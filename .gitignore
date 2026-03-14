@@ -1,0 +1,36 @@
+# Go
+server/cantinarr
+*.exe
+
+# Flutter
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/build/
+app/.metadata
+app/pubspec.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Docker (runtime config volume, not app source)
+/config/
+
+# Environment
+.env
+*.env.local
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
