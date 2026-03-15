@@ -14,16 +14,14 @@ type Service struct {
 	db     *sql.DB
 	radarr *radarr.Client
 	sonarr *sonarr.Client
-	tmdb   *tmdb.Client
 	bridge *tmdb.Bridge
 }
 
-func NewService(db *sql.DB, radarrClient *radarr.Client, sonarrClient *sonarr.Client, tmdbClient *tmdb.Client, bridge *tmdb.Bridge) *Service {
+func NewService(db *sql.DB, radarrClient *radarr.Client, sonarrClient *sonarr.Client, bridge *tmdb.Bridge) *Service {
 	return &Service{
 		db:     db,
 		radarr: radarrClient,
 		sonarr: sonarrClient,
-		tmdb:   tmdbClient,
 		bridge: bridge,
 	}
 }
@@ -31,6 +29,8 @@ func NewService(db *sql.DB, radarrClient *radarr.Client, sonarrClient *sonarr.Cl
 type CreateRequest struct {
 	TmdbID    int    `json:"tmdb_id"`
 	MediaType string `json:"media_type"`
+	Title     string `json:"title"`
+	TvdbID    int    `json:"tvdb_id"`
 }
 
 type CreateResponse struct {
@@ -57,7 +57,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	case "movie":
 		return s.requestMovie(userID, req.TmdbID)
 	case "tv":
-		return s.requestTV(userID, req.TmdbID)
+		return s.requestTV(userID, req)
 	default:
 		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
 	}
@@ -113,22 +113,20 @@ func (s *Service) requestMovie(userID int64, tmdbID int) (*CreateResponse, error
 	return &CreateResponse{Success: true, Status: "requested", Title: lookup.Title}, nil
 }
 
-func (s *Service) requestTV(userID int64, tmdbID int) (*CreateResponse, error) {
+func (s *Service) requestTV(userID int64, req *CreateRequest) (*CreateResponse, error) {
 	if s.sonarr == nil {
 		return nil, fmt.Errorf("sonarr is not configured")
 	}
 
-	// Get TV details for title
-	tvDetails, err := s.tmdb.GetTVDetails(tmdbID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get TV details: %w", err)
-	}
+	tvdbID := req.TvdbID
+	title := req.Title
 
-	// Bridge TMDB → TVDB
-	bridgeResult, err := s.bridge.ResolveTVDBID(tmdbID)
-	var tvdbID int
-	if err == nil {
-		tvdbID = bridgeResult.TVDBID
+	// Cache the client-provided TVDB ID so getTVStatus works without TMDB calls
+	if tvdbID != 0 {
+		s.db.Exec(
+			"INSERT OR REPLACE INTO tmdb_tvdb_cache (tmdb_id, tvdb_id) VALUES (?, ?)",
+			req.TmdbID, tvdbID,
+		)
 	}
 
 	// Check if already in Sonarr
@@ -141,19 +139,23 @@ func (s *Service) requestTV(userID int64, tmdbID int) (*CreateResponse, error) {
 			} else if existing.Statistics != nil && existing.Statistics.EpisodeFileCount > 0 {
 				status = "partial"
 			}
-			s.logRequest(userID, tmdbID, "tv", existing.Title, status)
+			s.logRequest(userID, req.TmdbID, "tv", existing.Title, status)
 			return &CreateResponse{Success: true, Status: status, Title: existing.Title}, nil
 		}
 	}
 
 	// Lookup series
 	var lookup *sonarr.LookupResult
+	var err error
 	if tvdbID != 0 {
 		lookup, err = s.sonarr.LookupByTVDB(tvdbID)
 	}
 	if lookup == nil || err != nil {
 		// Fallback to title search
-		lookup, err = s.sonarr.LookupByTitle(tvDetails.Name)
+		if title == "" {
+			return nil, fmt.Errorf("series lookup failed: no TVDB ID or title provided")
+		}
+		lookup, err = s.sonarr.LookupByTitle(title)
 		if err != nil {
 			return nil, fmt.Errorf("series lookup failed: %w", err)
 		}
@@ -185,7 +187,7 @@ func (s *Service) requestTV(userID int64, tmdbID int) (*CreateResponse, error) {
 		return nil, fmt.Errorf("add series failed: %w", err)
 	}
 
-	s.logRequest(userID, tmdbID, "tv", lookup.Title, "requested")
+	s.logRequest(userID, req.TmdbID, "tv", lookup.Title, "requested")
 	return &CreateResponse{Success: true, Status: "requested", Title: lookup.Title}, nil
 }
 

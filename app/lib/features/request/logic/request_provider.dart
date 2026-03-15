@@ -58,13 +58,15 @@ class RequestNotifier extends ChangeNotifier {
   }
 
   /// One-tap request action.
-  Future<void> request() async {
+  Future<void> request({String? title, int? tvdbId}) async {
     if (state.isRequesting) return;
     state = state.copyWith(isRequesting: true, error: null);
 
     final success = await _service.request(
       tmdbId: _tmdbId,
       mediaType: _mediaType,
+      title: title,
+      tvdbId: tvdbId,
     );
 
     if (success) {

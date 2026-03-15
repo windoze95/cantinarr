@@ -105,21 +105,15 @@ class AuthResponse {
 
 /// Server-provided configuration returned after authentication.
 class ServerConfig {
-  final String tmdbKey;
-  final String? traktClientId;
   final String serverName;
   final AvailableServices services;
 
   const ServerConfig({
-    required this.tmdbKey,
-    this.traktClientId,
     required this.serverName,
     required this.services,
   });
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) => ServerConfig(
-        tmdbKey: json['tmdb_key'] as String? ?? '',
-        traktClientId: json['trakt_client_id'] as String?,
         serverName: json['server_name'] as String? ?? 'Cantinarr',
         services: AvailableServices.fromJson(
             json['services'] as Map<String, dynamic>? ?? {}),

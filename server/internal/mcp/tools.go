@@ -195,6 +195,9 @@ func formatSearchResults(results []tmdb.SearchResult, limit int) string {
 }
 
 func (s *ToolServer) searchMovies(input json.RawMessage) (string, error) {
+	if s.tmdb == nil {
+		return "TMDB is not configured on the server.", nil
+	}
 	var params struct {
 		Query string `json:"query"`
 	}
@@ -209,6 +212,9 @@ func (s *ToolServer) searchMovies(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) searchTVShows(input json.RawMessage) (string, error) {
+	if s.tmdb == nil {
+		return "TMDB is not configured on the server.", nil
+	}
 	var params struct {
 		Query string `json:"query"`
 	}
@@ -223,6 +229,9 @@ func (s *ToolServer) searchTVShows(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) getTrending(input json.RawMessage) (string, error) {
+	if s.tmdb == nil {
+		return "TMDB is not configured on the server.", nil
+	}
 	var params struct {
 		MediaType  string `json:"media_type"`
 		TimeWindow string `json:"time_window"`
@@ -238,6 +247,9 @@ func (s *ToolServer) getTrending(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) getMovieDetails(input json.RawMessage) (string, error) {
+	if s.tmdb == nil {
+		return "TMDB is not configured on the server.", nil
+	}
 	var params struct {
 		TmdbID int `json:"tmdb_id"`
 	}
@@ -253,6 +265,9 @@ func (s *ToolServer) getMovieDetails(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) getTVDetails(input json.RawMessage) (string, error) {
+	if s.tmdb == nil {
+		return "TMDB is not configured on the server.", nil
+	}
 	var params struct {
 		TmdbID int `json:"tmdb_id"`
 	}
@@ -268,6 +283,9 @@ func (s *ToolServer) getTVDetails(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) getRecommendations(input json.RawMessage) (string, error) {
+	if s.tmdb == nil {
+		return "TMDB is not configured on the server.", nil
+	}
 	var params struct {
 		TmdbID    int    `json:"tmdb_id"`
 		MediaType string `json:"media_type"`

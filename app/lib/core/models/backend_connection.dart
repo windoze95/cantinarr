@@ -4,8 +4,6 @@ class BackendConnection {
   final String accessToken;
   final String refreshToken;
   final String? serverName;
-  final String? tmdbApiKey;
-  final String? traktClientId;
   final AvailableServices services;
 
   const BackendConnection({
@@ -13,8 +11,6 @@ class BackendConnection {
     required this.accessToken,
     required this.refreshToken,
     this.serverName,
-    this.tmdbApiKey,
-    this.traktClientId,
     this.services = const AvailableServices(),
   });
 
@@ -23,8 +19,6 @@ class BackendConnection {
     String? accessToken,
     String? refreshToken,
     String? serverName,
-    String? tmdbApiKey,
-    String? traktClientId,
     AvailableServices? services,
   }) =>
       BackendConnection(
@@ -32,22 +26,24 @@ class BackendConnection {
         accessToken: accessToken ?? this.accessToken,
         refreshToken: refreshToken ?? this.refreshToken,
         serverName: serverName ?? this.serverName,
-        tmdbApiKey: tmdbApiKey ?? this.tmdbApiKey,
-        traktClientId: traktClientId ?? this.traktClientId,
         services: services ?? this.services,
       );
 }
 
-/// Which arr services the backend has configured.
+/// Which services the backend has configured.
 class AvailableServices {
   final bool radarr;
   final bool sonarr;
   final bool ai;
+  final bool tmdb;
+  final bool trakt;
 
   const AvailableServices({
     this.radarr = false,
     this.sonarr = false,
     this.ai = false,
+    this.tmdb = false,
+    this.trakt = false,
   });
 
   factory AvailableServices.fromJson(Map<String, dynamic> json) =>
@@ -55,11 +51,15 @@ class AvailableServices {
         radarr: json['radarr'] as bool? ?? false,
         sonarr: json['sonarr'] as bool? ?? false,
         ai: json['ai'] as bool? ?? false,
+        tmdb: json['tmdb'] as bool? ?? false,
+        trakt: json['trakt'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
         'radarr': radarr,
         'sonarr': sonarr,
         'ai': ai,
+        'tmdb': tmdb,
+        'trakt': trakt,
       };
 }

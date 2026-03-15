@@ -6,13 +6,13 @@ class AppTheme {
 
   // Brand colours
   static const Color accent = Color(0xFFE5A00D); // warm gold
-  static const Color surface = Color(0xFF1A1A2E);
-  static const Color surfaceVariant = Color(0xFF222240);
-  static const Color background = Color(0xFF0F0F1A);
+  static const Color surface = Color(0xFF1C1510);
+  static const Color surfaceVariant = Color(0xFF2A1F14);
+  static const Color background = Color(0xFF0F0A04);
   static const Color error = Color(0xFFCF6679);
   static const Color textPrimary = Color(0xFFF0F0F0);
-  static const Color textSecondary = Color(0xFF9E9EB8);
-  static const Color border = Color(0xFF2A2A45);
+  static const Color textSecondary = Color(0xFF9E918A);
+  static const Color border = Color(0xFF332818);
 
   // Status colours
   static const Color available = Color(0xFF4CAF50);
@@ -25,7 +25,7 @@ class AppTheme {
         useMaterial3: true,
         colorScheme: const ColorScheme.dark(
           primary: accent,
-          onPrimary: Color(0xFF1A1A2E),
+          onPrimary: Color(0xFF1C1510),
           secondary: accent,
           surface: surface,
           error: error,

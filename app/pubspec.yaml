@@ -49,10 +49,18 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_native_splash: ^2.4.4
   build_runner: ^2.4.13
   json_serializable: ^6.8.0
   riverpod_generator: ^2.6.3
   retrofit_generator: ^9.1.5
+
+flutter_native_splash:
+  color: "#0F0801"
+  image: assets/splash_icon.png
+  android_12:
+    color: "#0F0801"
+    image: assets/splash_icon.png
 
 flutter:
   uses-material-design: true

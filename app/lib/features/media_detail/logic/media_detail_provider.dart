@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
-import '../../discover/data/tmdb_api_service.dart';
+import '../../discover/data/discover_api_service.dart';
 import '../../discover/data/tmdb_models.dart';
-import '../../discover/logic/discover_provider.dart';
 
 /// State for the media detail screen.
 class MediaDetailState {
@@ -73,7 +72,7 @@ class MediaDetailState {
 
 /// Loads full detail + recommendations for a movie or TV show.
 class MediaDetailNotifier extends ChangeNotifier {
-  final TmdbApiService _tmdb;
+  final DiscoverApiService _api;
   final int _id;
   final MediaType _mediaType;
 
@@ -85,10 +84,10 @@ class MediaDetailNotifier extends ChangeNotifier {
   }
 
   MediaDetailNotifier({
-    required TmdbApiService tmdb,
+    required DiscoverApiService api,
     required int id,
     required MediaType mediaType,
-  })  : _tmdb = tmdb,
+  })  : _api = api,
         _id = id,
         _mediaType = mediaType;
 
@@ -96,9 +95,9 @@ class MediaDetailNotifier extends ChangeNotifier {
     state = state.copyWith(isLoading: true);
     try {
       if (_mediaType == MediaType.movie) {
-        final detail = await _tmdb.movieDetail(_id);
-        final recs = await _tmdb.movieRecommendations(_id);
-        final sim = await _tmdb.similarMovies(_id);
+        final detail = await _api.movieDetail(_id);
+        final recs = await _api.movieRecommendations(_id);
+        final sim = await _api.similarMovies(_id);
         state = state.copyWith(
           isLoading: false,
           movieDetail: detail,
@@ -106,9 +105,9 @@ class MediaDetailNotifier extends ChangeNotifier {
           similar: sim.results,
         );
       } else {
-        final detail = await _tmdb.tvDetail(_id);
-        final recs = await _tmdb.tvRecommendations(_id);
-        final sim = await _tmdb.similarTV(_id);
+        final detail = await _api.tvDetail(_id);
+        final recs = await _api.tvRecommendations(_id);
+        final sim = await _api.similarTV(_id);
         state = state.copyWith(
           isLoading: false,
           tvDetail: detail,

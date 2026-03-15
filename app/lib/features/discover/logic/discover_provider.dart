@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/app_config.dart';
-import '../data/tmdb_api_service.dart';
+import '../../../core/network/backend_client.dart';
+import '../data/discover_api_service.dart';
 import '../data/tmdb_models.dart';
 import 'paged_loader.dart';
 
-/// Provides the TMDB service, keyed by API key.
-final tmdbServiceProvider = Provider.family<TmdbApiService, String>(
-  (_, apiKey) => TmdbApiService(apiKey: apiKey),
+/// Provides the unified discover service backed by the server.
+final discoverServiceProvider = Provider<DiscoverApiService>(
+  (ref) => DiscoverApiService(backendDio: ref.watch(backendClientProvider)),
 );
 
 /// The main state for the discover screen.
@@ -75,12 +76,12 @@ class DiscoverState {
 
 /// Manages all discover-related data and search.
 class DiscoverNotifier extends StateNotifier<DiscoverState> {
-  final TmdbApiService _tmdb;
+  final DiscoverApiService _api;
   final PagedLoader _trendingLoader = PagedLoader();
   final PagedLoader _searchLoader = PagedLoader();
   Timer? _searchDebounce;
 
-  DiscoverNotifier(this._tmdb) : super(const DiscoverState());
+  DiscoverNotifier(this._api) : super(const DiscoverState());
 
   /// Called on first load – fetches trending, popular, top rated, upcoming.
   Future<void> bootstrap() async {
@@ -100,7 +101,7 @@ class DiscoverNotifier extends StateNotifier<DiscoverState> {
     state = state.copyWith(isLoadingTrending: true);
     try {
       final page =
-          await _tmdb.fetchTrending(page: _trendingLoader.page);
+          await _api.fetchTrending(page: _trendingLoader.page);
       state = state.copyWith(
         trending: [...state.trending, ...page.results],
         isLoadingTrending: false,
@@ -127,7 +128,7 @@ class DiscoverNotifier extends StateNotifier<DiscoverState> {
   Future<void> _loadPopularMovies() async {
     state = state.copyWith(isLoadingPopularMovies: true);
     try {
-      final page = await _tmdb.fetchPopularMovies();
+      final page = await _api.fetchPopularMovies();
       state = state.copyWith(
         popularMovies: page.results,
         isLoadingPopularMovies: false,
@@ -140,7 +141,7 @@ class DiscoverNotifier extends StateNotifier<DiscoverState> {
   Future<void> _loadPopularTV() async {
     state = state.copyWith(isLoadingPopularTV: true);
     try {
-      final page = await _tmdb.fetchPopularTV();
+      final page = await _api.fetchPopularTV();
       state = state.copyWith(
         popularTV: page.results,
         isLoadingPopularTV: false,
@@ -152,14 +153,14 @@ class DiscoverNotifier extends StateNotifier<DiscoverState> {
 
   Future<void> _loadTopRated() async {
     try {
-      final page = await _tmdb.fetchTopRatedMovies();
+      final page = await _api.fetchTopRatedMovies();
       state = state.copyWith(topRated: page.results);
     } catch (_) {}
   }
 
   Future<void> _loadUpcoming() async {
     try {
-      final page = await _tmdb.fetchUpcomingMovies();
+      final page = await _api.fetchUpcomingMovies();
       state = state.copyWith(upcoming: page.results);
     } catch (_) {}
   }
@@ -185,7 +186,7 @@ class DiscoverNotifier extends StateNotifier<DiscoverState> {
     if (!_searchLoader.beginLoading()) return;
 
     try {
-      final page = await _tmdb.multiSearch(
+      final page = await _api.multiSearch(
         query: state.searchQuery,
         page: _searchLoader.page,
       );
@@ -214,7 +215,7 @@ class DiscoverNotifier extends StateNotifier<DiscoverState> {
     if (!_searchLoader.beginLoading()) return;
     state = state.copyWith(isLoadingSearch: true);
     try {
-      final page = await _tmdb.multiSearch(
+      final page = await _api.multiSearch(
         query: state.searchQuery,
         page: _searchLoader.page,
       );
@@ -240,11 +241,11 @@ class DiscoverNotifier extends StateNotifier<DiscoverState> {
   }
 }
 
-/// Provider for the discover notifier, scoped to a TMDB API key.
+/// Provider for the discover notifier.
 final discoverProvider =
-    StateNotifierProvider.family<DiscoverNotifier, DiscoverState, String>(
-  (ref, apiKey) {
-    final tmdb = ref.watch(tmdbServiceProvider(apiKey));
-    return DiscoverNotifier(tmdb);
+    StateNotifierProvider<DiscoverNotifier, DiscoverState>(
+  (ref) {
+    final api = ref.watch(discoverServiceProvider);
+    return DiscoverNotifier(api);
   },
 );

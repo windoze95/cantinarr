@@ -77,8 +77,6 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         accessToken: authResp.accessToken,
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
-        tmdbApiKey: config.tmdbKey,
-        traktClientId: config.traktClientId,
         services: config.services,
       );
 
@@ -110,8 +108,6 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         accessToken: authResp.accessToken,
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
-        tmdbApiKey: config.tmdbKey,
-        traktClientId: config.traktClientId,
         services: config.services,
       );
 
@@ -142,8 +138,6 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         accessToken: authResp.accessToken,
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
-        tmdbApiKey: config.tmdbKey,
-        traktClientId: config.traktClientId,
         services: config.services,
       );
 

@@ -66,12 +66,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: '/discover',
-                builder: (context, state) {
-                  final auth = ref.read(authProvider).valueOrNull;
-                  final tmdbApiKey =
-                      auth?.connection?.tmdbApiKey ?? '';
-                  return DiscoverScreen(tmdbApiKey: tmdbApiKey);
-                },
+                builder: (context, state) => const DiscoverScreen(),
               ),
             ],
           ),
@@ -145,12 +140,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           final id = int.parse(state.pathParameters['id']!);
           final mediaType =
               type == 'tv' ? MediaType.tv : MediaType.movie;
-          final auth = ref.read(authProvider).valueOrNull;
-          final tmdbApiKey = auth?.connection?.tmdbApiKey ?? '';
           return MediaDetailScreen(
             id: id,
             mediaType: mediaType,
-            tmdbApiKey: tmdbApiKey,
           );
         },
       ),

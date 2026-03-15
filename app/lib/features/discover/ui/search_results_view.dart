@@ -11,7 +11,6 @@ class SearchResultsView extends StatelessWidget {
   final bool isLoading;
   final String query;
   final void Function(MediaItem)? onLoadMore;
-  final String tmdbApiKey;
 
   const SearchResultsView({
     super.key,
@@ -19,7 +18,6 @@ class SearchResultsView extends StatelessWidget {
     required this.isLoading,
     required this.query,
     this.onLoadMore,
-    required this.tmdbApiKey,
   });
 
   @override

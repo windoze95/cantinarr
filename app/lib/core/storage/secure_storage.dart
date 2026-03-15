@@ -17,6 +17,4 @@ class StorageKeys {
   static const String refreshToken = 'jwt_refresh_token';
   static const String serverUrl = 'server_url';
 
-  // Legacy keys (kept for migration, will be removed)
-  static const String tmdbApiKey = 'tmdb_api_key';
 }

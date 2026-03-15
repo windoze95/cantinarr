@@ -11,7 +11,6 @@ class CategoryRow extends StatelessWidget {
   final List<MediaItem> items;
   final bool isLoading;
   final void Function(MediaItem)? onLoadMore;
-  final String tmdbApiKey;
 
   const CategoryRow({
     super.key,
@@ -19,7 +18,6 @@ class CategoryRow extends StatelessWidget {
     required this.items,
     required this.isLoading,
     this.onLoadMore,
-    required this.tmdbApiKey,
   });
 
   @override

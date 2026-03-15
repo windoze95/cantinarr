@@ -12,9 +12,7 @@ import 'category_row.dart';
 
 /// The main discover screen – trending, categories, and search.
 class DiscoverScreen extends ConsumerStatefulWidget {
-  final String tmdbApiKey;
-
-  const DiscoverScreen({super.key, required this.tmdbApiKey});
+  const DiscoverScreen({super.key});
 
   @override
   ConsumerState<DiscoverScreen> createState() => _DiscoverScreenState();
@@ -32,7 +30,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     _scrollController.addListener(_onScroll);
     // Bootstrap data on first load.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(discoverProvider(widget.tmdbApiKey).notifier).bootstrap();
+      ref.read(discoverProvider.notifier).bootstrap();
     });
   }
 
@@ -51,8 +49,8 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(discoverProvider(widget.tmdbApiKey));
-    final notifier = ref.read(discoverProvider(widget.tmdbApiKey).notifier);
+    final state = ref.watch(discoverProvider);
+    final notifier = ref.read(discoverProvider.notifier);
 
     return Scaffold(
       body: SafeArea(
@@ -92,7 +90,6 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                       isLoading: state.isLoadingSearch,
                       query: state.searchQuery,
                       onLoadMore: notifier.loadMoreSearch,
-                      tmdbApiKey: widget.tmdbApiKey,
                     )
                   : _buildHomeContent(state, notifier),
             ),
@@ -116,7 +113,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
             items: state.trending,
             isLoading: state.isLoadingTrending,
             onLoadMore: notifier.loadMoreTrending,
-            tmdbApiKey: widget.tmdbApiKey,
+
           ),
 
           // Popular Movies
@@ -124,7 +121,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
             title: 'Popular Movies',
             items: state.popularMovies,
             isLoading: state.isLoadingPopularMovies,
-            tmdbApiKey: widget.tmdbApiKey,
+
           ),
 
           // Popular TV
@@ -132,7 +129,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
             title: 'Popular TV Shows',
             items: state.popularTV,
             isLoading: state.isLoadingPopularTV,
-            tmdbApiKey: widget.tmdbApiKey,
+
           ),
 
           // Top Rated
@@ -141,7 +138,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
               title: 'Top Rated',
               items: state.topRated,
               isLoading: false,
-              tmdbApiKey: widget.tmdbApiKey,
+  
             ),
 
           // Upcoming
@@ -150,7 +147,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
               title: 'Coming Soon',
               items: state.upcoming,
               isLoading: false,
-              tmdbApiKey: widget.tmdbApiKey,
+  
             ),
         ],
       ),

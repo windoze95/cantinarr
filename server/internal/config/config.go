@@ -4,12 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 )
 
 type Config struct {
-	TMDBKey           string
+	TMDBAccessToken           string
 	AnthropicKey      string
 	RadarrURL         string
 	RadarrKey         string
@@ -22,6 +23,10 @@ type Config struct {
 	Port              int
 	ServerName        string
 	AdminPassword     string
+}
+
+func (c *Config) TMDBEnabled() bool {
+	return c.TMDBAccessToken != ""
 }
 
 func (c *Config) RadarrEnabled() bool {
@@ -42,7 +47,7 @@ func (c *Config) AIEnabled() bool {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		TMDBKey:           os.Getenv("CANTINARR_TMDB_KEY"),
+		TMDBAccessToken:   os.Getenv("CANTINARR_TMDB_ACCESS_TOKEN"),
 		AnthropicKey:      os.Getenv("CANTINARR_ANTHROPIC_KEY"),
 		RadarrURL:         os.Getenv("CANTINARR_RADARR_URL"),
 		RadarrKey:         os.Getenv("CANTINARR_RADARR_KEY"),
@@ -56,8 +61,8 @@ func Load() (*Config, error) {
 		AdminPassword:     os.Getenv("CANTINARR_ADMIN_PASSWORD"),
 	}
 
-	if cfg.TMDBKey == "" {
-		return nil, fmt.Errorf("CANTINARR_TMDB_KEY is required")
+	if cfg.TMDBAccessToken == "" {
+		log.Println("WARNING: CANTINARR_TMDB_ACCESS_TOKEN not set – TMDB features will be disabled")
 	}
 
 	if cfg.DBPath == "" {

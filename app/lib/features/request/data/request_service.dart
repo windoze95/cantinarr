@@ -54,12 +54,17 @@ class RequestService {
   Future<bool> request({
     required int tmdbId,
     required MediaType mediaType,
+    String? title,
+    int? tvdbId,
   }) async {
     try {
-      final resp = await _backendDio.post('/api/requests', data: {
+      final body = <String, dynamic>{
         'tmdb_id': tmdbId,
         'media_type': mediaType.name,
-      });
+      };
+      if (title != null) body['title'] = title;
+      if (tvdbId != null && tvdbId != 0) body['tvdb_id'] = tvdbId;
+      final resp = await _backendDio.post('/api/requests', data: body);
       return resp.statusCode == 200 || resp.statusCode == 201;
     } catch (_) {
       return false;

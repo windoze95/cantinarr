@@ -228,6 +228,7 @@ class TVDetail {
   final List<Genre> genres;
   final List<Video> videos;
   final List<Season> seasons;
+  final ExternalIds? externalIds;
 
   const TVDetail({
     required this.id,
@@ -244,6 +245,7 @@ class TVDetail {
     this.genres = const [],
     this.videos = const [],
     this.seasons = const [],
+    this.externalIds,
   });
 
   factory TVDetail.fromJson(Map<String, dynamic> json) => TVDetail(
@@ -267,6 +269,9 @@ class TVDetail {
                 ?.map((s) => Season.fromJson(s as Map<String, dynamic>))
                 .toList() ??
             [],
+        externalIds: json['external_ids'] is Map<String, dynamic>
+            ? ExternalIds.fromJson(json['external_ids'] as Map<String, dynamic>)
+            : null,
       );
 
   String? get trailerKey {
@@ -277,6 +282,19 @@ class TVDetail {
     final any = videos.where((v) => v.site?.toLowerCase() == 'youtube');
     return any.isNotEmpty ? any.first.key : null;
   }
+}
+
+/// External IDs (TVDB, IMDb, etc.) from TMDB.
+class ExternalIds {
+  final int? tvdbId;
+  final String? imdbId;
+
+  const ExternalIds({this.tvdbId, this.imdbId});
+
+  factory ExternalIds.fromJson(Map<String, dynamic> json) => ExternalIds(
+        tvdbId: json['tvdb_id'] as int?,
+        imdbId: json['imdb_id'] as String?,
+      );
 }
 
 /// A video (trailer, teaser, etc.) from TMDB.

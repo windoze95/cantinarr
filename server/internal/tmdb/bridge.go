@@ -47,6 +47,9 @@ func (b *Bridge) ResolveTVDBID(tmdbID int) (*BridgeResult, error) {
 	}
 
 	// 2. Try TMDB external IDs
+	if b.tmdb == nil {
+		return nil, fmt.Errorf("TMDB client not configured")
+	}
 	ids, err := b.tmdb.GetTVExternalIDs(tmdbID)
 	if err == nil && ids.TVDBID != nil && *ids.TVDBID != 0 {
 		result := &BridgeResult{TVDBID: *ids.TVDBID}

@@ -21,13 +21,11 @@ import 'season_grid.dart';
 class MediaDetailScreen extends ConsumerStatefulWidget {
   final int id;
   final MediaType mediaType;
-  final String tmdbApiKey;
 
   const MediaDetailScreen({
     super.key,
     required this.id,
     required this.mediaType,
-    required this.tmdbApiKey,
   });
 
   @override
@@ -41,9 +39,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   @override
   void initState() {
     super.initState();
-    final tmdb = ref.read(tmdbServiceProvider(widget.tmdbApiKey));
+    final api = ref.read(discoverServiceProvider);
     _detailNotifier = MediaDetailNotifier(
-      tmdb: tmdb,
+      api: api,
       id: widget.id,
       mediaType: widget.mediaType,
     );
@@ -113,7 +111,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           status: _requestNotifier.state.status,
                           isRequesting: _requestNotifier.state.isRequesting,
                           error: _requestNotifier.state.error,
-                          onRequest: _requestNotifier.request,
+                          onRequest: () {
+                            final s = _detailNotifier.state;
+                            _requestNotifier.request(
+                              title: s.title,
+                              tvdbId: s.tvDetail?.externalIds?.tvdbId,
+                            );
+                          },
                         ),
                       ),
                     ),
@@ -267,7 +271,6 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                       _SectionRow(
                         title: 'Recommended',
                         items: state.recommendations,
-                        tmdbApiKey: widget.tmdbApiKey,
                       ),
                     ],
 
@@ -277,7 +280,6 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                       _SectionRow(
                         title: 'Similar',
                         items: state.similar,
-                        tmdbApiKey: widget.tmdbApiKey,
                       ),
                     ],
 
@@ -310,12 +312,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 class _SectionRow extends StatelessWidget {
   final String title;
   final List<MediaItem> items;
-  final String tmdbApiKey;
 
   const _SectionRow({
     required this.title,
     required this.items,
-    required this.tmdbApiKey,
   });
 
   @override

@@ -1,36 +1,23 @@
 import 'package:dio/dio.dart';
-import '../../../core/config/app_config.dart';
 import 'tmdb_models.dart';
+import 'trakt_models.dart';
 
-/// Client for TMDB API v3 – handles all discovery, search, and detail fetches.
-class TmdbApiService {
+/// Unified discovery service that calls the Cantinarr backend (which proxies
+/// TMDB/Trakt). API keys never leave the server.
+class DiscoverApiService {
   final Dio _dio;
-  final String _apiKey;
 
-  TmdbApiService({required String apiKey})
-      : _apiKey = apiKey,
-        _dio = Dio(BaseOptions(
-          baseUrl: AppConfig.tmdbApiBase,
-          connectTimeout: AppConfig.requestTimeout,
-          receiveTimeout: AppConfig.requestTimeout,
-        ));
-
-  Map<String, dynamic> _params([Map<String, dynamic>? extra]) => {
-        'api_key': _apiKey,
-        'language': 'en-US',
-        ...?extra,
-      };
+  DiscoverApiService({required Dio backendDio}) : _dio = backendDio;
 
   // ─── Trending ───────────────────────────────────────
 
-  /// Fetch trending movies and TV shows (day or week).
   Future<TmdbPage<MediaItem>> fetchTrending({
     String timeWindow = 'day',
     int page = 1,
   }) async {
     final resp = await _dio.get(
-      '/trending/all/$timeWindow',
-      queryParameters: _params({'page': page}),
+      '/api/discover/trending',
+      queryParameters: {'time_window': timeWindow, 'page': page},
     );
     return TmdbPage.fromJson(
       resp.data as Map<String, dynamic>,
@@ -42,61 +29,59 @@ class TmdbApiService {
 
   Future<TmdbPage<MediaItem>> fetchPopularMovies({int page = 1}) async {
     final resp = await _dio.get(
-      '/movie/popular',
-      queryParameters: _params({'page': page}),
+      '/api/discover/movies/popular',
+      queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
 
   Future<TmdbPage<MediaItem>> fetchPopularTV({int page = 1}) async {
     final resp = await _dio.get(
-      '/tv/popular',
-      queryParameters: _params({'page': page}),
+      '/api/discover/tv/popular',
+      queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
   }
 
   Future<TmdbPage<MediaItem>> fetchTopRatedMovies({int page = 1}) async {
     final resp = await _dio.get(
-      '/movie/top_rated',
-      queryParameters: _params({'page': page}),
+      '/api/discover/movies/top-rated',
+      queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
 
   Future<TmdbPage<MediaItem>> fetchUpcomingMovies({int page = 1}) async {
     final resp = await _dio.get(
-      '/movie/upcoming',
-      queryParameters: _params({'page': page}),
+      '/api/discover/movies/upcoming',
+      queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
 
   Future<TmdbPage<MediaItem>> fetchNowPlayingMovies({int page = 1}) async {
     final resp = await _dio.get(
-      '/movie/now_playing',
-      queryParameters: _params({'page': page}),
+      '/api/discover/movies/now-playing',
+      queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
 
   // ─── Search ─────────────────────────────────────────
 
-  /// Multi-search: movies, TV shows, and people in one query.
   Future<TmdbPage<MediaItem>> multiSearch({
     required String query,
     int page = 1,
   }) async {
     final resp = await _dio.get(
-      '/search/multi',
-      queryParameters: _params({'query': query, 'page': page}),
+      '/api/search',
+      queryParameters: {'query': query, 'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromMultiSearchJson);
   }
 
   // ─── Discover ───────────────────────────────────────
 
-  /// Discover movies with filters.
   Future<TmdbPage<MediaItem>> discoverMovies({
     int page = 1,
     List<int>? genreIds,
@@ -116,13 +101,12 @@ class TmdbApiService {
       params['watch_region'] = watchRegion ?? 'US';
     }
     final resp = await _dio.get(
-      '/discover/movie',
-      queryParameters: _params(params),
+      '/api/discover/movies',
+      queryParameters: params,
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
 
-  /// Discover TV shows with filters.
   Future<TmdbPage<MediaItem>> discoverTV({
     int page = 1,
     List<int>? genreIds,
@@ -142,8 +126,8 @@ class TmdbApiService {
       params['watch_region'] = watchRegion ?? 'US';
     }
     final resp = await _dio.get(
-      '/discover/tv',
-      queryParameters: _params(params),
+      '/api/discover/tv',
+      queryParameters: params,
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
   }
@@ -151,18 +135,12 @@ class TmdbApiService {
   // ─── Details ────────────────────────────────────────
 
   Future<MovieDetail> movieDetail(int id) async {
-    final resp = await _dio.get(
-      '/movie/$id',
-      queryParameters: _params({'append_to_response': 'videos'}),
-    );
+    final resp = await _dio.get('/api/media/movie/$id');
     return MovieDetail.fromJson(resp.data as Map<String, dynamic>);
   }
 
   Future<TVDetail> tvDetail(int id) async {
-    final resp = await _dio.get(
-      '/tv/$id',
-      queryParameters: _params({'append_to_response': 'videos'}),
-    );
+    final resp = await _dio.get('/api/media/tv/$id');
     return TVDetail.fromJson(resp.data as Map<String, dynamic>);
   }
 
@@ -171,8 +149,8 @@ class TmdbApiService {
   Future<TmdbPage<MediaItem>> movieRecommendations(int id,
       {int page = 1}) async {
     final resp = await _dio.get(
-      '/movie/$id/recommendations',
-      queryParameters: _params({'page': page}),
+      '/api/media/movie/$id/recommendations',
+      queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
@@ -180,24 +158,24 @@ class TmdbApiService {
   Future<TmdbPage<MediaItem>> tvRecommendations(int id,
       {int page = 1}) async {
     final resp = await _dio.get(
-      '/tv/$id/recommendations',
-      queryParameters: _params({'page': page}),
+      '/api/media/tv/$id/recommendations',
+      queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
   }
 
   Future<TmdbPage<MediaItem>> similarMovies(int id, {int page = 1}) async {
     final resp = await _dio.get(
-      '/movie/$id/similar',
-      queryParameters: _params({'page': page}),
+      '/api/media/movie/$id/similar',
+      queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromMovieJson);
   }
 
   Future<TmdbPage<MediaItem>> similarTV(int id, {int page = 1}) async {
     final resp = await _dio.get(
-      '/tv/$id/similar',
-      queryParameters: _params({'page': page}),
+      '/api/media/tv/$id/similar',
+      queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
   }
@@ -205,20 +183,14 @@ class TmdbApiService {
   // ─── Genres ─────────────────────────────────────────
 
   Future<List<Genre>> movieGenres() async {
-    final resp = await _dio.get(
-      '/genre/movie/list',
-      queryParameters: _params(),
-    );
+    final resp = await _dio.get('/api/genres/movie');
     return (resp.data['genres'] as List<dynamic>)
         .map((g) => Genre.fromJson(g as Map<String, dynamic>))
         .toList();
   }
 
   Future<List<Genre>> tvGenres() async {
-    final resp = await _dio.get(
-      '/genre/tv/list',
-      queryParameters: _params(),
-    );
+    final resp = await _dio.get('/api/genres/tv');
     return (resp.data['genres'] as List<dynamic>)
         .map((g) => Genre.fromJson(g as Map<String, dynamic>))
         .toList();
@@ -229,11 +201,89 @@ class TmdbApiService {
   Future<List<WatchProvider>> movieWatchProviders(
       {String region = 'US'}) async {
     final resp = await _dio.get(
-      '/watch/providers/movie',
-      queryParameters: _params({'watch_region': region}),
+      '/api/providers/movie',
+      queryParameters: {'region': region},
     );
     return (resp.data['results'] as List<dynamic>)
         .map((p) => WatchProvider.fromJson(p as Map<String, dynamic>))
+        .toList();
+  }
+
+  // ─── Trakt ──────────────────────────────────────────
+
+  Future<List<TraktItem>> getTraktTrending(String type,
+      {int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/trakt/trending',
+      queryParameters: {'type': type, 'page': page},
+    );
+    return (resp.data as List<dynamic>)
+        .map((j) =>
+            TraktItem.fromTrendingJson(j as Map<String, dynamic>, type))
+        .toList();
+  }
+
+  Future<List<TraktItem>> getTraktPopular(String type,
+      {int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/trakt/popular',
+      queryParameters: {'type': type, 'page': page},
+    );
+    return (resp.data as List<dynamic>)
+        .map((j) =>
+            TraktItem.fromPopularJson(j as Map<String, dynamic>, type))
+        .toList();
+  }
+
+  Future<List<TraktList>> getTraktPopularLists({int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/trakt/lists',
+      queryParameters: {'page': page},
+    );
+    return (resp.data as List<dynamic>)
+        .map((j) => TraktList.fromJson(j as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<TraktItem>> getTraktListItems(String user, String slug) async {
+    final resp = await _dio.get(
+      '/api/trakt/lists/$user/$slug/items',
+    );
+    return (resp.data as List<dynamic>).map((j) {
+      final json = j as Map<String, dynamic>;
+      final type = json['type'] as String? ?? 'movie';
+      final inner = json[type] as Map<String, dynamic>? ?? {};
+      final ids =
+          TraktIds.fromJson(inner['ids'] as Map<String, dynamic>? ?? {});
+      return TraktItem(
+        tmdbId: ids.tmdb,
+        title: (inner['title'] ?? 'Untitled') as String,
+        year: inner['year'] as int?,
+        overview: inner['overview'] as String?,
+        ids: ids,
+        mediaType: type,
+      );
+    }).toList();
+  }
+
+  Future<List<TraktCalendarItem>> getTraktCalendar({int days = 14}) async {
+    final resp = await _dio.get(
+      '/api/trakt/calendar',
+      queryParameters: {'days': days},
+    );
+    return (resp.data as List<dynamic>)
+        .map((j) => TraktCalendarItem.fromJson(j as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<TraktItem>> getTraktRecommendations(String type) async {
+    final resp = await _dio.get(
+      '/api/trakt/recommendations',
+      queryParameters: {'type': type},
+    );
+    return (resp.data as List<dynamic>)
+        .map((j) =>
+            TraktItem.fromPopularJson(j as Map<String, dynamic>, type))
         .toList();
   }
 }

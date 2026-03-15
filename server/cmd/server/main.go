@@ -11,9 +11,11 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/api"
 	"github.com/windoze95/cantinarr-server/internal/auth"
-	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/db"
+	"github.com/windoze95/cantinarr-server/internal/discover"
+	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/request"
@@ -48,8 +50,11 @@ func main() {
 	}
 	authHandler := auth.NewHandler(authService)
 
-	// TMDB
-	tmdbClient := tmdb.NewClient(cfg.TMDBKey)
+	// TMDB (optional)
+	var tmdbClient *tmdb.Client
+	if cfg.TMDBEnabled() {
+		tmdbClient = tmdb.NewClient(cfg.TMDBAccessToken)
+	}
 
 	// Trakt (optional)
 	var traktClient *trakt.Client
@@ -73,7 +78,7 @@ func main() {
 	}
 
 	// Request service
-	requestService := request.NewService(database, radarrClient, sonarrClient, tmdbClient, bridge)
+	requestService := request.NewService(database, radarrClient, sonarrClient, bridge)
 	requestHandler := request.NewHandler(requestService)
 
 	// Proxy handler
@@ -89,12 +94,20 @@ func main() {
 	}
 	aiHandler := ai.NewHandler(aiService)
 
+	// Discover handler (caching proxy for TMDB/Trakt)
+	apiCache := cache.New()
+	defer apiCache.Close()
+	var discoverHandler *discover.Handler
+	if tmdbClient != nil {
+		discoverHandler = discover.NewHandler(tmdbClient, traktClient, apiCache, cfg)
+	}
+
 	// WebSocket hub
 	wsHub := ws.NewHub(authService, radarrClient, sonarrClient)
 	go wsHub.Run(context.Background())
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
