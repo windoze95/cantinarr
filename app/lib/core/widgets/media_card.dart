@@ -26,7 +26,9 @@ class MediaCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = AppConfig.tmdbPoster(posterPath, width: 342);
+    final imageUrl = posterPath != null && posterPath!.startsWith('http')
+        ? posterPath!
+        : AppConfig.tmdbPoster(posterPath, width: 342);
 
     return GestureDetector(
       onTap: onTap,

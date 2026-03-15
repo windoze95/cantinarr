@@ -113,6 +113,8 @@ func NewRouter(
 				r.Get("/media/tv/{id}/recommendations", discoverHandler.TVRecommendations)
 				r.Get("/media/movie/{id}/similar", discoverHandler.SimilarMovies)
 				r.Get("/media/tv/{id}/similar", discoverHandler.SimilarTV)
+				r.Get("/media/person/{id}", discoverHandler.PersonDetail)
+				r.Get("/media/person/{id}/credits", discoverHandler.PersonCredits)
 
 				// Genres & providers
 				r.Get("/genres/movie", discoverHandler.MovieGenres)
@@ -125,7 +127,8 @@ func NewRouter(
 				r.Get("/trakt/lists", discoverHandler.TraktPopularLists)
 				r.Get("/trakt/lists/{user}/{slug}/items", discoverHandler.TraktListItems)
 				r.Get("/trakt/calendar", discoverHandler.TraktCalendar)
-				r.Get("/trakt/recommendations", discoverHandler.TraktRecommendations)
+				r.Get("/trakt/anticipated", discoverHandler.TraktAnticipated)
+			r.Get("/trakt/recommendations", discoverHandler.TraktRecommendations)
 			})
 		}
 

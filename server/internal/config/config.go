@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"strconv"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -46,6 +48,11 @@ func (c *Config) AIEnabled() bool {
 }
 
 func Load() (*Config, error) {
+	// Load .env file if present (dev convenience; does not override existing env vars).
+	if err := godotenv.Load(); err == nil {
+		log.Println("Loaded .env file")
+	}
+
 	cfg := &Config{
 		TMDBAccessToken:   os.Getenv("CANTINARR_TMDB_ACCESS_TOKEN"),
 		AnthropicKey:      os.Getenv("CANTINARR_ANTHROPIC_KEY"),

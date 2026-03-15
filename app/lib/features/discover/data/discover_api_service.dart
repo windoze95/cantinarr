@@ -1,6 +1,13 @@
 import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/network/backend_client.dart';
 import 'tmdb_models.dart';
 import 'trakt_models.dart';
+
+/// Provides the unified discover service backed by the server.
+final discoverServiceProvider = Provider<DiscoverApiService>(
+  (ref) => DiscoverApiService(backendDio: ref.watch(backendClientProvider)),
+);
 
 /// Unified discovery service that calls the Cantinarr backend (which proxies
 /// TMDB/Trakt). API keys never leave the server.
@@ -144,6 +151,39 @@ class DiscoverApiService {
     return TVDetail.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  // ─── Person ────────────────────────────────────────
+
+  Future<PersonDetail> personDetail(int id) async {
+    final resp = await _dio.get('/api/media/person/$id');
+    return PersonDetail.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  Future<List<PersonCredit>> personCredits(int id) async {
+    final resp = await _dio.get('/api/media/person/$id/credits');
+    final data = resp.data as Map<String, dynamic>;
+    final cast = (data['cast'] as List<dynamic>?)
+            ?.map((e) => PersonCredit.fromJson(e as Map<String, dynamic>))
+            .toList() ??
+        [];
+    final crew = (data['crew'] as List<dynamic>?)
+            ?.map((e) => PersonCredit.fromJson(e as Map<String, dynamic>))
+            .toList() ??
+        [];
+
+    // Deduplicate: prefer cast over crew for same id+mediaType
+    final seen = <String>{};
+    final merged = <PersonCredit>[];
+    for (final c in cast) {
+      final key = '${c.id}:${c.mediaType}';
+      if (seen.add(key)) merged.add(c);
+    }
+    for (final c in crew) {
+      final key = '${c.id}:${c.mediaType}';
+      if (seen.add(key)) merged.add(c);
+    }
+    return merged;
+  }
+
   // ─── Recommendations ───────────────────────────────
 
   Future<TmdbPage<MediaItem>> movieRecommendations(int id,
@@ -273,6 +313,18 @@ class DiscoverApiService {
     );
     return (resp.data as List<dynamic>)
         .map((j) => TraktCalendarItem.fromJson(j as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<TraktItem>> getTraktAnticipated(String type,
+      {int page = 1}) async {
+    final resp = await _dio.get(
+      '/api/trakt/anticipated',
+      queryParameters: {'type': type, 'page': page},
+    );
+    return (resp.data as List<dynamic>)
+        .map((j) =>
+            TraktItem.fromAnticipatedJson(j as Map<String, dynamic>, type))
         .toList();
   }
 

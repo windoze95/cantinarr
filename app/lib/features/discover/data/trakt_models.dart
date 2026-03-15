@@ -28,6 +28,7 @@ class TraktItem {
   final TraktIds ids;
   final int? watchers;
   final String mediaType; // "movie" or "show"
+  final String? posterUrl;
 
   const TraktItem({
     this.tmdbId,
@@ -37,6 +38,7 @@ class TraktItem {
     required this.ids,
     this.watchers,
     required this.mediaType,
+    this.posterUrl,
   });
 
   factory TraktItem.fromTrendingJson(
@@ -51,6 +53,32 @@ class TraktItem {
       overview: inner['overview'] as String?,
       ids: ids,
       watchers: json['watchers'] as int?,
+      mediaType: type == 'movies' ? 'movie' : 'show',
+    );
+  }
+
+  factory TraktItem.fromAnticipatedJson(
+      Map<String, dynamic> json, String type) {
+    final inner = json[type == 'movies' ? 'movie' : 'show']
+        as Map<String, dynamic>;
+    final ids = TraktIds.fromJson(inner['ids'] as Map<String, dynamic>? ?? {});
+    // Extract poster URL from Trakt images (extended=full).
+    String? posterUrl;
+    final images = inner['images'] as Map<String, dynamic>?;
+    if (images != null) {
+      final posters = images['poster'] as List<dynamic>?;
+      if (posters != null && posters.isNotEmpty) {
+        final raw = posters.first as String;
+        posterUrl = raw.startsWith('http') ? raw : 'https://$raw';
+      }
+    }
+    return TraktItem(
+      tmdbId: ids.tmdb,
+      title: (inner['title'] ?? 'Untitled') as String,
+      year: inner['year'] as int?,
+      overview: inner['overview'] as String?,
+      ids: ids,
+      posterUrl: posterUrl,
       mediaType: type == 'movies' ? 'movie' : 'show',
     );
   }
@@ -72,6 +100,7 @@ class TraktItem {
   MediaItem toMediaItem() => MediaItem(
         id: tmdbId ?? ids.trakt ?? 0,
         title: title,
+        posterPath: posterUrl,
         mediaType: mediaType == 'movie' ? MediaType.movie : MediaType.tv,
         releaseDate: year?.toString(),
         overview: overview,

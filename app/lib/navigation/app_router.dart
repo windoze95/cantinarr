@@ -6,17 +6,15 @@ import '../features/auth/logic/auth_provider.dart';
 import '../features/auth/ui/invite_screen.dart';
 import '../features/auth/ui/login_screen.dart';
 import '../features/discover/data/tmdb_models.dart';
-import '../features/discover/ui/discover_screen.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
-import '../features/radarr/ui/radarr_home_screen.dart';
+import '../features/radarr/ui/movies_tab_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
 import '../features/setup_wizard/ui/plex_setup_guide.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
-import '../features/sonarr/ui/sonarr_home_screen.dart';
+import '../features/sonarr/ui/tv_shows_tab_screen.dart';
 import '../features/shell/ui/app_shell.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
-final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
 /// Central router configuration using GoRouter with ShellRoute for tabs.
 /// Redirects unauthenticated users to /login.
@@ -25,7 +23,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
-    initialLocation: '/discover',
+    initialLocation: '/radarr',
     redirect: (context, state) {
       final auth = authState.valueOrNull;
       final isAuthenticated = auth?.isAuthenticated ?? false;
@@ -33,7 +31,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           state.matchedLocation == '/invite';
 
       if (!isAuthenticated && !isAuthRoute) return '/login';
-      if (isAuthenticated && isAuthRoute) return '/discover';
+      if (isAuthenticated && isAuthRoute) return '/radarr';
       return null;
     },
     routes: [
@@ -61,60 +59,25 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           );
         },
         branches: [
-          // Tab 0: Discover
-          StatefulShellBranch(
-            routes: [
-              GoRoute(
-                path: '/discover',
-                builder: (context, state) => const DiscoverScreen(),
-              ),
-            ],
-          ),
-          // Tab 1: Radarr (Movies)
+          // Tab 0: Movies (discovery + Radarr library)
           StatefulShellBranch(
             routes: [
               GoRoute(
                 path: '/radarr',
-                builder: (context, state) {
-                  final auth = ref.read(authProvider).valueOrNull;
-                  final hasRadarr =
-                      auth?.connection?.services.radarr ?? false;
-                  if (!hasRadarr) {
-                    return _PlaceholderScreen(
-                      title: 'Movies',
-                      message:
-                          'Radarr is not configured on this server.',
-                      icon: Icons.movie_outlined,
-                    );
-                  }
-                  return const RadarrHomeScreen();
-                },
+                builder: (context, state) => const MoviesTabScreen(),
               ),
             ],
           ),
-          // Tab 2: Sonarr (TV)
+          // Tab 1: TV Shows (discovery + Sonarr library)
           StatefulShellBranch(
             routes: [
               GoRoute(
                 path: '/sonarr',
-                builder: (context, state) {
-                  final auth = ref.read(authProvider).valueOrNull;
-                  final hasSonarr =
-                      auth?.connection?.services.sonarr ?? false;
-                  if (!hasSonarr) {
-                    return _PlaceholderScreen(
-                      title: 'TV Shows',
-                      message:
-                          'Sonarr is not configured on this server.',
-                      icon: Icons.tv_outlined,
-                    );
-                  }
-                  return const SonarrHomeScreen();
-                },
+                builder: (context, state) => const TvShowsTabScreen(),
               ),
             ],
           ),
-          // Tab 3: AI Assistant
+          // Tab 2: AI Assistant
           StatefulShellBranch(
             routes: [
               GoRoute(
@@ -164,38 +127,3 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
-
-/// Placeholder for unconfigured service tabs.
-class _PlaceholderScreen extends StatelessWidget {
-  final String title;
-  final String message;
-  final IconData icon;
-
-  const _PlaceholderScreen({
-    required this.title,
-    required this.message,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 64, color: Colors.grey),
-              const SizedBox(height: 16),
-              Text(message,
-                  style: const TextStyle(color: Colors.grey, fontSize: 16),
-                  textAlign: TextAlign.center),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}

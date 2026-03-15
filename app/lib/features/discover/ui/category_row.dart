@@ -47,6 +47,7 @@ class CategoryRow extends StatelessWidget {
               id: item.id,
               title: item.title,
               posterPath: item.posterPath,
+              width: 100,
               onTap: () => context.push(
                 '/detail/${item.mediaType.name}/${item.id}',
               ),

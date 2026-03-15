@@ -9,7 +9,7 @@ import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/media_header.dart';
 import '../../discover/data/tmdb_models.dart';
-import '../../discover/logic/discover_provider.dart';
+import '../../discover/data/discover_api_service.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/request_provider.dart';
 import '../../request/ui/request_button.dart';
@@ -339,6 +339,7 @@ class _SectionRow extends StatelessWidget {
             id: item.id,
             title: item.title,
             posterPath: item.posterPath,
+            width: 100,
             onTap: () => context.push(
               '/detail/${item.mediaType.name}/${item.id}',
             ),

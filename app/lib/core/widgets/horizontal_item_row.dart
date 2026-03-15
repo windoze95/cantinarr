@@ -16,7 +16,7 @@ class HorizontalItemRow<T> extends StatelessWidget {
     required this.isLoading,
     required this.itemBuilder,
     this.onItemAppear,
-    this.height = 220,
+    this.height = 190,
     this.itemSpacing = 12,
   });
 
@@ -30,7 +30,7 @@ class HorizontalItemRow<T> extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           itemCount: 6,
           separatorBuilder: (_, __) => SizedBox(width: itemSpacing),
-          itemBuilder: (_, __) => const ShimmerCard(width: 120),
+          itemBuilder: (_, __) => const ShimmerCard(width: 100),
         ),
       );
     }
@@ -44,7 +44,7 @@ class HorizontalItemRow<T> extends StatelessWidget {
         separatorBuilder: (_, __) => SizedBox(width: itemSpacing),
         itemBuilder: (context, index) {
           if (index >= items.length) {
-            return const ShimmerCard(width: 120);
+            return const ShimmerCard(width: 100);
           }
           final item = items[index];
           // Trigger prefetch callback when nearing the end.

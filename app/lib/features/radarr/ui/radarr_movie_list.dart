@@ -8,12 +8,14 @@ class RadarrMovieList extends StatelessWidget {
   final List<RadarrMovie> movies;
   final void Function(int id) onDelete;
   final void Function(int id) onSearch;
+  final bool embedded;
 
   const RadarrMovieList({
     super.key,
     required this.movies,
     required this.onDelete,
     required this.onSearch,
+    this.embedded = false,
   });
 
   @override
@@ -26,6 +28,8 @@ class RadarrMovieList extends StatelessWidget {
     }
 
     return ListView.separated(
+      shrinkWrap: embedded,
+      physics: embedded ? const NeverScrollableScrollPhysics() : null,
       itemCount: movies.length,
       separatorBuilder: (_, __) =>
           const Divider(color: AppTheme.border, height: 1),

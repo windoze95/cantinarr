@@ -342,6 +342,103 @@ class Season {
       );
 }
 
+/// Full person detail from TMDB.
+class PersonDetail {
+  final int id;
+  final String name;
+  final String? biography;
+  final String? birthday;
+  final String? deathday;
+  final String? placeOfBirth;
+  final String? profilePath;
+  final String? knownForDepartment;
+  final List<String> alsoKnownAs;
+
+  const PersonDetail({
+    required this.id,
+    required this.name,
+    this.biography,
+    this.birthday,
+    this.deathday,
+    this.placeOfBirth,
+    this.profilePath,
+    this.knownForDepartment,
+    this.alsoKnownAs = const [],
+  });
+
+  factory PersonDetail.fromJson(Map<String, dynamic> json) => PersonDetail(
+        id: json['id'] as int,
+        name: (json['name'] ?? 'Unknown') as String,
+        biography: json['biography'] as String?,
+        birthday: json['birthday'] as String?,
+        deathday: json['deathday'] as String?,
+        placeOfBirth: json['place_of_birth'] as String?,
+        profilePath: json['profile_path'] as String?,
+        knownForDepartment: json['known_for_department'] as String?,
+        alsoKnownAs: (json['also_known_as'] as List<dynamic>?)
+                ?.map((e) => e as String)
+                .toList() ??
+            [],
+      );
+
+  int? get age {
+    if (birthday == null) return null;
+    final birth = DateTime.tryParse(birthday!);
+    if (birth == null) return null;
+    final end = deathday != null ? DateTime.tryParse(deathday!) : null;
+    final ref = end ?? DateTime.now();
+    int a = ref.year - birth.year;
+    if (ref.month < birth.month ||
+        (ref.month == birth.month && ref.day < birth.day)) {
+      a--;
+    }
+    return a;
+  }
+}
+
+/// A single credit entry (cast or crew) from TMDB combined_credits.
+class PersonCredit {
+  final int id;
+  final String title;
+  final String mediaType;
+  final String? posterPath;
+  final double? voteAverage;
+  final String? releaseDate;
+  final String? character;
+  final String? job;
+  final String? overview;
+
+  const PersonCredit({
+    required this.id,
+    required this.title,
+    required this.mediaType,
+    this.posterPath,
+    this.voteAverage,
+    this.releaseDate,
+    this.character,
+    this.job,
+    this.overview,
+  });
+
+  factory PersonCredit.fromJson(Map<String, dynamic> json) => PersonCredit(
+        id: json['id'] as int,
+        title: (json['title'] ?? json['name'] ?? 'Untitled') as String,
+        mediaType: (json['media_type'] ?? 'movie') as String,
+        posterPath: json['poster_path'] as String?,
+        voteAverage: (json['vote_average'] as num?)?.toDouble(),
+        releaseDate:
+            (json['release_date'] ?? json['first_air_date']) as String?,
+        character: json['character'] as String?,
+        job: json['job'] as String?,
+        overview: json['overview'] as String?,
+      );
+
+  String? get year {
+    if (releaseDate == null || releaseDate!.length < 4) return null;
+    return releaseDate!.substring(0, 4);
+  }
+}
+
 /// Helper to parse the nested videos response.
 List<Video> _parseVideos(Map<String, dynamic> json) {
   final videosData = json['videos'];

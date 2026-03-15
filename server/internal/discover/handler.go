@@ -187,6 +187,18 @@ func (h *Handler) TVDetail(w http.ResponseWriter, r *http.Request) {
 	h.cachedTMDB(w, key, ttlDetails, fmt.Sprintf("/tv/%s", id), params)
 }
 
+func (h *Handler) PersonDetail(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	key := "person:" + id
+	h.cachedTMDB(w, key, ttlDetails, fmt.Sprintf("/person/%s", id), nil)
+}
+
+func (h *Handler) PersonCredits(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	key := "person_credits:" + id
+	h.cachedTMDB(w, key, ttlDetails, fmt.Sprintf("/person/%s/combined_credits", id), nil)
+}
+
 func (h *Handler) MovieRecommendations(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	page := queryInt(r, "page", 1)
@@ -301,6 +313,21 @@ func (h *Handler) TraktCalendar(w http.ResponseWriter, r *http.Request) {
 	today := time.Now().Format("2006-01-02")
 	key := fmt.Sprintf("trakt_cal:%s:%d", today, days)
 	h.cachedTrakt(w, key, ttlTrakt, fmt.Sprintf("/calendars/all/shows/%s/%d", today, days), nil)
+}
+
+func (h *Handler) TraktAnticipated(w http.ResponseWriter, r *http.Request) {
+	if h.trakt == nil {
+		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+	typ := r.URL.Query().Get("type")
+	if typ == "" {
+		typ = "movies"
+	}
+	page := queryInt(r, "page", 1)
+	key := fmt.Sprintf("trakt_anticipated:%s:%d", typ, page)
+	params := url.Values{"page": {strconv.Itoa(page)}, "limit": {"20"}, "extended": {"full"}}
+	h.cachedTrakt(w, key, ttlTrakt, fmt.Sprintf("/%s/anticipated", typ), params)
 }
 
 func (h *Handler) TraktRecommendations(w http.ResponseWriter, r *http.Request) {

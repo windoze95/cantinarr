@@ -1,15 +1,9 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/app_config.dart';
-import '../../../core/network/backend_client.dart';
 import '../data/discover_api_service.dart';
 import '../data/tmdb_models.dart';
 import 'paged_loader.dart';
-
-/// Provides the unified discover service backed by the server.
-final discoverServiceProvider = Provider<DiscoverApiService>(
-  (ref) => DiscoverApiService(backendDio: ref.watch(backendClientProvider)),
-);
 
 /// The main state for the discover screen.
 class DiscoverState {

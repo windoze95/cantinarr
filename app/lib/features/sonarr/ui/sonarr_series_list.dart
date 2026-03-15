@@ -8,12 +8,14 @@ class SonarrSeriesList extends StatelessWidget {
   final List<SonarrSeries> series;
   final void Function(int id) onDelete;
   final void Function(int id) onSearch;
+  final bool embedded;
 
   const SonarrSeriesList({
     super.key,
     required this.series,
     required this.onDelete,
     required this.onSearch,
+    this.embedded = false,
   });
 
   @override
@@ -26,6 +28,8 @@ class SonarrSeriesList extends StatelessWidget {
     }
 
     return ListView.separated(
+      shrinkWrap: embedded,
+      physics: embedded ? const NeverScrollableScrollPhysics() : null,
       itemCount: series.length,
       separatorBuilder: (_, __) =>
           const Divider(color: AppTheme.border, height: 1),
