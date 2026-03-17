@@ -1,0 +1,19 @@
+default_platform(:ios)
+
+platform :ios do
+  desc "Upload to TestFlight"
+  lane :beta do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
+      key_content: Base64.decode64(ENV["APP_STORE_CONNECT_API_KEY_B64"]),
+      is_key_content_base64: false,
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: "../build/ios/ipa/Cantinarr.ipa",
+      skip_waiting_for_build_processing: true,
+    )
+  end
+end

@@ -1,7 +1,7 @@
 name: cantinarr
 description: A frictionless media request app for Plex/Jellyfin servers.
 publish_to: 'none'
-version: 1.0.0+1
+version: 0.1.0+1
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
