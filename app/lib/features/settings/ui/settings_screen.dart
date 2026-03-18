@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
+import 'about_sheet.dart';
 
 /// Simplified settings screen for backend-connected architecture.
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -158,6 +159,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             icon: Icons.info_outline,
             title: 'Cantinarr',
             subtitle: 'Version 1.0.0',
+            onTap: () => showModalBottomSheet(
+              context: context,
+              backgroundColor: Colors.transparent,
+              builder: (_) => const AboutSheet(),
+            ),
           ),
 
           const SizedBox(height: 24),
