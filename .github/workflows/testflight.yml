@@ -20,22 +20,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Calculate build number
         id: build_number
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
-          FIRST_COMMIT=$(git log --all --reverse -S "version: ${VERSION}" --format="%H" -- app/pubspec.yaml | head -1)
-          if [ -z "$FIRST_COMMIT" ]; then
-            COMMIT_COUNT=1
-          else
-            COMMIT_COUNT=$(( $(git rev-list --count ${FIRST_COMMIT}..HEAD) + 1 ))
-          fi
-          BUILD_NUMBER=$(( 38 + COMMIT_COUNT ))
-          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Building ${VERSION}+${BUILD_NUMBER}"
+          cd ios
+          gem install fastlane
+          APP_VERSION=$VERSION fastlane next_build_number
 
       - name: Setup Xcode 16
         uses: maxim-lobanov/setup-xcode@v1
@@ -49,12 +47,6 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
-
-      - name: Install Fastlane
-        run: |
-          cd ios
-          gem install bundler
-          gem install fastlane
 
       - name: Import distribution certificate
         env:

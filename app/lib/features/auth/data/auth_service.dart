@@ -107,15 +107,26 @@ class AuthResponse {
 class ServerConfig {
   final String serverName;
   final AvailableServices services;
+  final List<ServiceInstance> instances;
 
   const ServerConfig({
     required this.serverName,
     required this.services,
+    this.instances = const [],
   });
 
-  factory ServerConfig.fromJson(Map<String, dynamic> json) => ServerConfig(
-        serverName: json['server_name'] as String? ?? 'Cantinarr',
-        services: AvailableServices.fromJson(
-            json['services'] as Map<String, dynamic>? ?? {}),
-      );
+  factory ServerConfig.fromJson(Map<String, dynamic> json) {
+    final instancesList = (json['instances'] as List<dynamic>?)
+            ?.map((i) =>
+                ServiceInstance.fromJson(i as Map<String, dynamic>))
+            .toList() ??
+        [];
+
+    return ServerConfig(
+      serverName: json['server_name'] as String? ?? 'Cantinarr',
+      services: AvailableServices.fromJson(
+          json['services'] as Map<String, dynamic>? ?? {}),
+      instances: instancesList,
+    );
+  }
 }

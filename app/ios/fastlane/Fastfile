@@ -1,6 +1,28 @@
 default_platform(:ios)
 
 platform :ios do
+  desc "Get next build number from TestFlight"
+  lane :next_build_number do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
+      key_content: Base64.decode64(ENV["APP_STORE_CONNECT_API_KEY_B64"]),
+      is_key_content_base64: false,
+    )
+
+    version = ENV["APP_VERSION"]
+    current = latest_testflight_build_number(
+      api_key: api_key,
+      app_identifier: "codes.julian.cantinarr",
+      version: version,
+      initial_build_number: 0,
+    )
+    next_build = current + 1
+
+    UI.message("Latest TestFlight build: #{current}, next: #{next_build}")
+    File.write(ENV['GITHUB_OUTPUT'], "build_number=#{next_build}\n", mode: "a") if ENV['GITHUB_OUTPUT']
+  end
+
   desc "Upload to TestFlight"
   lane :beta do
     api_key = app_store_connect_api_key(

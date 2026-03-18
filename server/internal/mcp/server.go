@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
@@ -20,19 +21,45 @@ type Tool struct {
 
 // ToolServer executes tools in-process on behalf of the AI.
 type ToolServer struct {
-	tmdb    *tmdb.Client
-	request *request.Service
-	radarr  *radarr.Client
-	sonarr  *sonarr.Client
+	tmdb     *tmdb.Client
+	request  *request.Service
+	registry *instance.Registry
+
+	// Legacy direct clients (used when registry is nil)
+	radarr *radarr.Client
+	sonarr *sonarr.Client
 }
 
-func NewToolServer(tmdbClient *tmdb.Client, requestSvc *request.Service, radarrClient *radarr.Client, sonarrClient *sonarr.Client) *ToolServer {
+func NewToolServer(tmdbClient *tmdb.Client, requestSvc *request.Service, registry *instance.Registry, radarrClient *radarr.Client, sonarrClient *sonarr.Client) *ToolServer {
 	return &ToolServer{
-		tmdb:    tmdbClient,
-		request: requestSvc,
-		radarr:  radarrClient,
-		sonarr:  sonarrClient,
+		tmdb:     tmdbClient,
+		request:  requestSvc,
+		registry: registry,
+		radarr:   radarrClient,
+		sonarr:   sonarrClient,
 	}
+}
+
+// GetRadarr returns the default Radarr client.
+func (s *ToolServer) GetRadarr() *radarr.Client {
+	if s.registry != nil {
+		client, _, err := s.registry.GetDefaultRadarrClient()
+		if err == nil && client != nil {
+			return client
+		}
+	}
+	return s.radarr
+}
+
+// GetSonarr returns the default Sonarr client.
+func (s *ToolServer) GetSonarr() *sonarr.Client {
+	if s.registry != nil {
+		client, _, err := s.registry.GetDefaultSonarrClient()
+		if err == nil && client != nil {
+			return client
+		}
+	}
+	return s.sonarr
 }
 
 // GetTools returns the list of tools available to the AI.
