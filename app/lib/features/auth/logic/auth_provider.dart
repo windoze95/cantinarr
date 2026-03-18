@@ -78,6 +78,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
         services: config.services,
+        instances: config.instances,
       );
 
       return AuthState(connection: connection, user: authResp.user);
@@ -109,6 +110,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
         services: config.services,
+        instances: config.instances,
       );
 
       state = AsyncData(
@@ -139,6 +141,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
         services: config.services,
+        instances: config.instances,
       );
 
       state = AsyncData(

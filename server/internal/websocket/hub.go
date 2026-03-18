@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -44,12 +45,16 @@ type Hub struct {
 	mu         sync.RWMutex
 
 	authService *auth.Service
-	radarr      *radarr.Client
-	sonarr      *sonarr.Client
+	registry    *instance.Registry
+	store       *instance.Store
+
+	// Legacy direct clients (used when registry is nil)
+	radarr *radarr.Client
+	sonarr *sonarr.Client
 
 	// Previous polling state for detecting transitions
-	prevRadarrQueue map[int]float64 // movieId -> progress
-	prevSonarrQueue map[int]float64 // seriesId -> progress
+	prevRadarrQueue map[string]map[int]float64 // instanceID -> movieId -> progress
+	prevSonarrQueue map[string]map[int]float64 // instanceID -> seriesId -> progress
 }
 
 var upgrader = websocket.Upgrader{
@@ -57,17 +62,19 @@ var upgrader = websocket.Upgrader{
 }
 
 // NewHub creates a new WebSocket hub.
-func NewHub(authService *auth.Service, radarrClient *radarr.Client, sonarrClient *sonarr.Client) *Hub {
+func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store, radarrClient *radarr.Client, sonarrClient *sonarr.Client) *Hub {
 	return &Hub{
 		clients:         make(map[*Client]bool),
 		broadcast:       make(chan []byte, 256),
 		register:        make(chan *Client),
 		unregister:      make(chan *Client),
 		authService:     authService,
+		registry:        registry,
+		store:           store,
 		radarr:          radarrClient,
 		sonarr:          sonarrClient,
-		prevRadarrQueue: make(map[int]float64),
-		prevSonarrQueue: make(map[int]float64),
+		prevRadarrQueue: make(map[string]map[int]float64),
+		prevSonarrQueue: make(map[string]map[int]float64),
 	}
 }
 
@@ -205,20 +212,66 @@ func (h *Hub) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			h.pollRadarr()
-			h.pollSonarr()
+			h.pollAllRadarr()
+			h.pollAllSonarr()
 		}
 	}
 }
 
-func (h *Hub) pollRadarr() {
-	if h.radarr == nil {
-		return
+func (h *Hub) pollAllRadarr() {
+	// Poll via registry (all instances)
+	if h.store != nil {
+		instances, err := h.store.List("radarr")
+		if err == nil {
+			for _, inst := range instances {
+				if h.registry == nil {
+					continue
+				}
+				client, err := h.registry.GetRadarrClient(inst.ID)
+				if err != nil {
+					continue
+				}
+				h.pollRadarrInstance(inst.ID, client)
+			}
+			return
+		}
 	}
 
-	queue, err := h.radarr.GetQueue()
+	// Legacy fallback
+	if h.radarr != nil {
+		h.pollRadarrInstance("legacy", h.radarr)
+	}
+}
+
+func (h *Hub) pollAllSonarr() {
+	// Poll via registry (all instances)
+	if h.store != nil {
+		instances, err := h.store.List("sonarr")
+		if err == nil {
+			for _, inst := range instances {
+				if h.registry == nil {
+					continue
+				}
+				client, err := h.registry.GetSonarrClient(inst.ID)
+				if err != nil {
+					continue
+				}
+				h.pollSonarrInstance(inst.ID, client)
+			}
+			return
+		}
+	}
+
+	// Legacy fallback
+	if h.sonarr != nil {
+		h.pollSonarrInstance("legacy", h.sonarr)
+	}
+}
+
+func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
+	queue, err := client.GetQueue()
 	if err != nil {
-		log.Printf("websocket: poll radarr queue: %v", err)
+		log.Printf("websocket: poll radarr queue (%s): %v", instanceID, err)
 		return
 	}
 
@@ -231,7 +284,7 @@ func (h *Hub) pollRadarr() {
 		currentQueue[item.MovieID] = progress
 
 		// Look up TMDB ID for this movie
-		movie, err := h.radarr.GetMovie(item.MovieID)
+		movie, err := client.GetMovie(item.MovieID)
 		if err != nil {
 			log.Printf("websocket: get radarr movie %d: %v", item.MovieID, err)
 			continue
@@ -240,46 +293,47 @@ func (h *Hub) pollRadarr() {
 		h.Broadcast(Event{
 			Type: "download_progress",
 			Data: map[string]interface{}{
-				"tmdb_id":    movie.TmdbID,
-				"media_type": "movie",
-				"progress":   progress,
-				"status":     "downloading",
+				"tmdb_id":     movie.TmdbID,
+				"media_type":  "movie",
+				"progress":    progress,
+				"status":      "downloading",
+				"instance_id": instanceID,
 			},
 		})
 	}
 
 	// Check for items that were previously downloading but are no longer in queue
-	for movieID := range h.prevRadarrQueue {
-		if _, stillInQueue := currentQueue[movieID]; !stillInQueue {
-			movie, err := h.radarr.GetMovie(movieID)
-			if err != nil {
-				log.Printf("websocket: get completed radarr movie %d: %v", movieID, err)
-				continue
-			}
-			if movie.HasFile {
-				h.Broadcast(Event{
-					Type: "request_status_changed",
-					Data: map[string]interface{}{
-						"tmdb_id":    movie.TmdbID,
-						"media_type": "movie",
-						"status":     "available",
-					},
-				})
+	prevQueue := h.prevRadarrQueue[instanceID]
+	if prevQueue != nil {
+		for movieID := range prevQueue {
+			if _, stillInQueue := currentQueue[movieID]; !stillInQueue {
+				movie, err := client.GetMovie(movieID)
+				if err != nil {
+					log.Printf("websocket: get completed radarr movie %d: %v", movieID, err)
+					continue
+				}
+				if movie.HasFile {
+					h.Broadcast(Event{
+						Type: "request_status_changed",
+						Data: map[string]interface{}{
+							"tmdb_id":     movie.TmdbID,
+							"media_type":  "movie",
+							"status":      "available",
+							"instance_id": instanceID,
+						},
+					})
+				}
 			}
 		}
 	}
 
-	h.prevRadarrQueue = currentQueue
+	h.prevRadarrQueue[instanceID] = currentQueue
 }
 
-func (h *Hub) pollSonarr() {
-	if h.sonarr == nil {
-		return
-	}
-
-	queue, err := h.sonarr.GetQueue()
+func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
+	queue, err := client.GetQueue()
 	if err != nil {
-		log.Printf("websocket: poll sonarr queue: %v", err)
+		log.Printf("websocket: poll sonarr queue (%s): %v", instanceID, err)
 		return
 	}
 
@@ -291,7 +345,7 @@ func (h *Hub) pollSonarr() {
 		}
 		currentQueue[item.SeriesID] = progress
 
-		series, err := h.sonarr.GetSeries(item.SeriesID)
+		series, err := client.GetSeries(item.SeriesID)
 		if err != nil {
 			log.Printf("websocket: get sonarr series %d: %v", item.SeriesID, err)
 			continue
@@ -300,36 +354,41 @@ func (h *Hub) pollSonarr() {
 		h.Broadcast(Event{
 			Type: "download_progress",
 			Data: map[string]interface{}{
-				"tmdb_id":    series.TmdbID,
-				"media_type": "tv",
-				"progress":   progress,
-				"status":     "downloading",
+				"tmdb_id":     series.TmdbID,
+				"media_type":  "tv",
+				"progress":    progress,
+				"status":      "downloading",
+				"instance_id": instanceID,
 			},
 		})
 	}
 
 	// Check for items that left the queue
-	for seriesID := range h.prevSonarrQueue {
-		if _, stillInQueue := currentQueue[seriesID]; !stillInQueue {
-			series, err := h.sonarr.GetSeries(seriesID)
-			if err != nil {
-				log.Printf("websocket: get completed sonarr series %d: %v", seriesID, err)
-				continue
+	prevQueue := h.prevSonarrQueue[instanceID]
+	if prevQueue != nil {
+		for seriesID := range prevQueue {
+			if _, stillInQueue := currentQueue[seriesID]; !stillInQueue {
+				series, err := client.GetSeries(seriesID)
+				if err != nil {
+					log.Printf("websocket: get completed sonarr series %d: %v", seriesID, err)
+					continue
+				}
+				status := "available"
+				if series.Statistics != nil && series.Statistics.PercentOfEpisodes < 100 {
+					status = "partially_available"
+				}
+				h.Broadcast(Event{
+					Type: "request_status_changed",
+					Data: map[string]interface{}{
+						"tmdb_id":     series.TmdbID,
+						"media_type":  "tv",
+						"status":      status,
+						"instance_id": instanceID,
+					},
+				})
 			}
-			status := "available"
-			if series.Statistics != nil && series.Statistics.PercentOfEpisodes < 100 {
-				status = "partially_available"
-			}
-			h.Broadcast(Event{
-				Type: "request_status_changed",
-				Data: map[string]interface{}{
-					"tmdb_id":    series.TmdbID,
-					"media_type": "tv",
-					"status":     status,
-				},
-			})
 		}
 	}
 
-	h.prevSonarrQueue = currentQueue
+	h.prevSonarrQueue[instanceID] = currentQueue
 }

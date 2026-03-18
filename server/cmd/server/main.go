@@ -15,6 +15,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/discover"
+	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -65,27 +66,31 @@ func main() {
 	// Bridge
 	bridge := tmdb.NewBridge(tmdbClient, traktClient, database)
 
-	// Radarr (optional)
+	// Instance store and registry
+	instanceStore := instance.NewStore(database)
+	seedInstancesFromEnv(instanceStore, cfg)
+	registry := instance.NewRegistry(instanceStore)
+	instanceHandler := instance.NewHandler(instanceStore, registry)
+
+	// Legacy direct clients (for backward compat, also used as fallback)
 	var radarrClient *radarr.Client
 	if cfg.RadarrEnabled() {
 		radarrClient = radarr.NewClient(cfg.RadarrURL, cfg.RadarrKey)
 	}
-
-	// Sonarr (optional)
 	var sonarrClient *sonarr.Client
 	if cfg.SonarrEnabled() {
 		sonarrClient = sonarr.NewClient(cfg.SonarrURL, cfg.SonarrKey)
 	}
 
 	// Request service
-	requestService := request.NewService(database, radarrClient, sonarrClient, bridge)
+	requestService := request.NewService(database, registry, radarrClient, sonarrClient, bridge)
 	requestHandler := request.NewHandler(requestService)
 
 	// Proxy handler
-	proxyHandler := proxy.NewHandler(cfg.RadarrURL, cfg.RadarrKey, cfg.SonarrURL, cfg.SonarrKey)
+	proxyHandler := proxy.NewHandler(cfg.RadarrURL, cfg.RadarrKey, cfg.SonarrURL, cfg.SonarrKey, instanceStore)
 
 	// MCP tool server
-	toolServer := mcp.NewToolServer(tmdbClient, requestService, radarrClient, sonarrClient)
+	toolServer := mcp.NewToolServer(tmdbClient, requestService, registry, radarrClient, sonarrClient)
 
 	// AI service
 	var aiService *ai.Service
@@ -103,15 +108,62 @@ func main() {
 	}
 
 	// WebSocket hub
-	wsHub := ws.NewHub(authService, radarrClient, sonarrClient)
+	wsHub := ws.NewHub(authService, registry, instanceStore, radarrClient, sonarrClient)
 	go wsHub.Run(context.Background())
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Fatalf("Server failed: %v", err)
+	}
+}
+
+// seedInstancesFromEnv creates default service instances from environment variables
+// if the service_instances table is empty and env vars are set.
+func seedInstancesFromEnv(store *instance.Store, cfg *config.Config) {
+	all, err := store.ListAll()
+	if err != nil {
+		log.Printf("Warning: could not check existing instances: %v", err)
+		return
+	}
+	if len(all) > 0 {
+		return // Already have instances, don't seed
+	}
+
+	if cfg.RadarrEnabled() {
+		inst := &instance.Instance{
+			ID:          "radarr-default",
+			ServiceType: "radarr",
+			Name:        "Movies",
+			URL:         cfg.RadarrURL,
+			APIKey:      cfg.RadarrKey,
+			IsDefault:   true,
+			SortOrder:   0,
+		}
+		if err := store.Create(inst); err != nil {
+			log.Printf("Warning: failed to seed Radarr instance: %v", err)
+		} else {
+			log.Println("Seeded default Radarr instance from env vars")
+		}
+	}
+
+	if cfg.SonarrEnabled() {
+		inst := &instance.Instance{
+			ID:          "sonarr-default",
+			ServiceType: "sonarr",
+			Name:        "TV Shows",
+			URL:         cfg.SonarrURL,
+			APIKey:      cfg.SonarrKey,
+			IsDefault:   true,
+			SortOrder:   0,
+		}
+		if err := store.Create(inst); err != nil {
+			log.Printf("Warning: failed to seed Sonarr instance: %v", err)
+		} else {
+			log.Println("Seeded default Sonarr instance from env vars")
+		}
 	}
 }

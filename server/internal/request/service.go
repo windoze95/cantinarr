@@ -5,25 +5,52 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
 type Service struct {
-	db     *sql.DB
+	db       *sql.DB
+	registry *instance.Registry
+	bridge   *tmdb.Bridge
+
+	// Legacy direct clients (nil when using registry)
 	radarr *radarr.Client
 	sonarr *sonarr.Client
-	bridge *tmdb.Bridge
 }
 
-func NewService(db *sql.DB, radarrClient *radarr.Client, sonarrClient *sonarr.Client, bridge *tmdb.Bridge) *Service {
+func NewService(db *sql.DB, registry *instance.Registry, radarrClient *radarr.Client, sonarrClient *sonarr.Client, bridge *tmdb.Bridge) *Service {
 	return &Service{
-		db:     db,
-		radarr: radarrClient,
-		sonarr: sonarrClient,
-		bridge: bridge,
+		db:       db,
+		registry: registry,
+		radarr:   radarrClient,
+		sonarr:   sonarrClient,
+		bridge:   bridge,
 	}
+}
+
+// getRadarr returns the default Radarr client, preferring registry over legacy.
+func (s *Service) getRadarr() *radarr.Client {
+	if s.registry != nil {
+		client, _, err := s.registry.GetDefaultRadarrClient()
+		if err == nil && client != nil {
+			return client
+		}
+	}
+	return s.radarr
+}
+
+// getSonarr returns the default Sonarr client, preferring registry over legacy.
+func (s *Service) getSonarr() *sonarr.Client {
+	if s.registry != nil {
+		client, _, err := s.registry.GetDefaultSonarrClient()
+		if err == nil && client != nil {
+			return client
+		}
+	}
+	return s.sonarr
 }
 
 type CreateRequest struct {
@@ -64,12 +91,13 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 }
 
 func (s *Service) requestMovie(userID int64, tmdbID int) (*CreateResponse, error) {
-	if s.radarr == nil {
+	radarrClient := s.getRadarr()
+	if radarrClient == nil {
 		return nil, fmt.Errorf("radarr is not configured")
 	}
 
 	// Check if already in Radarr
-	existing, err := s.radarr.GetMovieByTMDB(tmdbID)
+	existing, err := radarrClient.GetMovieByTMDB(tmdbID)
 	if err == nil && existing != nil {
 		status := "requested"
 		if existing.HasFile {
@@ -80,17 +108,17 @@ func (s *Service) requestMovie(userID int64, tmdbID int) (*CreateResponse, error
 	}
 
 	// Lookup movie
-	lookup, err := s.radarr.LookupByTMDB(tmdbID)
+	lookup, err := radarrClient.LookupByTMDB(tmdbID)
 	if err != nil {
 		return nil, fmt.Errorf("movie lookup failed: %w", err)
 	}
 
 	// Get defaults
-	profiles, err := s.radarr.GetQualityProfiles()
+	profiles, err := radarrClient.GetQualityProfiles()
 	if err != nil || len(profiles) == 0 {
 		return nil, fmt.Errorf("no quality profiles available")
 	}
-	folders, err := s.radarr.GetRootFolders()
+	folders, err := radarrClient.GetRootFolders()
 	if err != nil || len(folders) == 0 {
 		return nil, fmt.Errorf("no root folders available")
 	}
@@ -105,7 +133,7 @@ func (s *Service) requestMovie(userID int64, tmdbID int) (*CreateResponse, error
 	}
 	addReq.AddOptions.SearchForMovie = true
 
-	if err := s.radarr.AddMovie(addReq); err != nil {
+	if err := radarrClient.AddMovie(addReq); err != nil {
 		return nil, fmt.Errorf("add movie failed: %w", err)
 	}
 
@@ -114,7 +142,8 @@ func (s *Service) requestMovie(userID int64, tmdbID int) (*CreateResponse, error
 }
 
 func (s *Service) requestTV(userID int64, req *CreateRequest) (*CreateResponse, error) {
-	if s.sonarr == nil {
+	sonarrClient := s.getSonarr()
+	if sonarrClient == nil {
 		return nil, fmt.Errorf("sonarr is not configured")
 	}
 
@@ -131,7 +160,7 @@ func (s *Service) requestTV(userID int64, req *CreateRequest) (*CreateResponse, 
 
 	// Check if already in Sonarr
 	if tvdbID != 0 {
-		existing, err := s.sonarr.GetSeriesByTVDB(tvdbID)
+		existing, err := sonarrClient.GetSeriesByTVDB(tvdbID)
 		if err == nil && existing != nil {
 			status := "requested"
 			if existing.Statistics != nil && existing.Statistics.PercentOfEpisodes >= 100 {
@@ -148,14 +177,14 @@ func (s *Service) requestTV(userID int64, req *CreateRequest) (*CreateResponse, 
 	var lookup *sonarr.LookupResult
 	var err error
 	if tvdbID != 0 {
-		lookup, err = s.sonarr.LookupByTVDB(tvdbID)
+		lookup, err = sonarrClient.LookupByTVDB(tvdbID)
 	}
 	if lookup == nil || err != nil {
 		// Fallback to title search
 		if title == "" {
 			return nil, fmt.Errorf("series lookup failed: no TVDB ID or title provided")
 		}
-		lookup, err = s.sonarr.LookupByTitle(title)
+		lookup, err = sonarrClient.LookupByTitle(title)
 		if err != nil {
 			return nil, fmt.Errorf("series lookup failed: %w", err)
 		}
@@ -163,11 +192,11 @@ func (s *Service) requestTV(userID int64, req *CreateRequest) (*CreateResponse, 
 	}
 
 	// Get defaults
-	profiles, err := s.sonarr.GetQualityProfiles()
+	profiles, err := sonarrClient.GetQualityProfiles()
 	if err != nil || len(profiles) == 0 {
 		return nil, fmt.Errorf("no quality profiles available")
 	}
-	folders, err := s.sonarr.GetRootFolders()
+	folders, err := sonarrClient.GetRootFolders()
 	if err != nil || len(folders) == 0 {
 		return nil, fmt.Errorf("no root folders available")
 	}
@@ -183,7 +212,7 @@ func (s *Service) requestTV(userID int64, req *CreateRequest) (*CreateResponse, 
 	}
 	addReq.AddOptions.SearchForMissingEpisodes = true
 
-	if err := s.sonarr.AddSeries(addReq); err != nil {
+	if err := sonarrClient.AddSeries(addReq); err != nil {
 		return nil, fmt.Errorf("add series failed: %w", err)
 	}
 
@@ -203,11 +232,12 @@ func (s *Service) GetStatus(tmdbID int, mediaType string) (*StatusResponse, erro
 }
 
 func (s *Service) getMovieStatus(tmdbID int) (*StatusResponse, error) {
-	if s.radarr == nil {
+	radarrClient := s.getRadarr()
+	if radarrClient == nil {
 		return &StatusResponse{Status: "unavailable"}, nil
 	}
 
-	movie, err := s.radarr.GetMovieByTMDB(tmdbID)
+	movie, err := radarrClient.GetMovieByTMDB(tmdbID)
 	if err != nil || movie == nil {
 		return &StatusResponse{Status: "unavailable"}, nil
 	}
@@ -217,7 +247,7 @@ func (s *Service) getMovieStatus(tmdbID int) (*StatusResponse, error) {
 	}
 
 	// Check queue for download progress
-	queue, err := s.radarr.GetQueue()
+	queue, err := radarrClient.GetQueue()
 	if err == nil {
 		for _, item := range queue {
 			if item.MovieID == movie.ID {
@@ -238,7 +268,8 @@ func (s *Service) getMovieStatus(tmdbID int) (*StatusResponse, error) {
 }
 
 func (s *Service) getTVStatus(tmdbID int) (*StatusResponse, error) {
-	if s.sonarr == nil {
+	sonarrClient := s.getSonarr()
+	if sonarrClient == nil {
 		return &StatusResponse{Status: "unavailable"}, nil
 	}
 
@@ -254,7 +285,7 @@ func (s *Service) getTVStatus(tmdbID int) (*StatusResponse, error) {
 		tvdbID = bridgeResult.TVDBID
 	}
 
-	series, err := s.sonarr.GetSeriesByTVDB(tvdbID)
+	series, err := sonarrClient.GetSeriesByTVDB(tvdbID)
 	if err != nil || series == nil {
 		return &StatusResponse{Status: "unavailable"}, nil
 	}

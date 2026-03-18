@@ -11,6 +11,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/discover"
+	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/web"
@@ -26,6 +27,8 @@ func NewRouter(
 	wsHub *ws.Hub,
 	aiHandler *ai.Handler,
 	discoverHandler *discover.Handler,
+	instanceHandler *instance.Handler,
+	instanceStore *instance.Store,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -77,7 +80,7 @@ func NewRouter(
 		// Config route (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Get("/config", configHandler(cfg))
+			r.Get("/config", configHandler(cfg, instanceStore))
 		})
 
 		// Request routes (authenticated)
@@ -139,7 +142,21 @@ func NewRouter(
 			r.Get("/ai/available", aiHandler.Available)
 		})
 
-		// Arr proxy routes (admin only)
+		// Instance CRUD routes (admin only)
+		r.Group(func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.Use(auth.AdminMiddleware)
+
+			r.Get("/instances", instanceHandler.List)
+			r.Post("/instances", instanceHandler.Create)
+			r.Put("/instances/{instanceID}", instanceHandler.Update)
+			r.Delete("/instances/{instanceID}", instanceHandler.Delete)
+
+			// Instance proxy — forward to specific instance
+			r.HandleFunc("/instances/{instanceID}/*", proxyHandler.InstanceProxy())
+		})
+
+		// Legacy arr proxy routes (admin only, backward compat)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Use(auth.AdminMiddleware)
@@ -155,18 +172,63 @@ func NewRouter(
 	return r
 }
 
-func configHandler(cfg *config.Config) http.HandlerFunc {
+func configHandler(cfg *config.Config, store *instance.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Build instances list
+		type instanceInfo struct {
+			ID          string `json:"id"`
+			ServiceType string `json:"service_type"`
+			Name        string `json:"name"`
+			IsDefault   bool   `json:"is_default"`
+		}
+
+		var instances []instanceInfo
+		allInstances, err := store.ListAll()
+		if err == nil {
+			for _, inst := range allInstances {
+				instances = append(instances, instanceInfo{
+					ID:          inst.ID,
+					ServiceType: inst.ServiceType,
+					Name:        inst.Name,
+					IsDefault:   inst.IsDefault,
+				})
+			}
+		}
+		if instances == nil {
+			instances = []instanceInfo{}
+		}
+
+		// Derive radarr/sonarr availability from instances
+		hasRadarr := false
+		hasSonarr := false
+		for _, inst := range instances {
+			if inst.ServiceType == "radarr" {
+				hasRadarr = true
+			}
+			if inst.ServiceType == "sonarr" {
+				hasSonarr = true
+			}
+		}
+
+		// Fall back to env var config if no instances
+		if !hasRadarr {
+			hasRadarr = cfg.RadarrEnabled()
+		}
+		if !hasSonarr {
+			hasSonarr = cfg.SonarrEnabled()
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"server_name": cfg.ServerName,
 			"services": map[string]bool{
-				"radarr": cfg.RadarrEnabled(),
-				"sonarr": cfg.SonarrEnabled(),
+				"radarr": hasRadarr,
+				"sonarr": hasSonarr,
 				"ai":     cfg.AIEnabled(),
 				"tmdb":   cfg.TMDBEnabled(),
 				"trakt":  cfg.TraktEnabled(),
 			},
+			"instances": instances,
 		})
 	}
 }

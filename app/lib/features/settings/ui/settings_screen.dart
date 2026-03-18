@@ -24,6 +24,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final auth = authState.valueOrNull;
     final connection = auth?.connection;
     final user = auth?.user;
+    final instances = connection?.instances ?? [];
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -64,36 +65,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           const SizedBox(height: 16),
 
-          // Services
-          _SectionHeader(title: 'Services'),
-          _SettingsTile(
-            icon: Icons.movie_outlined,
-            title: 'Radarr',
-            subtitle: connection?.services.radarr == true
-                ? 'Available'
-                : 'Not configured',
-            trailing: Icon(
-              Icons.circle,
-              size: 12,
-              color: connection?.services.radarr == true
-                  ? AppTheme.available
-                  : AppTheme.unavailable,
+          // Modules (dynamic, instance-based)
+          _SectionHeader(title: 'Modules'),
+          if (instances.isEmpty)
+            _SettingsTile(
+              icon: Icons.info_outline,
+              title: 'No instances configured',
+              subtitle: 'Add a Radarr or Sonarr instance to get started',
             ),
-          ),
-          _SettingsTile(
-            icon: Icons.tv_outlined,
-            title: 'Sonarr',
-            subtitle: connection?.services.sonarr == true
-                ? 'Available'
-                : 'Not configured',
-            trailing: Icon(
-              Icons.circle,
-              size: 12,
-              color: connection?.services.sonarr == true
-                  ? AppTheme.available
-                  : AppTheme.unavailable,
-            ),
-          ),
+          ...instances.map((inst) => _SettingsTile(
+                icon: inst.serviceType == 'radarr'
+                    ? Icons.movie_outlined
+                    : Icons.tv_outlined,
+                title: inst.name,
+                subtitle:
+                    '${inst.serviceType == 'radarr' ? 'Radarr' : 'Sonarr'}${inst.isDefault ? ' (Default)' : ''}',
+                trailing: Icon(
+                  Icons.circle,
+                  size: 12,
+                  color: AppTheme.available,
+                ),
+                onTap: user?.isAdmin == true
+                    ? () => context.push('/settings/instance/${inst.id}')
+                    : null,
+              )),
           _SettingsTile(
             icon: Icons.smart_toy_outlined,
             title: 'AI Assistant',
@@ -108,6 +103,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   : AppTheme.unavailable,
             ),
           ),
+          if (user?.isAdmin == true)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final result =
+                      await context.push<bool>('/settings/instance/new');
+                  if (result == true && mounted) {
+                    // Trigger a config refresh by re-logging in
+                    // (the auth provider will refetch config on next session restore)
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                          content: Text(
+                              'Instance added. Restart the app to see changes.')),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Add Instance'),
+              ),
+            ),
 
           // Admin section
           if (user?.isAdmin == true) ...[
