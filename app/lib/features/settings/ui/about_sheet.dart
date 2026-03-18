@@ -47,7 +47,7 @@ class AboutSheet extends StatelessWidget {
                 'GREEDO <3',
                 style: TextStyle(
                   color: AppTheme.accent,
-                  fontSize: 18,
+                  fontSize: 13,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.2,
                 ),
