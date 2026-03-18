@@ -1050,14 +1050,14 @@ func registerTraktRoutes(r chi.Router) {
 				if i >= 10 {
 					break
 				}
-				mv := TraktMovie{Title: m.tmdb.Title, Year: yearFromDate(m.tmdb.ReleaseDate), IDs: TraktIDs{Trakt: m.tmdb.ID * 10, TMDB: m.tmdb.ID, IMDB: m.detail.ImdbID}}
+				mv := TraktMovie{Title: m.tmdb.Title, Year: yearFromDate(m.tmdb.ReleaseDate), IDs: TraktIDs{Trakt: m.tmdb.ID * 10, TMDB: m.tmdb.ID, IMDB: m.detail.ImdbID}, Images: traktImagesFor(m.tmdb.PosterPath)}
 				items = append(items, TraktAnticipatedItem{ListCount: 500 - i*30, Movie: &mv})
 			}
 			writeJSONOK(w, items)
 		} else {
 			var items []TraktAnticipatedItem
 			for i, t := range tvShows {
-				sh := TraktShow{Title: t.tmdb.Name, Year: yearFromDate(t.tmdb.FirstAirDate), IDs: TraktIDs{Trakt: t.tmdb.ID * 10, TMDB: t.tmdb.ID, TVDB: *t.detail.ExternalIDs.TvdbID}}
+				sh := TraktShow{Title: t.tmdb.Name, Year: yearFromDate(t.tmdb.FirstAirDate), IDs: TraktIDs{Trakt: t.tmdb.ID * 10, TMDB: t.tmdb.ID, TVDB: *t.detail.ExternalIDs.TvdbID}, Images: traktImagesFor(t.tmdb.PosterPath)}
 				items = append(items, TraktAnticipatedItem{ListCount: 400 - i*25, Show: &sh})
 			}
 			writeJSONOK(w, items)

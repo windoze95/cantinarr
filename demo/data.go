@@ -175,16 +175,22 @@ type TraktTrendingShow struct {
 	Show     TraktShow `json:"show"`
 }
 
+type TraktImages struct {
+	Poster []string `json:"poster,omitempty"`
+}
+
 type TraktMovie struct {
-	Title string   `json:"title"`
-	Year  int      `json:"year"`
-	IDs   TraktIDs `json:"ids"`
+	Title  string      `json:"title"`
+	Year   int         `json:"year"`
+	IDs    TraktIDs    `json:"ids"`
+	Images *TraktImages `json:"images,omitempty"`
 }
 
 type TraktShow struct {
-	Title string   `json:"title"`
-	Year  int      `json:"year"`
-	IDs   TraktIDs `json:"ids"`
+	Title  string      `json:"title"`
+	Year   int         `json:"year"`
+	IDs    TraktIDs    `json:"ids"`
+	Images *TraktImages `json:"images,omitempty"`
 }
 
 type TraktIDs struct {
@@ -421,19 +427,38 @@ func init() {
 		{90006, "Silent Film Classics", "An in-depth documentary series exploring the art, history, and lasting influence of silent cinema, featuring restored footage and expert commentary on public domain masterpieces.", "2021-01-05", 8.0, 345, 18.7, []TMDBGenre{{99, "Documentary"}}, []int{99}, 3, 24, "Ended", "Documentary", 390006},
 	}
 
+	// TV shows use fictional IDs — borrow posters from thematically similar real shows.
+	tvPosters := map[int]string{
+		90001: "/ivUXXK80C8Uy4SKQ8IS0LB9zNDX.jpg", // Sherlock Holmes
+		90002: "/nNeb35RFoeLwxu0CFzZ9NAI5UTA.jpg", // MST3K
+		90003: "/7uY4pCOxbEdv4M8jTE4uMPVoSIW.jpg", // The Twilight Zone
+		90004: "/sKlU5jCHKhP8v3wk7VjbLOXrFef.jpg", // Buster Keaton doc
+		90005: "/265Gpw7wSwwMkUQlksot8B2chRg.jpg", // Tales from the Crypt
+		90006: "/dY7zYWlHoctqD5iKbEpv3f07ysO.jpg", // American Masters
+	}
+	tvBackdrops := map[int]string{
+		90001: "/fnArp9iDW0mM5Hu6JbIUlVuHRGj.jpg",
+		90002: "/dnePq1kDs0On398Oc7sVUCZgtft.jpg",
+		90003: "/fg5GcstgP9H8OCNS0MjOMp6MH8R.jpg",
+		90004: "/fNA8lGi9dgZ6o66OQpMYJQFmb3X.jpg",
+		90005: "/nwtdRZHTlDqYwuJDc7oVQueHY2l.jpg",
+		90006: "/jZGxKCxDbepPaARnSu74Df9UE5Y.jpg",
+	}
+
 	for _, t := range tvData {
-		// TV shows use fictional IDs — no TMDB images available.
+		poster := tvPosters[t.id]
+		backdrop := tvBackdrops[t.id]
 		tvShows = append(tvShows, tvEntry{
 			tmdb: TMDBTVShow{
 				ID: t.id, Name: t.name, Overview: t.overview, FirstAirDate: t.date,
 				VoteAverage: t.vote, VoteCount: t.votes, Popularity: t.pop,
-				GenreIDs: t.genreIDs,
+				PosterPath: &poster, BackdropPath: &backdrop, GenreIDs: t.genreIDs,
 				OriginalLanguage: "en", OriginalName: t.name, OriginCountry: []string{"US"},
 			},
 			detail: TMDBTVDetail{
 				ID: t.id, Name: t.name, Overview: t.overview, FirstAirDate: t.date,
 				VoteAverage: t.vote, VoteCount: t.votes, Popularity: t.pop,
-				Genres: t.genres,
+				PosterPath: &poster, BackdropPath: &backdrop, Genres: t.genres,
 				NumberOfSeasons: t.seasons, NumberOfEpisodes: t.episodes,
 				Status: t.status, Type: t.tvType,
 				OriginalLanguage: "en", OriginalName: t.name, OriginCountry: []string{"US"},
@@ -647,6 +672,14 @@ var aiResponses = []string{
 	"For science fiction fans, Metropolis (1927) by Fritz Lang is an absolute must-watch. It's set in a futuristic city divided between wealthy industrialists and underground workers. The visual effects were groundbreaking for its time, and the film's themes about class division remain relevant today. The iconic robot design has influenced everything from C-3PO to modern art.",
 	"Night of the Living Dead (1968) by George A. Romero essentially invented the modern zombie genre. Shot on a shoestring budget in rural Pennsylvania, it became a massive cultural phenomenon. The film entered the public domain because the distributor accidentally failed to include a copyright notice on the prints. That happy accident means we can share this masterpiece freely!",
 	"The General (1926) starring Buster Keaton is widely considered one of the greatest comedies ever made. It features an incredible train chase sequence that Keaton performed himself \u2014 no stunt doubles! The physical comedy and timing are simply unmatched. If you enjoy silent film comedy, this is the perfect starting point.",
+}
+
+// traktImagesFor builds a TraktImages from a TMDB poster path.
+func traktImagesFor(posterPath *string) *TraktImages {
+	if posterPath == nil || *posterPath == "" {
+		return nil
+	}
+	return &TraktImages{Poster: []string{"https://image.tmdb.org/t/p/w500" + *posterPath}}
 }
 
 func traktLists() []TraktList {
