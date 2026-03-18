@@ -33,7 +33,7 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           cd ios
           gem install fastlane
-          APP_VERSION=$VERSION fastlane get_build_number
+          APP_VERSION=$VERSION fastlane next_build_number
 
       - name: Setup Xcode 16
         uses: maxim-lobanov/setup-xcode@v1
