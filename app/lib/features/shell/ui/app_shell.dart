@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../../../core/models/app_module.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/search_bar.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -12,18 +15,14 @@ import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
 import '../logic/shell_search_provider.dart';
 
-/// The root shell widget with persistent search bar, bottom navigation,
-/// and a drawer. 3 tabs: Movies | TV Shows | Assistant.
+/// The root shell widget with persistent search bar and drawer.
+/// Each module provides its own bottom nav via inner StatefulShellRoutes.
 class AppShell extends ConsumerStatefulWidget {
-  final int currentIndex;
   final Widget child;
-  final ValueChanged<int> onTabChanged;
 
   const AppShell({
     super.key,
-    required this.currentIndex,
     required this.child,
-    required this.onTabChanged,
   });
 
   @override
@@ -57,14 +56,32 @@ class _AppShellState extends ConsumerState<AppShell>
   void _initLibraries() {
     final auth = ref.read(authProvider).valueOrNull;
     final backendDio = ref.read(backendClientProvider);
-    if (auth?.connection?.services.radarr ?? false) {
+
+    // Use instance-aware API services
+    final defaultRadarr = auth?.connection?.defaultRadarrInstance;
+    if (defaultRadarr != null) {
+      _radarrNotifier = RadarrMoviesNotifier(
+        RadarrApiService(backendDio: backendDio, instanceId: defaultRadarr.id),
+      );
+      _radarrNotifier!.addListener(_onLibraryChanged);
+      _radarrNotifier!.loadMovies();
+    } else if (auth?.connection?.services.radarr ?? false) {
+      // Legacy fallback
       _radarrNotifier = RadarrMoviesNotifier(
         RadarrApiService(backendDio: backendDio),
       );
       _radarrNotifier!.addListener(_onLibraryChanged);
       _radarrNotifier!.loadMovies();
     }
-    if (auth?.connection?.services.sonarr ?? false) {
+
+    final defaultSonarr = auth?.connection?.defaultSonarrInstance;
+    if (defaultSonarr != null) {
+      _sonarrNotifier = SonarrSeriesNotifier(
+        SonarrApiService(backendDio: backendDio, instanceId: defaultSonarr.id),
+      );
+      _sonarrNotifier!.addListener(_onLibraryChanged);
+      _sonarrNotifier!.loadSeries();
+    } else if (auth?.connection?.services.sonarr ?? false) {
       _sonarrNotifier = SonarrSeriesNotifier(
         SonarrApiService(backendDio: backendDio),
       );
@@ -187,7 +204,7 @@ class _AppShellState extends ConsumerState<AppShell>
       body: SafeArea(
         child: Stack(
           children: [
-            // Base layer: search bar + tab content
+            // Base layer: search bar + module content
             Column(
               children: [
                 // Search bar: collapses on scroll (mobile only)
@@ -199,7 +216,7 @@ class _AppShellState extends ConsumerState<AppShell>
                   )
                 else
                   searchBar,
-                // Tab content
+                // Module content (includes its own bottom nav)
                 Expanded(
                   child: NotificationListener<ScrollNotification>(
                     onNotification: mobile && !searchState.isSearching
@@ -251,41 +268,13 @@ class _AppShellState extends ConsumerState<AppShell>
           ],
         ),
       ),
-      bottomNavigationBar: _buildBottomNav(),
       drawer: _buildDrawer(context),
     );
   }
 
-  Widget _buildBottomNav() {
-    return Container(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
-      ),
-      child: BottomNavigationBar(
-        currentIndex: widget.currentIndex,
-        onTap: widget.onTabChanged,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.movie_outlined),
-            activeIcon: Icon(Icons.movie),
-            label: 'Movies',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.tv_outlined),
-            activeIcon: Icon(Icons.tv),
-            label: 'TV Shows',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.smart_toy_outlined),
-            activeIcon: Icon(Icons.smart_toy),
-            label: 'Assistant',
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildDrawer(BuildContext context) {
+    final moduleState = ref.watch(moduleProvider);
+
     return Drawer(
       backgroundColor: AppTheme.surface,
       child: SafeArea(
@@ -327,34 +316,25 @@ class _AppShellState extends ConsumerState<AppShell>
             ),
             const Divider(color: AppTheme.border),
 
-            // Navigation items
-            _DrawerItem(
-              icon: Icons.movie,
-              title: 'Movies',
-              selected: widget.currentIndex == 0,
-              onTap: () {
-                Navigator.pop(context);
-                widget.onTabChanged(0);
-              },
-            ),
-            _DrawerItem(
-              icon: Icons.tv,
-              title: 'TV Shows',
-              selected: widget.currentIndex == 1,
-              onTap: () {
-                Navigator.pop(context);
-                widget.onTabChanged(1);
-              },
-            ),
-            _DrawerItem(
-              icon: Icons.smart_toy,
-              title: 'AI Assistant',
-              selected: widget.currentIndex == 2,
-              onTap: () {
-                Navigator.pop(context);
-                widget.onTabChanged(2);
-              },
-            ),
+            // Module navigation items
+            ...moduleState.modules.asMap().entries.map((entry) {
+              final module = entry.value;
+              final isActive = entry.key == moduleState.activeIndex;
+
+              return _DrawerItem(
+                icon: module.icon,
+                title: module.label,
+                selected: isActive,
+                onTap: () {
+                  Navigator.pop(context);
+                  _navigateToModule(context, module);
+                  ref.read(moduleProvider.notifier).setActiveModule(
+                        module.type,
+                        instanceId: module.instanceId,
+                      );
+                },
+              );
+            }),
 
             const Spacer(),
             const Divider(color: AppTheme.border),
@@ -362,18 +342,37 @@ class _AppShellState extends ConsumerState<AppShell>
             _DrawerItem(
               icon: Icons.play_circle_outline,
               title: 'Plex Setup Guide',
-              onTap: () => Navigator.pop(context),
+              onTap: () {
+                Navigator.pop(context);
+                context.push('/plex-guide');
+              },
             ),
             _DrawerItem(
               icon: Icons.settings,
               title: 'Settings',
-              onTap: () => Navigator.pop(context),
+              onTap: () {
+                Navigator.pop(context);
+                context.push('/settings');
+              },
             ),
             const SizedBox(height: 8),
           ],
         ),
       ),
     );
+  }
+
+  void _navigateToModule(BuildContext context, AppModule module) {
+    switch (module.type) {
+      case ModuleType.dashboard:
+        context.go('/dashboard/movies');
+      case ModuleType.radarr:
+        context.go('/radarr/library');
+      case ModuleType.sonarr:
+        context.go('/sonarr/library');
+      case ModuleType.assistant:
+        context.go('/assistant');
+    }
   }
 }
 

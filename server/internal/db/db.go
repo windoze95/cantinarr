@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS tmdb_tvdb_cache (
     imdb_id TEXT,
     cached_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS service_instances (
+    id TEXT PRIMARY KEY,
+    service_type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    api_key TEXT NOT NULL,
+    is_default BOOLEAN DEFAULT 0,
+    sort_order INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 func Open(dbPath string) (*sql.DB, error) {
