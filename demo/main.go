@@ -1,12 +1,13 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
+	mathrand "math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -27,6 +29,8 @@ const (
 	demoPort   = 8484
 	demoInvite = "DEMO42"
 	serverName = "Cantinarr Demo"
+
+	demoConnectTokenStr = "demo0000000000000000000000000000000000000000000000000000connect1"
 )
 
 // ─── Simple password hashing (demo only) ────────────────
@@ -92,21 +96,149 @@ func (s *userStore) create(username, password, role string) (*demoUser, error) {
 	return u, nil
 }
 
+// ─── Device store ───────────────────────────────────────
+
+type demoDevice struct {
+	ID         string     `json:"id"`
+	UserID     int64      `json:"user_id"`
+	DeviceName string     `json:"device_name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastSeenAt time.Time  `json:"last_seen_at"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+}
+
+type deviceStore struct {
+	mu      sync.RWMutex
+	devices map[string]*demoDevice
+}
+
+func newDeviceStore() *deviceStore {
+	s := &deviceStore{devices: make(map[string]*demoDevice)}
+	now := time.Now()
+	s.devices["admin-device-0001"] = &demoDevice{ID: "admin-device-0001", UserID: 1, DeviceName: "Admin", CreatedAt: now, LastSeenAt: now}
+	s.devices["user-device-0001"] = &demoDevice{ID: "user-device-0001", UserID: 2, DeviceName: "User", CreatedAt: now, LastSeenAt: now}
+	return s
+}
+
+func (s *deviceStore) get(id string) *demoDevice {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.devices[id]
+}
+
+func (s *deviceStore) create(userID int64, deviceName string) *demoDevice {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	d := &demoDevice{ID: uuid.NewString(), UserID: userID, DeviceName: deviceName, CreatedAt: now, LastSeenAt: now}
+	s.devices[d.ID] = d
+	return d
+}
+
+func (s *deviceStore) updateLastSeen(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d, ok := s.devices[id]; ok {
+		d.LastSeenAt = time.Now()
+	}
+}
+
+func (s *deviceStore) revoke(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.devices[id]
+	if !ok {
+		return false
+	}
+	now := time.Now()
+	d.RevokedAt = &now
+	return true
+}
+
+func (s *deviceStore) listActive() []*demoDevice {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []*demoDevice
+	for _, d := range s.devices {
+		if d.RevokedAt == nil {
+			result = append(result, d)
+		}
+	}
+	return result
+}
+
+// ─── Connect token store ────────────────────────────────
+
+type demoConnectToken struct {
+	Token      string
+	UserID     int64
+	CreatedBy  int64
+	ExpiresAt  time.Time
+	RedeemedAt *time.Time
+}
+
+type connectTokenStore struct {
+	mu     sync.RWMutex
+	tokens map[string]*demoConnectToken
+}
+
+func newConnectTokenStore() *connectTokenStore {
+	s := &connectTokenStore{tokens: make(map[string]*demoConnectToken)}
+	s.tokens[demoConnectTokenStr] = &demoConnectToken{
+		Token:     demoConnectTokenStr,
+		UserID:    2,
+		CreatedBy: 1,
+		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
+	}
+	return s
+}
+
+func (s *connectTokenStore) get(token string) *demoConnectToken {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.tokens[token]
+}
+
+func (s *connectTokenStore) create(userID, createdBy int64) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b := make([]byte, 32)
+	rand.Read(b)
+	token := hex.EncodeToString(b)
+	s.tokens[token] = &demoConnectToken{
+		Token:     token,
+		UserID:    userID,
+		CreatedBy: createdBy,
+		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
+	}
+	return token
+}
+
+func (s *connectTokenStore) redeem(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ct, ok := s.tokens[token]; ok {
+		now := time.Now()
+		ct.RedeemedAt = &now
+	}
+}
+
 // ─── JWT ────────────────────────────────────────────────
 
 type demoClaims struct {
 	UserID   int64  `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	DeviceID string `json:"device_id"`
 	jwt.RegisteredClaims
 }
 
-func generateTokens(u *demoUser) (string, string, error) {
+func generateTokens(u *demoUser, deviceID string) (string, string, error) {
 	now := time.Now()
 	access := jwt.NewWithClaims(jwt.SigningMethodHS256, &demoClaims{
-		UserID: u.ID, Username: u.Username, Role: u.Role,
+		UserID: u.ID, Username: u.Username, Role: u.Role, DeviceID: deviceID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(7 * 24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(15 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	})
@@ -115,9 +247,9 @@ func generateTokens(u *demoUser) (string, string, error) {
 		return "", "", err
 	}
 	refresh := jwt.NewWithClaims(jwt.SigningMethodHS256, &demoClaims{
-		UserID: u.ID, Username: u.Username, Role: u.Role,
+		UserID: u.ID, Username: u.Username, Role: u.Role, DeviceID: deviceID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(30 * 24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(365 * 24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	})
@@ -425,6 +557,8 @@ func yearFromDate(date string) int {
 
 func main() {
 	users := newUserStore()
+	devices := newDeviceStore()
+	connectTokens := newConnectTokenStore()
 	requests := newRequestStore()
 	hub := newWSHub()
 	go hub.run()
@@ -477,9 +611,10 @@ func main() {
 
 		// ── Auth ──
 		r.Route("/auth", func(r chi.Router) {
-			r.Post("/login", loginHandler(users))
+			r.Post("/login", loginHandler(users, devices))
 			r.Post("/register", registerHandler(users))
-			r.Post("/refresh", refreshHandler(users))
+			r.Post("/refresh", refreshHandler(users, devices))
+			r.Post("/connect", connectHandler(users, devices, connectTokens))
 
 			r.Group(func(r chi.Router) {
 				r.Use(authMiddleware)
@@ -489,6 +624,15 @@ func main() {
 					r.Post("/invite", inviteHandler())
 				})
 			})
+		})
+
+		// ── Admin ──
+		r.Route("/admin", func(r chi.Router) {
+			r.Use(authMiddleware)
+			r.Use(adminMiddleware)
+			r.Post("/connect-token", createConnectTokenHandler(users, connectTokens))
+			r.Get("/devices", listDevicesHandler(users, devices))
+			r.Delete("/devices/{deviceID}", revokeDeviceHandler(devices))
 		})
 
 		// ── Config ──
@@ -596,7 +740,7 @@ func main() {
 	log.Printf("Cantinarr Demo Server starting on %s", addr)
 	log.Printf("  Admin login: admin / demo")
 	log.Printf("  User login:  user / demo")
-	log.Printf("  Invite code: %s", demoInvite)
+	log.Printf("  Demo connect link: cantinarr://connect?token=%s&server=http://localhost:%d", demoConnectTokenStr, demoPort)
 	if err := http.ListenAndServe(addr, r); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
@@ -604,21 +748,22 @@ func main() {
 
 // ─── Auth handlers ──────────────────────────────────────
 
-func tokenResponse(u *demoUser) (map[string]interface{}, error) {
-	at, rt, err := generateTokens(u)
+func tokenResponse(u *demoUser, deviceID string) (map[string]interface{}, error) {
+	at, rt, err := generateTokens(u, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{
 		"access_token":  at,
 		"refresh_token": rt,
+		"device_id":     deviceID,
 		"user": map[string]interface{}{
 			"id": u.ID, "username": u.Username, "role": u.Role, "created_at": u.CreatedAt,
 		},
 	}, nil
 }
 
-func loginHandler(users *userStore) http.HandlerFunc {
+func loginHandler(users *userStore, devices *deviceStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Username string `json:"username"`
@@ -633,7 +778,12 @@ func loginHandler(users *userStore) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 			return
 		}
-		resp, err := tokenResponse(u)
+		deviceName := u.Username
+		if u.Role == "admin" {
+			deviceName = "Admin"
+		}
+		device := devices.create(u.ID, deviceName)
+		resp, err := tokenResponse(u, device.ID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token error"})
 			return
@@ -666,7 +816,7 @@ func registerHandler(users *userStore) http.HandlerFunc {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
-		resp, err := tokenResponse(u)
+		resp, err := tokenResponse(u, "")
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token error"})
 			return
@@ -675,7 +825,7 @@ func registerHandler(users *userStore) http.HandlerFunc {
 	}
 }
 
-func refreshHandler(users *userStore) http.HandlerFunc {
+func refreshHandler(users *userStore, devices *deviceStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			RefreshToken string `json:"refresh_token"`
@@ -689,12 +839,22 @@ func refreshHandler(users *userStore) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid refresh token"})
 			return
 		}
+		if claims.DeviceID != "" {
+			device := devices.get(claims.DeviceID)
+			if device != nil && device.RevokedAt != nil {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "device has been revoked"})
+				return
+			}
+			if device != nil {
+				devices.updateLastSeen(claims.DeviceID)
+			}
+		}
 		u := users.getByID(claims.UserID)
 		if u == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user not found"})
 			return
 		}
-		resp, err := tokenResponse(u)
+		resp, err := tokenResponse(u, claims.DeviceID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token error"})
 			return
@@ -720,6 +880,120 @@ func inviteHandler() http.HandlerFunc {
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
 			"code": demoInvite, "expires_at": time.Now().Add(7 * 24 * time.Hour),
 		})
+	}
+}
+
+func connectHandler(users *userStore, devices *deviceStore, tokens *connectTokenStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Token      string `json:"token"`
+			DeviceName string `json:"device_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		ct := tokens.get(req.Token)
+		if ct == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connect token not found"})
+			return
+		}
+		isDemoToken := req.Token == demoConnectTokenStr
+		if !isDemoToken && ct.RedeemedAt != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connect token already used"})
+			return
+		}
+		if time.Now().After(ct.ExpiresAt) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connect token expired"})
+			return
+		}
+		if !isDemoToken {
+			tokens.redeem(req.Token)
+		}
+		u := users.getByID(ct.UserID)
+		if u == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user not found"})
+			return
+		}
+		deviceName := req.DeviceName
+		if deviceName == "" {
+			deviceName = "Unknown Device"
+		}
+		device := devices.create(u.ID, deviceName)
+		resp, err := tokenResponse(u, device.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token error"})
+			return
+		}
+		writeJSONOK(w, resp)
+	}
+}
+
+func createConnectTokenHandler(users *userStore, tokens *connectTokenStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := claimsFromContext(r.Context())
+		var req struct {
+			Name      string `json:"name"`
+			ServerURL string `json:"server_url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		// Find or create user by name
+		u := users.get(req.Name)
+		if u == nil {
+			var err error
+			u, err = users.create(req.Name, "", "user")
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create user"})
+				return
+			}
+		}
+		token := tokens.create(u.ID, claims.UserID)
+		serverURL := req.ServerURL
+		if serverURL == "" {
+			serverURL = fmt.Sprintf("http://localhost:%d", demoPort)
+		}
+		link := fmt.Sprintf("cantinarr://connect?token=%s&server=%s", token, serverURL)
+		ct := tokens.get(token)
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"link":       link,
+			"expires_at": ct.ExpiresAt,
+		})
+	}
+}
+
+func listDevicesHandler(users *userStore, devices *deviceStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		active := devices.listActive()
+		result := make([]map[string]interface{}, 0, len(active))
+		for _, d := range active {
+			username := ""
+			if u := users.getByID(d.UserID); u != nil {
+				username = u.Username
+			}
+			result = append(result, map[string]interface{}{
+				"id":           d.ID,
+				"user_id":      d.UserID,
+				"username":     username,
+				"device_name":  d.DeviceName,
+				"created_at":   d.CreatedAt,
+				"last_seen_at": d.LastSeenAt,
+			})
+		}
+		writeJSONOK(w, result)
+	}
+}
+
+func revokeDeviceHandler(devices *deviceStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		deviceID := chi.URLParam(r, "deviceID")
+		if !devices.revoke(deviceID) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "device not found"})
+			return
+		}
+		writeJSONOK(w, map[string]string{"status": "revoked"})
 	}
 }
 
@@ -1162,7 +1436,7 @@ func aiChatHandler() http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 
-		response := aiResponses[rand.Intn(len(aiResponses))]
+		response := aiResponses[mathrand.Intn(len(aiResponses))]
 		words := strings.Fields(response)
 		for i, word := range words {
 			chunk := word
@@ -1365,12 +1639,12 @@ const landingHTML = `<!DOCTYPE html>
     <div class="cred"><div class="label">User Login</div><div class="value">user / demo</div></div>
   </div>
   <div class="card">
-    <h3>Invite Code</h3>
-    <p>Use code <code>DEMO42</code> to register new accounts.</p>
+    <h3>Connect Link</h3>
+    <p>Use this link to connect a device:<br><code style="word-break:break-all;font-size:.75rem">cantinarr://connect?token=demo0000000000000000000000000000000000000000000000000000connect1&amp;server=http://localhost:8484</code></p>
   </div>
   <div class="card">
     <h3>Features Enabled</h3>
-    <p>TMDB Discovery, Radarr, Sonarr, Trakt, AI Assistant &mdash; all simulated with public domain films.</p>
+    <p>Token-link auth, device management, TMDB Discovery, Radarr, Sonarr, Trakt, AI Assistant &mdash; all simulated with public domain films.</p>
   </div>
   <p class="footer">All content is public domain. This is a demo server for distribution review.</p>
 </div>
