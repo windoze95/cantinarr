@@ -1007,11 +1007,11 @@ func registerTraktRoutes(r chi.Router) {
 		var movieIDs []int
 		switch slug {
 		case "classic-horror-essentials":
-			movieIDs = []int{987, 653, 234, 27573, 17057, 42832}
+			movieIDs = []int{10331, 653, 234, 964, 16093, 21159}
 		case "silent-film-gems":
-			movieIDs = []int{653, 961, 19, 1942, 234, 27573}
+			movieIDs = []int{653, 961, 19, 775, 234, 964}
 		default:
-			movieIDs = []int{25862, 44208, 1480, 43861}
+			movieIDs = []int{18995, 20367, 4808, 18398}
 		}
 		var items []TraktListItem
 		for rank, id := range movieIDs {
