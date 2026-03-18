@@ -3,8 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../features/ai_assistant/ui/ai_chat_screen.dart';
 import '../features/auth/logic/auth_provider.dart';
-import '../features/auth/ui/invite_screen.dart';
-import '../features/auth/ui/login_screen.dart';
+import '../features/auth/ui/connection_screen.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
 import '../features/dashboard/ui/dashboard_tv_tab.dart';
@@ -14,6 +13,7 @@ import '../features/radarr/ui/radarr_calendar_screen.dart';
 import '../features/radarr/ui/radarr_home_screen.dart';
 import '../features/radarr/ui/radarr_module_shell.dart';
 import '../features/radarr/ui/radarr_queue_screen.dart';
+import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
 import '../features/setup_wizard/ui/plex_setup_guide.dart';
@@ -38,26 +38,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final auth = authState.valueOrNull;
       final isAuthenticated = auth?.isAuthenticated ?? false;
-      final isAuthRoute = state.matchedLocation == '/login' ||
-          state.matchedLocation == '/invite';
+      final isAuthRoute = state.matchedLocation == '/login';
 
       if (!isAuthenticated && !isAuthRoute) return '/login';
       if (isAuthenticated && isAuthRoute) return '/dashboard/movies';
       return null;
     },
     routes: [
-      // Auth routes (outside the shell)
+      // Auth route (outside the shell)
       GoRoute(
         path: '/login',
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const LoginScreen(),
-      ),
-      GoRoute(
-        path: '/invite',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, state) => InviteScreen(
-          prefillServerUrl: state.extra as String?,
-        ),
+        builder: (_, __) => const ConnectionScreen(),
       ),
 
       // Module shell (provides drawer + search bar, no bottom nav)
@@ -200,6 +192,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/devices',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const DevicesScreen(),
       ),
       GoRoute(
         path: '/settings/instance/new',

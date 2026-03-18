@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
@@ -43,6 +46,14 @@ func main() {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	defer database.Close()
+
+	// Resolve JWT secret: env var > DB > generate and persist
+	if cfg.JWTSecret == "" {
+		cfg.JWTSecret, err = ensureJWTSecret(database)
+		if err != nil {
+			log.Fatalf("Failed to resolve JWT secret: %v", err)
+		}
+	}
 
 	// Auth
 	authService := auth.NewService(database, cfg.JWTSecret)
@@ -119,6 +130,31 @@ func main() {
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+// ensureJWTSecret loads the JWT secret from the settings table, or generates
+// and persists a new one. This ensures tokens survive server restarts.
+func ensureJWTSecret(database *sql.DB) (string, error) {
+	var secret string
+	err := database.QueryRow("SELECT value FROM settings WHERE key = 'jwt_secret'").Scan(&secret)
+	if err == nil {
+		return secret, nil
+	}
+
+	// Generate a new secret
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate secret: %w", err)
+	}
+	secret = hex.EncodeToString(b)
+
+	_, err = database.Exec("INSERT INTO settings (key, value) VALUES ('jwt_secret', ?)", secret)
+	if err != nil {
+		return "", fmt.Errorf("persist secret: %w", err)
+	}
+
+	log.Println("Generated and persisted JWT secret")
+	return secret, nil
 }
 
 // seedInstancesFromEnv creates default service instances from environment variables

@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -17,12 +19,18 @@ var (
 	ErrInviteRequired     = errors.New("valid invite code required")
 	ErrInviteExpired      = errors.New("invite code expired or already used")
 	ErrUserExists         = errors.New("username already taken")
+	ErrTokenExpired       = errors.New("connect token has expired")
+	ErrTokenRedeemed      = errors.New("connect token has already been used")
+	ErrTokenNotFound      = errors.New("connect token not found")
+	ErrDeviceRevoked      = errors.New("device has been revoked")
+	ErrDeviceNotFound     = errors.New("device not found")
 )
 
 type Claims struct {
 	UserID   int64  `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	DeviceID string `json:"device_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -68,7 +76,23 @@ func (s *Service) Login(username, password string) (*TokenResponse, error) {
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
 	}
-	return s.generateTokens(user)
+
+	// Auto-create a device record for admin login
+	deviceID := uuid.New().String()
+	_, err = s.db.Exec(
+		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
+		deviceID, user.ID, "Admin",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create device: %w", err)
+	}
+
+	resp, err := s.generateTokens(user, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	resp.DeviceID = deviceID
+	return resp, nil
 }
 
 func (s *Service) Register(username, password, inviteCode string) (*TokenResponse, error) {
@@ -106,7 +130,7 @@ func (s *Service) Register(username, password, inviteCode string) (*TokenRespons
 		Username: username,
 		Role:     "user",
 	}
-	return s.generateTokens(user)
+	return s.generateTokens(user, "")
 }
 
 func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {
@@ -114,11 +138,39 @@ func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
+
+	// Check device revocation if the token has a device ID
+	if claims.DeviceID != "" {
+		var revokedAt *time.Time
+		err := s.db.QueryRow(
+			"SELECT revoked_at FROM devices WHERE id = ?", claims.DeviceID,
+		).Scan(&revokedAt)
+		if err != nil {
+			return nil, ErrInvalidCredentials
+		}
+		if revokedAt != nil {
+			return nil, ErrDeviceRevoked
+		}
+		// Update last_seen_at
+		_, _ = s.db.Exec(
+			"UPDATE devices SET last_seen_at = ? WHERE id = ?",
+			time.Now(), claims.DeviceID,
+		)
+	}
+
 	user, err := s.getUserByID(claims.UserID)
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
-	return s.generateTokens(user)
+
+	resp, err := s.generateTokens(user, claims.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	if claims.DeviceID != "" {
+		resp.DeviceID = claims.DeviceID
+	}
+	return resp, nil
 }
 
 func (s *Service) GetUser(userID int64) (*User, error) {
@@ -138,6 +190,152 @@ func (s *Service) CreateInvite(createdBy int64) (*InviteResponse, error) {
 	return &InviteResponse{Code: code, ExpiresAt: expiresAt}, nil
 }
 
+func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*CreateConnectTokenResponse, error) {
+	// Find or create user
+	var userID int64
+	user, err := s.getUserByUsername(name)
+	if err != nil {
+		// Create new user with empty password hash (no password login)
+		result, err := s.db.Exec(
+			"INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+			name, "", "user",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("create user: %w", err)
+		}
+		userID, _ = result.LastInsertId()
+	} else {
+		userID = user.ID
+	}
+
+	// Generate 32-byte random token (64 hex chars)
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return nil, fmt.Errorf("generate token: %w", err)
+	}
+	token := hex.EncodeToString(tokenBytes)
+
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	_, err = s.db.Exec(
+		"INSERT INTO connect_tokens (token, user_id, created_by, expires_at) VALUES (?, ?, ?, ?)",
+		token, userID, createdBy, expiresAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("insert connect token: %w", err)
+	}
+
+	link := fmt.Sprintf("cantinarr://connect?token=%s&server=%s", token, url.QueryEscape(serverURL))
+	return &CreateConnectTokenResponse{Link: link, ExpiresAt: expiresAt}, nil
+}
+
+func (s *Service) RedeemConnectToken(token, deviceName string) (*TokenResponse, error) {
+	var ct ConnectToken
+	err := s.db.QueryRow(
+		"SELECT token, user_id, created_by, expires_at, redeemed_at FROM connect_tokens WHERE token = ?", token,
+	).Scan(&ct.Token, &ct.UserID, &ct.CreatedBy, &ct.ExpiresAt, &ct.RedeemedAt)
+	if err != nil {
+		return nil, ErrTokenNotFound
+	}
+	if ct.RedeemedAt != nil {
+		return nil, ErrTokenRedeemed
+	}
+	if time.Now().After(ct.ExpiresAt) {
+		return nil, ErrTokenExpired
+	}
+
+	// Mark as redeemed
+	now := time.Now()
+	_, err = s.db.Exec("UPDATE connect_tokens SET redeemed_at = ? WHERE token = ?", now, token)
+	if err != nil {
+		return nil, fmt.Errorf("mark token redeemed: %w", err)
+	}
+
+	// Create device record
+	deviceID := uuid.New().String()
+	_, err = s.db.Exec(
+		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
+		deviceID, ct.UserID, deviceName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create device: %w", err)
+	}
+
+	user, err := s.getUserByID(ct.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+
+	resp, err := s.generateTokens(user, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	resp.DeviceID = deviceID
+	return resp, nil
+}
+
+func (s *Service) ListDevices() ([]DeviceInfo, error) {
+	rows, err := s.db.Query(`
+		SELECT d.id, d.user_id, u.username, d.device_name, d.created_at, d.last_seen_at
+		FROM devices d
+		JOIN users u ON u.id = d.user_id
+		WHERE d.revoked_at IS NULL
+		ORDER BY d.last_seen_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query devices: %w", err)
+	}
+	defer rows.Close()
+
+	var devices []DeviceInfo
+	for rows.Next() {
+		var d DeviceInfo
+		if err := rows.Scan(&d.ID, &d.UserID, &d.Username, &d.DeviceName, &d.CreatedAt, &d.LastSeenAt); err != nil {
+			return nil, fmt.Errorf("scan device: %w", err)
+		}
+		devices = append(devices, d)
+	}
+	if devices == nil {
+		devices = []DeviceInfo{}
+	}
+	return devices, nil
+}
+
+func (s *Service) RevokeDevice(deviceID string) error {
+	result, err := s.db.Exec(
+		"UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+		time.Now(), deviceID,
+	)
+	if err != nil {
+		return fmt.Errorf("revoke device: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
+func (s *Service) ListUsers() ([]User, error) {
+	rows, err := s.db.Query("SELECT id, username, password_hash, role, created_at FROM users ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("query users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		users = append(users, u)
+	}
+	if users == nil {
+		users = []User{}
+	}
+	return users, nil
+}
+
 func (s *Service) ValidateToken(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -155,15 +353,16 @@ func (s *Service) ValidateToken(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
-func (s *Service) generateTokens(user *User) (*TokenResponse, error) {
+func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, error) {
 	now := time.Now()
 
 	accessClaims := &Claims{
 		UserID:   user.ID,
 		Username: user.Username,
 		Role:     user.Role,
+		DeviceID: deviceID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(7 * 24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(15 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}
@@ -176,8 +375,9 @@ func (s *Service) generateTokens(user *User) (*TokenResponse, error) {
 		UserID:   user.ID,
 		Username: user.Username,
 		Role:     user.Role,
+		DeviceID: deviceID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(30 * 24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(365 * 24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}

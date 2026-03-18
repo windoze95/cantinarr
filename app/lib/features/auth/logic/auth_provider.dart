@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -39,7 +42,7 @@ class AuthState {
       );
 }
 
-/// Manages authentication lifecycle: login, register, token refresh, logout.
+/// Manages authentication lifecycle: login, connect token, token refresh.
 class AuthNotifier extends AsyncNotifier<AuthState> {
   late final AuthService _authService;
   late final FlutterSecureStorage _storage;
@@ -57,6 +60,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final serverUrl = await _storage.read(key: StorageKeys.serverUrl);
     final accessToken = await _storage.read(key: StorageKeys.jwt);
     final refreshToken = await _storage.read(key: StorageKeys.refreshToken);
+    final deviceId = await _storage.read(key: StorageKeys.deviceId);
 
     if (serverUrl == null || accessToken == null || refreshToken == null) {
       return const AuthState();
@@ -70,7 +74,11 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
       // Persist new tokens
       await _saveTokens(
-          serverUrl, authResp.accessToken, authResp.refreshToken);
+        serverUrl,
+        authResp.accessToken,
+        authResp.refreshToken,
+        authResp.deviceId ?? deviceId,
+      );
 
       final connection = BackendConnection(
         serverUrl: serverUrl,
@@ -89,7 +97,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
   }
 
-  /// Log in with server URL, username, and password.
+  /// Log in with server URL, username, and password (admin bootstrap).
   Future<void> login(
       String serverUrl, String username, String password) async {
     state = const AsyncData(AuthState(isLoading: true));
@@ -102,7 +110,11 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
 
       await _saveTokens(
-          normalizedUrl, authResp.accessToken, authResp.refreshToken);
+        normalizedUrl,
+        authResp.accessToken,
+        authResp.refreshToken,
+        authResp.deviceId,
+      );
 
       final connection = BackendConnection(
         serverUrl: normalizedUrl,
@@ -120,20 +132,24 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
   }
 
-  /// Register a new account using an invite code.
-  Future<void> register(String serverUrl, String username, String password,
-      String inviteCode) async {
+  /// Connect using a connect token (from deep link or paste).
+  Future<void> connectWithToken(String serverUrl, String token) async {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
       final normalizedUrl = _normalizeUrl(serverUrl);
-      final authResp = await _authService.register(
-          normalizedUrl, username, password, inviteCode);
+      final deviceName = _getDeviceName();
+      final authResp = await _authService.redeemConnectToken(
+          normalizedUrl, token, deviceName);
       final config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
 
       await _saveTokens(
-          normalizedUrl, authResp.accessToken, authResp.refreshToken);
+        normalizedUrl,
+        authResp.accessToken,
+        authResp.refreshToken,
+        authResp.deviceId,
+      );
 
       final connection = BackendConnection(
         serverUrl: normalizedUrl,
@@ -147,14 +163,49 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       state = AsyncData(
           AuthState(connection: connection, user: authResp.user));
     } catch (e) {
-      state = AsyncData(AuthState(error: _parseError(e)));
+      state = AsyncData(AuthState(error: _parseConnectError(e)));
     }
   }
 
-  /// Log out and clear stored credentials.
-  Future<void> logout() async {
-    await _clearStorage();
-    state = const AsyncData(AuthState());
+  /// Handle a cantinarr:// deep link. If already authenticated, ignores it.
+  Future<void> connectWithLink(String link) async {
+    final current = state.valueOrNull;
+    if (current?.isAuthenticated == true) return;
+
+    final uri = Uri.tryParse(link);
+    if (uri == null) return;
+
+    final token = uri.queryParameters['token'];
+    final server = uri.queryParameters['server'];
+    if (token == null || server == null) return;
+
+    await connectWithToken(server, token);
+  }
+
+  /// Generate a connect link for a new user (admin only).
+  Future<ConnectTokenResponse> generateConnectToken(String name) async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    return _authService.generateConnectToken(
+      conn.serverUrl,
+      conn.accessToken,
+      name,
+      conn.serverUrl,
+    );
+  }
+
+  /// List all connected devices (admin only).
+  Future<List<DeviceInfo>> listDevices() async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    return _authService.listDevices(conn.serverUrl, conn.accessToken);
+  }
+
+  /// Revoke a device (admin only).
+  Future<void> revokeDevice(String deviceId) async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    await _authService.revokeDevice(conn.serverUrl, conn.accessToken, deviceId);
   }
 
   /// Update tokens after a refresh (called by the auth interceptor).
@@ -174,11 +225,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = AsyncData(current.copyWith(connection: updated));
   }
 
-  /// Generate an invite code (admin only).
-  Future<String> generateInviteCode() async {
-    final conn = state.valueOrNull?.connection;
-    if (conn == null) throw Exception('Not authenticated');
-    return _authService.generateInviteCode(conn.serverUrl, conn.accessToken);
+  /// Called when auth has expired (refresh rejected). Clears state.
+  Future<void> onAuthExpired() async {
+    await _clearStorage();
+    state = const AsyncData(AuthState());
   }
 
   void clearError() {
@@ -191,16 +241,24 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   // ─── Helpers ─────────────────────────────────────────
 
   Future<void> _saveTokens(
-      String serverUrl, String accessToken, String refreshToken) async {
+    String serverUrl,
+    String accessToken,
+    String refreshToken,
+    String? deviceId,
+  ) async {
     await _storage.write(key: StorageKeys.serverUrl, value: serverUrl);
     await _storage.write(key: StorageKeys.jwt, value: accessToken);
     await _storage.write(key: StorageKeys.refreshToken, value: refreshToken);
+    if (deviceId != null) {
+      await _storage.write(key: StorageKeys.deviceId, value: deviceId);
+    }
   }
 
   Future<void> _clearStorage() async {
     await _storage.delete(key: StorageKeys.serverUrl);
     await _storage.delete(key: StorageKeys.jwt);
     await _storage.delete(key: StorageKeys.refreshToken);
+    await _storage.delete(key: StorageKeys.deviceId);
   }
 
   String _normalizeUrl(String url) {
@@ -215,7 +273,29 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     return normalized;
   }
 
+  String _getDeviceName() {
+    try {
+      if (Platform.isIOS) return 'iPhone';
+      if (Platform.isAndroid) return 'Android';
+      if (Platform.isMacOS) return 'Mac';
+      if (Platform.isWindows) return 'Windows';
+      if (Platform.isLinux) return 'Linux';
+    } catch (_) {}
+    return 'Unknown Device';
+  }
+
   String _parseError(Object e) {
+    if (e is DioException) {
+      final statusCode = e.response?.statusCode;
+      if (statusCode == 401) return 'Invalid username or password';
+      if (statusCode == 404) return 'Server not found at this URL';
+      if (e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout) {
+        return 'Could not connect to server';
+      }
+      if (statusCode == 409) return 'Username already taken';
+      if (statusCode == 400) return 'Invalid invite code';
+    }
     if (e is Exception) {
       final msg = e.toString();
       if (msg.contains('401')) return 'Invalid username or password';
@@ -224,10 +304,23 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           msg.contains('SocketException')) {
         return 'Could not connect to server';
       }
-      if (msg.contains('409')) return 'Username already taken';
-      if (msg.contains('400')) return 'Invalid invite code';
     }
     return 'Connection failed. Please check the server URL.';
+  }
+
+  String _parseConnectError(Object e) {
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map<String, dynamic>) {
+        final error = data['error'] as String?;
+        if (error != null) return error;
+      }
+      if (e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout) {
+        return 'Could not connect to server';
+      }
+    }
+    return 'Connection failed. The link may be invalid or expired.';
   }
 }
 

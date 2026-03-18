@@ -63,6 +63,7 @@ func NewRouter(
 			r.Post("/login", authHandler.Login)
 			r.Post("/register", authHandler.Register)
 			r.Post("/refresh", authHandler.Refresh)
+			r.Post("/connect", authHandler.HandleRedeemConnectToken)
 
 			// Protected auth routes
 			r.Group(func(r chi.Router) {
@@ -75,6 +76,15 @@ func NewRouter(
 					r.Post("/invite", authHandler.CreateInvite)
 				})
 			})
+		})
+
+		// Admin routes
+		r.Route("/admin", func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.Use(auth.AdminMiddleware)
+			r.Post("/connect-token", authHandler.HandleCreateConnectToken)
+			r.Get("/devices", authHandler.HandleListDevices)
+			r.Delete("/devices/{deviceID}", authHandler.HandleRevokeDevice)
 		})
 
 		// Config route (authenticated)

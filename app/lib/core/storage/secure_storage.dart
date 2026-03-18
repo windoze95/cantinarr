@@ -16,5 +16,5 @@ class StorageKeys {
   static const String jwt = 'jwt_access_token';
   static const String refreshToken = 'jwt_refresh_token';
   static const String serverUrl = 'server_url';
-
+  static const String deviceId = 'device_id';
 }
