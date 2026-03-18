@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -13,6 +14,12 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// hashToken returns a hex-encoded SHA-256 hash of the given token string.
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
 
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
@@ -138,6 +145,20 @@ func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
+
+	// Verify the refresh token exists in our store (rotation check)
+	oldHash := hashToken(refreshToken)
+	var storedDeviceID string
+	err = s.db.QueryRow(
+		"SELECT device_id FROM refresh_tokens WHERE token_hash = ?", oldHash,
+	).Scan(&storedDeviceID)
+	if err != nil {
+		// Token not in store — it was already rotated out (possible replay)
+		return nil, ErrInvalidCredentials
+	}
+
+	// Delete the old refresh token (one-time use)
+	_, _ = s.db.Exec("DELETE FROM refresh_tokens WHERE token_hash = ?", oldHash)
 
 	// Check device revocation if the token has a device ID
 	if claims.DeviceID != "" {
@@ -312,6 +333,8 @@ func (s *Service) RevokeDevice(deviceID string) error {
 	if affected == 0 {
 		return ErrDeviceNotFound
 	}
+	// Invalidate all refresh tokens for this device
+	_, _ = s.db.Exec("DELETE FROM refresh_tokens WHERE device_id = ?", deviceID)
 	return nil
 }
 
@@ -371,13 +394,14 @@ func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, e
 		return nil, fmt.Errorf("sign access token: %w", err)
 	}
 
+	refreshExpiry := 30 * 24 * time.Hour
 	refreshClaims := &Claims{
 		UserID:   user.ID,
 		Username: user.Username,
 		Role:     user.Role,
 		DeviceID: deviceID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(365 * 24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(refreshExpiry)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}
@@ -385,6 +409,16 @@ func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, e
 	if err != nil {
 		return nil, fmt.Errorf("sign refresh token: %w", err)
 	}
+
+	// Store refresh token hash for rotation tracking
+	tokenHash := hashToken(refreshToken)
+	_, _ = s.db.Exec(
+		"INSERT INTO refresh_tokens (token_hash, device_id, user_id, expires_at) VALUES (?, ?, ?, ?)",
+		tokenHash, deviceID, user.ID, now.Add(refreshExpiry),
+	)
+
+	// Clean up expired refresh tokens periodically (best-effort)
+	_, _ = s.db.Exec("DELETE FROM refresh_tokens WHERE expires_at < ?", now)
 
 	return &TokenResponse{
 		AccessToken:  accessToken,

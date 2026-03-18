@@ -119,7 +119,7 @@ func main() {
 	}
 
 	// WebSocket hub
-	wsHub := ws.NewHub(authService, registry, instanceStore, radarrClient, sonarrClient)
+	wsHub := ws.NewHub(authService, registry, instanceStore, radarrClient, sonarrClient, cfg.AllowedOrigins)
 	go wsHub.Run(context.Background())
 
 	// Router

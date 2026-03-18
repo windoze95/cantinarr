@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    token_hash TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    expires_at DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 func Open(dbPath string) (*sql.DB, error) {

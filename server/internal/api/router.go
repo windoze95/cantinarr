@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -37,12 +38,20 @@ func NewRouter(
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	// CORS: use configured origins, or same-origin only if none specified.
+	allowedOrigins := cfg.AllowedOrigins
+	if len(allowedOrigins) == 0 {
+		// When no origins are configured, allow same-origin requests only.
+		// An empty AllowedOrigins with AllowCredentials=false means the
+		// browser's same-origin policy applies (no cross-origin access).
+		allowedOrigins = []string{}
+	}
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: true,
+		AllowCredentials: false,
 		MaxAge:           300,
 	}))
 
@@ -58,12 +67,15 @@ func NewRouter(
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		})
 
+		// Rate limiter for public auth endpoints: 10 requests per minute per IP
+		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
-			r.Post("/login", authHandler.Login)
-			r.Post("/register", authHandler.Register)
+			r.With(authLimiter.Middleware).Post("/login", authHandler.Login)
+			r.With(authLimiter.Middleware).Post("/register", authHandler.Register)
 			r.Post("/refresh", authHandler.Refresh)
-			r.Post("/connect", authHandler.HandleRedeemConnectToken)
+			r.With(authLimiter.Middleware).Post("/connect", authHandler.HandleRedeemConnectToken)
 
 			// Protected auth routes
 			r.Group(func(r chi.Router) {
