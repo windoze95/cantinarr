@@ -35,7 +35,7 @@ final backendClientProvider = Provider<Dio>((ref) {
       await authNotifier.updateTokens(accessToken, refreshToken);
     },
     onAuthExpired: () {
-      authNotifier.logout();
+      authNotifier.onAuthExpired();
     },
   ));
 

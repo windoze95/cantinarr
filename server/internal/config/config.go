@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -89,14 +87,6 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("invalid CANTINARR_PORT: %w", err)
 		}
 		cfg.Port = p
-	}
-
-	if cfg.JWTSecret == "" {
-		b := make([]byte, 32)
-		if _, err := rand.Read(b); err != nil {
-			return nil, fmt.Errorf("failed to generate JWT secret: %w", err)
-		}
-		cfg.JWTSecret = hex.EncodeToString(b)
 	}
 
 	return cfg, nil

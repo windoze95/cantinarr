@@ -16,8 +16,6 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  String? _generatedCode;
-  bool _isGenerating = false;
   String _appVersion = '';
 
   @override
@@ -121,8 +119,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   final result =
                       await context.push<bool>('/settings/instance/new');
                   if (result == true && mounted) {
-                    // Trigger a config refresh by re-logging in
-                    // (the auth provider will refetch config on next session restore)
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                           content: Text(
@@ -140,29 +136,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: 16),
             _SectionHeader(title: 'Admin'),
             _SettingsTile(
-              icon: Icons.vpn_key_outlined,
-              title: 'Generate Invite Code',
-              subtitle: _generatedCode != null
-                  ? 'Code: $_generatedCode (tap to copy)'
-                  : 'Create a code to invite new users',
-              onTap: _generatedCode != null
-                  ? () {
-                      Clipboard.setData(
-                          ClipboardData(text: _generatedCode!));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                            content: Text('Invite code copied!')),
-                      );
-                    }
-                  : _generateInviteCode,
-              trailing: _isGenerating
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppTheme.accent),
-                    )
-                  : null,
+              icon: Icons.link,
+              title: 'Generate Connect Link',
+              subtitle: 'Create a link to invite a new user',
+              onTap: () => _showGenerateConnectLinkDialog(context),
+            ),
+            _SettingsTile(
+              icon: Icons.devices,
+              title: 'Connected Devices',
+              subtitle: 'Manage all connected devices',
+              onTap: () => context.push('/settings/devices'),
             ),
           ],
 
@@ -192,51 +175,111 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
 
-          const SizedBox(height: 24),
-
-          // Logout
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: OutlinedButton.icon(
-              onPressed: () async {
-                await ref.read(authProvider.notifier).logout();
-                if (context.mounted) context.go('/login');
-              },
-              icon: const Icon(Icons.logout, color: AppTheme.error),
-              label:
-                  const Text('Sign Out', style: TextStyle(color: AppTheme.error)),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: AppTheme.error),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-            ),
-          ),
-
           const SizedBox(height: 32),
         ],
       ),
     );
   }
 
-  Future<void> _generateInviteCode() async {
-    setState(() => _isGenerating = true);
-    try {
-      final code =
-          await ref.read(authProvider.notifier).generateInviteCode();
-      setState(() {
-        _generatedCode = code;
-        _isGenerating = false;
-      });
-    } catch (e) {
-      setState(() => _isGenerating = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to generate code: $e')),
-        );
-      }
-    }
+  void _showGenerateConnectLinkDialog(BuildContext context) {
+    final nameController = TextEditingController();
+    String? generatedLink;
+    bool isGenerating = false;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Generate Connect Link'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (generatedLink == null) ...[
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Name',
+                    hintText: 'e.g. Mom, Dad, Roommate',
+                    prefixIcon: Icon(Icons.person_outline),
+                  ),
+                  textCapitalization: TextCapitalization.words,
+                  textInputAction: TextInputAction.done,
+                ),
+              ] else ...[
+                const Text(
+                  'Share this link:',
+                  style: TextStyle(color: AppTheme.textSecondary),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.accent.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: SelectableText(
+                    generatedLink!,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(generatedLink != null ? 'Done' : 'Cancel'),
+            ),
+            if (generatedLink == null)
+              ElevatedButton(
+                onPressed: isGenerating
+                    ? null
+                    : () async {
+                        final name = nameController.text.trim();
+                        if (name.isEmpty) return;
+                        setDialogState(() => isGenerating = true);
+                        try {
+                          final resp = await ref
+                              .read(authProvider.notifier)
+                              .generateConnectToken(name);
+                          setDialogState(() {
+                            generatedLink = resp.link;
+                            isGenerating = false;
+                          });
+                        } catch (e) {
+                          setDialogState(() => isGenerating = false);
+                          if (dialogContext.mounted) {
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              SnackBar(
+                                  content:
+                                      Text('Failed to generate link: $e')),
+                            );
+                          }
+                        }
+                      },
+                child: isGenerating
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Generate'),
+              ),
+            if (generatedLink != null)
+              ElevatedButton.icon(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: generatedLink!));
+                  ScaffoldMessenger.of(dialogContext).showSnackBar(
+                    const SnackBar(content: Text('Link copied!')),
+                  );
+                },
+                icon: const Icon(Icons.copy, size: 18),
+                label: const Text('Copy'),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

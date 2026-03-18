@@ -40,6 +40,9 @@ dependencies:
   # App info
   package_info_plus: ^8.0.0
 
+  # Deep linking
+  app_links: ^6.3.2
+
   # Utilities
   url_launcher: ^6.3.1
   webview_flutter: ^4.10.0
