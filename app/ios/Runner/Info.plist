@@ -66,6 +66,19 @@
 			<string>UIInterfaceOrientationLandscapeLeft</string>
 			<string>UIInterfaceOrientationLandscapeRight</string>
 		</array>
+		<key>CFBundleURLTypes</key>
+		<array>
+			<dict>
+				<key>CFBundleTypeRole</key>
+				<string>Viewer</string>
+				<key>CFBundleURLName</key>
+				<string>com.cantinarr.connect</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>cantinarr</string>
+				</array>
+			</dict>
+		</array>
 		<key>UIStatusBarHidden</key>
 		<false/>
 	</dict>

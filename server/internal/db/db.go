@@ -53,6 +53,28 @@ CREATE TABLE IF NOT EXISTS service_instances (
     sort_order INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS devices (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    device_name TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    revoked_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS connect_tokens (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    expires_at DATETIME NOT NULL,
+    redeemed_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 `
 
 func Open(dbPath string) (*sql.DB, error) {
