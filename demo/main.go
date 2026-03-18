@@ -500,6 +500,10 @@ func main() {
 					"services": map[string]bool{
 						"radarr": true, "sonarr": true, "ai": true, "tmdb": true, "trakt": true,
 					},
+					"instances": []map[string]interface{}{
+						{"id": "radarr-default", "service_type": "radarr", "name": "Movies", "is_default": true},
+						{"id": "sonarr-default", "service_type": "sonarr", "name": "TV Shows", "is_default": true},
+					},
 				})
 			})
 		})
@@ -533,6 +537,53 @@ func main() {
 			r.Use(authMiddleware)
 			r.Use(adminMiddleware)
 			registerArrRoutes(r, requests)
+		})
+
+		// ── Instance CRUD ──
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware)
+			r.Use(adminMiddleware)
+			r.Get("/instances", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSONOK(w, []map[string]interface{}{
+					{"id": "radarr-default", "service_type": "radarr", "name": "Movies", "url": "http://localhost:7878", "api_key": "demo", "is_default": true},
+					{"id": "sonarr-default", "service_type": "sonarr", "name": "TV Shows", "url": "http://localhost:8989", "api_key": "demo", "is_default": true},
+				})
+			})
+			r.Post("/instances", func(w http.ResponseWriter, r *http.Request) {
+				var req map[string]interface{}
+				json.NewDecoder(r.Body).Decode(&req)
+				req["id"] = fmt.Sprintf("%s-%d", req["service_type"], time.Now().UnixMilli())
+				writeJSON(w, http.StatusCreated, req)
+			})
+			r.Put("/instances/{instanceID}", func(w http.ResponseWriter, r *http.Request) {
+				var req map[string]interface{}
+				json.NewDecoder(r.Body).Decode(&req)
+				req["id"] = chi.URLParam(r, "instanceID")
+				writeJSONOK(w, req)
+			})
+			r.Delete("/instances/{instanceID}", func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+		})
+
+		// ── Instance proxy ──
+		r.Group(func(r chi.Router) {
+			r.Use(authMiddleware)
+			r.HandleFunc("/instances/{instanceID}/*", func(w http.ResponseWriter, r *http.Request) {
+				instanceID := chi.URLParam(r, "instanceID")
+				path := chi.URLParam(r, "*")
+				if r.Method == http.MethodGet {
+					if strings.HasPrefix(instanceID, "radarr") {
+						handleRadarrGet(w, path, requests)
+					} else if strings.HasPrefix(instanceID, "sonarr") {
+						handleSonarrGet(w, path)
+					} else {
+						writeJSONOK(w, map[string]interface{}{})
+					}
+				} else {
+					writeJSONOK(w, map[string]interface{}{"success": true})
+				}
+			})
 		})
 	})
 
@@ -1133,54 +1184,10 @@ func aiChatHandler() http.HandlerFunc {
 
 func registerArrRoutes(r chi.Router, requests *requestStore) {
 	r.Get("/radarr/*", func(w http.ResponseWriter, r *http.Request) {
-		path := chi.URLParam(r, "*")
-		switch {
-		case strings.HasSuffix(path, "qualityprofile"):
-			writeJSONOK(w, []map[string]interface{}{{"id": 1, "name": "HD-1080p"}})
-		case strings.HasSuffix(path, "rootfolder"):
-			writeJSONOK(w, []map[string]interface{}{{"id": 1, "path": "/movies", "freeSpace": 500000000000}})
-		case strings.HasSuffix(path, "queue"):
-			writeJSONOK(w, map[string]interface{}{"records": []interface{}{}})
-		case strings.HasSuffix(path, "movie"):
-			var radarrMovies []map[string]interface{}
-			for _, m := range movies[:min(8, len(movies))] {
-				entry := requests.get(m.tmdb.ID, "movie")
-				radarrMovies = append(radarrMovies, map[string]interface{}{
-					"id": m.tmdb.ID, "title": m.tmdb.Title, "tmdbId": m.tmdb.ID,
-					"year": yearFromDate(m.tmdb.ReleaseDate), "hasFile": entry != nil && entry.Status == "available",
-					"monitored": true, "isAvailable": true, "rootFolderPath": "/movies",
-				})
-			}
-			writeJSONOK(w, radarrMovies)
-		default:
-			writeJSONOK(w, map[string]interface{}{})
-		}
+		handleRadarrGet(w, chi.URLParam(r, "*"), requests)
 	})
-
 	r.Get("/sonarr/*", func(w http.ResponseWriter, r *http.Request) {
-		path := chi.URLParam(r, "*")
-		switch {
-		case strings.HasSuffix(path, "qualityprofile"):
-			writeJSONOK(w, []map[string]interface{}{{"id": 1, "name": "HD-1080p"}})
-		case strings.HasSuffix(path, "rootfolder"):
-			writeJSONOK(w, []map[string]interface{}{{"id": 1, "path": "/tv", "freeSpace": 500000000000}})
-		case strings.HasSuffix(path, "queue"):
-			writeJSONOK(w, map[string]interface{}{"records": []interface{}{}})
-		case strings.HasSuffix(path, "series"):
-			var series []map[string]interface{}
-			for _, t := range tvShows[:min(3, len(tvShows))] {
-				series = append(series, map[string]interface{}{
-					"id": t.tmdb.ID, "title": t.tmdb.Name, "tvdbId": *t.detail.ExternalIDs.TvdbID,
-					"tmdbId": t.tmdb.ID, "year": yearFromDate(t.tmdb.FirstAirDate), "monitored": true,
-					"statistics": map[string]interface{}{
-						"episodeFileCount": t.detail.NumberOfEpisodes, "episodeCount": t.detail.NumberOfEpisodes, "percentOfEpisodes": 100.0,
-					},
-				})
-			}
-			writeJSONOK(w, series)
-		default:
-			writeJSONOK(w, map[string]interface{}{})
-		}
+		handleSonarrGet(w, chi.URLParam(r, "*"))
 	})
 
 	noopHandler := func(w http.ResponseWriter, _ *http.Request) {
@@ -1190,6 +1197,94 @@ func registerArrRoutes(r chi.Router, requests *requestStore) {
 	r.Delete("/radarr/*", noopHandler)
 	r.Post("/sonarr/*", noopHandler)
 	r.Delete("/sonarr/*", noopHandler)
+}
+
+func handleRadarrGet(w http.ResponseWriter, path string, requests *requestStore) {
+	switch {
+	case strings.HasSuffix(path, "qualityprofile"):
+		writeJSONOK(w, []map[string]interface{}{{"id": 1, "name": "HD-1080p"}})
+	case strings.HasSuffix(path, "rootfolder"):
+		writeJSONOK(w, []map[string]interface{}{{"id": 1, "path": "/movies", "freeSpace": 500000000000}})
+	case strings.HasSuffix(path, "queue"):
+		writeJSONOK(w, map[string]interface{}{
+			"records": []map[string]interface{}{
+				{
+					"title":    "Night of the Living Dead",
+					"status":   "downloading",
+					"size":     4500000000.0,
+					"sizeleft": 1575000000.0,
+				},
+				{
+					"title":    "Nosferatu",
+					"status":   "downloading",
+					"size":     3200000000.0,
+					"sizeleft": 2240000000.0,
+				},
+			},
+		})
+	case strings.HasSuffix(path, "calendar"):
+		now := time.Now()
+		writeJSONOK(w, []map[string]interface{}{
+			{"title": "Metropolis", "inCinemas": now.AddDate(0, 0, 2).Format(time.RFC3339), "digitalRelease": now.AddDate(0, 0, 5).Format(time.RFC3339), "hasFile": false},
+			{"title": "The General", "inCinemas": now.AddDate(0, 0, 4).Format(time.RFC3339), "digitalRelease": now.AddDate(0, 0, 8).Format(time.RFC3339), "hasFile": false},
+			{"title": "A Trip to the Moon", "inCinemas": now.AddDate(0, 0, 7).Format(time.RFC3339), "digitalRelease": now.AddDate(0, 0, 12).Format(time.RFC3339), "hasFile": true},
+		})
+	case strings.HasSuffix(path, "movie"):
+		var radarrMovies []map[string]interface{}
+		for _, m := range movies[:min(8, len(movies))] {
+			entry := requests.get(m.tmdb.ID, "movie")
+			radarrMovies = append(radarrMovies, map[string]interface{}{
+				"id": m.tmdb.ID, "title": m.tmdb.Title, "tmdbId": m.tmdb.ID,
+				"year": yearFromDate(m.tmdb.ReleaseDate), "hasFile": entry != nil && entry.Status == "available",
+				"monitored": true, "isAvailable": true, "rootFolderPath": "/movies",
+			})
+		}
+		writeJSONOK(w, radarrMovies)
+	default:
+		writeJSONOK(w, map[string]interface{}{})
+	}
+}
+
+func handleSonarrGet(w http.ResponseWriter, path string) {
+	switch {
+	case strings.HasSuffix(path, "qualityprofile"):
+		writeJSONOK(w, []map[string]interface{}{{"id": 1, "name": "HD-1080p"}})
+	case strings.HasSuffix(path, "rootfolder"):
+		writeJSONOK(w, []map[string]interface{}{{"id": 1, "path": "/tv", "freeSpace": 500000000000}})
+	case strings.HasSuffix(path, "queue"):
+		writeJSONOK(w, map[string]interface{}{
+			"records": []map[string]interface{}{
+				{
+					"title":    "Sherlock Holmes Adventures - S01E05",
+					"status":   "downloading",
+					"size":     1800000000.0,
+					"sizeleft": 1080000000.0,
+				},
+			},
+		})
+	case strings.HasSuffix(path, "calendar"):
+		now := time.Now()
+		writeJSONOK(w, []map[string]interface{}{
+			{"series": map[string]interface{}{"title": "Sherlock Holmes Adventures"}, "title": "The Red-Headed League", "seasonNumber": 2, "episodeNumber": 1, "airDateUtc": now.AddDate(0, 0, 1).Format(time.RFC3339), "hasFile": false},
+			{"series": map[string]interface{}{"title": "Classic Science Theater"}, "title": "Plan 9 Revisited", "seasonNumber": 4, "episodeNumber": 12, "airDateUtc": now.AddDate(0, 0, 3).Format(time.RFC3339), "hasFile": false},
+			{"series": map[string]interface{}{"title": "Tales from the Public Domain"}, "title": "The Time Machine", "seasonNumber": 1, "episodeNumber": 8, "airDateUtc": now.AddDate(0, 0, 6).Format(time.RFC3339), "hasFile": false},
+			{"series": map[string]interface{}{"title": "Vintage Comedy Hour"}, "title": "Keaton's Best Stunts", "seasonNumber": 3, "episodeNumber": 5, "airDateUtc": now.AddDate(0, 0, 10).Format(time.RFC3339), "hasFile": true},
+		})
+	case strings.HasSuffix(path, "series"):
+		var series []map[string]interface{}
+		for _, t := range tvShows[:min(3, len(tvShows))] {
+			series = append(series, map[string]interface{}{
+				"id": t.tmdb.ID, "title": t.tmdb.Name, "tvdbId": *t.detail.ExternalIDs.TvdbID,
+				"tmdbId": t.tmdb.ID, "year": yearFromDate(t.tmdb.FirstAirDate), "monitored": true,
+				"statistics": map[string]interface{}{
+					"episodeFileCount": t.detail.NumberOfEpisodes, "episodeCount": t.detail.NumberOfEpisodes, "percentOfEpisodes": 100.0,
+				},
+			})
+		}
+		writeJSONOK(w, series)
+	default:
+		writeJSONOK(w, map[string]interface{}{})
+	}
 }
 
 // ─── Download simulation ────────────────────────────────
@@ -1202,11 +1297,16 @@ func simulateDownload(store *requestStore, hub *wsHub, tmdbID int, mediaType str
 		return
 	}
 
+	instanceID := "radarr-default"
+	if mediaType == "tv" {
+		instanceID = "sonarr-default"
+	}
+
 	entry.Status = "downloading"
 	entry.Progress = 0
 	store.set(entry)
 	hub.broadcastEvent("download_progress", map[string]interface{}{
-		"tmdb_id": tmdbID, "media_type": mediaType, "progress": 0.0, "status": "downloading",
+		"tmdb_id": tmdbID, "media_type": mediaType, "progress": 0.0, "status": "downloading", "instance_id": instanceID,
 	})
 
 	steps := 20
@@ -1216,7 +1316,7 @@ func simulateDownload(store *requestStore, hub *wsHub, tmdbID int, mediaType str
 		entry.Progress = progress
 		store.set(entry)
 		hub.broadcastEvent("download_progress", map[string]interface{}{
-			"tmdb_id": tmdbID, "media_type": mediaType, "progress": progress, "status": "downloading",
+			"tmdb_id": tmdbID, "media_type": mediaType, "progress": progress, "status": "downloading", "instance_id": instanceID,
 		})
 	}
 
@@ -1224,7 +1324,7 @@ func simulateDownload(store *requestStore, hub *wsHub, tmdbID int, mediaType str
 	entry.Progress = 1.0
 	store.set(entry)
 	hub.broadcastEvent("request_status_changed", map[string]interface{}{
-		"tmdb_id": tmdbID, "media_type": mediaType, "status": "available",
+		"tmdb_id": tmdbID, "media_type": mediaType, "status": "available", "instance_id": instanceID,
 	})
 }
 
