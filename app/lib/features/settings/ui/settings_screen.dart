@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
 import 'about_sheet.dart';
@@ -17,6 +18,15 @@ class SettingsScreen extends ConsumerStatefulWidget {
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String? _generatedCode;
   bool _isGenerating = false;
+  String _appVersion = '';
+
+  @override
+  void initState() {
+    super.initState();
+    PackageInfo.fromPlatform().then((info) {
+      setState(() => _appVersion = info.version);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -174,7 +184,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _SettingsTile(
             icon: Icons.info_outline,
             title: 'Cantinarr',
-            subtitle: 'Version 1.0.0',
+            subtitle: 'Version $_appVersion',
             onTap: () => showModalBottomSheet(
               context: context,
               backgroundColor: Colors.transparent,

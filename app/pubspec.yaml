@@ -37,6 +37,9 @@ dependencies:
   # WebSocket
   web_socket_channel: ^3.0.1
 
+  # App info
+  package_info_plus: ^8.0.0
+
   # Utilities
   url_launcher: ^6.3.1
   webview_flutter: ^4.10.0
