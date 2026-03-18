@@ -332,9 +332,51 @@ func init() {
 		{17057, "Carnival of Souls", "After a traumatic accident, a woman becomes drawn to a mysterious abandoned carnival. Herk Harvey's 1962 low-budget horror film has become one of the most influential cult classics in cinema.", "1962-09-26", 7.1, 567, 21.6, []TMDBGenre{{27, "Horror"}, {9648, "Mystery"}}, []int{27, 9648}, 78, "She escaped death... only to face something worse", "tt0055830", "en", "Carnival of Souls"},
 	}
 
+	// Real TMDB image paths for public domain movies.
+	moviePosters := map[int]string{
+		987:   "/r4RtbJk8wVyZ1yk6yBZjzGD4ANU.jpg",
+		653:   "/zv7J85D8CC9qYagAEhPM63CIG6j.jpg",
+		3085:  "/lu86Y9zTPH3neCiUzLzHCEFHf7f.jpg",
+		961:   "/nIp4gIXogCjfB1QABNsWwa9gSca.jpg",
+		19:    "/kr9wXRN23zLuWJIelahas1mtnYj.jpg",
+		1942:  "/zsZ2PAMMyBhkn5OSC8Qnror2KCA.jpg",
+		234:   "/myK9DeIsXWGKgUTZyGXg2IfFk0W.jpg",
+		1480:  "/1pvRgmfBaoMczIJBOi9gCOZ4FMC.jpg",
+		25862: "/A6anBd0LJIZ4fnsh70THxUtuCD.jpg",
+		27573: "/fJPKar0jnAsS09l3xfP6LL8sUkX.jpg",
+		27405: "/9sfshfTBXOFOAutfceewC6Rvgxq.jpg",
+		2108:  "/gp4zlj7wgbiofLMNsTPndMuO3PN.jpg",
+		42832: "/yk4NokXK0Bg84ULFOiVFmXp12EC.jpg",
+		43861: "/lKCZQEJGzUf7lIGQuRhyOYxh2jp.jpg",
+		44208: "/5zHcGQOUSAhp9Dqzwxe6vPGPfHo.jpg",
+		3087:  "/cqLLIyJFjLr6jGOxWVEHG11WGzB.jpg",
+		10098: "/A9NWYyn7eX0H9XIjaOvfWJ9mCGA.jpg",
+		17057: "/vbdgtwzLOpE6MppZlyYChMagvQq.jpg",
+	}
+	movieBackdrops := map[int]string{
+		987:   "/k0YZgwDZtI9M80GKvAAbGMweAEH.jpg",
+		653:   "/u06SympEEMb7pLhR9W3tvydHT9L.jpg",
+		3085:  "/ihoQaiMFAz4YCTAaSIsQjRknsNH.jpg",
+		961:   "/mzox4HbcV9W42MH2dB1QsdDVGo3.jpg",
+		19:    "/eeMoFKxjjiCi6iep2GEZtSAMYIr.jpg",
+		1942:  "/u6cyzNiF95GaZFRmNYRDQJoU0Av.jpg",
+		234:   "/iNNNkYuUU365LhnPwQqfzBvKnsg.jpg",
+		1480:  "/ousBoWTm1CltjAGSYOELYP0jFFC.jpg",
+		25862: "/iCi2TuEBAVEVEpsS6KGy4ZNLxuK.jpg",
+		27573: "/zoBpc8yHzZMpOyFiiMP1iKSZzwH.jpg",
+		27405: "/4jMjsSdLHA4ccDPNunPnnuAX9NH.jpg",
+		2108:  "/kjVgUMsG0PKBXzlP8HGNQpWDxAX.jpg",
+		42832: "/c3Tq6V9qHG89szM5F10HOiUQh4A.jpg",
+		43861: "/mc4moIBe75fIgodcvrIe3d62mmO.jpg",
+		44208: "/qlGQSScyNAZcGYrd2NKJm83BA1f.jpg",
+		3087:  "/dskxBjNFZsn6ThCZ7vAqd5UueEl.jpg",
+		10098: "/mAhCW7QbpL5kwvCWGsfyY3ILoW6.jpg",
+		17057: "/5fuZzGsUZtF9esFFBHPwysB6b6a.jpg",
+	}
+
 	for _, m := range movieData {
-		poster := "/" + strings.ReplaceAll(strings.ToLower(m.title), " ", "_") + "_poster.jpg"
-		backdrop := "/" + strings.ReplaceAll(strings.ToLower(m.title), " ", "_") + "_backdrop.jpg"
+		poster := moviePosters[m.id]
+		backdrop := movieBackdrops[m.id]
 		movies = append(movies, movieEntry{
 			tmdb: TMDBMovie{
 				ID: m.id, Title: m.title, Overview: m.overview, ReleaseDate: m.date,
@@ -380,19 +422,18 @@ func init() {
 	}
 
 	for _, t := range tvData {
-		poster := "/" + strings.ReplaceAll(strings.ToLower(t.name), " ", "_") + "_poster.jpg"
-		backdrop := "/" + strings.ReplaceAll(strings.ToLower(t.name), " ", "_") + "_backdrop.jpg"
+		// TV shows use fictional IDs — no TMDB images available.
 		tvShows = append(tvShows, tvEntry{
 			tmdb: TMDBTVShow{
 				ID: t.id, Name: t.name, Overview: t.overview, FirstAirDate: t.date,
 				VoteAverage: t.vote, VoteCount: t.votes, Popularity: t.pop,
-				PosterPath: &poster, BackdropPath: &backdrop, GenreIDs: t.genreIDs,
+				GenreIDs: t.genreIDs,
 				OriginalLanguage: "en", OriginalName: t.name, OriginCountry: []string{"US"},
 			},
 			detail: TMDBTVDetail{
 				ID: t.id, Name: t.name, Overview: t.overview, FirstAirDate: t.date,
 				VoteAverage: t.vote, VoteCount: t.votes, Popularity: t.pop,
-				PosterPath: &poster, BackdropPath: &backdrop, Genres: t.genres,
+				Genres: t.genres,
 				NumberOfSeasons: t.seasons, NumberOfEpisodes: t.episodes,
 				Status: t.status, Type: t.tvType,
 				OriginalLanguage: "en", OriginalName: t.name, OriginCountry: []string{"US"},
@@ -419,6 +460,7 @@ func init() {
 				ID: 1, Name: "Buster Keaton",
 				Biography: "Joseph Frank Keaton, known professionally as Buster Keaton, was an American actor, comedian, film director, producer, screenwriter, and stunt performer. He is best known for his silent films, in which his trademark was physical comedy with a consistently stoic, deadpan expression.",
 				Birthday: "1895-10-04", Deathday: &bkDeathday, PlaceOfBirth: "Piqua, Kansas, USA",
+				ProfilePath: strPtr("/kEybBFkO5AX83o3WKyNDfuvfVrn.jpg"),
 				KnownForDept: "Acting", Popularity: 35.2, Gender: 2, ImdbID: "nm0000036",
 			},
 			credits: TMDBPersonCredits{
@@ -436,6 +478,7 @@ func init() {
 				ID: 2, Name: "Fritz Lang",
 				Biography: "Friedrich Christian Anton Lang was an Austrian-German-American filmmaker, screenwriter, and occasional film producer and actor. One of the best known practitioners of German Expressionism.",
 				Birthday: "1890-12-05", Deathday: strPtr("1976-08-02"), PlaceOfBirth: "Vienna, Austria-Hungary",
+				ProfilePath: strPtr("/9dz4PmFzlSyexldWrOXBLLpkBqB.jpg"),
 				KnownForDept: "Directing", Popularity: 28.9, Gender: 2, ImdbID: "nm0000485",
 			},
 			credits: TMDBPersonCredits{
@@ -451,6 +494,7 @@ func init() {
 				ID: 3, Name: "F.W. Murnau",
 				Biography: "Friedrich Wilhelm Murnau was a German film director who was a prominent figure during the Golden Age of Weimar cinema.",
 				Birthday: "1888-12-28", Deathday: &fwmDeathday, PlaceOfBirth: "Bielefeld, Germany",
+				ProfilePath: strPtr("/keLp43iiIkkllroUwExIJITeR7a.jpg"),
 				KnownForDept: "Directing", Popularity: 22.4, Gender: 2, ImdbID: "nm0003638",
 			},
 			credits: TMDBPersonCredits{
@@ -466,6 +510,7 @@ func init() {
 				ID: 4, Name: "George A. Romero",
 				Biography: "George Andrew Romero was an American-Canadian filmmaker, writer, and editor, best known for his series of zombie films. He is considered the father of the modern zombie genre.",
 				Birthday: "1940-02-04", Deathday: strPtr("2017-07-16"), PlaceOfBirth: "The Bronx, New York, USA",
+				ProfilePath: strPtr("/w2zVF92x149qK79ZxwUowcSp2c6.jpg"),
 				KnownForDept: "Directing", Popularity: 25.1, Gender: 2, ImdbID: "nm0001681",
 			},
 			credits: TMDBPersonCredits{
