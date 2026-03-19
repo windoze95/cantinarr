@@ -52,8 +52,19 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp> {
 
   @override
   Widget build(BuildContext context) {
-    final router = ref.watch(appRouterProvider);
+    final authState = ref.watch(authProvider);
 
+    // Show blank screen while restoring session to prevent login flash
+    if (authState.isLoading) {
+      return MaterialApp(
+        title: 'Cantinarr',
+        theme: AppTheme.dark,
+        debugShowCheckedModeBanner: false,
+        home: const Scaffold(),
+      );
+    }
+
+    final router = ref.watch(appRouterProvider);
     return MaterialApp.router(
       title: 'Cantinarr',
       theme: AppTheme.dark,
