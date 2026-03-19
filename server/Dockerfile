@@ -8,6 +8,6 @@ RUN CGO_ENABLED=0 go build -o cantinarr ./cmd/server
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /build/cantinarr /usr/local/bin/
-EXPOSE 8484
+EXPOSE 8585
 VOLUME /config
 CMD ["cantinarr"]

@@ -82,7 +82,7 @@ func Load() (*Config, error) {
 
 	portStr := os.Getenv("CANTINARR_PORT")
 	if portStr == "" {
-		cfg.Port = 8484
+		cfg.Port = 8585
 	} else {
 		p, err := strconv.Atoi(portStr)
 		if err != nil {

@@ -5,7 +5,7 @@ The backend brain for [Cantinarr](https://github.com/windoze95/cantinarr) -- a s
 A single Go binary that bridges your arr stack, serves the web UI, and keeps API keys off user devices. Drop it on your NAS, point it at Radarr/Sonarr, and hand out invite codes to family and friends.
 
 ```
-                        Cantinarr Server (:8484)
+                        Cantinarr Server (:8585)
     ┌──────────────────────────────────────────────────┐
     │                                                  │
     │   Auth (JWT)    Requests    AI Chat (Claude)     │
@@ -42,7 +42,7 @@ services:
   cantinarr:
     image: cantinarr/cantinarr:latest
     ports:
-      - "8484:8484"
+      - "8585:8585"
     volumes:
       - ./config:/config
     environment:
@@ -61,7 +61,7 @@ services:
 docker-compose up -d
 ```
 
-Open `http://your-server:8484` and log in with `admin` / your admin password.
+Open `http://your-server:8585` and log in with `admin` / your admin password.
 
 ### From Source
 
@@ -94,7 +94,7 @@ All configuration is via environment variables with the `CANTINARR_` prefix.
 | `CANTINARR_TRAKT_CLIENT_SECRET` | No | -- | Trakt client secret |
 | `CANTINARR_JWT_SECRET` | No | auto-generated | HMAC secret for JWT signing |
 | `CANTINARR_DB_PATH` | No | `/config/cantinarr.db` | SQLite database path |
-| `CANTINARR_PORT` | No | `8484` | HTTP listen port |
+| `CANTINARR_PORT` | No | `8585` | HTTP listen port |
 | `CANTINARR_SERVER_NAME` | No | `Cantinarr` | Display name shown in clients |
 
 ## API Reference
