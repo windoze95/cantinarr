@@ -5,7 +5,7 @@ COPY app/ .
 RUN flutter pub get && flutter build web --release
 
 # Stage 2: Build Go binary
-FROM golang:1.22-alpine AS go-builder
+FROM golang:1.25-alpine AS go-builder
 WORKDIR /build
 COPY server/go.mod server/go.sum ./
 RUN go mod download
