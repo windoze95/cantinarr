@@ -1,8 +1,10 @@
 # Stage 1: Build Flutter web
-FROM ghcr.io/cirruslabs/flutter:stable AS flutter-builder
+FROM --platform=$BUILDPLATFORM ghcr.io/cirruslabs/flutter:stable AS flutter-builder
 WORKDIR /app
+COPY app/pubspec.yaml ./
+RUN flutter pub get
 COPY app/ .
-RUN flutter pub get && flutter build web --release
+RUN flutter build web --release
 
 # Stage 2: Build Go binary
 FROM golang:1.25-alpine AS go-builder
