@@ -141,7 +141,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       state = AsyncData(AuthState(
         connection: connection,
         user: authResp.user,
-        pendingPasskeyOffer: true,
+        pendingPasskeyOffer: await _shouldOfferPasskey(normalizedUrl),
       ));
     } catch (e) {
       state = AsyncData(AuthState(error: _parseSetupError(e)));
@@ -184,10 +184,13 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
       );
 
+      final offerPasskey = authResp.user.isAdmin &&
+          await _shouldOfferPasskey(normalizedUrl);
+
       state = AsyncData(AuthState(
         connection: connection,
         user: authResp.user,
-        pendingPasskeyOffer: authResp.user.isAdmin,
+        pendingPasskeyOffer: offerPasskey,
       ));
     } catch (e) {
       state = AsyncData(AuthState(error: _parseError(e)));
@@ -383,6 +386,18 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final current = state.valueOrNull;
     if (current != null) {
       state = AsyncData(current.copyWith(clearError: true));
+    }
+  }
+
+  /// Check if passkey offer should be shown — requires both platform
+  /// support and server-side secure context (HTTPS / localhost).
+  Future<bool> _shouldOfferPasskey(String serverUrl) async {
+    if (!PasskeyService.isAvailable()) return false;
+    try {
+      final status = await _authService.getServerStatus(serverUrl);
+      return status.webAuthnAvailable;
+    } catch (_) {
+      return false;
     }
   }
 

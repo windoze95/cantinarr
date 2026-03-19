@@ -92,6 +92,7 @@ func (s *Service) IsSetupComplete() bool {
 
 // Setup creates the initial admin account during first-run setup.
 // Returns JWT tokens so the user is automatically logged in.
+// The entire operation is wrapped in a transaction to prevent race conditions.
 func (s *Service) Setup(username, password string) (*TokenResponse, error) {
 	if s.IsSetupComplete() {
 		return nil, ErrSetupAlreadyComplete
@@ -102,7 +103,25 @@ func (s *Service) Setup(username, password string) (*TokenResponse, error) {
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
 
-	result, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Re-check inside the transaction (SQLite serializes writes, so this is safe)
+	var setupVal string
+	if err := tx.QueryRow("SELECT value FROM settings WHERE key = 'setup_completed'").Scan(&setupVal); err == nil && setupVal == "true" {
+		return nil, ErrSetupAlreadyComplete
+	}
+
+	// Mark setup as complete FIRST to prevent concurrent setup attempts
+	_, err = tx.Exec("INSERT INTO settings (key, value) VALUES ('setup_completed', 'true')")
+	if err != nil {
+		return nil, fmt.Errorf("mark setup complete: %w", err)
+	}
+
+	result, err := tx.Exec(
 		"INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
 		username, string(hash), "admin",
 	)
@@ -111,20 +130,17 @@ func (s *Service) Setup(username, password string) (*TokenResponse, error) {
 	}
 	userID, _ := result.LastInsertId()
 
-	// Mark setup as complete
-	_, err = s.db.Exec("INSERT INTO settings (key, value) VALUES ('setup_completed', 'true')")
-	if err != nil {
-		return nil, fmt.Errorf("mark setup complete: %w", err)
-	}
-
-	// Auto-create device and return tokens (auto-login)
 	deviceID := uuid.New().String()
-	_, err = s.db.Exec(
+	_, err = tx.Exec(
 		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
 		deviceID, userID, "Setup",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create device: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit setup: %w", err)
 	}
 
 	user := &User{

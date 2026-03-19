@@ -95,7 +95,8 @@ func (h *Handler) ListPasskeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	passkeys, err := h.service.ListPasskeys(claims.UserID)
+	rpID := rpIDFromRequest(r)
+	passkeys, err := h.service.ListPasskeys(claims.UserID, rpID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list passkeys"})
 		return
@@ -117,7 +118,8 @@ func (h *Handler) DeletePasskey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.service.DeletePasskey(claims.UserID, credentialID)
+	rpID := rpIDFromRequest(r)
+	err := h.service.DeletePasskey(claims.UserID, credentialID, rpID)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "passkey not found"})
 		return

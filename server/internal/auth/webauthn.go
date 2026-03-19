@@ -38,6 +38,15 @@ func isSecureContext(r *http.Request) bool {
 
 // ─── RP Config from Request ──────────────────────────────
 
+// rpIDFromRequest extracts just the RP ID (hostname without port) from a request.
+func rpIDFromRequest(r *http.Request) string {
+	host := r.Host
+	if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
+		host = host[:colonIdx]
+	}
+	return host
+}
+
 // rpConfigFromRequest derives the WebAuthn relying party config from the
 // incoming HTTP request. Each self-hosted deployment has a different domain.
 func rpConfigFromRequest(r *http.Request) *webauthn.Config {
@@ -398,10 +407,10 @@ func (s *Service) FinishPasskeyLogin(sessionID string, r *http.Request) (*TokenR
 	return resp, nil
 }
 
-func (s *Service) ListPasskeys(userID int64) ([]PasskeyInfo, error) {
+func (s *Service) ListPasskeys(userID int64, rpID string) ([]PasskeyInfo, error) {
 	rows, err := s.db.Query(
-		"SELECT id, name, created_at, last_used_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at DESC",
-		userID,
+		"SELECT id, name, created_at, last_used_at FROM webauthn_credentials WHERE user_id = ? AND rp_id = ? ORDER BY created_at DESC",
+		userID, rpID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query passkeys: %w", err)
@@ -422,10 +431,10 @@ func (s *Service) ListPasskeys(userID int64) ([]PasskeyInfo, error) {
 	return passkeys, nil
 }
 
-func (s *Service) DeletePasskey(userID int64, credentialID string) error {
+func (s *Service) DeletePasskey(userID int64, credentialID, rpID string) error {
 	result, err := s.db.Exec(
-		"DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ?",
-		credentialID, userID,
+		"DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ? AND rp_id = ?",
+		credentialID, userID, rpID,
 	)
 	if err != nil {
 		return fmt.Errorf("delete passkey: %w", err)
