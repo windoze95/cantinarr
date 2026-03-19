@@ -31,6 +31,10 @@ app/pubspec.lock
 .env
 *.env.local
 
+# Cloudflare origin certs
+origin-cert.pem
+origin-key.pem
+
 # SQLite
 *.db
 *.db-wal

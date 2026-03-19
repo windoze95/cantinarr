@@ -9,6 +9,7 @@ import (
 	"log"
 	mathrand "math/rand"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,15 @@ const (
 
 	demoConnectTokenStr = "demo0000000000000000000000000000000000000000000000000000connect1"
 )
+
+var demoServerURL string
+
+func init() {
+	demoServerURL = os.Getenv("DEMO_SERVER_URL")
+	if demoServerURL == "" {
+		demoServerURL = fmt.Sprintf("http://localhost:%d", demoPort)
+	}
+}
 
 // ─── Simple password hashing (demo only) ────────────────
 
@@ -733,14 +743,14 @@ func main() {
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(landingHTML))
+		w.Write([]byte(strings.Replace(landingHTML, "http://localhost:8484", demoServerURL, 1)))
 	})
 
 	addr := fmt.Sprintf(":%d", demoPort)
 	log.Printf("Cantinarr Demo Server starting on %s", addr)
 	log.Printf("  Admin login: admin / demo")
 	log.Printf("  User login:  user / demo")
-	log.Printf("  Demo connect link: cantinarr://connect?token=%s&server=http://localhost:%d", demoConnectTokenStr, demoPort)
+	log.Printf("  Demo connect link: cantinarr://connect?token=%s&server=%s", demoConnectTokenStr, demoServerURL)
 	if err := http.ListenAndServe(addr, r); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
@@ -953,7 +963,7 @@ func createConnectTokenHandler(users *userStore, tokens *connectTokenStore) http
 		token := tokens.create(u.ID, claims.UserID)
 		serverURL := req.ServerURL
 		if serverURL == "" {
-			serverURL = fmt.Sprintf("http://localhost:%d", demoPort)
+			serverURL = demoServerURL
 		}
 		link := fmt.Sprintf("cantinarr://connect?token=%s&server=%s", token, serverURL)
 		ct := tokens.get(token)
