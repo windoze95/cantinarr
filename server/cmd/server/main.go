@@ -57,8 +57,16 @@ func main() {
 
 	// Auth
 	authService := auth.NewService(database, cfg.JWTSecret)
-	if err := authService.EnsureAdmin(cfg.AdminPassword); err != nil {
-		log.Fatalf("Failed to ensure admin: %v", err)
+	// Migrate setup state for existing deployments
+	if err := authService.MigrateSetupState(); err != nil {
+		log.Fatalf("Failed to migrate setup state: %v", err)
+	}
+	// Backward compat: CANTINARR_ADMIN_PASSWORD still works but is deprecated
+	if cfg.AdminPassword != "" {
+		log.Println("WARNING: CANTINARR_ADMIN_PASSWORD is deprecated. Use the setup wizard in the web UI instead. This env var will be removed in a future version.")
+		if err := authService.EnsureAdmin(cfg.AdminPassword); err != nil {
+			log.Fatalf("Failed to ensure admin: %v", err)
+		}
 	}
 	authHandler := auth.NewHandler(authService)
 

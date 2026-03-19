@@ -131,6 +131,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
 
+          _SettingsTile(
+            icon: Icons.fingerprint,
+            title: 'Passkeys',
+            subtitle: 'Manage passkey sign-in methods',
+            onTap: () => context.push('/settings/passkeys'),
+          ),
+
           // Admin section
           if (user?.isAdmin == true) ...[
             const SizedBox(height: 16),

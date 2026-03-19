@@ -8,6 +8,8 @@ import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../data/auth_service.dart';
+import '../data/passkey_service.dart';
+import '../data/server_status.dart';
 
 /// The authentication state exposed to the rest of the app.
 class AuthState {
@@ -15,12 +17,14 @@ class AuthState {
   final UserProfile? user;
   final bool isLoading;
   final String? error;
+  final bool pendingPasskeyOffer;
 
   const AuthState({
     this.connection,
     this.user,
     this.isLoading = false,
     this.error,
+    this.pendingPasskeyOffer = false,
   });
 
   bool get isAuthenticated => connection != null && user != null;
@@ -30,6 +34,7 @@ class AuthState {
     UserProfile? user,
     bool? isLoading,
     String? error,
+    bool? pendingPasskeyOffer,
     bool clearConnection = false,
     bool clearUser = false,
     bool clearError = false,
@@ -39,6 +44,8 @@ class AuthState {
         user: clearUser ? null : (user ?? this.user),
         isLoading: isLoading ?? this.isLoading,
         error: clearError ? null : (error ?? this.error),
+        pendingPasskeyOffer:
+            pendingPasskeyOffer ?? this.pendingPasskeyOffer,
       );
 }
 
@@ -97,6 +104,58 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
   }
 
+  /// Check server status (needs setup, webauthn available).
+  Future<ServerStatus> checkServer(String serverUrl) async {
+    final normalizedUrl = _normalizeUrl(serverUrl);
+    return _authService.getServerStatus(normalizedUrl);
+  }
+
+  /// Create admin account during first-run setup.
+  Future<void> setup(
+      String serverUrl, String username, String password) async {
+    state = const AsyncData(AuthState(isLoading: true));
+
+    try {
+      final normalizedUrl = _normalizeUrl(serverUrl);
+      final authResp =
+          await _authService.setup(normalizedUrl, username, password);
+      final config =
+          await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
+
+      await _saveTokens(
+        normalizedUrl,
+        authResp.accessToken,
+        authResp.refreshToken,
+        authResp.deviceId,
+      );
+
+      final connection = BackendConnection(
+        serverUrl: normalizedUrl,
+        accessToken: authResp.accessToken,
+        refreshToken: authResp.refreshToken,
+        serverName: config.serverName,
+        services: config.services,
+        instances: config.instances,
+      );
+
+      state = AsyncData(AuthState(
+        connection: connection,
+        user: authResp.user,
+        pendingPasskeyOffer: true,
+      ));
+    } catch (e) {
+      state = AsyncData(AuthState(error: _parseSetupError(e)));
+    }
+  }
+
+  /// Dismiss the post-setup passkey offer, allowing redirect to dashboard.
+  void dismissPasskeyOffer() {
+    final current = state.valueOrNull;
+    if (current != null) {
+      state = AsyncData(current.copyWith(pendingPasskeyOffer: false));
+    }
+  }
+
   /// Log in with server URL, username, and password (admin bootstrap).
   Future<void> login(
       String serverUrl, String username, String password) async {
@@ -125,8 +184,11 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
       );
 
-      state = AsyncData(
-          AuthState(connection: connection, user: authResp.user));
+      state = AsyncData(AuthState(
+        connection: connection,
+        user: authResp.user,
+        pendingPasskeyOffer: authResp.user.isAdmin,
+      ));
     } catch (e) {
       state = AsyncData(AuthState(error: _parseError(e)));
     }
@@ -206,6 +268,92 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final conn = state.valueOrNull?.connection;
     if (conn == null) throw Exception('Not authenticated');
     await _authService.revokeDevice(conn.serverUrl, conn.accessToken, deviceId);
+  }
+
+  // ─── Passkey Methods ─────────────────────────────────
+
+  /// Register a new passkey for the current user.
+  Future<void> registerPasskey(String name) async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+
+    // Step 1: Begin registration on server
+    final beginResp = await _authService.beginPasskeyRegistration(
+        conn.serverUrl, conn.accessToken);
+
+    // Step 2: Call platform WebAuthn API
+    final credentialResponse = await PasskeyService.create(beginResp.options);
+
+    // Step 3: Complete registration on server
+    await _authService.finishPasskeyRegistration(
+      conn.serverUrl,
+      conn.accessToken,
+      beginResp.sessionId,
+      name,
+      credentialResponse,
+    );
+  }
+
+  /// Log in with a passkey (discoverable credential).
+  Future<void> loginWithPasskey(String serverUrl) async {
+    state = const AsyncData(AuthState(isLoading: true));
+
+    try {
+      final normalizedUrl = _normalizeUrl(serverUrl);
+
+      // Step 1: Begin login on server
+      final beginResp =
+          await _authService.beginPasskeyLogin(normalizedUrl);
+
+      // Step 2: Call platform WebAuthn API
+      final assertionResponse = await PasskeyService.get(beginResp.options);
+
+      // Step 3: Complete login on server
+      final authResp = await _authService.finishPasskeyLogin(
+        normalizedUrl,
+        beginResp.sessionId,
+        assertionResponse,
+      );
+
+      final config = await _authService.fetchConfig(
+          normalizedUrl, authResp.accessToken);
+
+      await _saveTokens(
+        normalizedUrl,
+        authResp.accessToken,
+        authResp.refreshToken,
+        authResp.deviceId,
+      );
+
+      final connection = BackendConnection(
+        serverUrl: normalizedUrl,
+        accessToken: authResp.accessToken,
+        refreshToken: authResp.refreshToken,
+        serverName: config.serverName,
+        services: config.services,
+        instances: config.instances,
+      );
+
+      state = AsyncData(
+          AuthState(connection: connection, user: authResp.user));
+    } catch (e) {
+      state = AsyncData(AuthState(error: _parsePasskeyLoginError(e)));
+    }
+  }
+
+  /// List user's passkeys.
+  Future<List<PasskeyInfoResponse>> listPasskeys() async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    return _authService.listPasskeys(conn.serverUrl, conn.accessToken);
+  }
+
+  /// Delete a passkey.
+  Future<void> deletePasskey(String credentialId) async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    await _authService.deletePasskey(
+        conn.serverUrl, conn.accessToken, credentialId);
   }
 
   /// Update tokens after a refresh (called by the auth interceptor).
@@ -306,6 +454,39 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       }
     }
     return 'Connection failed. Please check the server URL.';
+  }
+
+  String _parsePasskeyLoginError(Object e) {
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map<String, dynamic>) {
+        final error = data['error'] as String?;
+        if (error != null) return error;
+      }
+      if (e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout) {
+        return 'Could not connect to server';
+      }
+    }
+    return 'Passkey authentication failed. Try signing in with your password.';
+  }
+
+  String _parseSetupError(Object e) {
+    if (e is DioException) {
+      final statusCode = e.response?.statusCode;
+      if (statusCode == 409) return 'Setup has already been completed';
+      if (statusCode == 400) {
+        final data = e.response?.data;
+        if (data is Map<String, dynamic>) {
+          return data['error'] as String? ?? 'Invalid request';
+        }
+      }
+      if (e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout) {
+        return 'Could not connect to server';
+      }
+    }
+    return 'Setup failed. Please try again.';
   }
 
   String _parseConnectError(Object e) {

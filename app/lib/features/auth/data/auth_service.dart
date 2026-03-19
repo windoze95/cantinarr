@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
+import 'server_status.dart';
 
 /// Handles authentication requests against the Cantinarr backend.
 ///
@@ -14,6 +15,27 @@ class AuthService {
         receiveTimeout: AppConfig.requestTimeout,
         headers: {'Content-Type': 'application/json'},
       ));
+
+  /// Check server status (needs setup, webauthn available).
+  Future<ServerStatus> getServerStatus(String serverUrl) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.get('/api/auth/status');
+    return ServerStatus.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Create admin account during first-run setup.
+  Future<AuthResponse> setup(
+    String serverUrl,
+    String username,
+    String password,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.post('/api/auth/setup', data: {
+      'username': username,
+      'password': password,
+    });
+    return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
+  }
 
   /// Log in with username and password.
   Future<AuthResponse> login(
@@ -127,6 +149,93 @@ class AuthService {
       options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
     );
   }
+
+  // ─── Passkey API Methods ─────────────────────────────
+
+  /// Begin passkey registration (authenticated).
+  Future<BeginRegistrationResponse> beginPasskeyRegistration(
+    String serverUrl,
+    String accessToken,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.post(
+      '/api/auth/passkey/register/begin',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return BeginRegistrationResponse.fromJson(
+        resp.data as Map<String, dynamic>);
+  }
+
+  /// Finish passkey registration (authenticated).
+  /// The body is the raw WebAuthn credential creation response.
+  Future<void> finishPasskeyRegistration(
+    String serverUrl,
+    String accessToken,
+    String sessionId,
+    String credentialName,
+    Map<String, dynamic> credentialResponse,
+  ) async {
+    final dio = _createDio(serverUrl);
+    await dio.post(
+      '/api/auth/passkey/register/finish',
+      queryParameters: {
+        'session_id': sessionId,
+        'credential_name': credentialName,
+      },
+      data: credentialResponse,
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
+  /// Begin passkey login (public).
+  Future<BeginLoginResponse> beginPasskeyLogin(String serverUrl) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.post('/api/auth/passkey/login/begin');
+    return BeginLoginResponse.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Finish passkey login (public).
+  Future<AuthResponse> finishPasskeyLogin(
+    String serverUrl,
+    String sessionId,
+    Map<String, dynamic> assertionResponse,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.post(
+      '/api/auth/passkey/login/finish',
+      queryParameters: {'session_id': sessionId},
+      data: assertionResponse,
+    );
+    return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// List user's passkeys (authenticated).
+  Future<List<PasskeyInfoResponse>> listPasskeys(
+    String serverUrl,
+    String accessToken,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.get(
+      '/api/auth/passkeys',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return (resp.data as List<dynamic>)
+        .map((p) => PasskeyInfoResponse.fromJson(p as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Delete a passkey (authenticated).
+  Future<void> deletePasskey(
+    String serverUrl,
+    String accessToken,
+    String credentialId,
+  ) async {
+    final dio = _createDio(serverUrl);
+    await dio.delete(
+      '/api/auth/passkeys/$credentialId',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
 }
 
 /// Response from login/register/refresh/connect endpoints.
@@ -219,4 +328,61 @@ class ServerConfig {
       instances: instancesList,
     );
   }
+}
+
+/// Response from begin passkey registration.
+class BeginRegistrationResponse {
+  final Map<String, dynamic> options;
+  final String sessionId;
+
+  const BeginRegistrationResponse({
+    required this.options,
+    required this.sessionId,
+  });
+
+  factory BeginRegistrationResponse.fromJson(Map<String, dynamic> json) =>
+      BeginRegistrationResponse(
+        options: json['options'] as Map<String, dynamic>,
+        sessionId: json['session_id'] as String,
+      );
+}
+
+/// Response from begin passkey login.
+class BeginLoginResponse {
+  final Map<String, dynamic> options;
+  final String sessionId;
+
+  const BeginLoginResponse({
+    required this.options,
+    required this.sessionId,
+  });
+
+  factory BeginLoginResponse.fromJson(Map<String, dynamic> json) =>
+      BeginLoginResponse(
+        options: json['options'] as Map<String, dynamic>,
+        sessionId: json['session_id'] as String,
+      );
+}
+
+/// Passkey info returned by list passkeys endpoint.
+class PasskeyInfoResponse {
+  final String id;
+  final String name;
+  final String createdAt;
+  final String? lastUsedAt;
+
+  const PasskeyInfoResponse({
+    required this.id,
+    required this.name,
+    required this.createdAt,
+    this.lastUsedAt,
+  });
+
+  factory PasskeyInfoResponse.fromJson(Map<String, dynamic> json) =>
+      PasskeyInfoResponse(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        createdAt: json['created_at'] as String,
+        lastUsedAt: json['last_used_at'] as String?,
+      );
 }
