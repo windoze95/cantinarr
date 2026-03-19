@@ -1,7 +1,7 @@
 # Stage 1: Build Flutter web
 FROM --platform=$BUILDPLATFORM ghcr.io/cirruslabs/flutter:stable AS flutter-builder
 WORKDIR /app
-COPY app/pubspec.yaml app/pubspec.lock ./
+COPY app/pubspec.yaml ./
 RUN flutter pub get
 COPY app/ .
 RUN flutter build web --release
