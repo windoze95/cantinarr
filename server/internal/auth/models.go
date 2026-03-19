@@ -85,3 +85,25 @@ type DeviceInfo struct {
 	CreatedAt  time.Time `json:"created_at"`
 	LastSeenAt time.Time `json:"last_seen_at"`
 }
+
+type SetupRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type AuthStatusResponse struct {
+	NeedsSetup        bool `json:"needs_setup"`
+	WebAuthnAvailable bool `json:"webauthn_available"`
+}
+
+type PasskeyInfo struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
+type FinishRegistrationRequest struct {
+	SessionID      string `json:"session_id"`
+	CredentialName string `json:"credential_name"`
+}

@@ -22,15 +22,16 @@ func hashToken(token string) string {
 }
 
 var (
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrInviteRequired     = errors.New("valid invite code required")
-	ErrInviteExpired      = errors.New("invite code expired or already used")
-	ErrUserExists         = errors.New("username already taken")
-	ErrTokenExpired       = errors.New("connect token has expired")
-	ErrTokenRedeemed      = errors.New("connect token has already been used")
-	ErrTokenNotFound      = errors.New("connect token not found")
-	ErrDeviceRevoked      = errors.New("device has been revoked")
-	ErrDeviceNotFound     = errors.New("device not found")
+	ErrInvalidCredentials  = errors.New("invalid credentials")
+	ErrInviteRequired      = errors.New("valid invite code required")
+	ErrInviteExpired       = errors.New("invite code expired or already used")
+	ErrUserExists          = errors.New("username already taken")
+	ErrTokenExpired        = errors.New("connect token has expired")
+	ErrTokenRedeemed       = errors.New("connect token has already been used")
+	ErrTokenNotFound       = errors.New("connect token not found")
+	ErrDeviceRevoked       = errors.New("device has been revoked")
+	ErrDeviceNotFound      = errors.New("device not found")
+	ErrSetupAlreadyComplete = errors.New("setup has already been completed")
 )
 
 type Claims struct {
@@ -42,17 +43,22 @@ type Claims struct {
 }
 
 type Service struct {
-	db        *sql.DB
-	jwtSecret []byte
+	db               *sql.DB
+	jwtSecret        []byte
+	webauthnSessions *SessionStore
 }
 
 func NewService(db *sql.DB, jwtSecret string) *Service {
 	return &Service{
-		db:        db,
-		jwtSecret: []byte(jwtSecret),
+		db:               db,
+		jwtSecret:        []byte(jwtSecret),
+		webauthnSessions: NewSessionStore(),
 	}
 }
 
+// EnsureAdmin creates a default "admin" user from the CANTINARR_ADMIN_PASSWORD env var.
+// Deprecated: Use the interactive setup wizard instead. This is kept for backward
+// compatibility and will be removed in a future version.
 func (s *Service) EnsureAdmin(adminPassword string) error {
 	if adminPassword == "" {
 		return nil
@@ -71,6 +77,101 @@ func (s *Service) EnsureAdmin(adminPassword string) error {
 	_, err = s.db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", "admin", string(hash), "admin")
 	if err != nil {
 		return fmt.Errorf("create admin: %w", err)
+	}
+	// Mark setup as complete since we created a user via env var
+	_, _ = s.db.Exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('setup_completed', 'true')")
+	return nil
+}
+
+// IsSetupComplete checks whether initial setup has been completed.
+func (s *Service) IsSetupComplete() bool {
+	var val string
+	err := s.db.QueryRow("SELECT value FROM settings WHERE key = 'setup_completed'").Scan(&val)
+	return err == nil && val == "true"
+}
+
+// Setup creates the initial admin account during first-run setup.
+// Returns JWT tokens so the user is automatically logged in.
+// The entire operation is wrapped in a transaction to prevent race conditions.
+func (s *Service) Setup(username, password string) (*TokenResponse, error) {
+	if s.IsSetupComplete() {
+		return nil, ErrSetupAlreadyComplete
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("hash password: %w", err)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Re-check inside the transaction (SQLite serializes writes, so this is safe)
+	var setupVal string
+	if err := tx.QueryRow("SELECT value FROM settings WHERE key = 'setup_completed'").Scan(&setupVal); err == nil && setupVal == "true" {
+		return nil, ErrSetupAlreadyComplete
+	}
+
+	// Mark setup as complete FIRST to prevent concurrent setup attempts
+	_, err = tx.Exec("INSERT INTO settings (key, value) VALUES ('setup_completed', 'true')")
+	if err != nil {
+		return nil, fmt.Errorf("mark setup complete: %w", err)
+	}
+
+	result, err := tx.Exec(
+		"INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+		username, string(hash), "admin",
+	)
+	if err != nil {
+		return nil, ErrUserExists
+	}
+	userID, _ := result.LastInsertId()
+
+	deviceID := uuid.New().String()
+	_, err = tx.Exec(
+		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
+		deviceID, userID, "Setup",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create device: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit setup: %w", err)
+	}
+
+	user := &User{
+		ID:       userID,
+		Username: username,
+		Role:     "admin",
+	}
+	resp, err := s.generateTokens(user, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	resp.DeviceID = deviceID
+	return resp, nil
+}
+
+// MigrateSetupState ensures the setup_completed flag is consistent.
+// If users exist but setup_completed is not set, it inserts it.
+// This handles existing deployments upgrading to the setup wizard.
+func (s *Service) MigrateSetupState() error {
+	if s.IsSetupComplete() {
+		return nil
+	}
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		return fmt.Errorf("check users: %w", err)
+	}
+	if count > 0 {
+		_, err := s.db.Exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('setup_completed', 'true')")
+		if err != nil {
+			return fmt.Errorf("migrate setup state: %w", err)
+		}
 	}
 	return nil
 }

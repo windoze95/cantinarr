@@ -3,7 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../features/ai_assistant/ui/ai_chat_screen.dart';
 import '../features/auth/logic/auth_provider.dart';
-import '../features/auth/ui/connection_screen.dart';
+import '../features/auth/ui/auth_screen.dart';
+import '../features/auth/ui/passkey_management_screen.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
 import '../features/dashboard/ui/dashboard_tv_tab.dart';
@@ -39,8 +40,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final auth = authState.valueOrNull;
       final isAuthenticated = auth?.isAuthenticated ?? false;
       final isAuthRoute = state.matchedLocation == '/login';
+      final pendingPasskey = auth?.pendingPasskeyOffer ?? false;
 
       if (!isAuthenticated && !isAuthRoute) return '/login';
+      // During passkey offer, force user to /login (where the offer renders)
+      if (isAuthenticated && pendingPasskey) return isAuthRoute ? null : '/login';
       if (isAuthenticated && isAuthRoute) return '/dashboard/movies';
       return null;
     },
@@ -49,7 +53,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/login',
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const ConnectionScreen(),
+        builder: (_, __) => const AuthScreen(),
       ),
 
       // Module shell (provides drawer + search bar, no bottom nav)
@@ -197,6 +201,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/devices',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const DevicesScreen(),
+      ),
+      GoRoute(
+        path: '/settings/passkeys',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const PasskeyManagementScreen(),
       ),
       GoRoute(
         path: '/settings/instance/new',

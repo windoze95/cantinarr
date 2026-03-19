@@ -19,8 +19,6 @@ func Handler() http.Handler {
 		})
 	}
 
-	fileServer := http.FileServer(http.FS(distFS))
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip API and WebSocket routes
 		if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -28,22 +26,26 @@ func Handler() http.Handler {
 			return
 		}
 
-		// Try to serve the file directly
-		// If it doesn't exist (SPA route), serve index.html
-		path := r.URL.Path
-		if path == "/" {
-			path = "/index.html"
+		// Determine which file to serve
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
 		}
 
-		// Check if file exists
-		f, err := distFS.Open(strings.TrimPrefix(path, "/"))
+		// Check if file exists; fall back to index.html for SPA routing
+		f, err := distFS.Open(path)
 		if err != nil {
-			// SPA fallback: serve index.html for client-side routing
-			r.URL.Path = "/index.html"
-		} else {
-			f.Close()
+			path = "index.html"
+			f, err = distFS.Open(path)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
 		}
+		f.Close()
 
-		fileServer.ServeHTTP(w, r)
+		// Serve the file directly from the filesystem to avoid
+		// http.FileServer's redirect behavior for "/" and "/index.html"
+		http.ServeFileFS(w, r, distFS, path)
 	})
 }

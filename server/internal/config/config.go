@@ -23,7 +23,8 @@ type Config struct {
 	DBPath            string
 	Port              int
 	ServerName        string
-	AdminPassword     string
+	// Deprecated: Use the setup wizard instead. Will be removed in a future version.
+	AdminPassword string
 	AllowedOrigins    []string
 }
 

@@ -72,15 +72,27 @@ func NewRouter(
 
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
+			r.Get("/status", authHandler.AuthStatus)
+			r.With(authLimiter.Middleware).Post("/setup", authHandler.HandleSetup)
 			r.With(authLimiter.Middleware).Post("/login", authHandler.Login)
 			r.With(authLimiter.Middleware).Post("/register", authHandler.Register)
 			r.Post("/refresh", authHandler.Refresh)
 			r.With(authLimiter.Middleware).Post("/connect", authHandler.HandleRedeemConnectToken)
 
+			// Passkey login (public, rate-limited)
+			r.With(authLimiter.Middleware).Post("/passkey/login/begin", authHandler.BeginPasskeyLogin)
+			r.With(authLimiter.Middleware).Post("/passkey/login/finish", authHandler.FinishPasskeyLogin)
+
 			// Protected auth routes
 			r.Group(func(r chi.Router) {
 				r.Use(authService.AuthMiddleware)
 				r.Get("/me", authHandler.Me)
+
+				// Passkey registration (authenticated)
+				r.Post("/passkey/register/begin", authHandler.BeginPasskeyRegistration)
+				r.Post("/passkey/register/finish", authHandler.FinishPasskeyRegistration)
+				r.Get("/passkeys", authHandler.ListPasskeys)
+				r.Delete("/passkeys/{credentialID}", authHandler.DeletePasskey)
 
 				// Admin-only
 				r.Group(func(r chi.Router) {
