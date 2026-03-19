@@ -1,7 +1,12 @@
 # Go
 server/cantinarr
 server/server
+server/cantinarr-server
 *.exe
+
+# Web build artifacts (embedded at compile time)
+server/internal/web/dist/*
+!server/internal/web/dist/.gitkeep
 
 # Flutter
 app/.dart_tool/
