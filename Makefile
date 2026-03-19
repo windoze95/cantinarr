@@ -5,11 +5,11 @@ all: flutter-web copy-web server
 flutter-web:
 	cd app && flutter pub get && flutter build web --release
 
-copy-web:
+copy-web: flutter-web
 	rm -rf server/internal/web/dist/*
 	cp -r app/build/web/* server/internal/web/dist/
 
-server:
+server: copy-web
 	cd server && CGO_ENABLED=0 go build -o cantinarr-server ./cmd/server
 
 run: all
