@@ -196,6 +196,48 @@ func (h *Handler) HandleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
 
+func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
+	resp := AuthStatusResponse{
+		NeedsSetup:       !h.service.IsSetupComplete(),
+		WebAuthnAvailable: isSecureContext(r),
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) HandleSetup(w http.ResponseWriter, r *http.Request) {
+	var req SetupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.Username == "" || req.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
+		return
+	}
+
+	if len(req.Password) < 8 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be at least 8 characters"})
+		return
+	}
+
+	resp, err := h.service.Setup(req.Username, req.Password)
+	if err != nil {
+		if errors.Is(err, ErrSetupAlreadyComplete) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "setup has already been completed"})
+			return
+		}
+		if errors.Is(err, ErrUserExists) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "username already taken"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, resp)
+}
+
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r.Context())
 	if claims == nil {

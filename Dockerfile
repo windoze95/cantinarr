@@ -1,11 +1,13 @@
 # Stage 1: Build Flutter web
-FROM ghcr.io/cirruslabs/flutter:stable AS flutter-builder
+FROM --platform=$BUILDPLATFORM ghcr.io/cirruslabs/flutter:stable AS flutter-builder
 WORKDIR /app
+COPY app/pubspec.yaml ./
+RUN flutter pub get
 COPY app/ .
-RUN flutter pub get && flutter build web --release
+RUN flutter build web --release
 
 # Stage 2: Build Go binary
-FROM golang:1.22-alpine AS go-builder
+FROM golang:1.25-alpine AS go-builder
 WORKDIR /build
 COPY server/go.mod server/go.sum ./
 RUN go mod download
@@ -18,6 +20,6 @@ RUN CGO_ENABLED=0 go build -o cantinarr ./cmd/server
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates
 COPY --from=go-builder /build/cantinarr /usr/local/bin/
-EXPOSE 8484
+EXPOSE 8585
 VOLUME /config
 CMD ["cantinarr"]

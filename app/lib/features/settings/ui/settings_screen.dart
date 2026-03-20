@@ -22,7 +22,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void initState() {
     super.initState();
     PackageInfo.fromPlatform().then((info) {
-      setState(() => _appVersion = info.version);
+      final build = info.buildNumber;
+      setState(() => _appVersion =
+          build.isNotEmpty ? '${info.version} ($build)' : info.version);
     });
   }
 
@@ -130,6 +132,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 label: const Text('Add Instance'),
               ),
             ),
+
+          _SettingsTile(
+            icon: Icons.fingerprint,
+            title: 'Passkeys',
+            subtitle: 'Manage passkey sign-in methods',
+            onTap: () => context.push('/settings/passkeys'),
+          ),
 
           // Admin section
           if (user?.isAdmin == true) ...[

@@ -38,6 +38,7 @@ type Client struct {
 
 // Hub manages WebSocket clients and broadcasts events.
 type Hub struct {
+	upgrader   websocket.Upgrader
 	clients    map[*Client]bool
 	broadcast  chan []byte
 	register   chan *Client
@@ -57,13 +58,13 @@ type Hub struct {
 	prevSonarrQueue map[string]map[int]float64 // instanceID -> seriesId -> progress
 }
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
 // NewHub creates a new WebSocket hub.
-func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store, radarrClient *radarr.Client, sonarrClient *sonarr.Client) *Hub {
+func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store, radarrClient *radarr.Client, sonarrClient *sonarr.Client, allowedOrigins []string) *Hub {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: makeOriginChecker(allowedOrigins),
+	}
 	return &Hub{
+		upgrader:        upgrader,
 		clients:         make(map[*Client]bool),
 		broadcast:       make(chan []byte, 256),
 		register:        make(chan *Client),
@@ -75,6 +76,24 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		sonarr:          sonarrClient,
 		prevRadarrQueue: make(map[string]map[int]float64),
 		prevSonarrQueue: make(map[string]map[int]float64),
+	}
+}
+
+// makeOriginChecker returns a CheckOrigin function. If allowedOrigins is empty,
+// it allows same-origin only (gorilla/websocket default). Otherwise it checks
+// the Origin header against the allowed list.
+func makeOriginChecker(allowedOrigins []string) func(r *http.Request) bool {
+	if len(allowedOrigins) == 0 {
+		// Default: allow same-origin only (nil means gorilla default check)
+		return nil
+	}
+	allowed := make(map[string]bool, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		allowed[o] = true
+	}
+	return func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		return allowed[origin]
 	}
 }
 
@@ -141,7 +160,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	// Upgrade with the Bearer subprotocol so the client knows auth succeeded
 	header := http.Header{}
-	conn, err := upgrader.Upgrade(w, r, header)
+	conn, err := h.upgrader.Upgrade(w, r, header)
 	if err != nil {
 		log.Printf("websocket: upgrade: %v", err)
 		return

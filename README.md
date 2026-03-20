@@ -6,7 +6,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Cantinarr Server (Go, single container, port 8484)     │
+│  Cantinarr Server (Go, single container, port 8585)     │
 │                                                         │
 │  ┌──────────┐  ┌──────────┐  ┌───────────────────────┐  │
 │  │ Auth/JWT │  │ Request  │  │ AI Chat (Claude)      │  │
@@ -63,7 +63,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Open `http://your-server:8484` -- log in as `admin` with your configured password.
+Open `http://your-server:8585` -- log in as `admin` with your configured password.
 
 ### From Source
 

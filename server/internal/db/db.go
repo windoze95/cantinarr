@@ -75,6 +75,29 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    token_hash TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    expires_at DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    public_key BLOB NOT NULL,
+    attestation_type TEXT NOT NULL,
+    aaguid BLOB,
+    sign_count INTEGER NOT NULL DEFAULT 0,
+    backup_eligible BOOLEAN NOT NULL DEFAULT 0,
+    backup_state BOOLEAN NOT NULL DEFAULT 0,
+    rp_id TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT 'Passkey',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_used_at DATETIME
+);
 `
 
 func Open(dbPath string) (*sql.DB, error) {

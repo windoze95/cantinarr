@@ -5,12 +5,13 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	TMDBAccessToken           string
+	TMDBAccessToken   string
 	AnthropicKey      string
 	RadarrURL         string
 	RadarrKey         string
@@ -22,7 +23,9 @@ type Config struct {
 	DBPath            string
 	Port              int
 	ServerName        string
-	AdminPassword     string
+	// Deprecated: Use the setup wizard instead. Will be removed in a future version.
+	AdminPassword string
+	AllowedOrigins    []string
 }
 
 func (c *Config) TMDBEnabled() bool {
@@ -80,13 +83,23 @@ func Load() (*Config, error) {
 
 	portStr := os.Getenv("CANTINARR_PORT")
 	if portStr == "" {
-		cfg.Port = 8484
+		cfg.Port = 8585
 	} else {
 		p, err := strconv.Atoi(portStr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid CANTINARR_PORT: %w", err)
 		}
 		cfg.Port = p
+	}
+
+	// Parse allowed CORS origins (comma-separated). Empty means same-origin only.
+	if origins := os.Getenv("CANTINARR_ALLOWED_ORIGINS"); origins != "" {
+		for _, o := range strings.Split(origins, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				cfg.AllowedOrigins = append(cfg.AllowedOrigins, o)
+			}
+		}
 	}
 
 	return cfg, nil
