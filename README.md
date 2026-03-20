@@ -1,6 +1,6 @@
 # Cantinarr
 
-The flashiest, most seamless media request app for Plex and Jellyfin households.
+A seamless media request and *arr management app for Plex and Jellyfin households.
 
 Cantinarr makes it dead simple for your family and friends to discover and request movies and TV shows. They browse a beautiful interface powered by TMDB and Trakt, tap "Request," and the server handles everything behind the scenes -- adding to Radarr or Sonarr with the right IDs, the right quality profile, the right root folder. No configuration, no confusion, no TVDB headaches.
 
