@@ -621,6 +621,12 @@ func main() {
 
 		// ── Auth ──
 		r.Route("/auth", func(r chi.Router) {
+			r.Get("/status", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSONOK(w, map[string]interface{}{
+					"needs_setup":        false,
+					"webauthn_available": false,
+				})
+			})
 			r.Post("/login", loginHandler(users, devices))
 			r.Post("/register", registerHandler(users))
 			r.Post("/refresh", refreshHandler(users, devices))
@@ -629,6 +635,9 @@ func main() {
 			r.Group(func(r chi.Router) {
 				r.Use(authMiddleware)
 				r.Get("/me", meHandler(users))
+				r.Get("/passkeys", func(w http.ResponseWriter, _ *http.Request) {
+					writeJSONOK(w, []interface{}{})
+				})
 				r.Group(func(r chi.Router) {
 					r.Use(adminMiddleware)
 					r.Post("/invite", inviteHandler())
