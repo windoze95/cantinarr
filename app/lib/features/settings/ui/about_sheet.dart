@@ -16,7 +16,9 @@ class AboutSheet extends StatelessWidget {
       child: FutureBuilder<PackageInfo>(
         future: PackageInfo.fromPlatform(),
         builder: (context, snapshot) {
-          final version = snapshot.data?.version ?? '';
+          final info = snapshot.data;
+          final version = info?.version ?? '';
+          final build = info?.buildNumber ?? '';
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -65,7 +67,7 @@ class AboutSheet extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                'Version $version',
+                build.isNotEmpty ? 'Version $version ($build)' : 'Version $version',
                 style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 14,
