@@ -190,4 +190,6 @@ Contributions are welcome! Please open an issue to discuss your idea before subm
 
 ## License
 
-MIT
+AGPL-3.0 — See [LICENSE](LICENSE) for details.
+
+Copyright (c) 2024 Julian Dice
