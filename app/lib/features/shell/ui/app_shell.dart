@@ -202,6 +202,7 @@ class _AppShellState extends ConsumerState<AppShell>
 
     return Scaffold(
       body: SafeArea(
+        bottom: false,
         child: Stack(
           children: [
             // Base layer: search bar + module content
