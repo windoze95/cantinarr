@@ -192,4 +192,4 @@ Contributions are welcome! Please open an issue to discuss your idea before subm
 
 AGPL-3.0 — See [LICENSE](LICENSE) for details.
 
-Copyright (c) 2024 Julian Dice
+Copyright (c) 2026 Julian Dice
