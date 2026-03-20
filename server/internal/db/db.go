@@ -17,14 +17,6 @@ CREATE TABLE IF NOT EXISTS users (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS invite_codes (
-    code TEXT PRIMARY KEY,
-    created_by INTEGER REFERENCES users(id),
-    used_by INTEGER REFERENCES users(id),
-    expires_at DATETIME NOT NULL,
-    used_at DATETIME
-);
-
 CREATE TABLE IF NOT EXISTS request_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id),

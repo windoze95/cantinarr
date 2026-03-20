@@ -2,7 +2,7 @@
 
 The backend brain for [Cantinarr](https://github.com/windoze95/cantinarr) -- a self-hosted media request app for Plex and Jellyfin households.
 
-A single Go binary that bridges your arr stack, serves the web UI, and keeps API keys off user devices. Drop it on your NAS, point it at Radarr/Sonarr, and hand out invite codes to family and friends.
+A single Go binary that bridges your arr stack, serves the web UI, and keeps API keys off user devices. Drop it on your NAS, point it at Radarr/Sonarr, and generate connect links for family and friends.
 
 ```
                         Cantinarr Server (:8585)
@@ -26,7 +26,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 
 - **One-tap requests** -- Users browse TMDB/Trakt on the app, tap request, and the server handles everything: ID bridging, arr lookups, quality profiles, root folders.
 - **TMDB-to-TVDB Rosetta Stone** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then title+year search. Results cached in SQLite for 30 days.
-- **Invite code auth** -- Admin generates 6-character codes for household members. JWT-based sessions with 7-day access / 30-day refresh tokens.
+- **Connect link auth** -- Admin generates one-time connect links for household members. JWT-based sessions with 7-day access / 30-day refresh tokens.
 - **AI assistant** -- Claude-powered chat with server-side tool execution (search, recommendations, request status, make requests). Streams responses via SSE.
 - **Real-time updates** -- WebSocket hub polls arr queues every 30 seconds and pushes download progress to connected clients.
 - **Arr proxy** -- Admins get full passthrough to Radarr/Sonarr APIs for management without exposing keys.
@@ -102,10 +102,8 @@ All configuration is via environment variables with the `CANTINARR_` prefix.
 ### Authentication
 ```
 POST   /api/auth/login          # { username, password } -> tokens + user
-POST   /api/auth/register       # { username, password, invite_code } -> tokens + user
 POST   /api/auth/refresh        # { refresh_token } -> new tokens
 GET    /api/auth/me             # current user profile
-POST   /api/auth/invite         # (admin) generate invite code
 ```
 
 ### Configuration
@@ -191,7 +189,6 @@ The AI assistant has 9 server-side tools:
 SQLite with WAL mode for concurrent reads. Four tables:
 
 - `users` -- accounts with bcrypt password hashes
-- `invite_codes` -- single-use registration codes (7-day expiry)
 - `request_log` -- audit trail of all requests
 - `tmdb_tvdb_cache` -- ID bridge cache (30-day TTL)
 
@@ -206,7 +203,7 @@ server/
 │   │   └── service.go              # Anthropic API client + tool loop
 │   ├── api/router.go               # Chi router, CORS, middleware, routes
 │   ├── auth/
-│   │   ├── handler.go              # Login, register, refresh, invite
+│   │   ├── handler.go              # Login, refresh, connect token
 │   │   ├── middleware.go           # JWT validation + admin gate
 │   │   ├── models.go              # User, tokens, request/response types
 │   │   └── service.go             # Auth business logic, JWT signing

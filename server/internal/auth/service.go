@@ -23,8 +23,6 @@ func hashToken(token string) string {
 
 var (
 	ErrInvalidCredentials  = errors.New("invalid credentials")
-	ErrInviteRequired      = errors.New("valid invite code required")
-	ErrInviteExpired       = errors.New("invite code expired or already used")
 	ErrUserExists          = errors.New("username already taken")
 	ErrTokenExpired        = errors.New("connect token has expired")
 	ErrTokenRedeemed       = errors.New("connect token has already been used")
@@ -203,44 +201,6 @@ func (s *Service) Login(username, password string) (*TokenResponse, error) {
 	return resp, nil
 }
 
-func (s *Service) Register(username, password, inviteCode string) (*TokenResponse, error) {
-	// Validate invite code
-	var code InviteCode
-	err := s.db.QueryRow(
-		"SELECT code, created_by, expires_at, used_at FROM invite_codes WHERE code = ?", inviteCode,
-	).Scan(&code.Code, &code.CreatedBy, &code.ExpiresAt, &code.UsedAt)
-	if err != nil {
-		return nil, ErrInviteRequired
-	}
-	if code.UsedAt != nil || time.Now().After(code.ExpiresAt) {
-		return nil, ErrInviteExpired
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return nil, fmt.Errorf("hash password: %w", err)
-	}
-
-	result, err := s.db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", username, string(hash), "user")
-	if err != nil {
-		return nil, ErrUserExists
-	}
-	userID, _ := result.LastInsertId()
-
-	now := time.Now()
-	_, err = s.db.Exec("UPDATE invite_codes SET used_by = ?, used_at = ? WHERE code = ?", userID, now, inviteCode)
-	if err != nil {
-		return nil, fmt.Errorf("mark invite used: %w", err)
-	}
-
-	user := &User{
-		ID:       userID,
-		Username: username,
-		Role:     "user",
-	}
-	return s.generateTokens(user, "")
-}
-
 func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {
 	claims, err := s.ValidateToken(refreshToken)
 	if err != nil {
@@ -297,19 +257,6 @@ func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {
 
 func (s *Service) GetUser(userID int64) (*User, error) {
 	return s.getUserByID(userID)
-}
-
-func (s *Service) CreateInvite(createdBy int64) (*InviteResponse, error) {
-	code, err := generateCode(6)
-	if err != nil {
-		return nil, fmt.Errorf("generate code: %w", err)
-	}
-	expiresAt := time.Now().Add(7 * 24 * time.Hour)
-	_, err = s.db.Exec("INSERT INTO invite_codes (code, created_by, expires_at) VALUES (?, ?, ?)", code, createdBy, expiresAt)
-	if err != nil {
-		return nil, fmt.Errorf("insert invite: %w", err)
-	}
-	return &InviteResponse{Code: code, ExpiresAt: expiresAt}, nil
 }
 
 func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*CreateConnectTokenResponse, error) {

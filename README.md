@@ -44,7 +44,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **TMDB + Trakt for discovery** -- The best metadata, images, and trending data. Sonarr's TVDB dependency is invisible.
 - **The Rosetta Stone** -- Automatic TMDB-to-TVDB ID bridging with Trakt fallback. The #1 source of failed Sonarr adds, solved.
 - **AI assistant** -- "What should I watch tonight?" Claude searches your library, checks availability, and can request for you.
-- **Household-friendly** -- Invite codes, role-based access. Admins manage arr services, users just browse and request.
+- **Household-friendly** -- Connect links, role-based access. Admins manage arr services, users just browse and request.
 - **Single container** -- One Go binary, one port, serves API + web UI. Runs great on a Raspberry Pi or NAS.
 
 ## Quick Start
@@ -89,7 +89,7 @@ cantinarr/
 │   ├── internal/
 │   │   ├── ai/             # Claude AI chat with SSE streaming
 │   │   ├── api/            # Chi router, middleware, routes
-│   │   ├── auth/           # JWT, bcrypt, invite codes
+│   │   ├── auth/           # JWT, bcrypt, connect tokens
 │   │   ├── config/         # Environment variable loading
 │   │   ├── db/             # SQLite with WAL mode
 │   │   ├── mcp/            # 9 AI tools (search, request, status)
@@ -136,8 +136,8 @@ See [`server/README.md`](server/README.md) for the full configuration reference.
 ## How It Works
 
 ### For Users
-1. Admin gives you a 6-character invite code and a server URL
-2. Open the app, enter the URL and code, pick a username
+1. Admin sends you a connect link
+2. Open the link on your device -- it creates your account and connects automatically
 3. Browse movies and TV shows powered by TMDB and Trakt
 4. Tap "Request" on anything you want -- it just works
 5. Watch download progress in real-time via WebSocket updates
@@ -145,7 +145,7 @@ See [`server/README.md`](server/README.md) for the full configuration reference.
 
 ### For Admins
 1. Deploy the container, set your TMDB key and arr connections
-2. Log in as `admin`, generate invite codes for your household
+2. Log in as `admin`, generate connect links for your household
 3. Users' requests flow through the Rosetta Stone bridge to the correct arr service
 4. Manage Radarr/Sonarr from the app (admin tabs) without exposing API keys
 5. Optionally add an Anthropic key for AI chat features
@@ -174,7 +174,7 @@ Movies don't need bridging -- Radarr natively supports TMDB IDs.
 |---|---|
 | Server | Go, Chi router, SQLite (pure Go) |
 | Client | Flutter (Dart), Riverpod, GoRouter |
-| Auth | JWT (HS256), bcrypt, invite codes |
+| Auth | JWT (HS256), bcrypt, connect tokens |
 | AI | Anthropic Claude API, SSE streaming |
 | Real-time | gorilla/websocket |
 | Discovery | TMDB API v3, Trakt API v2 |
