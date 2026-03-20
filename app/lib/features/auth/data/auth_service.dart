@@ -51,22 +51,6 @@ class AuthService {
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
 
-  /// Register a new account using an invite code.
-  Future<AuthResponse> register(
-    String serverUrl,
-    String username,
-    String password,
-    String inviteCode,
-  ) async {
-    final dio = _createDio(serverUrl);
-    final resp = await dio.post('/api/auth/register', data: {
-      'username': username,
-      'password': password,
-      'invite_code': inviteCode,
-    });
-    return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
-  }
-
   /// Refresh an expired access token.
   Future<AuthResponse> refreshToken(
     String serverUrl,

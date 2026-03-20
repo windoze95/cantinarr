@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../logic/auth_provider.dart';
 
@@ -151,17 +150,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             ),
                           )
                         : const Text('Sign In'),
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Invite link
-                TextButton(
-                  onPressed: () => context.go('/invite',
-                      extra: _serverUrlController.text.trim()),
-                  child: const Text(
-                    'Have an invite code?',
-                    style: TextStyle(color: AppTheme.accent),
                   ),
                 ),
               ],

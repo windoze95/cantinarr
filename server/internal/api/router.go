@@ -75,7 +75,6 @@ func NewRouter(
 			r.Get("/status", authHandler.AuthStatus)
 			r.With(authLimiter.Middleware).Post("/setup", authHandler.HandleSetup)
 			r.With(authLimiter.Middleware).Post("/login", authHandler.Login)
-			r.With(authLimiter.Middleware).Post("/register", authHandler.Register)
 			r.Post("/refresh", authHandler.Refresh)
 			r.With(authLimiter.Middleware).Post("/connect", authHandler.HandleRedeemConnectToken)
 
@@ -93,12 +92,6 @@ func NewRouter(
 				r.Post("/passkey/register/finish", authHandler.FinishPasskeyRegistration)
 				r.Get("/passkeys", authHandler.ListPasskeys)
 				r.Delete("/passkeys/{credentialID}", authHandler.DeletePasskey)
-
-				// Admin-only
-				r.Group(func(r chi.Router) {
-					r.Use(auth.AdminMiddleware)
-					r.Post("/invite", authHandler.CreateInvite)
-				})
 			})
 		})
 

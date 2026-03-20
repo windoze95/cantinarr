@@ -58,7 +58,7 @@ Dark-first UI with warm gold accents, designed for couch browsing.
 
 ### Auth
 - **Server URL + login** -- point at your Cantinarr server, enter credentials
-- **Invite codes** -- new users register with a 6-character code from their admin
+- **Connect links** -- new users connect via a one-time link from their admin
 - **Automatic session restore** -- JWT stored in secure storage, auto-refreshes on 401
 
 ## Getting Started
@@ -148,7 +148,6 @@ app/
 │   │   │   ├── logic/auth_provider.dart       # Session state (AsyncNotifier)
 │   │   │   └── ui/
 │   │   │       ├── login_screen.dart          # Server URL + credentials
-│   │   │       └── invite_screen.dart         # Invite code registration
 │   │   │
 │   │   ├── discover/                          # Browse & search
 │   │   │   ├── data/
@@ -241,7 +240,7 @@ Four-tab bottom navigation with GoRouter:
 | TV Shows | `/sonarr` | Sonarr library | Backend proxy |
 | Assistant | `/assistant` | AI chat | Backend SSE |
 
-Full-screen routes: `/detail/:type/:id`, `/settings`, `/login`, `/invite`
+Full-screen routes: `/detail/:type/:id`, `/settings`, `/login`
 
 Auth guard redirects unauthenticated users to `/login`. Authenticated users on `/login` redirect to `/discover`.
 

@@ -10,14 +10,6 @@ type User struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-type InviteCode struct {
-	Code      string     `json:"code"`
-	CreatedBy int64      `json:"created_by"`
-	UsedBy    *int64     `json:"used_by,omitempty"`
-	ExpiresAt time.Time  `json:"expires_at"`
-	UsedAt    *time.Time `json:"used_at,omitempty"`
-}
-
 type Device struct {
 	ID         string     `json:"id"`
 	UserID     int64      `json:"user_id"`
@@ -40,12 +32,6 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-type RegisterRequest struct {
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	InviteCode string `json:"invite_code"`
-}
-
 type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
@@ -55,11 +41,6 @@ type TokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 	User         User   `json:"user"`
 	DeviceID     string `json:"device_id,omitempty"`
-}
-
-type InviteResponse struct {
-	Code      string    `json:"code"`
-	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type CreateConnectTokenRequest struct {

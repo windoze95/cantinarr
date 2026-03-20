@@ -457,7 +457,6 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         return 'Could not connect to server';
       }
       if (statusCode == 409) return 'Username already taken';
-      if (statusCode == 400) return 'Invalid invite code';
     }
     if (e is Exception) {
       final msg = e.toString();
