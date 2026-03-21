@@ -2,21 +2,16 @@ import 'package:dio/dio.dart';
 import 'sonarr_models.dart';
 
 /// Networking layer for Sonarr, proxied through the Cantinarr backend.
-///
-/// Supports both instance-specific paths (/api/instances/{id}/...) and
-/// legacy paths (/api/sonarr/...) for backward compatibility.
 class SonarrApiService {
   final Dio _dio;
-  final String? _instanceId;
+  final String _instanceId;
 
-  SonarrApiService({required Dio backendDio, String? instanceId})
+  SonarrApiService({required Dio backendDio, required String instanceId})
       : _dio = backendDio,
         _instanceId = instanceId;
 
   /// Returns the base path prefix for API calls.
-  String get _basePath => _instanceId != null
-      ? '/api/instances/$_instanceId/api/v3'
-      : '/api/sonarr/api/v3';
+  String get _basePath => '/api/instances/$_instanceId/api/v3';
 
   Future<SonarrSystemStatus> getSystemStatus() async {
     final resp = await _dio.get('$_basePath/system/status');

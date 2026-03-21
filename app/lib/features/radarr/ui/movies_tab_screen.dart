@@ -35,10 +35,14 @@ class _MoviesTabScreenState extends ConsumerState<MoviesTabScreen> {
 
   void _initLibrary() {
     final auth = ref.read(authProvider).valueOrNull;
-    _hasRadarr = auth?.connection?.services.radarr ?? false;
+    final defaultRadarr = auth?.connection?.defaultRadarrInstance;
+    _hasRadarr = defaultRadarr != null;
     if (_hasRadarr) {
       final backendDio = ref.read(backendClientProvider);
-      final service = RadarrApiService(backendDio: backendDio);
+      final service = RadarrApiService(
+        backendDio: backendDio,
+        instanceId: defaultRadarr!.id,
+      );
       _libraryNotifier = RadarrMoviesNotifier(service);
       _libraryNotifier!.loadMovies();
       setState(() {});

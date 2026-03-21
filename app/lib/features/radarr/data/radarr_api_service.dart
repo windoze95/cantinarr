@@ -2,21 +2,16 @@ import 'package:dio/dio.dart';
 import 'radarr_models.dart';
 
 /// Networking layer for Radarr, proxied through the Cantinarr backend.
-///
-/// Supports both instance-specific paths (/api/instances/{id}/...) and
-/// legacy paths (/api/radarr/...) for backward compatibility.
 class RadarrApiService {
   final Dio _dio;
-  final String? _instanceId;
+  final String _instanceId;
 
-  RadarrApiService({required Dio backendDio, String? instanceId})
+  RadarrApiService({required Dio backendDio, required String instanceId})
       : _dio = backendDio,
         _instanceId = instanceId;
 
   /// Returns the base path prefix for API calls.
-  String get _basePath => _instanceId != null
-      ? '/api/instances/$_instanceId/api/v3'
-      : '/api/radarr/api/v3';
+  String get _basePath => '/api/instances/$_instanceId/api/v3';
 
   Future<RadarrSystemStatus> getSystemStatus() async {
     final resp = await _dio.get('$_basePath/system/status');

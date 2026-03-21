@@ -30,11 +30,12 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
   void _initNotifier() {
     final instanceState = ref.read(instanceProvider);
     final activeInstance = instanceState.activeRadarrInstance;
+    if (activeInstance == null) return;
 
     final backendDio = ref.read(backendClientProvider);
     final service = RadarrApiService(
       backendDio: backendDio,
-      instanceId: activeInstance?.id,
+      instanceId: activeInstance.id,
     );
     _notifier = RadarrMoviesNotifier(service);
     _notifier!.loadMovies();

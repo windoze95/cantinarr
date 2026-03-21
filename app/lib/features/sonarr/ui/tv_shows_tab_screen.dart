@@ -34,10 +34,14 @@ class _TvShowsTabScreenState extends ConsumerState<TvShowsTabScreen> {
 
   void _initLibrary() {
     final auth = ref.read(authProvider).valueOrNull;
-    _hasSonarr = auth?.connection?.services.sonarr ?? false;
+    final defaultSonarr = auth?.connection?.defaultSonarrInstance;
+    _hasSonarr = defaultSonarr != null;
     if (_hasSonarr) {
       final backendDio = ref.read(backendClientProvider);
-      final service = SonarrApiService(backendDio: backendDio);
+      final service = SonarrApiService(
+        backendDio: backendDio,
+        instanceId: defaultSonarr!.id,
+      );
       _libraryNotifier = SonarrSeriesNotifier(service);
       _libraryNotifier!.loadSeries();
       setState(() {});

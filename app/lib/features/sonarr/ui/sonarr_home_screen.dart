@@ -30,11 +30,12 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
   void _initNotifier() {
     final instanceState = ref.read(instanceProvider);
     final activeInstance = instanceState.activeSonarrInstance;
+    if (activeInstance == null) return;
 
     final backendDio = ref.read(backendClientProvider);
     final service = SonarrApiService(
       backendDio: backendDio,
-      instanceId: activeInstance?.id,
+      instanceId: activeInstance.id,
     );
     _notifier = SonarrSeriesNotifier(service);
     _notifier!.loadSeries();
