@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/horizontal_item_row.dart';
+import '../../../core/widgets/media_card.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/ui/category_row.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/logic/tv_discover_provider.dart';
 
-/// Dashboard TV tab: discovery rows + simplified Sonarr library sections.
+/// Dashboard TV tab: discovery rows + Sonarr library rows.
 class DashboardTvTab extends ConsumerStatefulWidget {
   const DashboardTvTab({super.key});
 
@@ -18,7 +21,7 @@ class DashboardTvTab extends ConsumerStatefulWidget {
 
 class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
   List<SonarrSeries> _recentlyDownloaded = [];
-  List<SonarrSeries> _continuing = [];
+  List<SonarrSeries> _airingNext = [];
   bool _isLoadingLibrary = false;
 
   @override
@@ -40,19 +43,34 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
       final backendDio = ref.read(backendClientProvider);
       final service = SonarrApiService(
           backendDio: backendDio, instanceId: defaultSonarr.id);
+
       final series = await service.getSeries();
 
+      final now = DateTime.now();
+      final calendarEntries = await service.getCalendar(
+        start: now.toIso8601String(),
+        end: now.add(const Duration(days: 7)).toIso8601String(),
+      );
+
+      // "Airing Next" = unique series from calendar entries
+      final airingSeriesIds = calendarEntries
+          .map((e) => e['seriesId'] as int?)
+          .whereType<int>()
+          .toSet();
+      final airingNext = series
+          .where((s) => airingSeriesIds.contains(s.id))
+          .toList();
+
+      // "Recently Downloaded" = series with downloaded episodes, sorted by percent complete
       final downloaded = series
           .where((s) => s.percentComplete > 0)
           .toList()
         ..sort((a, b) =>
             b.percentComplete.compareTo(a.percentComplete));
-      final continuing =
-          series.where((s) => s.status == 'continuing').toList();
 
       setState(() {
         _recentlyDownloaded = downloaded.take(10).toList();
-        _continuing = continuing.take(10).toList();
+        _airingNext = airingNext.take(10).toList();
         _isLoadingLibrary = false;
       });
     } catch (_) {
@@ -89,119 +107,66 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
               isLoading: discover.isLoadingAnticipated,
             ),
 
-          if (_recentlyDownloaded.isNotEmpty || _continuing.isNotEmpty) ...[
-            _SectionHeader(title: 'Your Library'),
-            if (_isLoadingLibrary)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(
-                    child:
-                        CircularProgressIndicator(color: AppTheme.accent)),
-              ),
-            if (_continuing.isNotEmpty)
-              _CompactSeriesSection(
-                title: 'Airing Now',
-                series: _continuing,
-                color: AppTheme.downloading,
-              ),
-            if (_recentlyDownloaded.isNotEmpty)
-              _CompactSeriesSection(
-                title: 'Recently Downloaded',
-                series: _recentlyDownloaded,
-                color: AppTheme.available,
-              ),
-          ],
+          // Sonarr library rows (same style as discovery)
+          if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)
+            _buildRow(
+              title: 'Recently Downloaded',
+              items: _recentlyDownloaded,
+              statusLabel: 'Downloaded',
+              statusColor: AppTheme.available,
+            ),
+          if (_airingNext.isNotEmpty || _isLoadingLibrary)
+            _buildRow(
+              title: 'Airing Next',
+              items: _airingNext,
+              statusLabel: 'Airing',
+              statusColor: AppTheme.downloading,
+            ),
         ],
       ),
     );
   }
-}
 
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  const _SectionHeader({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildRow({
+    required String title,
+    required List<SonarrSeries> items,
+    required String statusLabel,
+    required Color statusColor,
+  }) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 28, 16, 8),
-      child: Row(
+      padding: const EdgeInsets.only(top: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: Container(height: 1, color: AppTheme.border)),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(
               title,
               style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
+                color: AppTheme.textPrimary,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
               ),
             ),
           ),
-          Expanded(child: Container(height: 1, color: AppTheme.border)),
+          const SizedBox(height: 12),
+          HorizontalItemRow<SonarrSeries>(
+            items: items,
+            isLoading: _isLoadingLibrary,
+            itemBuilder: (series) => MediaCard(
+              id: series.id,
+              title: series.title,
+              posterPath: series.posterUrl,
+              statusLabel: statusLabel,
+              statusColor: statusColor,
+              width: 100,
+              onTap: series.tvdbId != null
+                  ? () => context.push('/detail/tv/${series.tvdbId}')
+                  : null,
+            ),
+          ),
         ],
       ),
-    );
-  }
-}
-
-class _CompactSeriesSection extends StatelessWidget {
-  final String title;
-  final List<SonarrSeries> series;
-  final Color color;
-
-  const _CompactSeriesSection({
-    required this.title,
-    required this.series,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Row(
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '$title (${series.length})',
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-        ...series.map((s) => ListTile(
-              dense: true,
-              leading: Icon(Icons.tv_outlined,
-                  color: color, size: 20),
-              title: Text(
-                s.title,
-                style: const TextStyle(
-                    color: AppTheme.textPrimary, fontSize: 14),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                '${s.year != null ? s.year.toString() : ''} ${s.status == 'continuing' ? '• Continuing' : ''}',
-                style: const TextStyle(
-                    color: AppTheme.textSecondary, fontSize: 12),
-              ),
-            )),
-      ],
     );
   }
 }
