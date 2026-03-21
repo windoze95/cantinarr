@@ -11,46 +11,11 @@ import (
 )
 
 type Handler struct {
-	radarrURL *url.URL
-	radarrKey string
-	sonarrURL *url.URL
-	sonarrKey string
-	store     *instance.Store
+	store *instance.Store
 }
 
-func NewHandler(radarrURL, radarrKey, sonarrURL, sonarrKey string, store *instance.Store) *Handler {
-	h := &Handler{
-		radarrKey: radarrKey,
-		sonarrKey: sonarrKey,
-		store:     store,
-	}
-	if radarrURL != "" {
-		h.radarrURL, _ = url.Parse(radarrURL)
-	}
-	if sonarrURL != "" {
-		h.sonarrURL, _ = url.Parse(sonarrURL)
-	}
-	return h
-}
-
-func (h *Handler) RadarrProxy() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if h.radarrURL == nil {
-			http.Error(w, `{"error":"radarr not configured"}`, http.StatusServiceUnavailable)
-			return
-		}
-		h.proxyRequest(w, r, h.radarrURL, h.radarrKey, "/api/radarr")
-	}
-}
-
-func (h *Handler) SonarrProxy() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if h.sonarrURL == nil {
-			http.Error(w, `{"error":"sonarr not configured"}`, http.StatusServiceUnavailable)
-			return
-		}
-		h.proxyRequest(w, r, h.sonarrURL, h.sonarrKey, "/api/sonarr")
-	}
+func NewHandler(store *instance.Store) *Handler {
+	return &Handler{store: store}
 }
 
 // InstanceProxy proxies requests to a specific service instance by ID.

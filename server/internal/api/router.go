@@ -38,16 +38,9 @@ func NewRouter(
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	// CORS: use configured origins, or same-origin only if none specified.
-	allowedOrigins := cfg.AllowedOrigins
-	if len(allowedOrigins) == 0 {
-		// When no origins are configured, allow same-origin requests only.
-		// An empty AllowedOrigins with AllowCredentials=false means the
-		// browser's same-origin policy applies (no cross-origin access).
-		allowedOrigins = []string{}
-	}
+	// CORS: same-origin only (frontend is served from the same origin).
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   allowedOrigins,
+		AllowedOrigins:   []string{},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
@@ -183,14 +176,6 @@ func NewRouter(
 			r.HandleFunc("/instances/{instanceID}/*", proxyHandler.InstanceProxy())
 		})
 
-		// Legacy arr proxy routes (admin only, backward compat)
-		r.Group(func(r chi.Router) {
-			r.Use(authService.AuthMiddleware)
-			r.Use(auth.AdminMiddleware)
-
-			r.HandleFunc("/radarr/*", proxyHandler.RadarrProxy())
-			r.HandleFunc("/sonarr/*", proxyHandler.SonarrProxy())
-		})
 	})
 
 	// Serve Flutter web UI at root (catch-all for non-API routes)
@@ -235,14 +220,6 @@ func configHandler(cfg *config.Config, store *instance.Store) http.HandlerFunc {
 			if inst.ServiceType == "sonarr" {
 				hasSonarr = true
 			}
-		}
-
-		// Fall back to env var config if no instances
-		if !hasRadarr {
-			hasRadarr = cfg.RadarrEnabled()
-		}
-		if !hasSonarr {
-			hasSonarr = cfg.SonarrEnabled()
 		}
 
 		w.Header().Set("Content-Type", "application/json")

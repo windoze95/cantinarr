@@ -65,25 +65,12 @@ class _AppShellState extends ConsumerState<AppShell>
       );
       _radarrNotifier!.addListener(_onLibraryChanged);
       _radarrNotifier!.loadMovies();
-    } else if (auth?.connection?.services.radarr ?? false) {
-      // Legacy fallback
-      _radarrNotifier = RadarrMoviesNotifier(
-        RadarrApiService(backendDio: backendDio),
-      );
-      _radarrNotifier!.addListener(_onLibraryChanged);
-      _radarrNotifier!.loadMovies();
     }
 
     final defaultSonarr = auth?.connection?.defaultSonarrInstance;
     if (defaultSonarr != null) {
       _sonarrNotifier = SonarrSeriesNotifier(
         SonarrApiService(backendDio: backendDio, instanceId: defaultSonarr.id),
-      );
-      _sonarrNotifier!.addListener(_onLibraryChanged);
-      _sonarrNotifier!.loadSeries();
-    } else if (auth?.connection?.services.sonarr ?? false) {
-      _sonarrNotifier = SonarrSeriesNotifier(
-        SonarrApiService(backendDio: backendDio),
       );
       _sonarrNotifier!.addListener(_onLibraryChanged);
       _sonarrNotifier!.loadSeries();

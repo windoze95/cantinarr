@@ -15,23 +15,17 @@ type Service struct {
 	db       *sql.DB
 	registry *instance.Registry
 	bridge   *tmdb.Bridge
-
-	// Legacy direct clients (nil when using registry)
-	radarr *radarr.Client
-	sonarr *sonarr.Client
 }
 
-func NewService(db *sql.DB, registry *instance.Registry, radarrClient *radarr.Client, sonarrClient *sonarr.Client, bridge *tmdb.Bridge) *Service {
+func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge) *Service {
 	return &Service{
 		db:       db,
 		registry: registry,
-		radarr:   radarrClient,
-		sonarr:   sonarrClient,
 		bridge:   bridge,
 	}
 }
 
-// getRadarr returns the default Radarr client, preferring registry over legacy.
+// getRadarr returns the default Radarr client from the registry.
 func (s *Service) getRadarr() *radarr.Client {
 	if s.registry != nil {
 		client, _, err := s.registry.GetDefaultRadarrClient()
@@ -39,10 +33,10 @@ func (s *Service) getRadarr() *radarr.Client {
 			return client
 		}
 	}
-	return s.radarr
+	return nil
 }
 
-// getSonarr returns the default Sonarr client, preferring registry over legacy.
+// getSonarr returns the default Sonarr client from the registry.
 func (s *Service) getSonarr() *sonarr.Client {
 	if s.registry != nil {
 		client, _, err := s.registry.GetDefaultSonarrClient()
@@ -50,7 +44,7 @@ func (s *Service) getSonarr() *sonarr.Client {
 			return client
 		}
 	}
-	return s.sonarr
+	return nil
 }
 
 type CreateRequest struct {

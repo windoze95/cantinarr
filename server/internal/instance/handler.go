@@ -10,6 +10,27 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// instanceResponse is the JSON shape returned to clients — API keys are write-only.
+type instanceResponse struct {
+	ID          string `json:"id"`
+	ServiceType string `json:"service_type"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	IsDefault   bool   `json:"is_default"`
+	SortOrder   int    `json:"sort_order"`
+}
+
+func toResponse(inst *Instance) instanceResponse {
+	return instanceResponse{
+		ID:          inst.ID,
+		ServiceType: inst.ServiceType,
+		Name:        inst.Name,
+		URL:         inst.URL,
+		IsDefault:   inst.IsDefault,
+		SortOrder:   inst.SortOrder,
+	}
+}
+
 // Handler provides REST endpoints for instance CRUD.
 type Handler struct {
 	store    *Store
@@ -28,11 +49,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
 		return
 	}
-	if instances == nil {
-		instances = []Instance{}
+	resp := make([]instanceResponse, 0, len(instances))
+	for _, inst := range instances {
+		resp = append(resp, toResponse(&inst))
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(instances)
+	json.NewEncoder(w).Encode(resp)
 }
 
 // Create adds a new service instance.
@@ -68,7 +90,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(inst)
+	json.NewEncoder(w).Encode(toResponse(&inst))
 }
 
 // Update modifies an existing service instance.
@@ -102,7 +124,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	h.registry.InvalidateClient(instanceID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(inst)
+	json.NewEncoder(w).Encode(toResponse(&inst))
 }
 
 // Delete removes a service instance.
