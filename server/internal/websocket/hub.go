@@ -49,22 +49,14 @@ type Hub struct {
 	registry    *instance.Registry
 	store       *instance.Store
 
-	// Legacy direct clients (used when registry is nil)
-	radarr *radarr.Client
-	sonarr *sonarr.Client
-
 	// Previous polling state for detecting transitions
 	prevRadarrQueue map[string]map[int]float64 // instanceID -> movieId -> progress
 	prevSonarrQueue map[string]map[int]float64 // instanceID -> seriesId -> progress
 }
 
 // NewHub creates a new WebSocket hub.
-func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store, radarrClient *radarr.Client, sonarrClient *sonarr.Client, allowedOrigins []string) *Hub {
-	upgrader := websocket.Upgrader{
-		CheckOrigin: makeOriginChecker(allowedOrigins),
-	}
+func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store) *Hub {
 	return &Hub{
-		upgrader:        upgrader,
 		clients:         make(map[*Client]bool),
 		broadcast:       make(chan []byte, 256),
 		register:        make(chan *Client),
@@ -72,28 +64,8 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		authService:     authService,
 		registry:        registry,
 		store:           store,
-		radarr:          radarrClient,
-		sonarr:          sonarrClient,
 		prevRadarrQueue: make(map[string]map[int]float64),
 		prevSonarrQueue: make(map[string]map[int]float64),
-	}
-}
-
-// makeOriginChecker returns a CheckOrigin function. If allowedOrigins is empty,
-// it allows same-origin only (gorilla/websocket default). Otherwise it checks
-// the Origin header against the allowed list.
-func makeOriginChecker(allowedOrigins []string) func(r *http.Request) bool {
-	if len(allowedOrigins) == 0 {
-		// Default: allow same-origin only (nil means gorilla default check)
-		return nil
-	}
-	allowed := make(map[string]bool, len(allowedOrigins))
-	for _, o := range allowedOrigins {
-		allowed[o] = true
-	}
-	return func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		return allowed[origin]
 	}
 }
 
@@ -238,52 +210,36 @@ func (h *Hub) pollLoop(ctx context.Context) {
 }
 
 func (h *Hub) pollAllRadarr() {
-	// Poll via registry (all instances)
-	if h.store != nil {
-		instances, err := h.store.List("radarr")
-		if err == nil {
-			for _, inst := range instances {
-				if h.registry == nil {
-					continue
-				}
-				client, err := h.registry.GetRadarrClient(inst.ID)
-				if err != nil {
-					continue
-				}
-				h.pollRadarrInstance(inst.ID, client)
-			}
-			return
-		}
+	if h.store == nil || h.registry == nil {
+		return
 	}
-
-	// Legacy fallback
-	if h.radarr != nil {
-		h.pollRadarrInstance("legacy", h.radarr)
+	instances, err := h.store.List("radarr")
+	if err != nil {
+		return
+	}
+	for _, inst := range instances {
+		client, err := h.registry.GetRadarrClient(inst.ID)
+		if err != nil {
+			continue
+		}
+		h.pollRadarrInstance(inst.ID, client)
 	}
 }
 
 func (h *Hub) pollAllSonarr() {
-	// Poll via registry (all instances)
-	if h.store != nil {
-		instances, err := h.store.List("sonarr")
-		if err == nil {
-			for _, inst := range instances {
-				if h.registry == nil {
-					continue
-				}
-				client, err := h.registry.GetSonarrClient(inst.ID)
-				if err != nil {
-					continue
-				}
-				h.pollSonarrInstance(inst.ID, client)
-			}
-			return
-		}
+	if h.store == nil || h.registry == nil {
+		return
 	}
-
-	// Legacy fallback
-	if h.sonarr != nil {
-		h.pollSonarrInstance("legacy", h.sonarr)
+	instances, err := h.store.List("sonarr")
+	if err != nil {
+		return
+	}
+	for _, inst := range instances {
+		client, err := h.registry.GetSonarrClient(inst.ID)
+		if err != nil {
+			continue
+		}
+		h.pollSonarrInstance(inst.ID, client)
 	}
 }
 

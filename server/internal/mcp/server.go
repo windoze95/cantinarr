@@ -24,19 +24,13 @@ type ToolServer struct {
 	tmdb     *tmdb.Client
 	request  *request.Service
 	registry *instance.Registry
-
-	// Legacy direct clients (used when registry is nil)
-	radarr *radarr.Client
-	sonarr *sonarr.Client
 }
 
-func NewToolServer(tmdbClient *tmdb.Client, requestSvc *request.Service, registry *instance.Registry, radarrClient *radarr.Client, sonarrClient *sonarr.Client) *ToolServer {
+func NewToolServer(tmdbClient *tmdb.Client, requestSvc *request.Service, registry *instance.Registry) *ToolServer {
 	return &ToolServer{
 		tmdb:     tmdbClient,
 		request:  requestSvc,
 		registry: registry,
-		radarr:   radarrClient,
-		sonarr:   sonarrClient,
 	}
 }
 
@@ -48,7 +42,7 @@ func (s *ToolServer) GetRadarr() *radarr.Client {
 			return client
 		}
 	}
-	return s.radarr
+	return nil
 }
 
 // GetSonarr returns the default Sonarr client.
@@ -59,7 +53,7 @@ func (s *ToolServer) GetSonarr() *sonarr.Client {
 			return client
 		}
 	}
-	return s.sonarr
+	return nil
 }
 
 // GetTools returns the list of tools available to the AI.
