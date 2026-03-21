@@ -51,15 +51,15 @@ func queryInt(r *http.Request, key string, fallback int) int {
 	return n
 }
 
-// cachedTMDB checks cache, calls TMDB on miss, caches result.
+// cachedTMDB checks credentials, then cache, then calls TMDB on miss.
 func (h *Handler) cachedTMDB(w http.ResponseWriter, cacheKey string, ttl time.Duration, path string, params url.Values) {
-	if data, ok := h.cache.Get(cacheKey); ok {
-		writeJSON(w, data)
-		return
-	}
 	tmdbClient := h.creds.TMDB()
 	if tmdbClient == nil {
 		http.Error(w, `{"error":"TMDB is not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+	if data, ok := h.cache.Get(cacheKey); ok {
+		writeJSON(w, data)
 		return
 	}
 	data, err := tmdbClient.DoGetRaw(path, params)
@@ -71,15 +71,15 @@ func (h *Handler) cachedTMDB(w http.ResponseWriter, cacheKey string, ttl time.Du
 	writeJSON(w, data)
 }
 
-// cachedTrakt checks cache, calls Trakt on miss, caches result.
+// cachedTrakt checks credentials, then cache, then calls Trakt on miss.
 func (h *Handler) cachedTrakt(w http.ResponseWriter, cacheKey string, ttl time.Duration, path string, params url.Values) {
-	if data, ok := h.cache.Get(cacheKey); ok {
-		writeJSON(w, data)
-		return
-	}
 	traktClient := h.creds.Trakt()
 	if traktClient == nil {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+	if data, ok := h.cache.Get(cacheKey); ok {
+		writeJSON(w, data)
 		return
 	}
 	data, err := traktClient.DoGetRaw(path, params)
