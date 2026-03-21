@@ -7,16 +7,19 @@ import (
 	"net/http"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
 // Handler provides HTTP handlers for AI chat endpoints.
 type Handler struct {
-	service *Service
+	creds      *credentials.Registry
+	toolServer *mcp.ToolServer
 }
 
-// NewHandler creates a new AI handler. service may be nil if AI is not configured.
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+// NewHandler creates a new AI handler.
+func NewHandler(creds *credentials.Registry, toolServer *mcp.ToolServer) *Handler {
+	return &Handler{creds: creds, toolServer: toolServer}
 }
 
 type chatRequest struct {
@@ -25,10 +28,12 @@ type chatRequest struct {
 
 // Chat handles POST /api/ai/chat with SSE streaming.
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
-	if h.service == nil {
+	apiKey := h.creds.GetCredential(credentials.KeyAnthropicKey)
+	if apiKey == "" {
 		http.Error(w, `{"error":"AI is not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
+	service := NewService(apiKey, h.toolServer)
 
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -63,7 +68,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	err := h.service.SendMessage(r.Context(), req.Messages, claims.UserID, onText)
+	err := service.SendMessage(r.Context(), req.Messages, claims.UserID, onText)
 	if err != nil {
 		log.Printf("ai chat error: %v", err)
 		errData, _ := json.Marshal(map[string]string{"error": err.Error()})
@@ -79,6 +84,6 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{
-		"available": h.service != nil,
+		"available": h.creds.IsConfigured(credentials.KeyAnthropicKey),
 	})
 }

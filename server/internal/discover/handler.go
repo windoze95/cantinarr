@@ -10,9 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/cache"
-	"github.com/windoze95/cantinarr-server/internal/config"
-	"github.com/windoze95/cantinarr-server/internal/tmdb"
-	"github.com/windoze95/cantinarr-server/internal/trakt"
+	"github.com/windoze95/cantinarr-server/internal/credentials"
 )
 
 // TTL constants for different content types.
@@ -26,15 +24,13 @@ const (
 
 // Handler serves discovery endpoints, proxying TMDB/Trakt with caching.
 type Handler struct {
-	tmdb  *tmdb.Client
-	trakt *trakt.Client
+	creds *credentials.Registry
 	cache *cache.Cache
-	cfg   *config.Config
 }
 
 // NewHandler creates a new discover handler.
-func NewHandler(tmdbClient *tmdb.Client, traktClient *trakt.Client, c *cache.Cache, cfg *config.Config) *Handler {
-	return &Handler{tmdb: tmdbClient, trakt: traktClient, cache: c, cfg: cfg}
+func NewHandler(creds *credentials.Registry, c *cache.Cache) *Handler {
+	return &Handler{creds: creds, cache: c}
 }
 
 // helper: write raw JSON bytes as response
@@ -55,13 +51,18 @@ func queryInt(r *http.Request, key string, fallback int) int {
 	return n
 }
 
-// cachedTMDB checks cache, calls TMDB on miss, caches result.
+// cachedTMDB checks credentials, then cache, then calls TMDB on miss.
 func (h *Handler) cachedTMDB(w http.ResponseWriter, cacheKey string, ttl time.Duration, path string, params url.Values) {
+	tmdbClient := h.creds.TMDB()
+	if tmdbClient == nil {
+		http.Error(w, `{"error":"TMDB is not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
 	if data, ok := h.cache.Get(cacheKey); ok {
 		writeJSON(w, data)
 		return
 	}
-	data, err := h.tmdb.DoGetRaw(path, params)
+	data, err := tmdbClient.DoGetRaw(path, params)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
@@ -70,13 +71,18 @@ func (h *Handler) cachedTMDB(w http.ResponseWriter, cacheKey string, ttl time.Du
 	writeJSON(w, data)
 }
 
-// cachedTrakt checks cache, calls Trakt on miss, caches result.
+// cachedTrakt checks credentials, then cache, then calls Trakt on miss.
 func (h *Handler) cachedTrakt(w http.ResponseWriter, cacheKey string, ttl time.Duration, path string, params url.Values) {
+	traktClient := h.creds.Trakt()
+	if traktClient == nil {
+		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
 	if data, ok := h.cache.Get(cacheKey); ok {
 		writeJSON(w, data)
 		return
 	}
-	data, err := h.trakt.DoGetRaw(path, params)
+	data, err := traktClient.DoGetRaw(path, params)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
@@ -252,7 +258,7 @@ func (h *Handler) MovieWatchProviders(w http.ResponseWriter, r *http.Request) {
 // ─── Trakt Endpoints ────────────────────────────────────
 
 func (h *Handler) TraktTrending(w http.ResponseWriter, r *http.Request) {
-	if h.trakt == nil {
+	if h.creds.Trakt() == nil {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
@@ -267,7 +273,7 @@ func (h *Handler) TraktTrending(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) TraktPopular(w http.ResponseWriter, r *http.Request) {
-	if h.trakt == nil {
+	if h.creds.Trakt() == nil {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
@@ -282,7 +288,7 @@ func (h *Handler) TraktPopular(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) TraktPopularLists(w http.ResponseWriter, r *http.Request) {
-	if h.trakt == nil {
+	if h.creds.Trakt() == nil {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
@@ -293,7 +299,7 @@ func (h *Handler) TraktPopularLists(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) TraktListItems(w http.ResponseWriter, r *http.Request) {
-	if h.trakt == nil {
+	if h.creds.Trakt() == nil {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
@@ -305,7 +311,7 @@ func (h *Handler) TraktListItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) TraktCalendar(w http.ResponseWriter, r *http.Request) {
-	if h.trakt == nil {
+	if h.creds.Trakt() == nil {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
@@ -316,7 +322,7 @@ func (h *Handler) TraktCalendar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) TraktAnticipated(w http.ResponseWriter, r *http.Request) {
-	if h.trakt == nil {
+	if h.creds.Trakt() == nil {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
@@ -331,7 +337,7 @@ func (h *Handler) TraktAnticipated(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) TraktRecommendations(w http.ResponseWriter, r *http.Request) {
-	if h.trakt == nil {
+	if h.creds.Trakt() == nil {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
 		return
 	}

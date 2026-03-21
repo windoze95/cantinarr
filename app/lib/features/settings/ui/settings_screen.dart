@@ -145,6 +145,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: 16),
             _SectionHeader(title: 'Admin'),
             _SettingsTile(
+              icon: Icons.key_outlined,
+              title: 'API Credentials',
+              subtitle: 'TMDB, AI, and Trakt configuration',
+              onTap: () => context.push('/settings/credentials'),
+            ),
+            _SettingsTile(
               icon: Icons.link,
               title: 'Generate Connect Link',
               subtitle: 'Create a link to invite a new user',

@@ -195,7 +195,8 @@ func formatSearchResults(results []tmdb.SearchResult, limit int) string {
 }
 
 func (s *ToolServer) searchMovies(input json.RawMessage) (string, error) {
-	if s.tmdb == nil {
+	tmdbClient := s.creds.TMDB()
+	if tmdbClient == nil {
 		return "TMDB is not configured on the server.", nil
 	}
 	var params struct {
@@ -204,7 +205,7 @@ func (s *ToolServer) searchMovies(input json.RawMessage) (string, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return "", fmt.Errorf("parse input: %w", err)
 	}
-	results, err := s.tmdb.SearchMovies(params.Query)
+	results, err := tmdbClient.SearchMovies(params.Query)
 	if err != nil {
 		return "", err
 	}
@@ -212,7 +213,8 @@ func (s *ToolServer) searchMovies(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) searchTVShows(input json.RawMessage) (string, error) {
-	if s.tmdb == nil {
+	tmdbClient := s.creds.TMDB()
+	if tmdbClient == nil {
 		return "TMDB is not configured on the server.", nil
 	}
 	var params struct {
@@ -221,7 +223,7 @@ func (s *ToolServer) searchTVShows(input json.RawMessage) (string, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return "", fmt.Errorf("parse input: %w", err)
 	}
-	results, err := s.tmdb.SearchTV(params.Query)
+	results, err := tmdbClient.SearchTV(params.Query)
 	if err != nil {
 		return "", err
 	}
@@ -229,7 +231,8 @@ func (s *ToolServer) searchTVShows(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) getTrending(input json.RawMessage) (string, error) {
-	if s.tmdb == nil {
+	tmdbClient := s.creds.TMDB()
+	if tmdbClient == nil {
 		return "TMDB is not configured on the server.", nil
 	}
 	var params struct {
@@ -239,7 +242,7 @@ func (s *ToolServer) getTrending(input json.RawMessage) (string, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return "", fmt.Errorf("parse input: %w", err)
 	}
-	results, err := s.tmdb.GetTrending(params.MediaType, params.TimeWindow)
+	results, err := tmdbClient.GetTrending(params.MediaType, params.TimeWindow)
 	if err != nil {
 		return "", err
 	}
@@ -247,7 +250,8 @@ func (s *ToolServer) getTrending(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) getMovieDetails(input json.RawMessage) (string, error) {
-	if s.tmdb == nil {
+	tmdbClient := s.creds.TMDB()
+	if tmdbClient == nil {
 		return "TMDB is not configured on the server.", nil
 	}
 	var params struct {
@@ -256,7 +260,7 @@ func (s *ToolServer) getMovieDetails(input json.RawMessage) (string, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return "", fmt.Errorf("parse input: %w", err)
 	}
-	movie, err := s.tmdb.GetMovieDetails(params.TmdbID)
+	movie, err := tmdbClient.GetMovieDetails(params.TmdbID)
 	if err != nil {
 		return "", err
 	}
@@ -265,7 +269,8 @@ func (s *ToolServer) getMovieDetails(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) getTVDetails(input json.RawMessage) (string, error) {
-	if s.tmdb == nil {
+	tmdbClient := s.creds.TMDB()
+	if tmdbClient == nil {
 		return "TMDB is not configured on the server.", nil
 	}
 	var params struct {
@@ -274,7 +279,7 @@ func (s *ToolServer) getTVDetails(input json.RawMessage) (string, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return "", fmt.Errorf("parse input: %w", err)
 	}
-	tv, err := s.tmdb.GetTVDetails(params.TmdbID)
+	tv, err := tmdbClient.GetTVDetails(params.TmdbID)
 	if err != nil {
 		return "", err
 	}
@@ -283,7 +288,8 @@ func (s *ToolServer) getTVDetails(input json.RawMessage) (string, error) {
 }
 
 func (s *ToolServer) getRecommendations(input json.RawMessage) (string, error) {
-	if s.tmdb == nil {
+	tmdbClient := s.creds.TMDB()
+	if tmdbClient == nil {
 		return "TMDB is not configured on the server.", nil
 	}
 	var params struct {
@@ -293,7 +299,7 @@ func (s *ToolServer) getRecommendations(input json.RawMessage) (string, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return "", fmt.Errorf("parse input: %w", err)
 	}
-	results, err := s.tmdb.GetRecommendations(params.TmdbID, params.MediaType)
+	results, err := tmdbClient.GetRecommendations(params.TmdbID, params.MediaType)
 	if err != nil {
 		return "", err
 	}

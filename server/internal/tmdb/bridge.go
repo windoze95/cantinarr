@@ -8,14 +8,19 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/trakt"
 )
 
-type Bridge struct {
-	tmdb  *Client
-	trakt *trakt.Client
-	db    *sql.DB
+// ServiceClients provides lazy access to TMDB and Trakt clients.
+type ServiceClients interface {
+	TMDB() *Client
+	Trakt() *trakt.Client
 }
 
-func NewBridge(tmdb *Client, trakt *trakt.Client, db *sql.DB) *Bridge {
-	return &Bridge{tmdb: tmdb, trakt: trakt, db: db}
+type Bridge struct {
+	clients ServiceClients
+	db      *sql.DB
+}
+
+func NewBridge(clients ServiceClients, db *sql.DB) *Bridge {
+	return &Bridge{clients: clients, db: db}
 }
 
 type BridgeResult struct {
@@ -47,10 +52,11 @@ func (b *Bridge) ResolveTVDBID(tmdbID int) (*BridgeResult, error) {
 	}
 
 	// 2. Try TMDB external IDs
-	if b.tmdb == nil {
+	tmdbClient := b.clients.TMDB()
+	if tmdbClient == nil {
 		return nil, fmt.Errorf("TMDB client not configured")
 	}
-	ids, err := b.tmdb.GetTVExternalIDs(tmdbID)
+	ids, err := tmdbClient.GetTVExternalIDs(tmdbID)
 	if err == nil && ids.TVDBID != nil && *ids.TVDBID != 0 {
 		result := &BridgeResult{TVDBID: *ids.TVDBID}
 		if ids.IMDBID != nil {
@@ -61,8 +67,8 @@ func (b *Bridge) ResolveTVDBID(tmdbID int) (*BridgeResult, error) {
 	}
 
 	// 3. Try Trakt as fallback
-	if b.trakt != nil {
-		traktResult, err := b.trakt.SearchByTMDB(tmdbID, "show")
+	if traktClient := b.clients.Trakt(); traktClient != nil {
+		traktResult, err := traktClient.SearchByTMDB(tmdbID, "show")
 		if err == nil && traktResult != nil && traktResult.TVDBID != 0 {
 			result := &BridgeResult{
 				TVDBID: traktResult.TVDBID,

@@ -7,9 +7,4 @@ services:
       - "8585:8585"
     volumes:
       - ./config:/config
-    environment:
-      - CANTINARR_TMDB_KEY=${CANTINARR_TMDB_KEY}
-      - CANTINARR_TRAKT_CLIENT_ID=${CANTINARR_TRAKT_CLIENT_ID:-}
-      - CANTINARR_TRAKT_CLIENT_SECRET=${CANTINARR_TRAKT_CLIENT_SECRET:-}
-      - CANTINARR_ANTHROPIC_KEY=${CANTINARR_ANTHROPIC_KEY:-}
     restart: unless-stopped

@@ -247,6 +247,23 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     await connectWithToken(server, token);
   }
 
+  /// Re-fetch /api/config and update the connection state (e.g. after
+  /// changing API credentials so service availability is reflected).
+  Future<void> refreshConfig() async {
+    final current = state.valueOrNull;
+    if (current?.connection == null) return;
+    final conn = current!.connection!;
+    final config =
+        await _authService.fetchConfig(conn.serverUrl, conn.accessToken);
+    state = AsyncData(current.copyWith(
+      connection: conn.copyWith(
+        serverName: config.serverName,
+        services: config.services,
+        instances: config.instances,
+      ),
+    ));
+  }
+
   /// Generate a connect link for a new user (admin only).
   Future<ConnectTokenResponse> generateConnectToken(String name) async {
     final conn = state.valueOrNull?.connection;
