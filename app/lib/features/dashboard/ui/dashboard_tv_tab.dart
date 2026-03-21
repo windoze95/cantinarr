@@ -39,27 +39,15 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
     if (defaultSonarr == null) return;
 
     setState(() => _isLoadingLibrary = true);
+
+    final backendDio = ref.read(backendClientProvider);
+    final service = SonarrApiService(
+        backendDio: backendDio, instanceId: defaultSonarr.id);
+
+    List<SonarrSeries> series = [];
     try {
-      final backendDio = ref.read(backendClientProvider);
-      final service = SonarrApiService(
-          backendDio: backendDio, instanceId: defaultSonarr.id);
-
-      final series = await service.getSeries();
-
-      final now = DateTime.now();
-      final calendarEntries = await service.getCalendar(
-        start: now.toIso8601String(),
-        end: now.add(const Duration(days: 7)).toIso8601String(),
-      );
-
-      // "Airing Next" = unique series from calendar entries
-      final airingSeriesIds = calendarEntries
-          .map((e) => e['seriesId'] as int?)
-          .whereType<int>()
-          .toSet();
-      final airingNext = series
-          .where((s) => airingSeriesIds.contains(s.id))
-          .toList();
+      series = await service.getSeries();
+      if (!mounted) return;
 
       // "Recently Downloaded" = series with downloaded episodes, sorted by percent complete
       final downloaded = series
@@ -70,12 +58,36 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
 
       setState(() {
         _recentlyDownloaded = downloaded.take(10).toList();
-        _airingNext = airingNext.take(10).toList();
-        _isLoadingLibrary = false;
       });
     } catch (_) {
-      setState(() => _isLoadingLibrary = false);
+      // Series fetch failed; leave _recentlyDownloaded empty.
     }
+
+    try {
+      final now = DateTime.now();
+      final calendarEntries = await service.getCalendar(
+        start: now.toIso8601String(),
+        end: now.add(const Duration(days: 7)).toIso8601String(),
+      );
+      if (!mounted) return;
+
+      // "Airing Next" = unique series from calendar entries
+      final airingSeriesIds = calendarEntries
+          .map((e) => e['seriesId'] as int?)
+          .whereType<int>()
+          .toSet();
+      final airingNext = series
+          .where((s) => airingSeriesIds.contains(s.id))
+          .toList();
+
+      setState(() {
+        _airingNext = airingNext.take(10).toList();
+      });
+    } catch (_) {
+      // Calendar fetch failed; leave _airingNext empty.
+    }
+
+    if (mounted) setState(() => _isLoadingLibrary = false);
   }
 
   Future<void> _onRefresh() async {
@@ -160,8 +172,8 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
               statusLabel: statusLabel,
               statusColor: statusColor,
               width: 100,
-              onTap: series.tvdbId != null
-                  ? () => context.push('/detail/tv/${series.tvdbId}')
+              onTap: series.tmdbId != null
+                  ? () => context.push('/detail/tv/${series.tmdbId}')
                   : null,
             ),
           ),

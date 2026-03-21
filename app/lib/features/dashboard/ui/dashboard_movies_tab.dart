@@ -41,21 +41,35 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
     if (defaultRadarr == null) return;
 
     setState(() => _isLoadingLibrary = true);
+
+    final backendDio = ref.read(backendClientProvider);
+    final service = RadarrApiService(
+        backendDio: backendDio, instanceId: defaultRadarr.id);
+
+    List<RadarrMovie> movies = [];
     try {
-      final backendDio = ref.read(backendClientProvider);
-      final service = RadarrApiService(
-          backendDio: backendDio, instanceId: defaultRadarr.id);
-      final movies = await service.getMovies();
+      movies = await service.getMovies();
+      if (!mounted) return;
+
+      final downloaded = movies.where((m) => m.hasFile).toList()
+        ..sort((a, b) => (b.added ?? DateTime(0)).compareTo(a.added ?? DateTime(0)));
+
+      setState(() {
+        _recentlyDownloaded = downloaded.take(10).toList();
+      });
+    } catch (_) {
+      // Movie fetch failed; leave _recentlyDownloaded empty.
+    }
+
+    try {
       final queue = await service.getQueue();
+      if (!mounted) return;
 
       // Track which movies are actively downloading
       final downloadingIds = queue
           .map((r) => r['movieId'] as int?)
           .whereType<int>()
           .toSet();
-
-      final downloaded = movies.where((m) => m.hasFile).toList()
-        ..sort((a, b) => (b.added ?? DateTime(0)).compareTo(a.added ?? DateTime(0)));
 
       // "Downloading Soon" includes both actively downloading and monitored-waiting;
       // actively downloading items are shown first.
@@ -65,14 +79,20 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
       final downloadingSoon = [...downloading, ...monitored];
 
       setState(() {
-        _recentlyDownloaded = downloaded.take(10).toList();
         _downloadingSoon = downloadingSoon.take(10).toList();
         _downloadingMovieIds = downloadingIds;
-        _isLoadingLibrary = false;
       });
     } catch (_) {
-      setState(() => _isLoadingLibrary = false);
+      if (!mounted) return;
+      // Queue fetch failed; still show monitored-but-missing movies without download status.
+      final waitingMovies = movies.where((m) => m.monitored && !m.hasFile).toList();
+      setState(() {
+        _downloadingSoon = waitingMovies.take(10).toList();
+        _downloadingMovieIds = {};
+      });
     }
+
+    if (mounted) setState(() => _isLoadingLibrary = false);
   }
 
   Future<void> _onRefresh() async {
