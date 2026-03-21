@@ -53,9 +53,6 @@ func main() {
 		}
 	}
 
-	// Migrate legacy env vars to DB (one-time, non-destructive)
-	migrateEnvCredentials(database)
-
 	// Credentials registry (lazy-creates TMDB/Trakt clients from DB)
 	creds := credentials.NewRegistry(database)
 	credHandler := credentials.NewHandler(creds)
@@ -130,41 +127,3 @@ func ensureJWTSecret(database *sql.DB) (string, error) {
 	return secret, nil
 }
 
-// migrateEnvCredentials copies legacy env vars to the DB settings table exactly
-// once. A "credentials_migrated" flag prevents re-running on subsequent starts,
-// so credentials deleted via the admin UI stay deleted even if env vars remain.
-func migrateEnvCredentials(database *sql.DB) {
-	var flag string
-	if err := database.QueryRow("SELECT value FROM settings WHERE key = 'credentials_migrated'").Scan(&flag); err == nil {
-		return // already migrated
-	}
-
-	envMap := map[string]string{
-		credentials.KeyTMDBAccessToken: os.Getenv("CANTINARR_TMDB_ACCESS_TOKEN"),
-		credentials.KeyAnthropicKey:    os.Getenv("CANTINARR_ANTHROPIC_KEY"),
-		credentials.KeyTraktClientID:   os.Getenv("CANTINARR_TRAKT_CLIENT_ID"),
-	}
-
-	any := false
-	for key, value := range envMap {
-		if value == "" {
-			continue
-		}
-		if _, err := database.Exec(
-			"INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
-			key, value,
-		); err != nil {
-			log.Printf("Warning: failed to migrate %s: %v", key, err)
-			continue
-		}
-		log.Printf("Migrated %s from env var to database", key)
-		any = true
-	}
-
-	// Mark migration as done so env vars are permanently ignored.
-	database.Exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('credentials_migrated', 'true')")
-
-	if any {
-		log.Println("WARNING: Credentials have been migrated to the database. Remove the env vars from your configuration — they will be ignored in future versions.")
-	}
-}
