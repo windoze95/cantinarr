@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
-	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
 // Tool describes a tool that the AI can invoke.
@@ -21,14 +21,14 @@ type Tool struct {
 
 // ToolServer executes tools in-process on behalf of the AI.
 type ToolServer struct {
-	tmdb     *tmdb.Client
+	creds    *credentials.Registry
 	request  *request.Service
 	registry *instance.Registry
 }
 
-func NewToolServer(tmdbClient *tmdb.Client, requestSvc *request.Service, registry *instance.Registry) *ToolServer {
+func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, registry *instance.Registry) *ToolServer {
 	return &ToolServer{
-		tmdb:     tmdbClient,
+		creds:    creds,
 		request:  requestSvc,
 		registry: registry,
 	}

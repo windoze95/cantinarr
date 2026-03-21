@@ -16,6 +16,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/config"
+	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -23,7 +24,6 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
-	"github.com/windoze95/cantinarr-server/internal/trakt"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
 
@@ -53,28 +53,22 @@ func main() {
 		}
 	}
 
+	// Migrate legacy env vars to DB (one-time, non-destructive)
+	migrateEnvCredentials(database)
+
+	// Credentials registry (lazy-creates TMDB/Trakt clients from DB)
+	creds := credentials.NewRegistry(database)
+	credHandler := credentials.NewHandler(creds)
+
 	// Auth
 	authService := auth.NewService(database, cfg.JWTSecret)
-	// Migrate setup state for existing deployments
 	if err := authService.MigrateSetupState(); err != nil {
 		log.Fatalf("Failed to migrate setup state: %v", err)
 	}
 	authHandler := auth.NewHandler(authService)
 
-	// TMDB (optional)
-	var tmdbClient *tmdb.Client
-	if cfg.TMDBEnabled() {
-		tmdbClient = tmdb.NewClient(cfg.TMDBAccessToken)
-	}
-
-	// Trakt (optional)
-	var traktClient *trakt.Client
-	if cfg.TraktEnabled() {
-		traktClient = trakt.NewClient(cfg.TraktClientID)
-	}
-
-	// Bridge
-	bridge := tmdb.NewBridge(tmdbClient, traktClient, database)
+	// Bridge (uses credentials registry for TMDB/Trakt clients)
+	bridge := tmdb.NewBridge(creds, database)
 
 	// Instance store and registry
 	instanceStore := instance.NewStore(database)
@@ -88,30 +82,21 @@ func main() {
 	// Proxy handler
 	proxyHandler := proxy.NewHandler(instanceStore)
 
-	// MCP tool server
-	toolServer := mcp.NewToolServer(tmdbClient, requestService, registry)
+	// MCP tool server + AI handler
+	toolServer := mcp.NewToolServer(creds, requestService, registry)
+	aiHandler := ai.NewHandler(creds, toolServer)
 
-	// AI service
-	var aiService *ai.Service
-	if cfg.AIEnabled() {
-		aiService = ai.NewService(cfg.AnthropicKey, toolServer)
-	}
-	aiHandler := ai.NewHandler(aiService)
-
-	// Discover handler (caching proxy for TMDB/Trakt)
+	// Discover handler (always created — checks credentials at request time)
 	apiCache := cache.New()
 	defer apiCache.Close()
-	var discoverHandler *discover.Handler
-	if tmdbClient != nil {
-		discoverHandler = discover.NewHandler(tmdbClient, traktClient, apiCache, cfg)
-	}
+	discoverHandler := discover.NewHandler(creds, apiCache)
 
 	// WebSocket hub
 	wsHub := ws.NewHub(authService, registry, instanceStore)
 	go wsHub.Run(context.Background())
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, creds, credHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
@@ -145,3 +130,34 @@ func ensureJWTSecret(database *sql.DB) (string, error) {
 	return secret, nil
 }
 
+// migrateEnvCredentials copies legacy env vars to the DB settings table
+// on first run. Uses INSERT OR IGNORE so existing DB values are never overwritten.
+func migrateEnvCredentials(database *sql.DB) {
+	migrations := map[string]string{
+		credentials.KeyTMDBAccessToken:   os.Getenv("CANTINARR_TMDB_ACCESS_TOKEN"),
+		credentials.KeyAnthropicKey:      os.Getenv("CANTINARR_ANTHROPIC_KEY"),
+		credentials.KeyTraktClientID: os.Getenv("CANTINARR_TRAKT_CLIENT_ID"),
+	}
+
+	migrated := false
+	for key, value := range migrations {
+		if value == "" {
+			continue
+		}
+		result, err := database.Exec(
+			"INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+			key, value,
+		)
+		if err != nil {
+			log.Printf("Warning: failed to migrate %s: %v", key, err)
+			continue
+		}
+		if rows, _ := result.RowsAffected(); rows > 0 {
+			log.Printf("Migrated %s from env var to database", key)
+			migrated = true
+		}
+	}
+	if migrated {
+		log.Println("WARNING: Credentials have been migrated to the database. Remove the env vars from your configuration — they will be ignored in future versions.")
+	}
+}

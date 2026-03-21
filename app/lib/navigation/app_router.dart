@@ -14,6 +14,7 @@ import '../features/radarr/ui/radarr_calendar_screen.dart';
 import '../features/radarr/ui/radarr_home_screen.dart';
 import '../features/radarr/ui/radarr_module_shell.dart';
 import '../features/radarr/ui/radarr_queue_screen.dart';
+import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
@@ -196,6 +197,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/credentials',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const CredentialsScreen(),
       ),
       GoRoute(
         path: '/settings/devices',
