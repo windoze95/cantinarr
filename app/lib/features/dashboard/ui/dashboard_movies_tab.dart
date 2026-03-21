@@ -23,6 +23,7 @@ class DashboardMoviesTab extends ConsumerStatefulWidget {
 class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
   List<RadarrMovie> _recentlyDownloaded = [];
   List<RadarrMovie> _downloadingSoon = [];
+  Set<int> _downloadingMovieIds = {};
   bool _isLoadingLibrary = false;
 
   @override
@@ -45,14 +46,28 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
       final service = RadarrApiService(
           backendDio: backendDio, instanceId: defaultRadarr.id);
       final movies = await service.getMovies();
+      final queue = await service.getQueue();
+
+      // Track which movies are actively downloading
+      final downloadingIds = queue
+          .map((r) => r['movieId'] as int?)
+          .whereType<int>()
+          .toSet();
 
       final downloaded = movies.where((m) => m.hasFile).toList()
         ..sort((a, b) => (b.added ?? DateTime(0)).compareTo(a.added ?? DateTime(0)));
-      final downloadingSoon = movies.where((m) => m.monitored && !m.hasFile).toList();
+
+      // "Downloading Soon" includes both actively downloading and monitored-waiting;
+      // actively downloading items are shown first.
+      final waitingMovies = movies.where((m) => m.monitored && !m.hasFile).toList();
+      final downloading = waitingMovies.where((m) => downloadingIds.contains(m.id)).toList();
+      final monitored = waitingMovies.where((m) => !downloadingIds.contains(m.id)).toList();
+      final downloadingSoon = [...downloading, ...monitored];
 
       setState(() {
         _recentlyDownloaded = downloaded.take(10).toList();
         _downloadingSoon = downloadingSoon.take(10).toList();
+        _downloadingMovieIds = downloadingIds;
         _isLoadingLibrary = false;
       });
     } catch (_) {
@@ -107,15 +122,16 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
             _buildRow(
               title: 'Downloading Soon',
               items: _downloadingSoon,
-              statusLabel: 'Monitored',
-              statusColor: AppTheme.requested,
+              badgeBuilder: (movie) => _downloadingMovieIds.contains(movie.id)
+                  ? (label: 'Downloading', color: AppTheme.downloading)
+                  : (label: 'Monitored', color: AppTheme.requested),
             ),
           if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)
             _buildRow(
               title: 'Recently Downloaded',
               items: _recentlyDownloaded,
-              statusLabel: 'Downloaded',
-              statusColor: AppTheme.available,
+              badgeBuilder: (_) =>
+                  (label: 'Downloaded', color: AppTheme.available),
             ),
         ],
       ),
@@ -125,8 +141,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
   Widget _buildRow({
     required String title,
     required List<RadarrMovie> items,
-    required String statusLabel,
-    required Color statusColor,
+    required ({String label, Color color}) Function(RadarrMovie) badgeBuilder,
   }) {
     return Padding(
       padding: const EdgeInsets.only(top: 20),
@@ -148,17 +163,20 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
           HorizontalItemRow<RadarrMovie>(
             items: items,
             isLoading: _isLoadingLibrary,
-            itemBuilder: (movie) => MediaCard(
-              id: movie.id,
-              title: movie.title,
-              posterPath: movie.posterUrl,
-              statusLabel: statusLabel,
-              statusColor: statusColor,
-              width: 100,
-              onTap: movie.tmdbId != null
-                  ? () => context.push('/detail/movie/${movie.tmdbId}')
-                  : null,
-            ),
+            itemBuilder: (movie) {
+              final badge = badgeBuilder(movie);
+              return MediaCard(
+                id: movie.id,
+                title: movie.title,
+                posterPath: movie.posterUrl,
+                statusLabel: badge.label,
+                statusColor: badge.color,
+                width: 100,
+                onTap: movie.tmdbId != null
+                    ? () => context.push('/detail/movie/${movie.tmdbId}')
+                    : null,
+              );
+            },
           ),
         ],
       ),
