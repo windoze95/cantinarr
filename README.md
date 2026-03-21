@@ -14,7 +14,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 │  └──────────┘  └────┬─────┘  └───────────────────────┘  │
 │                     │                                    │
 │  ┌──────────────────┼──────────────────────┐             │
-│  │   Rosetta Stone Bridge                  │             │
+│  │   ID Bridge                             │             │
 │  │   TMDB → Trakt → TVDB (cached 30 days) │             │
 │  └──────────────────┼──────────────────────┘             │
 │                     │                                    │
@@ -42,7 +42,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 
 - **Zero-config requesting** -- Your users never see API keys, TVDB IDs, or quality profiles. They browse, they tap, it works.
 - **TMDB + Trakt for discovery** -- The best metadata, images, and trending data. Sonarr's TVDB dependency is invisible.
-- **The Rosetta Stone** -- Automatic TMDB-to-TVDB ID bridging with Trakt fallback. The #1 source of failed Sonarr adds, solved.
+- **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
 - **AI assistant** -- "What should I watch tonight?" Claude searches your library, checks availability, and can request for you.
 - **Household-friendly** -- Connect links, role-based access. Admins manage arr services, users just browse and request.
 - **Single container** -- One Go binary, one port, serves API + web UI. Runs great on a Raspberry Pi or NAS.
@@ -52,26 +52,16 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 ```bash
 git clone https://github.com/windoze95/cantinarr.git
 cd cantinarr
-```
-
-### Docker (recommended)
-
-```bash
-cp .env.example .env
-# Edit .env with your TMDB key, admin password, and arr URLs
-
 docker compose up -d
 ```
 
-Open `http://your-server:8585` -- log in as `admin` with your configured password.
+Open `http://your-server:8585` -- the setup wizard walks you through creating an admin account. Then configure your services (TMDB, Radarr, Sonarr, etc.) from **Settings > API Credentials** in the admin UI.
 
 ### From Source
 
 ```bash
 # Server (requires Go 1.22+)
 cd server
-export CANTINARR_TMDB_KEY="your-key"
-export CANTINARR_ADMIN_PASSWORD="your-password"
 go run ./cmd/server
 
 # App (requires Flutter 3.2+)
@@ -90,14 +80,15 @@ cantinarr/
 │   │   ├── ai/             # Claude AI chat with SSE streaming
 │   │   ├── api/            # Chi router, middleware, routes
 │   │   ├── auth/           # JWT, bcrypt, connect tokens
-│   │   ├── config/         # Environment variable loading
+│   │   ├── config/         # Server configuration (port, name)
+│   │   ├── credentials/   # API credential management + client registry
 │   │   ├── db/             # SQLite with WAL mode
 │   │   ├── mcp/            # 9 AI tools (search, request, status)
 │   │   ├── proxy/          # Arr admin reverse proxy
 │   │   ├── radarr/         # Radarr API v3 client
 │   │   ├── request/        # Request orchestration + bridging
 │   │   ├── sonarr/         # Sonarr API v3 client
-│   │   ├── tmdb/           # TMDB client + Rosetta Stone bridge
+│   │   ├── tmdb/           # TMDB client + ID bridge
 │   │   ├── trakt/          # Trakt fallback ID resolver
 │   │   ├── web/            # Flutter web embed (go:embed)
 │   │   └── websocket/      # Real-time download progress
@@ -118,20 +109,22 @@ cantinarr/
 
 ## Configuration
 
-All via environment variables with the `CANTINARR_` prefix:
+All service credentials are managed through the admin UI -- no environment variables needed for API keys.
 
-| Variable | Required | Description |
+| Setting | Where | Description |
 |---|---|---|
-| `CANTINARR_TMDB_KEY` | Yes | TMDB API v3 key ([get one here](https://www.themoviedb.org/settings/api)) |
-| `CANTINARR_ADMIN_PASSWORD` | First run | Password for the `admin` account |
-| `CANTINARR_RADARR_URL` | No | Radarr URL (e.g. `http://radarr:7878`) |
-| `CANTINARR_RADARR_KEY` | No | Radarr API key |
-| `CANTINARR_SONARR_URL` | No | Sonarr URL (e.g. `http://sonarr:8989`) |
-| `CANTINARR_SONARR_KEY` | No | Sonarr API key |
-| `CANTINARR_ANTHROPIC_KEY` | No | Enables AI assistant |
-| `CANTINARR_TRAKT_CLIENT_ID` | No | Enhances discovery + fallback ID bridging |
+| TMDB access token | Admin UI | Required for media discovery and search ([get one here](https://www.themoviedb.org/settings/api)) |
+| Radarr/Sonarr instances | Admin UI | Add via Settings > Add Instance |
+| Anthropic API key | Admin UI | Enables AI assistant |
+| Trakt client ID | Admin UI | Enhances discovery + fallback ID bridging |
 
-See [`server/README.md`](server/README.md) for the full configuration reference.
+Optional server env vars for deployment tuning:
+
+| Variable | Default | Description |
+|---|---|---|
+| `CANTINARR_PORT` | `8585` | HTTP listen port |
+| `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
+| `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for JWT signing |
 
 ## How It Works
 
@@ -144,13 +137,13 @@ See [`server/README.md`](server/README.md) for the full configuration reference.
 6. Ask the AI assistant for recommendations or to make requests
 
 ### For Admins
-1. Deploy the container, set your TMDB key and arr connections
-2. Log in as `admin`, generate connect links for your household
-3. Users' requests flow through the Rosetta Stone bridge to the correct arr service
-4. Manage Radarr/Sonarr from the app (admin tabs) without exposing API keys
-5. Optionally add an Anthropic key for AI chat features
+1. Deploy the container and complete the setup wizard
+2. Add your API credentials and Radarr/Sonarr instances from Settings
+3. Generate connect links for your household
+4. Users' requests flow through the ID bridge to the correct arr service
+5. Manage everything from the app -- no config files or env vars to edit
 
-### The Rosetta Stone Bridge (TMDB-to-TVDB)
+### ID Bridge (TMDB-to-TVDB)
 
 The core technical challenge: TMDB has better metadata and APIs, but Sonarr only accepts TVDB IDs. Cantinarr solves this transparently:
 

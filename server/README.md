@@ -11,9 +11,9 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
     │   Auth (JWT)    Requests    AI Chat (Claude)     │
     │       │             │             │              │
     │       │      ┌──────┴──────┐      │              │
-    │       │      │  Rosetta    │      │              │
-    │       │      │  Stone      │   MCP Tools         │
-    │       │      │  Bridge     │      │              │
+    │       │      │    ID       │      │              │
+    │       │      │   Bridge    │   MCP Tools         │
+    │       │      │             │      │              │
     │       │      └──┬─────┬───┘      │              │
     │       │         │     │          │              │
     │       │    Radarr   Sonarr    Anthropic         │
@@ -25,7 +25,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 ## Features
 
 - **One-tap requests** -- Users browse TMDB/Trakt on the app, tap request, and the server handles everything: ID bridging, arr lookups, quality profiles, root folders.
-- **TMDB-to-TVDB Rosetta Stone** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then title+year search. Results cached in SQLite for 30 days.
+- **Automatic ID bridging** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then title+year search. Results cached in SQLite for 30 days.
 - **Connect link auth** -- Admin generates one-time connect links for household members. JWT-based sessions with 7-day access / 30-day refresh tokens.
 - **AI assistant** -- Claude-powered chat with server-side tool execution (search, recommendations, request status, make requests). Streams responses via SSE.
 - **Real-time updates** -- WebSocket hub polls arr queues every 30 seconds and pushes download progress to connected clients.
@@ -45,15 +45,6 @@ services:
       - "8585:8585"
     volumes:
       - ./config:/config
-    environment:
-      CANTINARR_TMDB_KEY: "your-tmdb-api-key"        # required
-      CANTINARR_ADMIN_PASSWORD: "your-admin-password" # required on first run
-      CANTINARR_RADARR_URL: "http://radarr:7878"      # optional
-      CANTINARR_RADARR_KEY: "radarr-api-key"
-      CANTINARR_SONARR_URL: "http://sonarr:8989"      # optional
-      CANTINARR_SONARR_KEY: "sonarr-api-key"
-      CANTINARR_ANTHROPIC_KEY: "sk-ant-..."           # optional, enables AI chat
-      CANTINARR_TRAKT_CLIENT_ID: "trakt-client-id"    # optional, enhances discovery
     restart: unless-stopped
 ```
 
@@ -61,7 +52,7 @@ services:
 docker-compose up -d
 ```
 
-Open `http://your-server:8585` and log in with `admin` / your admin password.
+Open `http://your-server:8585` -- the setup wizard creates your admin account. Then configure API credentials and service instances from the admin UI.
 
 ### From Source
 
@@ -69,33 +60,20 @@ Open `http://your-server:8585` and log in with `admin` / your admin password.
 # Requires Go 1.22+
 cd server
 go build -o cantinarr ./cmd/server
-
-# Set required env vars
-export CANTINARR_TMDB_KEY="..."
-export CANTINARR_ADMIN_PASSWORD="..."
-
 ./cantinarr
 ```
 
 ## Configuration
 
-All configuration is via environment variables with the `CANTINARR_` prefix.
+Service credentials (TMDB, Anthropic, Trakt) and Radarr/Sonarr instances are managed through the admin UI at **Settings > API Credentials** and **Settings > Add Instance**. No environment variables needed for API keys.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `CANTINARR_TMDB_KEY` | Yes | -- | TMDB API v3 key |
-| `CANTINARR_ADMIN_PASSWORD` | First run | -- | Creates the `admin` account |
-| `CANTINARR_RADARR_URL` | No | -- | Radarr base URL (e.g. `http://radarr:7878`) |
-| `CANTINARR_RADARR_KEY` | No | -- | Radarr API key |
-| `CANTINARR_SONARR_URL` | No | -- | Sonarr base URL (e.g. `http://sonarr:8989`) |
-| `CANTINARR_SONARR_KEY` | No | -- | Sonarr API key |
-| `CANTINARR_ANTHROPIC_KEY` | No | -- | Anthropic API key (enables AI chat) |
-| `CANTINARR_TRAKT_CLIENT_ID` | No | -- | Trakt client ID (enhances discovery + fallback bridging) |
-| `CANTINARR_TRAKT_CLIENT_SECRET` | No | -- | Trakt client secret |
-| `CANTINARR_JWT_SECRET` | No | auto-generated | HMAC secret for JWT signing |
-| `CANTINARR_DB_PATH` | No | `/config/cantinarr.db` | SQLite database path |
-| `CANTINARR_PORT` | No | `8585` | HTTP listen port |
-| `CANTINARR_SERVER_NAME` | No | `Cantinarr` | Display name shown in clients |
+Optional env vars for deployment tuning:
+
+| Variable | Default | Description |
+|---|---|---|
+| `CANTINARR_PORT` | `8585` | HTTP listen port |
+| `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
+| `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for JWT signing |
 
 ## API Reference
 
@@ -108,8 +86,15 @@ GET    /api/auth/me             # current user profile
 
 ### Configuration
 ```
-GET    /api/config              # TMDB key, Trakt ID, server name, available services
+GET    /api/config              # server name, available services, instances
 GET    /api/health              # { status: "ok" }
+```
+
+### Credentials (admin only)
+```
+GET    /api/admin/credentials          # which credentials are set (booleans, never values)
+PUT    /api/admin/credentials          # set/update credentials
+DELETE /api/admin/credentials/:key     # remove a credential
 ```
 
 ### Requests
@@ -125,10 +110,9 @@ POST   /api/ai/chat             # SSE-streamed Claude conversation with tool use
 GET    /api/ai/available        # { available: true/false }
 ```
 
-### Arr Proxy (admin only)
+### Instance Proxy (admin only)
 ```
-GET|POST|DELETE  /api/radarr/*  # passthrough to Radarr
-GET|POST|DELETE  /api/sonarr/*  # passthrough to Sonarr
+GET|POST|DELETE  /api/instances/:id/*  # passthrough to specific Radarr/Sonarr instance
 ```
 
 ### Real-time
@@ -142,7 +126,7 @@ WebSocket events:
 
 ## Architecture
 
-### The Rosetta Stone Bridge
+### ID Bridge (TMDB-to-TVDB)
 
 The key innovation. TMDB has the best metadata and images, but Sonarr only speaks TVDB. The bridge translates transparently:
 
@@ -207,7 +191,10 @@ server/
 │   │   ├── middleware.go           # JWT validation + admin gate
 │   │   ├── models.go              # User, tokens, request/response types
 │   │   └── service.go             # Auth business logic, JWT signing
-│   ├── config/config.go           # Environment variable loading
+│   ├── config/config.go           # Server configuration (port, name)
+│   ├── credentials/
+│   │   ├── handler.go             # Admin credential REST endpoints
+│   │   └── registry.go            # Lazy client caching + invalidation
 │   ├── db/db.go                   # SQLite setup, WAL mode, migrations
 │   ├── mcp/
 │   │   ├── server.go              # Tool execution engine

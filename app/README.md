@@ -47,7 +47,7 @@ Dark-first UI with warm gold accents, designed for couch browsing.
 
 ### Requests
 - **One-tap requesting** -- tap a button, the server handles everything
-- **No TVDB headaches** -- the backend's Rosetta Stone bridge translates TMDB IDs to TVDB IDs transparently
+- **No TVDB headaches** -- the backend's ID bridge translates TMDB IDs to TVDB IDs transparently
 - **Real-time status** -- WebSocket-powered download progress, live status updates
 - **Status indicators** -- available (green), requested (orange), downloading (blue), unavailable (grey)
 
