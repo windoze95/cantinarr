@@ -44,16 +44,12 @@ func Load() (*Config, error) {
 		TraktClientID:     os.Getenv("CANTINARR_TRAKT_CLIENT_ID"),
 		TraktClientSecret: os.Getenv("CANTINARR_TRAKT_CLIENT_SECRET"),
 		JWTSecret:         os.Getenv("CANTINARR_JWT_SECRET"),
-		DBPath:            os.Getenv("CANTINARR_DB_PATH"),
+		DBPath:            "/config/cantinarr.db",
 		ServerName:        os.Getenv("CANTINARR_SERVER_NAME"),
 	}
 
 	if cfg.TMDBAccessToken == "" {
 		log.Println("WARNING: CANTINARR_TMDB_ACCESS_TOKEN not set – TMDB features will be disabled")
-	}
-
-	if cfg.DBPath == "" {
-		cfg.DBPath = "/config/cantinarr.db"
 	}
 
 	if cfg.ServerName == "" {
