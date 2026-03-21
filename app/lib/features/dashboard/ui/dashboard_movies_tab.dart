@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/horizontal_item_row.dart';
+import '../../../core/widgets/media_card.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/ui/category_row.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/data/radarr_models.dart';
 import '../../radarr/logic/movie_discover_provider.dart';
 
-/// Dashboard Movies tab: discovery rows + simplified Radarr library sections.
+/// Dashboard Movies tab: discovery rows + Radarr library rows.
 class DashboardMoviesTab extends ConsumerStatefulWidget {
   const DashboardMoviesTab({super.key});
 
@@ -19,7 +22,8 @@ class DashboardMoviesTab extends ConsumerStatefulWidget {
 
 class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
   List<RadarrMovie> _recentlyDownloaded = [];
-  List<RadarrMovie> _missing = [];
+  List<RadarrMovie> _downloadingSoon = [];
+  Set<int> _downloadingMovieIds = {};
   bool _isLoadingLibrary = false;
 
   @override
@@ -37,24 +41,58 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
     if (defaultRadarr == null) return;
 
     setState(() => _isLoadingLibrary = true);
+
+    final backendDio = ref.read(backendClientProvider);
+    final service = RadarrApiService(
+        backendDio: backendDio, instanceId: defaultRadarr.id);
+
+    List<RadarrMovie> movies = [];
     try {
-      final backendDio = ref.read(backendClientProvider);
-      final service = RadarrApiService(
-          backendDio: backendDio, instanceId: defaultRadarr.id);
-      final movies = await service.getMovies();
+      movies = await service.getMovies();
+      if (!mounted) return;
 
       final downloaded = movies.where((m) => m.hasFile).toList()
         ..sort((a, b) => (b.added ?? DateTime(0)).compareTo(a.added ?? DateTime(0)));
-      final missing = movies.where((m) => m.monitored && !m.hasFile).toList();
 
       setState(() {
         _recentlyDownloaded = downloaded.take(10).toList();
-        _missing = missing.take(10).toList();
-        _isLoadingLibrary = false;
       });
     } catch (_) {
-      setState(() => _isLoadingLibrary = false);
+      // Movie fetch failed; leave _recentlyDownloaded empty.
     }
+
+    try {
+      final queue = await service.getQueue();
+      if (!mounted) return;
+
+      // Track which movies are actively downloading
+      final downloadingIds = queue
+          .map((r) => r['movieId'] as int?)
+          .whereType<int>()
+          .toSet();
+
+      // "Downloading Soon" includes both actively downloading and monitored-waiting;
+      // actively downloading items are shown first.
+      final waitingMovies = movies.where((m) => m.monitored && !m.hasFile).toList();
+      final downloading = waitingMovies.where((m) => downloadingIds.contains(m.id)).toList();
+      final monitored = waitingMovies.where((m) => !downloadingIds.contains(m.id)).toList();
+      final downloadingSoon = [...downloading, ...monitored];
+
+      setState(() {
+        _downloadingSoon = downloadingSoon.take(10).toList();
+        _downloadingMovieIds = downloadingIds;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      // Queue fetch failed; still show monitored-but-missing movies without download status.
+      final waitingMovies = movies.where((m) => m.monitored && !m.hasFile).toList();
+      setState(() {
+        _downloadingSoon = waitingMovies.take(10).toList();
+        _downloadingMovieIds = {};
+      });
+    }
+
+    if (mounted) setState(() => _isLoadingLibrary = false);
   }
 
   Future<void> _onRefresh() async {
@@ -99,120 +137,69 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab> {
               isLoading: discover.isLoadingAnticipated,
             ),
 
-          // Simplified library sections
-          if (_recentlyDownloaded.isNotEmpty || _missing.isNotEmpty) ...[
-            _SectionHeader(title: 'Your Library'),
-            if (_isLoadingLibrary)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(
-                    child:
-                        CircularProgressIndicator(color: AppTheme.accent)),
-              ),
-            if (_recentlyDownloaded.isNotEmpty)
-              _CompactMovieSection(
-                title: 'Recently Downloaded',
-                movies: _recentlyDownloaded,
-                color: AppTheme.available,
-              ),
-            if (_missing.isNotEmpty)
-              _CompactMovieSection(
-                title: 'Missing',
-                movies: _missing,
-                color: AppTheme.requested,
-              ),
-          ],
+          // Radarr library rows (same style as discovery)
+          if (_downloadingSoon.isNotEmpty || _isLoadingLibrary)
+            _buildRow(
+              title: 'Downloading Soon',
+              items: _downloadingSoon,
+              badgeBuilder: (movie) => _downloadingMovieIds.contains(movie.id)
+                  ? (label: 'Downloading', color: AppTheme.downloading)
+                  : (label: 'Monitored', color: AppTheme.requested),
+            ),
+          if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)
+            _buildRow(
+              title: 'Recently Downloaded',
+              items: _recentlyDownloaded,
+              badgeBuilder: (_) =>
+                  (label: 'Downloaded', color: AppTheme.available),
+            ),
         ],
       ),
     );
   }
-}
 
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  const _SectionHeader({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildRow({
+    required String title,
+    required List<RadarrMovie> items,
+    required ({String label, Color color}) Function(RadarrMovie) badgeBuilder,
+  }) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 28, 16, 8),
-      child: Row(
+      padding: const EdgeInsets.only(top: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: Container(height: 1, color: AppTheme.border)),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(
               title,
               style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
+                color: AppTheme.textPrimary,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
               ),
             ),
           ),
-          Expanded(child: Container(height: 1, color: AppTheme.border)),
+          const SizedBox(height: 12),
+          HorizontalItemRow<RadarrMovie>(
+            items: items,
+            isLoading: _isLoadingLibrary,
+            itemBuilder: (movie) {
+              final badge = badgeBuilder(movie);
+              return MediaCard(
+                id: movie.id,
+                title: movie.title,
+                posterPath: movie.posterUrl,
+                statusLabel: badge.label,
+                statusColor: badge.color,
+                width: 100,
+                onTap: movie.tmdbId != null
+                    ? () => context.push('/detail/movie/${movie.tmdbId}')
+                    : null,
+              );
+            },
+          ),
         ],
       ),
-    );
-  }
-}
-
-class _CompactMovieSection extends StatelessWidget {
-  final String title;
-  final List<RadarrMovie> movies;
-  final Color color;
-
-  const _CompactMovieSection({
-    required this.title,
-    required this.movies,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Row(
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '$title (${movies.length})',
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-        ...movies.map((movie) => ListTile(
-              dense: true,
-              leading: Icon(Icons.movie_outlined,
-                  color: color, size: 20),
-              title: Text(
-                movie.title,
-                style: const TextStyle(
-                    color: AppTheme.textPrimary, fontSize: 14),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                movie.year.toString(),
-                style: const TextStyle(
-                    color: AppTheme.textSecondary, fontSize: 12),
-              ),
-            )),
-      ],
     );
   }
 }

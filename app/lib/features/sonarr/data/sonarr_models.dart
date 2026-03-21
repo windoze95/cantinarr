@@ -3,6 +3,7 @@ class SonarrSeries {
   final int id;
   final String title;
   final int? tvdbId;
+  final int? tmdbId;
   final int? year;
   final String? overview;
   final String? titleSlug;
@@ -19,6 +20,7 @@ class SonarrSeries {
     required this.id,
     required this.title,
     this.tvdbId,
+    this.tmdbId,
     this.year,
     this.overview,
     this.titleSlug,
@@ -36,6 +38,7 @@ class SonarrSeries {
         id: json['id'] as int? ?? 0,
         title: json['title'] as String? ?? 'Untitled',
         tvdbId: json['tvdbId'] as int?,
+        tmdbId: json['tmdbId'] as int?,
         year: json['year'] as int?,
         overview: json['overview'] as String?,
         titleSlug: json['titleSlug'] as String?,
@@ -62,6 +65,7 @@ class SonarrSeries {
         'id': id,
         'title': title,
         'tvdbId': tvdbId,
+        'tmdbId': tmdbId,
         'year': year,
         'overview': overview,
         'titleSlug': titleSlug,
