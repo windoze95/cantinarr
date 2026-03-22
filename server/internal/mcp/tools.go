@@ -153,6 +153,76 @@ var toolDefinitions = []Tool{
 	},
 }
 
+// MediaResultItem is the structured data the MCP App UI renders.
+type MediaResultItem struct {
+	ID          int     `json:"id"`
+	Title       string  `json:"title"`
+	Year        string  `json:"year,omitempty"`
+	PosterPath  string  `json:"poster_path,omitempty"`
+	VoteAverage float64 `json:"vote_average,omitempty"`
+	Overview    string  `json:"overview,omitempty"`
+	MediaType   string  `json:"media_type,omitempty"`
+}
+
+// MediaResultEnvelope wraps both the text summary for the LLM and structured
+// data for the MCP App UI.
+type MediaResultEnvelope struct {
+	Text    string            `json:"text"`
+	Results []MediaResultItem `json:"results"`
+}
+
+// ToolsWithUI is the set of tool names that have MCP App UI attached.
+var ToolsWithUI = map[string]bool{
+	"search_movies":       true,
+	"search_tv_shows":     true,
+	"get_trending":        true,
+	"get_recommendations": true,
+}
+
+func toMediaResultItems(results []tmdb.SearchResult, limit int) []MediaResultItem {
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	items := make([]MediaResultItem, 0, len(results))
+	for _, r := range results {
+		title := r.Title
+		if title == "" {
+			title = r.Name
+		}
+		date := r.ReleaseDate
+		if date == "" {
+			date = r.FirstAirDate
+		}
+		year := ""
+		if len(date) >= 4 {
+			year = date[:4]
+		}
+		items = append(items, MediaResultItem{
+			ID:          r.ID,
+			Title:       title,
+			Year:        year,
+			PosterPath:  r.PosterPath,
+			VoteAverage: r.VoteAverage,
+			Overview:    r.Overview,
+			MediaType:   r.MediaType,
+		})
+	}
+	return items
+}
+
+func formatSearchResultsEnvelope(results []tmdb.SearchResult, limit int) (string, error) {
+	items := toMediaResultItems(results, limit)
+	env := MediaResultEnvelope{
+		Text:    formatSearchResults(results, limit),
+		Results: items,
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return "", fmt.Errorf("marshal envelope: %w", err)
+	}
+	return string(data), nil
+}
+
 func formatSearchResults(results []tmdb.SearchResult, limit int) string {
 	if len(results) == 0 {
 		return "No results found."
@@ -209,7 +279,7 @@ func (s *ToolServer) searchMovies(input json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return formatSearchResults(results, 10), nil
+	return formatSearchResultsEnvelope(results, 10)
 }
 
 func (s *ToolServer) searchTVShows(input json.RawMessage) (string, error) {
@@ -227,7 +297,7 @@ func (s *ToolServer) searchTVShows(input json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return formatSearchResults(results, 10), nil
+	return formatSearchResultsEnvelope(results, 10)
 }
 
 func (s *ToolServer) getTrending(input json.RawMessage) (string, error) {
@@ -246,7 +316,7 @@ func (s *ToolServer) getTrending(input json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return formatSearchResults(results, 10), nil
+	return formatSearchResultsEnvelope(results, 10)
 }
 
 func (s *ToolServer) getMovieDetails(input json.RawMessage) (string, error) {
@@ -303,7 +373,7 @@ func (s *ToolServer) getRecommendations(input json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return formatSearchResults(results, 10), nil
+	return formatSearchResultsEnvelope(results, 10)
 }
 
 func (s *ToolServer) checkRequestStatus(input json.RawMessage) (string, error) {
