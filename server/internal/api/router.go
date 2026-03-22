@@ -14,6 +14,8 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/mcpserver"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/web"
@@ -33,6 +35,7 @@ func NewRouter(
 	instanceStore *instance.Store,
 	creds *credentials.Registry,
 	credHandler *credentials.Handler,
+	toolServer *mcp.ToolServer,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -182,6 +185,20 @@ func NewRouter(
 			r.HandleFunc("/instances/{instanceID}/*", proxyHandler.InstanceProxy())
 		})
 
+	})
+
+	// MCP endpoint (authenticated, separate CORS for external MCP clients)
+	mcpHandler := mcpserver.NewMCPHandler(toolServer)
+	r.Route("/mcp", func(r chi.Router) {
+		r.Use(cors.Handler(cors.Options{
+			AllowedOrigins:   []string{"*"},
+			AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
+			AllowedHeaders:   []string{"Authorization", "Content-Type", "Mcp-Session-Id"},
+			ExposedHeaders:   []string{"Mcp-Session-Id"},
+			AllowCredentials: false,
+		}))
+		r.Use(authService.AuthMiddleware)
+		r.Handle("/*", mcpHandler)
 	})
 
 	// Serve Flutter web UI at root (catch-all for non-API routes)
