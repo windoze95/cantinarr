@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"log"
 	"net/http"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -49,15 +48,13 @@ func registerMediaResultsResource(mcpServer *server.MCPServer) {
 			},
 		},
 	}
-	if err := mcpServer.AddResource(resource, func(ctx context.Context, request mcplib.ReadResourceRequest) ([]mcplib.ResourceContents, error) {
+	mcpServer.AddResource(resource, func(ctx context.Context, request mcplib.ReadResourceRequest) ([]mcplib.ResourceContents, error) {
 		return []mcplib.ResourceContents{
 			mcplib.TextResourceContents{
 				URI:      MediaResultsResourceURI,
-				MimeType: "text/html;profile=mcp-app",
+				MIMEType: "text/html;profile=mcp-app",
 				Text:     mediaResultsAppHTML,
 			},
 		}, nil
-	}); err != nil {
-		log.Printf("mcpserver: failed to register media results resource: %v", err)
-	}
+	})
 }
