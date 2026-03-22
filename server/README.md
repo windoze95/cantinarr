@@ -26,7 +26,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 
 - **One-tap requests** -- Users browse TMDB/Trakt on the app, tap request, and the server handles everything: ID bridging, arr lookups, quality profiles, root folders.
 - **Automatic ID bridging** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then title+year search. Results cached in SQLite for 30 days.
-- **Connect link auth** -- Admin generates one-time connect links for household members. JWT-based sessions with 7-day access / 30-day refresh tokens.
+- **Connect link auth** -- Admin generates one-time connect links for household members. JWT-based sessions with 15-minute access / 30-day refresh tokens.
 - **AI assistant** -- Claude-powered chat with server-side tool execution (search, recommendations, request status, make requests). Streams responses via SSE.
 - **Real-time updates** -- WebSocket hub polls arr queues every 30 seconds and pushes download progress to connected clients.
 - **Arr proxy** -- Admins get full passthrough to Radarr/Sonarr APIs for management without exposing keys.
@@ -110,6 +110,14 @@ POST   /api/ai/chat             # SSE-streamed Claude conversation with tool use
 GET    /api/ai/available        # { available: true/false }
 ```
 
+### MCP (external tool access)
+```
+POST   /mcp                     # MCP JSON-RPC (initialize, tools/list, tools/call)
+GET    /mcp                     # SSE stream for async notifications
+DELETE /mcp                     # Close MCP session
+```
+Requires `Authorization: Bearer <token>` header. Session tracked via `Mcp-Session-Id` header.
+
 ### Instance Proxy (admin only)
 ```
 GET|POST|DELETE  /api/instances/:id/*  # passthrough to specific Radarr/Sonarr instance
@@ -154,7 +162,7 @@ Movies skip bridging entirely -- Radarr natively supports `term=tmdb:{id}`.
 
 ### MCP Tools
 
-The AI assistant has 9 server-side tools:
+The same 9 tools power both the in-app AI assistant and the external MCP endpoint:
 
 | Tool | Description |
 |---|---|
@@ -167,6 +175,30 @@ The AI assistant has 9 server-side tools:
 | `check_request_status` | Is this on my server? |
 | `request_media` | Actually add to Radarr/Sonarr |
 | `list_my_requests` | User's request history |
+
+### MCP Server Endpoint
+
+Cantinarr exposes these tools as a proper [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` using Streamable HTTP transport. External MCP clients (Claude Desktop, Claude Code, etc.) can connect directly.
+
+**Authentication:** Uses Cantinarr's existing JWT Bearer tokens. Pass an access token via the `Authorization` header.
+
+**Claude Desktop example** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "cantinarr": {
+      "url": "http://your-server:8585/mcp",
+      "headers": {
+        "Authorization": "Bearer <access-token>"
+      }
+    }
+  }
+}
+```
+
+**Limitations:**
+- Access tokens expire after 15 minutes. MCP clients cannot automatically refresh them because the endpoint uses Cantinarr's JWT auth rather than the MCP spec's OAuth 2.1 flow. Long MCP sessions will require manually providing a fresh access token.
+- A future update may implement the MCP OAuth 2.1 authorization spec, which would allow clients to handle login and token refresh automatically via browser-based auth.
 
 ### Database
 
@@ -199,6 +231,10 @@ server/
 │   ├── mcp/
 │   │   ├── server.go              # Tool execution engine
 │   │   └── tools.go               # 9 tool definitions + implementations
+│   ├── mcpserver/
+│   │   ├── server.go              # MCP Streamable HTTP endpoint (mcp-go)
+│   │   ├── context.go             # JWT auth -> MCP context bridge
+│   │   └── tools.go               # Registers existing tools with mcp-go
 │   ├── proxy/handler.go           # Reverse proxy for arr admin access
 │   ├── radarr/client.go           # Radarr API v3 client
 │   ├── request/
