@@ -57,7 +57,6 @@ class _AppShellState extends ConsumerState<AppShell>
   AiChatNotifier? _aiChatNotifier;
   Timer? _aiTransitionTimer;
   SearchMode _prevMode = SearchMode.search;
-  bool _hasAi = false;
 
   @override
   void initState() {
@@ -89,7 +88,6 @@ class _AppShellState extends ConsumerState<AppShell>
   void _initLibraries() {
     final auth = ref.read(authProvider).valueOrNull;
     final backendDio = ref.read(backendClientProvider);
-    _hasAi = auth?.connection?.services.ai ?? false;
 
     // Use instance-aware API services
     final defaultRadarr = auth?.connection?.defaultRadarrInstance;
@@ -164,12 +162,16 @@ class _AppShellState extends ConsumerState<AppShell>
         _glowAnim.stop();
         _glowAnim.value = 0;
         _aiModeAnim.forward();
-        // Auto-send the original query to AI
+        // Defer auto-send to after the current build frame to avoid
+        // setState() during build (sendMessage triggers notifyListeners).
         final query = ref.read(shellSearchProvider).searchQuery;
         if (query.isNotEmpty) {
-          final chat = _getOrCreateAiChat();
-          chat.sendMessage(query);
-          _searchController.clear();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            final chat = _getOrCreateAiChat();
+            chat.sendMessage(query);
+            _searchController.clear();
+          });
         }
 
       case SearchMode.search:
@@ -289,6 +291,7 @@ class _AppShellState extends ConsumerState<AppShell>
   Widget build(BuildContext context) {
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);
+    final hasAi = ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
     final libraryStatus = searchState.isSearching &&
             searchState.searchMode == SearchMode.search
         ? _buildLibraryStatus(searchState.searchResults)
@@ -306,8 +309,8 @@ class _AppShellState extends ConsumerState<AppShell>
       child: CantinarrSearchBar(
         controller: _searchController,
         focusNode: _searchFocusNode,
-        hintText: _hasAi ? 'Search or ask AI...' : 'Search movies & TV shows...',
-        aiEnabled: _hasAi,
+        hintText: hasAi ? 'Search or ask AI...' : 'Search movies & TV shows...',
+        aiEnabled: hasAi,
         onChanged: isAiMode ? null : (q) => searchNotifier.updateSearch(q),
         onClear: isAiMode ? _exitAiMode : () => searchNotifier.updateSearch(''),
       ),
