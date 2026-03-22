@@ -136,6 +136,7 @@ type SearchResult struct {
 	Title        string  `json:"title,omitempty"`
 	Name         string  `json:"name,omitempty"`
 	Overview     string  `json:"overview"`
+	PosterPath   string  `json:"poster_path,omitempty"`
 	ReleaseDate  string  `json:"release_date,omitempty"`
 	FirstAirDate string  `json:"first_air_date,omitempty"`
 	VoteAverage  float64 `json:"vote_average"`

@@ -10,6 +10,17 @@ import (
 	internalmcp "github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
+// mcpAppUIMeta returns a Meta with _meta.ui pointing to the media results app.
+func mcpAppUIMeta() *mcp.Meta {
+	return &mcp.Meta{
+		AdditionalFields: map[string]interface{}{
+			"ui": map[string]interface{}{
+				"resourceUri": MediaResultsResourceURI,
+			},
+		},
+	}
+}
+
 // RegisterTools bridges all existing ToolServer tools into the mcp-go MCPServer.
 func RegisterTools(mcpServer *server.MCPServer, toolServer *internalmcp.ToolServer) {
 	for _, tool := range toolServer.GetTools() {
@@ -20,6 +31,9 @@ func RegisterTools(mcpServer *server.MCPServer, toolServer *internalmcp.ToolServ
 		}
 
 		mcpTool := mcp.NewToolWithRawSchema(tool.Name, tool.Description, schemaJSON)
+		if internalmcp.ToolsWithUI[tool.Name] {
+			mcpTool.Meta = mcpAppUIMeta()
+		}
 		mcpServer.AddTool(mcpTool, makeToolHandler(toolServer, tool.Name))
 	}
 }
@@ -41,6 +55,13 @@ func makeToolHandler(toolServer *internalmcp.ToolServer, toolName string) server
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return mcp.NewToolResultText(result), nil
+		callResult := mcp.NewToolResultText(result.Text)
+		if result.StructuredData != nil {
+			// structuredContent must be a JSON object per MCP protocol schema
+			callResult.StructuredContent = map[string]any{
+				"results": result.StructuredData,
+			}
+		}
+		return callResult, nil
 	}
 }

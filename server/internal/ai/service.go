@@ -115,14 +115,17 @@ func (s *Service) SendMessage(ctx context.Context, messages []Message, userID in
 			if block.Type != "tool_use" {
 				continue
 			}
-			result, err := s.toolServer.ExecuteTool(ctx, block.Name, block.Input, userID)
+			toolResult, err := s.toolServer.ExecuteTool(ctx, block.Name, block.Input, userID)
+			var resultText string
 			if err != nil {
-				result = fmt.Sprintf("Error: %s", err.Error())
+				resultText = fmt.Sprintf("Error: %s", err.Error())
+			} else {
+				resultText = toolResult.Text
 			}
 			toolResults = append(toolResults, ContentBlock{
 				Type:      "tool_result",
 				ToolUseID: block.ID,
-				Content:   result,
+				Content:   resultText,
 			})
 		}
 

@@ -153,6 +153,63 @@ var toolDefinitions = []Tool{
 	},
 }
 
+// MediaResultItem is the structured data the MCP App UI renders.
+type MediaResultItem struct {
+	ID          int     `json:"id"`
+	Title       string  `json:"title"`
+	Year        string  `json:"year,omitempty"`
+	PosterPath  string  `json:"poster_path,omitempty"`
+	VoteAverage float64 `json:"vote_average,omitempty"`
+	Overview    string  `json:"overview,omitempty"`
+	MediaType   string  `json:"media_type,omitempty"`
+}
+
+// ToolResult holds the plain-text output (for LLM consumption) and optional
+// structured data (for the MCP App UI).
+type ToolResult struct {
+	Text           string
+	StructuredData any // nil for tools without UI; []MediaResultItem for search/browse tools
+}
+
+// ToolsWithUI is the set of tool names that have MCP App UI attached.
+var ToolsWithUI = map[string]bool{
+	"search_movies":       true,
+	"search_tv_shows":     true,
+	"get_trending":        true,
+	"get_recommendations": true,
+}
+
+func toMediaResultItems(results []tmdb.SearchResult, limit int) []MediaResultItem {
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	items := make([]MediaResultItem, 0, len(results))
+	for _, r := range results {
+		title := r.Title
+		if title == "" {
+			title = r.Name
+		}
+		date := r.ReleaseDate
+		if date == "" {
+			date = r.FirstAirDate
+		}
+		year := ""
+		if len(date) >= 4 {
+			year = date[:4]
+		}
+		items = append(items, MediaResultItem{
+			ID:          r.ID,
+			Title:       title,
+			Year:        year,
+			PosterPath:  r.PosterPath,
+			VoteAverage: r.VoteAverage,
+			Overview:    r.Overview,
+			MediaType:   r.MediaType,
+		})
+	}
+	return items
+}
+
 func formatSearchResults(results []tmdb.SearchResult, limit int) string {
 	if len(results) == 0 {
 		return "No results found."
@@ -194,165 +251,177 @@ func formatSearchResults(results []tmdb.SearchResult, limit int) string {
 	return sb.String()
 }
 
-func (s *ToolServer) searchMovies(input json.RawMessage) (string, error) {
+func (s *ToolServer) searchMovies(input json.RawMessage) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
-		return "TMDB is not configured on the server.", nil
+		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
 	}
 	var params struct {
 		Query string `json:"query"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse input: %w", err)
+		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	results, err := tmdbClient.SearchMovies(params.Query)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return formatSearchResults(results, 10), nil
+	return &ToolResult{
+		Text:           formatSearchResults(results, 10),
+		StructuredData: toMediaResultItems(results, 10),
+	}, nil
 }
 
-func (s *ToolServer) searchTVShows(input json.RawMessage) (string, error) {
+func (s *ToolServer) searchTVShows(input json.RawMessage) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
-		return "TMDB is not configured on the server.", nil
+		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
 	}
 	var params struct {
 		Query string `json:"query"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse input: %w", err)
+		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	results, err := tmdbClient.SearchTV(params.Query)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return formatSearchResults(results, 10), nil
+	return &ToolResult{
+		Text:           formatSearchResults(results, 10),
+		StructuredData: toMediaResultItems(results, 10),
+	}, nil
 }
 
-func (s *ToolServer) getTrending(input json.RawMessage) (string, error) {
+func (s *ToolServer) getTrending(input json.RawMessage) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
-		return "TMDB is not configured on the server.", nil
+		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
 	}
 	var params struct {
 		MediaType  string `json:"media_type"`
 		TimeWindow string `json:"time_window"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse input: %w", err)
+		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	results, err := tmdbClient.GetTrending(params.MediaType, params.TimeWindow)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return formatSearchResults(results, 10), nil
+	return &ToolResult{
+		Text:           formatSearchResults(results, 10),
+		StructuredData: toMediaResultItems(results, 10),
+	}, nil
 }
 
-func (s *ToolServer) getMovieDetails(input json.RawMessage) (string, error) {
+func (s *ToolServer) getMovieDetails(input json.RawMessage) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
-		return "TMDB is not configured on the server.", nil
+		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
 	}
 	var params struct {
 		TmdbID int `json:"tmdb_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse input: %w", err)
+		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	movie, err := tmdbClient.GetMovieDetails(params.TmdbID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	data, _ := json.Marshal(movie)
-	return string(data), nil
+	return &ToolResult{Text: string(data)}, nil
 }
 
-func (s *ToolServer) getTVDetails(input json.RawMessage) (string, error) {
+func (s *ToolServer) getTVDetails(input json.RawMessage) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
-		return "TMDB is not configured on the server.", nil
+		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
 	}
 	var params struct {
 		TmdbID int `json:"tmdb_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse input: %w", err)
+		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	tv, err := tmdbClient.GetTVDetails(params.TmdbID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	data, _ := json.Marshal(tv)
-	return string(data), nil
+	return &ToolResult{Text: string(data)}, nil
 }
 
-func (s *ToolServer) getRecommendations(input json.RawMessage) (string, error) {
+func (s *ToolServer) getRecommendations(input json.RawMessage) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
-		return "TMDB is not configured on the server.", nil
+		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
 	}
 	var params struct {
 		TmdbID    int    `json:"tmdb_id"`
 		MediaType string `json:"media_type"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse input: %w", err)
+		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	results, err := tmdbClient.GetRecommendations(params.TmdbID, params.MediaType)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return formatSearchResults(results, 10), nil
+	return &ToolResult{
+		Text:           formatSearchResults(results, 10),
+		StructuredData: toMediaResultItems(results, 10),
+	}, nil
 }
 
-func (s *ToolServer) checkRequestStatus(input json.RawMessage) (string, error) {
+func (s *ToolServer) checkRequestStatus(input json.RawMessage) (*ToolResult, error) {
 	var params struct {
 		TmdbID    int    `json:"tmdb_id"`
 		MediaType string `json:"media_type"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse input: %w", err)
+		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	status, err := s.request.GetStatus(params.TmdbID, params.MediaType)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	data, _ := json.Marshal(status)
-	return string(data), nil
+	return &ToolResult{Text: string(data)}, nil
 }
 
-func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (string, error) {
+func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
 		TmdbID    int    `json:"tmdb_id"`
 		MediaType string `json:"media_type"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("parse input: %w", err)
+		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	resp, err := s.request.CreateMediaRequest(userID, &request.CreateRequest{
 		TmdbID:    params.TmdbID,
 		MediaType: params.MediaType,
 	})
 	if err != nil {
-		return fmt.Sprintf("Request failed: %s", err.Error()), nil
+		return &ToolResult{Text: fmt.Sprintf("Request failed: %s", err.Error())}, nil
 	}
 	data, _ := json.Marshal(resp)
-	return string(data), nil
+	return &ToolResult{Text: string(data)}, nil
 }
 
-func (s *ToolServer) listMyRequests(userID int64) (string, error) {
+func (s *ToolServer) listMyRequests(userID int64) (*ToolResult, error) {
 	requests, err := s.request.GetRequests(userID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(requests) == 0 {
-		return "No requests found.", nil
+		return &ToolResult{Text: "No requests found."}, nil
 	}
 	var sb strings.Builder
 	for i, r := range requests {
 		fmt.Fprintf(&sb, "%d. %s (%s) - Status: %s - Requested: %s\n",
 			i+1, r.Title, r.MediaType, r.Status, r.RequestedAt.Format("2006-01-02"))
 	}
-	return sb.String(), nil
+	return &ToolResult{Text: sb.String()}, nil
 }
