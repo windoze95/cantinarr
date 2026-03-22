@@ -44,6 +44,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **TMDB + Trakt for discovery** -- The best metadata, images, and trending data. Sonarr's TVDB dependency is invisible.
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
 - **AI assistant** -- "What should I watch tonight?" Claude searches your library, checks availability, and can request for you.
+- **MCP server** -- The same 9 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, so Claude Desktop and other MCP clients can connect directly.
 - **Household-friendly** -- Connect links, role-based access. Admins manage arr services, users just browse and request.
 - **Single container** -- One Go binary, one port, serves API + web UI. Runs great on a Raspberry Pi or NAS.
 
@@ -84,6 +85,7 @@ cantinarr/
 │   │   ├── credentials/   # API credential management + client registry
 │   │   ├── db/             # SQLite with WAL mode
 │   │   ├── mcp/            # 9 AI tools (search, request, status)
+│   │   ├── mcpserver/      # MCP Streamable HTTP endpoint
 │   │   ├── proxy/          # Arr admin reverse proxy
 │   │   ├── radarr/         # Radarr API v3 client
 │   │   ├── request/        # Request orchestration + bridging
@@ -169,6 +171,7 @@ Movies don't need bridging -- Radarr natively supports TMDB IDs.
 | Client | Flutter (Dart), Riverpod, GoRouter |
 | Auth | JWT (HS256), bcrypt, connect tokens |
 | AI | Anthropic Claude API, SSE streaming |
+| MCP | [mcp-go](https://github.com/mark3labs/mcp-go), Streamable HTTP |
 | Real-time | gorilla/websocket |
 | Discovery | TMDB API v3, Trakt API v2 |
 | Packaging | Multi-stage Docker, go:embed |
