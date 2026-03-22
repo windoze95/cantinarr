@@ -36,6 +36,7 @@ class AppShell extends ConsumerStatefulWidget {
 
 class _AppShellState extends ConsumerState<AppShell>
     with TickerProviderStateMixin {
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
   final _chatScrollController = ScrollController();
@@ -258,6 +259,9 @@ class _AppShellState extends ConsumerState<AppShell>
   bool _isMobile(BuildContext context) =>
       MediaQuery.sizeOf(context).shortestSide < 600;
 
+  bool _isDesktop(BuildContext context) =>
+      MediaQuery.sizeOf(context).width >= 900;
+
   bool _handleScrollNotification(ScrollNotification notification) {
     if (notification is ScrollUpdateNotification) {
       final delta = notification.scrollDelta ?? 0;
@@ -297,6 +301,7 @@ class _AppShellState extends ConsumerState<AppShell>
         : const <int, LibraryStatus>{};
 
     final mobile = _isMobile(context);
+    final desktop = _isDesktop(context);
 
     // Drive animations from state changes
     _onSearchModeChanged(searchState.searchMode);
@@ -304,7 +309,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final isAiMode = searchState.searchMode == SearchMode.aiChat;
 
     final searchBar = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: EdgeInsets.fromLTRB(desktop ? 16 : 4, 8, 16, 8),
       child: CantinarrSearchBar(
         controller: _searchController,
         focusNode: _searchFocusNode,
@@ -315,7 +320,27 @@ class _AppShellState extends ConsumerState<AppShell>
       ),
     );
 
-    return Scaffold(
+    // Top bar: hamburger + search on non-desktop, just search on desktop
+    Widget topBar;
+    if (desktop) {
+      topBar = searchBar;
+    } else {
+      topBar = Row(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, top: 8, bottom: 8),
+            child: IconButton(
+              icon: const Icon(Icons.menu, color: AppTheme.textPrimary),
+              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+            ),
+          ),
+          Expanded(child: searchBar),
+        ],
+      );
+    }
+
+    final scaffold = Scaffold(
+      key: _scaffoldKey,
       body: SafeArea(
         bottom: false,
         child: Stack(
@@ -329,10 +354,10 @@ class _AppShellState extends ConsumerState<AppShell>
                     SizeTransition(
                       sizeFactor: _searchBarCurve,
                       axisAlignment: -1,
-                      child: searchBar,
+                      child: topBar,
                     )
                   else
-                    searchBar,
+                    topBar,
                 ],
                 // Module content (includes its own bottom nav)
                 Expanded(
@@ -399,8 +424,26 @@ class _AppShellState extends ConsumerState<AppShell>
           ],
         ),
       ),
-      drawer: _buildDrawer(context),
+      drawer: desktop ? null : _buildDrawer(context),
     );
+
+    if (desktop) {
+      return Row(
+        children: [
+          SizedBox(
+            width: 280,
+            child: Material(
+              color: AppTheme.surface,
+              child: _buildDrawerContent(context, isOverlay: false),
+            ),
+          ),
+          const VerticalDivider(width: 1, thickness: 1, color: AppTheme.border),
+          Expanded(child: scaffold),
+        ],
+      );
+    }
+
+    return scaffold;
   }
 
   /// Glow state: pulsing gold container with "Asking AI..." label.
@@ -603,91 +646,95 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   Widget _buildDrawer(BuildContext context) {
-    final moduleState = ref.watch(moduleProvider);
-
     return Drawer(
       backgroundColor: AppTheme.surface,
-      child: SafeArea(
-        child: Column(
-          children: [
-            // Header
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: AppTheme.accent.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.movie_filter,
-                        color: AppTheme.accent, size: 28),
+      child: _buildDrawerContent(context, isOverlay: true),
+    );
+  }
+
+  Widget _buildDrawerContent(BuildContext context, {required bool isOverlay}) {
+    final moduleState = ref.watch(moduleProvider);
+
+    return SafeArea(
+      child: Column(
+        children: [
+          // Header
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: AppTheme.accent.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Cantinarr',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: const Icon(Icons.movie_filter,
+                      color: AppTheme.accent, size: 28),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Cantinarr',
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
                   ),
-                  const Text(
-                    'Your media companion',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 14),
-                  ),
-                ],
-              ),
+                ),
+                const Text(
+                  'Your media companion',
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+                ),
+              ],
             ),
-            const Divider(color: AppTheme.border),
+          ),
+          const Divider(color: AppTheme.border),
 
-            // Module navigation items
-            ...moduleState.modules.asMap().entries.map((entry) {
-              final module = entry.value;
-              final isActive = entry.key == moduleState.activeIndex;
+          // Module navigation items
+          ...moduleState.modules.asMap().entries.map((entry) {
+            final module = entry.value;
+            final isActive = entry.key == moduleState.activeIndex;
 
-              return _DrawerItem(
-                icon: module.icon,
-                title: module.label,
-                selected: isActive,
-                onTap: () {
-                  Navigator.pop(context);
-                  _navigateToModule(context, module);
-                  ref.read(moduleProvider.notifier).setActiveModule(
-                        module.type,
-                        instanceId: module.instanceId,
-                      );
-                },
-              );
-            }),
-
-            const Spacer(),
-            const Divider(color: AppTheme.border),
-
-            _DrawerItem(
-              icon: Icons.play_circle_outline,
-              title: 'Plex Setup Guide',
+            return _DrawerItem(
+              icon: module.icon,
+              title: module.label,
+              selected: isActive,
               onTap: () {
-                Navigator.pop(context);
-                context.push('/plex-guide');
+                if (isOverlay) Navigator.pop(context);
+                _navigateToModule(context, module);
+                ref.read(moduleProvider.notifier).setActiveModule(
+                      module.type,
+                      instanceId: module.instanceId,
+                    );
               },
-            ),
-            _DrawerItem(
-              icon: Icons.settings,
-              title: 'Settings',
-              onTap: () {
-                Navigator.pop(context);
-                context.push('/settings');
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
+            );
+          }),
+
+          const Spacer(),
+          const Divider(color: AppTheme.border),
+
+          _DrawerItem(
+            icon: Icons.play_circle_outline,
+            title: 'Plex Setup Guide',
+            onTap: () {
+              if (isOverlay) Navigator.pop(context);
+              context.push('/plex-guide');
+            },
+          ),
+          _DrawerItem(
+            icon: Icons.settings,
+            title: 'Settings',
+            onTap: () {
+              if (isOverlay) Navigator.pop(context);
+              context.push('/settings');
+            },
+          ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
   }
