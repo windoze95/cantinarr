@@ -151,6 +151,7 @@ body{padding:12px 0}
   const loading = document.getElementById('loading');
   let initialized = false;
   let msgId = 1;
+  let hostOrigin = null;
 
   // Movie icon SVG for missing posters
   const movieIconSVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"/></svg>';
@@ -218,18 +219,22 @@ body{padding:12px 0}
 
   // MCP Apps postMessage protocol (JSON-RPC)
   function send(msg) {
-    parent.postMessage(msg, '*');
+    parent.postMessage(msg, hostOrigin || '*');
   }
 
   function handleMessage(event) {
+    // After handshake, only accept messages from the known host origin
+    if (hostOrigin && event.origin !== hostOrigin) return;
+
     let data = event.data;
     if (typeof data === 'string') {
       try { data = JSON.parse(data); } catch(e) { return; }
     }
     if (!data || !data.jsonrpc) return;
 
-    // Handle initialize response — send initialized notification back to host
+    // Handle initialize response — capture host origin and send initialized notification
     if (data.id && data.result && !initialized) {
+      hostOrigin = event.origin;
       initialized = true;
       send({
         jsonrpc: '2.0',
@@ -242,11 +247,11 @@ body{padding:12px 0}
     if (data.method === 'ui/notifications/tool-result') {
       const params = data.params || {};
       // Prefer structuredContent (typed data from the server)
-      if (params.structuredContent) {
-        renderResults(params.structuredContent);
+      if (params.structuredContent && params.structuredContent.results) {
+        renderResults(params.structuredContent.results);
         return;
       }
-      // Fallback: try parsing text content
+      // Fallback: try parsing text content or show error state
       const content = params.content || [];
       for (const c of content) {
         if (c.type === 'text' && c.text) {
@@ -256,9 +261,17 @@ body{padding:12px 0}
               renderResults(parsed);
               return;
             }
-          } catch(e) {}
+          } catch(e) {
+            // Plain text (e.g. error message) — show as empty state
+            loading.style.display = 'none';
+            root.innerHTML = '<div class="empty-state">' +
+              c.text.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+            return;
+          }
         }
       }
+      // No content at all — clear the loader
+      loading.style.display = 'none';
       return;
     }
 

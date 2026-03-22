@@ -16,9 +16,6 @@ func mcpAppUIMeta() *mcp.Meta {
 		AdditionalFields: map[string]interface{}{
 			"ui": map[string]interface{}{
 				"resourceUri": MediaResultsResourceURI,
-				"csp": map[string]interface{}{
-					"img-src": []string{"https://image.tmdb.org"},
-				},
 			},
 		},
 	}
@@ -60,7 +57,10 @@ func makeToolHandler(toolServer *internalmcp.ToolServer, toolName string) server
 
 		callResult := mcp.NewToolResultText(result.Text)
 		if result.StructuredData != nil {
-			callResult.StructuredContent = result.StructuredData
+			// structuredContent must be a JSON object per MCP protocol schema
+			callResult.StructuredContent = map[string]any{
+				"results": result.StructuredData,
+			}
 		}
 		return callResult, nil
 	}

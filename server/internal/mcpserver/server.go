@@ -42,6 +42,13 @@ func registerMediaResultsResource(mcpServer *server.MCPServer) {
 		mcplib.WithResourceDescription("Interactive media results viewer"),
 		mcplib.WithMIMEType("text/html;profile=mcp-app"),
 	)
+	resource.Meta = &mcplib.Meta{
+		AdditionalFields: map[string]interface{}{
+			"csp": map[string]interface{}{
+				"img-src": []string{"https://image.tmdb.org"},
+			},
+		},
+	}
 	if err := mcpServer.AddResource(resource, func(ctx context.Context, request mcplib.ReadResourceRequest) ([]mcplib.ResourceContents, error) {
 		return []mcplib.ResourceContents{
 			mcplib.TextResourceContents{
