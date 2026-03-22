@@ -162,17 +162,16 @@ class _AppShellState extends ConsumerState<AppShell>
         _glowAnim.stop();
         _glowAnim.value = 0;
         _aiModeAnim.forward();
-        // Defer auto-send to after the current build frame to avoid
-        // setState() during build (sendMessage triggers notifyListeners).
+        // Keep the original query in the input so the user can edit
+        // or send it when ready — don't auto-send.
         final query = ref.read(shellSearchProvider).searchQuery;
-        if (query.isNotEmpty) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            final chat = _getOrCreateAiChat();
-            chat.sendMessage(query);
-            _searchController.clear();
-          });
+        if (query.isNotEmpty && _searchController.text != query) {
+          _searchController.text = query;
+          _searchController.selection = TextSelection.fromPosition(
+            TextPosition(offset: query.length),
+          );
         }
+        _getOrCreateAiChat();
 
       case SearchMode.search:
         _aiTransitionTimer?.cancel();
