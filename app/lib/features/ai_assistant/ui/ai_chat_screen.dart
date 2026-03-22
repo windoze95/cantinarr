@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/ai_chat_service.dart';
-import '../data/ai_models.dart';
 import '../logic/ai_chat_provider.dart';
 import 'chat_bubble.dart';
 
