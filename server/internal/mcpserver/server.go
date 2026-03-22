@@ -40,13 +40,13 @@ func registerMediaResultsResource(mcpServer *server.MCPServer) {
 		MediaResultsResourceURI,
 		"Cantinarr Media Results",
 		mcplib.WithResourceDescription("Interactive media results viewer"),
-		mcplib.WithMIMEType("text/html"),
+		mcplib.WithMIMEType("text/html;profile=mcp-app"),
 	)
 	if err := mcpServer.AddResource(resource, func(ctx context.Context, request mcplib.ReadResourceRequest) ([]mcplib.ResourceContents, error) {
 		return []mcplib.ResourceContents{
 			mcplib.TextResourceContents{
 				URI:      MediaResultsResourceURI,
-				MimeType: "text/html",
+				MimeType: "text/html;profile=mcp-app",
 				Text:     mediaResultsAppHTML,
 			},
 		}, nil

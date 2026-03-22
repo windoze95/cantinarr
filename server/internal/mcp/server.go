@@ -62,7 +62,7 @@ func (s *ToolServer) GetTools() []Tool {
 }
 
 // ExecuteTool runs the named tool with the given JSON input.
-func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.RawMessage, userID int64) (string, error) {
+func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.RawMessage, userID int64) (*ToolResult, error) {
 	switch name {
 	case "search_movies":
 		return s.searchMovies(input)
@@ -83,6 +83,6 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "list_my_requests":
 		return s.listMyRequests(userID)
 	default:
-		return "", fmt.Errorf("unknown tool: %s", name)
+		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
 }

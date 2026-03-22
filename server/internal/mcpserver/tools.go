@@ -58,6 +58,10 @@ func makeToolHandler(toolServer *internalmcp.ToolServer, toolName string) server
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		return mcp.NewToolResultText(result), nil
+		callResult := mcp.NewToolResultText(result.Text)
+		if result.StructuredData != nil {
+			callResult.StructuredContent = result.StructuredData
+		}
+		return callResult, nil
 	}
 }

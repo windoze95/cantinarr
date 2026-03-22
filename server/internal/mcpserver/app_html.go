@@ -228,22 +228,32 @@ body{padding:12px 0}
     }
     if (!data || !data.jsonrpc) return;
 
-    // Handle initialize response
+    // Handle initialize response — send initialized notification back to host
     if (data.id && data.result && !initialized) {
       initialized = true;
+      send({
+        jsonrpc: '2.0',
+        method: 'ui/notifications/initialized'
+      });
       return;
     }
 
-    // Handle tool result notification (ui/toolResult)
-    if (data.method === 'ui/toolResult') {
+    // Handle tool result notification
+    if (data.method === 'ui/notifications/tool-result') {
       const params = data.params || {};
-      const content = params.content || params.result?.content || [];
+      // Prefer structuredContent (typed data from the server)
+      if (params.structuredContent) {
+        renderResults(params.structuredContent);
+        return;
+      }
+      // Fallback: try parsing text content
+      const content = params.content || [];
       for (const c of content) {
         if (c.type === 'text' && c.text) {
           try {
-            const envelope = JSON.parse(c.text);
-            if (envelope.results) {
-              renderResults(envelope.results);
+            const parsed = JSON.parse(c.text);
+            if (Array.isArray(parsed)) {
+              renderResults(parsed);
               return;
             }
           } catch(e) {}
@@ -252,8 +262,8 @@ body{padding:12px 0}
       return;
     }
 
-    // Handle streamed tool input (ui/toolInput) - for streaming tool args
-    if (data.method === 'ui/toolInput') {
+    // Handle streamed tool input - for streaming tool args
+    if (data.method === 'ui/notifications/tool-input') {
       // We render on toolResult, not toolInput
       return;
     }
