@@ -44,17 +44,17 @@ func NewRouter(
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	// CORS: same-origin only (frontend is served from the same origin).
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: false,
-		MaxAge:           300,
-	}))
 
 	r.Route("/api", func(r chi.Router) {
+		// CORS: same-origin only (frontend is served from the same origin).
+		r.Use(cors.Handler(cors.Options{
+			AllowedOrigins:   []string{},
+			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+			ExposedHeaders:   []string{"Link"},
+			AllowCredentials: false,
+			MaxAge:           300,
+		}))
 		r.Use(middleware.SetHeader("Content-Type", "application/json"))
 
 		// WebSocket (auth handled via subprotocol header)
@@ -198,6 +198,7 @@ func NewRouter(
 			AllowCredentials: false,
 		}))
 		r.Use(authService.AuthMiddleware)
+		r.Handle("/", mcpHandler)
 		r.Handle("/*", mcpHandler)
 	})
 
