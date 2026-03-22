@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
 import '../../../core/storage/secure_storage.dart';
@@ -52,12 +51,12 @@ class AuthState {
 /// Manages authentication lifecycle: login, connect token, token refresh.
 class AuthNotifier extends AsyncNotifier<AuthState> {
   late final AuthService _authService;
-  late final FlutterSecureStorage _storage;
+  late final StorageService _storage;
 
   @override
   Future<AuthState> build() async {
     _authService = AuthService();
-    _storage = ref.read(secureStorageProvider);
+    _storage = ref.read(storageServiceProvider);
 
     // Try to restore session from secure storage
     return _tryRestoreSession();
