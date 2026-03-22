@@ -465,20 +465,35 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   String _parseError(Object e) {
+    debugPrint('Auth error: $e');
     if (e is DioException) {
       final statusCode = e.response?.statusCode;
       if (statusCode == 401) return 'Invalid username or password';
       if (statusCode == 404) return 'Server not found at this URL';
+      if (statusCode == 409) return 'Username already taken';
+      if (statusCode == 429) {
+        return 'Too many attempts. Please wait a moment and try again.';
+      }
       if (e.type == DioExceptionType.connectionError ||
           e.type == DioExceptionType.connectionTimeout) {
         return 'Could not connect to server';
       }
-      if (statusCode == 409) return 'Username already taken';
+      if (e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.sendTimeout) {
+        return 'Server took too long to respond';
+      }
+      // Extract error message from server response
+      final data = e.response?.data;
+      if (data is Map<String, dynamic>) {
+        final error = data['error'] as String?;
+        if (error != null) return error;
+      }
+      if (statusCode != null) {
+        return 'Server error ($statusCode). Check server logs for details.';
+      }
     }
     if (e is Exception) {
       final msg = e.toString();
-      if (msg.contains('401')) return 'Invalid username or password';
-      if (msg.contains('404')) return 'Server not found at this URL';
       if (msg.contains('Connection refused') ||
           msg.contains('SocketException')) {
         return 'Could not connect to server';
@@ -488,7 +503,11 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   String _parsePasskeyLoginError(Object e) {
+    debugPrint('Passkey login error: $e');
     if (e is DioException) {
+      if (e.response?.statusCode == 429) {
+        return 'Too many attempts. Please wait a moment and try again.';
+      }
       final data = e.response?.data;
       if (data is Map<String, dynamic>) {
         final error = data['error'] as String?;
@@ -503,18 +522,29 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   String _parseSetupError(Object e) {
+    debugPrint('Setup error: $e');
     if (e is DioException) {
       final statusCode = e.response?.statusCode;
       if (statusCode == 409) return 'Setup has already been completed';
-      if (statusCode == 400) {
-        final data = e.response?.data;
-        if (data is Map<String, dynamic>) {
-          return data['error'] as String? ?? 'Invalid request';
-        }
+      if (statusCode == 429) {
+        return 'Too many attempts. Please wait a moment and try again.';
       }
       if (e.type == DioExceptionType.connectionError ||
           e.type == DioExceptionType.connectionTimeout) {
         return 'Could not connect to server';
+      }
+      if (e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.sendTimeout) {
+        return 'Server took too long to respond';
+      }
+      // Extract error message from server response
+      final data = e.response?.data;
+      if (data is Map<String, dynamic>) {
+        final error = data['error'] as String?;
+        if (error != null) return error;
+      }
+      if (statusCode != null) {
+        return 'Server error ($statusCode). Check server logs for details.';
       }
     }
     return 'Setup failed. Please try again.';
