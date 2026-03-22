@@ -1,9 +1,22 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/app_config.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/logic/paged_loader.dart';
+
+/// The current mode of the shell search bar.
+enum SearchMode {
+  /// Normal search — bar at top, results overlay below.
+  search,
+
+  /// No results found and AI is available — glow transition state.
+  noResults,
+
+  /// AI chat mode — bar at bottom (multiline), chat messages above.
+  aiChat,
+}
 
 /// Shell-level search state visible across all tabs.
 class ShellSearchState {
@@ -11,12 +24,14 @@ class ShellSearchState {
   final List<MediaItem> searchResults;
   final bool isLoadingSearch;
   final String? error;
+  final SearchMode searchMode;
 
   const ShellSearchState({
     this.searchQuery = '',
     this.searchResults = const [],
     this.isLoadingSearch = false,
     this.error,
+    this.searchMode = SearchMode.search,
   });
 
   ShellSearchState copyWith({
@@ -24,12 +39,14 @@ class ShellSearchState {
     List<MediaItem>? searchResults,
     bool? isLoadingSearch,
     String? error,
+    SearchMode? searchMode,
   }) =>
       ShellSearchState(
         searchQuery: searchQuery ?? this.searchQuery,
         searchResults: searchResults ?? this.searchResults,
         isLoadingSearch: isLoadingSearch ?? this.isLoadingSearch,
         error: error,
+        searchMode: searchMode ?? this.searchMode,
       );
 
   bool get isSearching => searchQuery.isNotEmpty;
@@ -38,22 +55,32 @@ class ShellSearchState {
 /// Manages TMDB multi-search from the shell search bar.
 class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
   final DiscoverApiService _api;
+  final bool aiAvailable;
   final PagedLoader _searchLoader = PagedLoader();
   Timer? _searchDebounce;
 
-  ShellSearchNotifier(this._api) : super(const ShellSearchState());
+  ShellSearchNotifier(this._api, {this.aiAvailable = false})
+      : super(const ShellSearchState());
 
   void updateSearch(String query) {
-    state = state.copyWith(searchQuery: query);
     _searchDebounce?.cancel();
 
     if (query.isEmpty) {
-      state = state.copyWith(searchResults: [], isLoadingSearch: false);
+      state = state.copyWith(
+        searchQuery: '',
+        searchResults: [],
+        isLoadingSearch: false,
+        searchMode: SearchMode.search,
+      );
       _searchLoader.reset();
       return;
     }
 
-    state = state.copyWith(isLoadingSearch: true);
+    state = state.copyWith(
+      searchQuery: query,
+      isLoadingSearch: true,
+      searchMode: SearchMode.search,
+    );
     _searchDebounce = Timer(AppConfig.searchDebounce, () => _executeSearch());
   }
 
@@ -66,7 +93,19 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
         query: state.searchQuery,
         page: _searchLoader.page,
       );
-      state = state.copyWith(searchResults: page.results, isLoadingSearch: false);
+
+      if (page.results.isEmpty && aiAvailable) {
+        state = state.copyWith(
+          searchResults: [],
+          isLoadingSearch: false,
+          searchMode: SearchMode.noResults,
+        );
+      } else {
+        state = state.copyWith(
+          searchResults: page.results,
+          isLoadingSearch: false,
+        );
+      }
       _searchLoader.endLoading(page.totalPages);
     } catch (e) {
       _searchLoader.cancelLoading();
@@ -75,6 +114,24 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
         error: 'Search failed: $e',
       );
     }
+  }
+
+  /// Transition from noResults to AI chat mode.
+  void activateAiChat() {
+    if (state.searchMode == SearchMode.noResults) {
+      state = state.copyWith(searchMode: SearchMode.aiChat);
+    }
+  }
+
+  /// Exit AI mode and return to normal search.
+  void exitAiMode() {
+    state = state.copyWith(
+      searchMode: SearchMode.search,
+      searchQuery: '',
+      searchResults: [],
+      isLoadingSearch: false,
+    );
+    _searchLoader.reset();
   }
 
   void loadMoreSearch(MediaItem current) {
@@ -117,6 +174,8 @@ final shellSearchProvider =
     StateNotifierProvider<ShellSearchNotifier, ShellSearchState>(
   (ref) {
     final api = ref.watch(discoverServiceProvider);
-    return ShellSearchNotifier(api);
+    final auth = ref.watch(authProvider).valueOrNull;
+    final hasAi = auth?.connection?.services.ai ?? false;
+    return ShellSearchNotifier(api, aiAvailable: hasAi);
   },
 );

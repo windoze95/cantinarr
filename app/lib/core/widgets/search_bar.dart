@@ -1,13 +1,27 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
-/// An animated search bar with focus handling and clear button.
+/// An animated search bar with focus handling, clear button,
+/// and optional AI mode (sparkle hint, multiline input, glow effect).
 class CantinarrSearchBar extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final String hintText;
   final ValueChanged<String>? onChanged;
   final VoidCallback? onClear;
+
+  /// When true, shows a sparkle icon hinting at AI capability.
+  final bool aiEnabled;
+
+  /// When true, the text field expands to 3 lines with a send button.
+  final bool multiline;
+
+  /// Called when the send button is tapped (AI multiline mode).
+  final VoidCallback? onSend;
+
+  /// Glow intensity (0.0–1.0) for the gold accent border/shadow.
+  /// Driven by the parent's animation controller.
+  final double glowIntensity;
 
   const CantinarrSearchBar({
     super.key,
@@ -16,34 +30,49 @@ class CantinarrSearchBar extends StatelessWidget {
     this.hintText = 'Search movies & TV shows...',
     this.onChanged,
     this.onClear,
+    this.aiEnabled = false,
+    this.multiline = false,
+    this.onSend,
+    this.glowIntensity = 0.0,
   });
 
   @override
   Widget build(BuildContext context) {
+    final hasGlow = glowIntensity > 0.0;
+    final borderColor = hasGlow
+        ? Color.lerp(AppTheme.border, AppTheme.accent, glowIntensity)!
+        : AppTheme.border;
+
     return Container(
       decoration: BoxDecoration(
         color: AppTheme.surfaceVariant,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border, width: 1),
+        border: Border.all(color: borderColor, width: hasGlow ? 1.5 : 1),
+        boxShadow: hasGlow
+            ? [
+                BoxShadow(
+                  color: AppTheme.accent.withValues(alpha: glowIntensity * 0.2),
+                  blurRadius: 20,
+                  spreadRadius: 1,
+                ),
+              ]
+            : null,
       ),
       child: TextField(
         controller: controller,
         focusNode: focusNode,
         onChanged: onChanged,
+        onSubmitted: multiline ? null : null,
+        textInputAction:
+            multiline ? TextInputAction.newline : TextInputAction.search,
+        maxLines: multiline ? 3 : 1,
+        minLines: multiline ? 2 : 1,
         style: const TextStyle(color: AppTheme.textPrimary, fontSize: 16),
         decoration: InputDecoration(
           hintText: hintText,
           hintStyle: const TextStyle(color: AppTheme.textSecondary),
-          prefixIcon: const Icon(Icons.search, color: AppTheme.textSecondary),
-          suffixIcon: controller.text.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.close, color: AppTheme.textSecondary),
-                  onPressed: () {
-                    controller.clear();
-                    onClear?.call();
-                  },
-                )
-              : null,
+          prefixIcon: _buildPrefixIcon(),
+          suffixIcon: _buildSuffixIcon(),
           filled: false,
           border: InputBorder.none,
           contentPadding:
@@ -51,5 +80,67 @@ class CantinarrSearchBar extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Widget _buildPrefixIcon() {
+    if (aiEnabled) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 12, right: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.auto_awesome,
+              size: 18,
+              color: AppTheme.accent.withValues(alpha: 0.7),
+            ),
+            const SizedBox(width: 6),
+            const Icon(Icons.search, size: 22, color: AppTheme.textSecondary),
+          ],
+        ),
+      );
+    }
+    return const Icon(Icons.search, color: AppTheme.textSecondary);
+  }
+
+  Widget? _buildSuffixIcon() {
+    if (multiline && controller.text.isNotEmpty) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.close, size: 20, color: AppTheme.textSecondary),
+            onPressed: () {
+              controller.clear();
+              onClear?.call();
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.send_rounded, color: AppTheme.accent),
+            onPressed: onSend,
+          ),
+        ],
+      );
+    }
+
+    if (controller.text.isNotEmpty) {
+      return IconButton(
+        icon: const Icon(Icons.close, color: AppTheme.textSecondary),
+        onPressed: () {
+          controller.clear();
+          onClear?.call();
+        },
+      );
+    }
+
+    if (multiline) {
+      return IconButton(
+        icon: Icon(Icons.send_rounded,
+            color: AppTheme.textSecondary.withValues(alpha: 0.5)),
+        onPressed: null,
+      );
+    }
+
+    return null;
   }
 }
