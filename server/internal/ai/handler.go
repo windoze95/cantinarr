@@ -68,7 +68,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	err := service.SendMessage(r.Context(), req.Messages, claims.UserID, onText)
+	onToolResult := func(toolName string, structuredData any) {
+		data, _ := json.Marshal(map[string]interface{}{
+			"media_results": structuredData,
+		})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	err := service.SendMessage(r.Context(), req.Messages, claims.UserID, onText, onToolResult)
 	if err != nil {
 		log.Printf("ai chat error: %v", err)
 		errData, _ := json.Marshal(map[string]string{"error": err.Error()})

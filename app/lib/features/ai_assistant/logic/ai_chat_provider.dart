@@ -74,16 +74,21 @@ class AiChatNotifier extends ChangeNotifier {
           .toList();
 
       final buffer = StringBuffer();
+      final mediaItems = <MediaResultItem>[];
       final responseId = _uuid.v4();
 
-      await for (final chunk
+      await for (final event
           in _chatService.sendMessage(messages: conversationMessages)) {
-        buffer.write(chunk);
+        switch (event) {
+          case TextChunkEvent(:final text):
+            buffer.write(text);
+          case MediaResultsEvent(:final items):
+            mediaItems.addAll(items);
+        }
 
         // Update the assistant message in-place for streaming effect
         final updatedMessages = List<ChatMessage>.from(state.messages);
 
-        // Find or create the streaming message
         final existingIdx =
             updatedMessages.indexWhere((m) => m.id == responseId);
         final streamingMessage = ChatMessage(
@@ -91,6 +96,7 @@ class AiChatNotifier extends ChangeNotifier {
           role: ChatRole.assistant,
           content: buffer.toString(),
           timestamp: DateTime.now(),
+          mediaResults: List.unmodifiable(mediaItems),
         );
 
         if (existingIdx >= 0) {
@@ -103,7 +109,7 @@ class AiChatNotifier extends ChangeNotifier {
       }
 
       // If no content was streamed, the response was empty
-      if (buffer.isEmpty) {
+      if (buffer.isEmpty && mediaItems.isEmpty) {
         _addMessage(ChatMessage(
           id: responseId,
           role: ChatRole.assistant,

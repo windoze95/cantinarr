@@ -88,8 +88,8 @@ type streamEvent struct {
 }
 
 // SendMessage handles the full conversation loop with tool execution.
-// It streams text back via the onText callback.
-func (s *Service) SendMessage(ctx context.Context, messages []Message, userID int64, onText func(string)) error {
+// It streams text back via onText and structured tool results via onToolResult.
+func (s *Service) SendMessage(ctx context.Context, messages []Message, userID int64, onText func(string), onToolResult func(string, any)) error {
 	tools := s.toolServer.GetTools()
 
 	for {
@@ -121,6 +121,10 @@ func (s *Service) SendMessage(ctx context.Context, messages []Message, userID in
 				resultText = fmt.Sprintf("Error: %s", err.Error())
 			} else {
 				resultText = toolResult.Text
+				// Send structured data to the frontend for rich UI rendering
+				if toolResult.StructuredData != nil && mcp.ToolsWithUI[block.Name] {
+					onToolResult(block.Name, toolResult.StructuredData)
+				}
 			}
 			toolResults = append(toolResults, ContentBlock{
 				Type:      "tool_result",
@@ -209,6 +213,11 @@ func (s *Service) parseSSEStream(reader io.Reader, onText func(string)) (*anthro
 		case "content_block_start":
 			if event.ContentBlock != nil {
 				block := *event.ContentBlock
+				// Clear the initial empty input from tool_use blocks;
+				// the real input arrives via input_json_delta events.
+				if block.Type == "tool_use" {
+					block.Input = nil
+				}
 				currentBlock = &block
 			}
 
