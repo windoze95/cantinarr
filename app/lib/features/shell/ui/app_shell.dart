@@ -694,27 +694,31 @@ class _AppShellState extends ConsumerState<AppShell>
           ),
           const Divider(color: AppTheme.border),
 
-          // Module navigation items
-          ...moduleState.modules.asMap().entries.map((entry) {
-            final module = entry.value;
-            final isActive = entry.key == moduleState.activeIndex;
+          // Scrollable module navigation items
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: moduleState.modules.asMap().entries.map((entry) {
+                final module = entry.value;
+                final isActive = entry.key == moduleState.activeIndex;
 
-            return _DrawerItem(
-              icon: module.icon,
-              title: module.label,
-              selected: isActive,
-              onTap: () {
-                if (isOverlay) Navigator.pop(context);
-                _navigateToModule(context, module);
-                ref.read(moduleProvider.notifier).setActiveModule(
-                      module.type,
-                      instanceId: module.instanceId,
-                    );
-              },
-            );
-          }),
+                return _DrawerItem(
+                  icon: module.icon,
+                  title: module.label,
+                  selected: isActive,
+                  onTap: () {
+                    if (isOverlay) Navigator.pop(context);
+                    _navigateToModule(context, module);
+                    ref.read(moduleProvider.notifier).setActiveModule(
+                          module.type,
+                          instanceId: module.instanceId,
+                        );
+                  },
+                );
+              }).toList(),
+            ),
+          ),
 
-          const Spacer(),
           const Divider(color: AppTheme.border),
 
           _DrawerItem(
