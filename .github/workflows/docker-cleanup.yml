@@ -1,0 +1,30 @@
+name: Cleanup PR Docker Image
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Delete PR container image
+        env:
+          PR_TAG: pr-${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PACKAGE="cantinarr"
+
+          VERSION_ID=$(gh api \
+            "/users/windoze95/packages/container/${PACKAGE}/versions" \
+            --paginate --jq ".[] | select(.metadata.container.tags[] == \"${PR_TAG}\") | .id")
+
+          if [ -n "$VERSION_ID" ]; then
+            echo "Deleting image tagged ${PR_TAG} (version ID: ${VERSION_ID})"
+            gh api --method DELETE \
+              "/users/windoze95/packages/container/${PACKAGE}/versions/${VERSION_ID}"
+          else
+            echo "No image found with tag ${PR_TAG}, skipping."
+          fi
