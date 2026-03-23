@@ -11,8 +11,8 @@ class AiChatService {
 
   AiChatService({required Dio backendDio}) : _backendDio = backendDio;
 
-  /// Send messages and stream the response text chunks via SSE.
-  Stream<String> sendMessage({
+  /// Send messages and stream response events (text chunks + media results) via SSE.
+  Stream<ChatStreamEvent> sendMessage({
     required List<ChatMessage> messages,
   }) async* {
     final apiMessages = messages
@@ -48,13 +48,23 @@ class AiChatService {
 
             try {
               final json = jsonDecode(data) as Map<String, dynamic>;
-              final text = json['text'] as String?;
-              if (text != null && text.isNotEmpty) {
-                yield text;
+              if (json.containsKey('text')) {
+                final text = json['text'] as String?;
+                if (text != null && text.isNotEmpty) {
+                  yield TextChunkEvent(text);
+                }
+              } else if (json.containsKey('media_results')) {
+                final items = (json['media_results'] as List)
+                    .map((e) =>
+                        MediaResultItem.fromJson(e as Map<String, dynamic>))
+                    .toList();
+                if (items.isNotEmpty) {
+                  yield MediaResultsEvent(items);
+                }
               }
             } catch (_) {
               // If it's not JSON, yield the raw data as text
-              if (data.isNotEmpty) yield data;
+              if (data.isNotEmpty) yield TextChunkEvent(data);
             }
           }
         }
