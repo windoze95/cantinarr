@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/ai_models.dart';
@@ -106,9 +107,13 @@ class _MediaResultCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final imageUrl = AppConfig.tmdbPoster(item.posterPath, width: 342);
 
-    return SizedBox(
-      width: 110,
-      child: Column(
+    final mediaType = item.mediaType ?? 'movie';
+
+    return GestureDetector(
+      onTap: () => context.push('/detail/$mediaType/${item.id}'),
+      child: SizedBox(
+        width: 110,
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Poster
@@ -194,6 +199,7 @@ class _MediaResultCard extends StatelessWidget {
           ),
         ],
       ),
+    ),
     );
   }
 }
