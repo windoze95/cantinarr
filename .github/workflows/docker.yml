@@ -9,7 +9,23 @@ on:
       - "server/**"
       - "Dockerfile"
       - ".github/workflows/docker.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "server/**"
+      - "Dockerfile"
+      - ".github/workflows/docker.yml"
   workflow_dispatch:
+    inputs:
+      multi-arch:
+        description: "Build for arm64 in addition to amd64"
+        type: boolean
+        default: false
+
+concurrency:
+  group: docker-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -22,6 +38,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up QEMU
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -44,12 +61,13 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
+            type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch) && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
