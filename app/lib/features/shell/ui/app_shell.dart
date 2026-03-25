@@ -173,6 +173,14 @@ class _AppShellState extends ConsumerState<AppShell>
           );
         }
         _getOrCreateAiChat();
+        // Re-request focus after the frame rebuilds so the new AI chat
+        // text field picks it up seamlessly (the old search bar is removed
+        // from the tree, which drops focus on the shared FocusNode).
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_searchFocusNode.hasFocus) {
+            _searchFocusNode.requestFocus();
+          }
+        });
 
       case SearchMode.search:
         _aiTransitionTimer?.cancel();
