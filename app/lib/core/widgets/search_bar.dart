@@ -65,6 +65,7 @@ class CantinarrSearchBar extends StatelessWidget {
       child: TextField(
         controller: controller,
         focusNode: focusNode,
+        keyboardType: TextInputType.text,
         onChanged: onChanged,
         onSubmitted: multiline ? null : null,
         textInputAction:
