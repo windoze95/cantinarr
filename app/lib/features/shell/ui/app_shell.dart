@@ -7,6 +7,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/search_bar.dart';
+import '../../../core/widgets/shimmer_border.dart';
 import '../../ai_assistant/data/ai_chat_service.dart';
 import '../../ai_assistant/data/ai_models.dart';
 import '../../ai_assistant/logic/ai_chat_provider.dart';
@@ -54,6 +55,9 @@ class _AppShellState extends ConsumerState<AppShell>
   // Glow pulse for no-results state
   late final AnimationController _glowAnim;
 
+  // Shimmer sweep rotation for aiReady state
+  late final AnimationController _shimmerRotationAnim;
+
   // Shell-scoped AI chat notifier (lazy)
   AiChatNotifier? _aiChatNotifier;
   Timer? _aiTransitionTimer;
@@ -82,6 +86,10 @@ class _AppShellState extends ConsumerState<AppShell>
     _glowAnim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
+    );
+    _shimmerRotationAnim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 3000),
     );
     WidgetsBinding.instance.addPostFrameCallback((_) => _initLibraries());
   }
@@ -150,7 +158,8 @@ class _AppShellState extends ConsumerState<AppShell>
     switch (mode) {
       case SearchMode.noResults:
         _glowAnim.repeat(reverse: true);
-        // Auto-transition to AI chat after glow delay
+        _shimmerRotationAnim.stop();
+        // Auto-transition to aiReady after glow delay
         _aiTransitionTimer?.cancel();
         _aiTransitionTimer = Timer(const Duration(milliseconds: 800), () {
           if (mounted) {
@@ -158,13 +167,21 @@ class _AppShellState extends ConsumerState<AppShell>
           }
         });
 
-      case SearchMode.aiChat:
+      case SearchMode.aiReady:
         _aiTransitionTimer?.cancel();
         _glowAnim.stop();
         _glowAnim.value = 0;
+        _shimmerRotationAnim.repeat();
+        _getOrCreateAiChat();
+
+      case SearchMode.aiChat:
+        _aiTransitionTimer?.cancel();
+        _shimmerRotationAnim.stop();
+        _shimmerRotationAnim.value = 0;
+        _glowAnim.stop();
+        _glowAnim.value = 0;
         _aiModeAnim.forward();
-        // Keep the original query in the input so the user can edit
-        // or send it when ready — don't auto-send.
+        // Transfer query text to the bottom input and re-request focus
         final query = ref.read(shellSearchProvider).searchQuery;
         if (query.isNotEmpty && _searchController.text != query) {
           _searchController.text = query;
@@ -173,9 +190,6 @@ class _AppShellState extends ConsumerState<AppShell>
           );
         }
         _getOrCreateAiChat();
-        // Re-request focus after the frame rebuilds so the new AI chat
-        // text field picks it up seamlessly (the old search bar is removed
-        // from the tree, which drops focus on the shared FocusNode).
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && !_searchFocusNode.hasFocus) {
             _searchFocusNode.requestFocus();
@@ -186,6 +200,8 @@ class _AppShellState extends ConsumerState<AppShell>
         _aiTransitionTimer?.cancel();
         _glowAnim.stop();
         _glowAnim.value = 0;
+        _shimmerRotationAnim.stop();
+        _shimmerRotationAnim.value = 0;
         _aiModeAnim.reverse();
     }
   }
@@ -201,6 +217,15 @@ class _AppShellState extends ConsumerState<AppShell>
     if (text.isEmpty || _aiChatNotifier == null) return;
     _searchController.clear();
     _aiChatNotifier!.sendMessage(text);
+  }
+
+  /// Submit from the aiReady state: transition to full chat and send message.
+  void _submitFromAiReady() {
+    final text = _searchController.text.trim();
+    if (text.isEmpty) return;
+    ref.read(shellSearchProvider.notifier).submitAiReady();
+    _searchController.clear();
+    _getOrCreateAiChat().sendMessage(text);
   }
 
   Map<int, LibraryStatus> _buildLibraryStatus(
@@ -288,6 +313,7 @@ class _AppShellState extends ConsumerState<AppShell>
     _searchBarAnim.dispose();
     _aiModeAnim.dispose();
     _glowAnim.dispose();
+    _shimmerRotationAnim.dispose();
     _chatScrollController.dispose();
     _aiChatNotifier?.removeListener(_onAiChatChanged);
     _aiChatNotifier?.dispose();
@@ -315,16 +341,38 @@ class _AppShellState extends ConsumerState<AppShell>
     _onSearchModeChanged(searchState.searchMode);
 
     final isAiMode = searchState.searchMode == SearchMode.aiChat;
+    final isAiReady = searchState.searchMode == SearchMode.aiReady;
 
     final searchBar = Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 16 : 4, 8, 16, 8),
-      child: CantinarrSearchBar(
-        controller: _searchController,
-        focusNode: _searchFocusNode,
-        hintText: hasAi ? 'Search or ask AI...' : 'Search movies & TV shows...',
-        aiEnabled: hasAi,
-        onChanged: isAiMode ? null : (q) => searchNotifier.updateSearch(q),
-        onClear: isAiMode ? _exitAiMode : () => searchNotifier.updateSearch(''),
+      child: AnimatedBuilder(
+        animation: _shimmerRotationAnim,
+        builder: (context, child) {
+          return CustomPaint(
+            foregroundPainter: isAiReady
+                ? ShimmerBorderPainter(
+                    progress: _shimmerRotationAnim.value,
+                    borderRadius: 14.0,
+                    accentColor: AppTheme.accent,
+                  )
+                : null,
+            child: child,
+          );
+        },
+        child: CantinarrSearchBar(
+          controller: _searchController,
+          focusNode: _searchFocusNode,
+          hintText: isAiReady
+              ? 'Edit your question or press send...'
+              : (hasAi ? 'Search or ask AI...' : 'Search movies & TV shows...'),
+          aiEnabled: hasAi,
+          maxLines: isAiReady ? 5 : null,
+          onSend: isAiReady ? _submitFromAiReady : null,
+          onChanged: isAiMode ? null : (q) => searchNotifier.updateSearch(q),
+          onClear: isAiReady || isAiMode
+              ? _exitAiMode
+              : () => searchNotifier.updateSearch(''),
+        ),
       ),
     );
 
@@ -369,12 +417,40 @@ class _AppShellState extends ConsumerState<AppShell>
                 ],
                 // Module content (includes its own bottom nav)
                 Expanded(
-                  child: NotificationListener<ScrollNotification>(
-                    onNotification:
-                        mobile && !searchState.isSearching && !isAiMode
-                            ? _handleScrollNotification
-                            : null,
-                    child: widget.child,
+                  child: Stack(
+                    children: [
+                      NotificationListener<ScrollNotification>(
+                        onNotification:
+                            mobile && !searchState.isSearching && !isAiMode && !isAiReady
+                                ? _handleScrollNotification
+                                : null,
+                        child: widget.child,
+                      ),
+                      if (isAiReady)
+                        Positioned.fill(
+                          child: Container(
+                            color: AppTheme.background,
+                            child: Column(
+                              children: [
+                                const SizedBox(height: 48),
+                                Icon(
+                                  Icons.auto_awesome,
+                                  size: 32,
+                                  color: AppTheme.accent.withValues(alpha: 0.5),
+                                ),
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'Press send to ask AI',
+                                  style: TextStyle(
+                                    color: AppTheme.textSecondary,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],

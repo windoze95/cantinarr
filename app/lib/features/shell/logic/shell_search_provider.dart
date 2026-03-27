@@ -14,6 +14,9 @@ enum SearchMode {
   /// No results found and AI is available — glow transition state.
   noResults,
 
+  /// AI ready — search bar stays at top, expands to multiline with shimmer glow.
+  aiReady,
+
   /// AI chat mode — bar at bottom (multiline), chat messages above.
   aiChat,
 }
@@ -76,6 +79,12 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
       return;
     }
 
+    // In aiReady mode, just update the query text — don't re-search TMDB.
+    if (state.searchMode == SearchMode.aiReady) {
+      state = state.copyWith(searchQuery: query);
+      return;
+    }
+
     state = state.copyWith(
       searchQuery: query,
       isLoadingSearch: true,
@@ -116,10 +125,17 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
     }
   }
 
-  /// Transition from noResults to AI chat mode.
+  /// Transition from noResults to AI-ready mode (expanded search bar + shimmer).
   void activateAiChat() {
     if (state.searchMode == SearchMode.noResults) {
-      state = state.copyWith(searchMode: SearchMode.aiChat);
+      state = state.copyWith(searchMode: SearchMode.aiReady);
+    }
+  }
+
+  /// Transition from aiReady to full AI chat mode (after user submits).
+  void submitAiReady() {
+    if (state.searchMode == SearchMode.aiReady) {
+      state = state.copyWith(searchMode: SearchMode.aiChat, searchQuery: '');
     }
   }
 
