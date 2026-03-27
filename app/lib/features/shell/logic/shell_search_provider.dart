@@ -135,7 +135,7 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
   /// Transition from aiReady to full AI chat mode (after user submits).
   void submitAiReady() {
     if (state.searchMode == SearchMode.aiReady) {
-      state = state.copyWith(searchMode: SearchMode.aiChat);
+      state = state.copyWith(searchMode: SearchMode.aiChat, searchQuery: '');
     }
   }
 
