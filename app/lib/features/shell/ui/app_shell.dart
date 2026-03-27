@@ -336,7 +336,6 @@ class _AppShellState extends ConsumerState<AppShell>
               ? 'Edit your question or press send...'
               : (hasAi ? 'Search or ask AI...' : 'Search movies & TV shows...'),
           aiEnabled: hasAi,
-          maxLines: isAiReady ? 5 : null,
           onSend: isAiReady ? _submitFromAiReady : null,
           onChanged: isAiMode ? null : (q) => searchNotifier.updateSearch(q),
           onClear: isAiReady || isAiMode
