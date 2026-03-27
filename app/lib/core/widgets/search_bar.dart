@@ -89,20 +89,10 @@ class CantinarrSearchBar extends StatelessWidget {
 
   Widget _buildPrefixIcon() {
     if (aiEnabled) {
-      return Padding(
-        padding: const EdgeInsets.only(left: 12, right: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.auto_awesome,
-              size: 18,
-              color: AppTheme.accent.withValues(alpha: 0.7),
-            ),
-            const SizedBox(width: 6),
-            const Icon(Icons.search, size: 22, color: AppTheme.textSecondary),
-          ],
-        ),
+      return Icon(
+        Icons.auto_awesome,
+        size: 20,
+        color: AppTheme.accent.withValues(alpha: 0.7),
       );
     }
     return const Icon(Icons.search, color: AppTheme.textSecondary);
