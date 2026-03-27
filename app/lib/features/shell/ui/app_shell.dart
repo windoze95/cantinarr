@@ -334,7 +334,7 @@ class _AppShellState extends ConsumerState<AppShell>
           focusNode: _searchFocusNode,
           hintText: isAiReady
               ? 'Edit your question or press send...'
-              : (hasAi ? 'Search or ask AI...' : 'Search movies & TV shows...'),
+              : (hasAi ? 'Search or ask AI...' : 'Search by title or person...'),
           aiEnabled: hasAi,
           onSend: isAiReady ? _submitFromAiReady : null,
           onChanged: isAiMode ? null : (q) => searchNotifier.updateSearch(q),
