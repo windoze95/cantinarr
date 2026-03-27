@@ -107,7 +107,7 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
         state = state.copyWith(
           searchResults: [],
           isLoadingSearch: false,
-          searchMode: SearchMode.noResults,
+          searchMode: SearchMode.aiReady,
         );
       } else {
         state = state.copyWith(
@@ -122,13 +122,6 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
         isLoadingSearch: false,
         error: 'Search failed: $e',
       );
-    }
-  }
-
-  /// Transition from noResults to AI-ready mode (expanded search bar + shimmer).
-  void activateAiChat() {
-    if (state.searchMode == SearchMode.noResults) {
-      state = state.copyWith(searchMode: SearchMode.aiReady);
     }
   }
 

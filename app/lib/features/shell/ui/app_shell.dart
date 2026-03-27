@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -52,15 +51,11 @@ class _AppShellState extends ConsumerState<AppShell>
   late final AnimationController _aiModeAnim;
   late final Animation<double> _aiModeCurve;
 
-  // Glow pulse for no-results state
-  late final AnimationController _glowAnim;
-
   // Shimmer sweep rotation for aiReady state
   late final AnimationController _shimmerRotationAnim;
 
   // Shell-scoped AI chat notifier (lazy)
   AiChatNotifier? _aiChatNotifier;
-  Timer? _aiTransitionTimer;
   SearchMode _prevMode = SearchMode.search;
 
   @override
@@ -82,10 +77,6 @@ class _AppShellState extends ConsumerState<AppShell>
     _aiModeCurve = CurvedAnimation(
       parent: _aiModeAnim,
       curve: Curves.easeInOutCubic,
-    );
-    _glowAnim = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
     );
     _shimmerRotationAnim = AnimationController(
       vsync: this,
@@ -157,29 +148,13 @@ class _AppShellState extends ConsumerState<AppShell>
 
     switch (mode) {
       case SearchMode.noResults:
-        _glowAnim.repeat(reverse: true);
-        _shimmerRotationAnim.stop();
-        // Auto-transition to aiReady after glow delay
-        _aiTransitionTimer?.cancel();
-        _aiTransitionTimer = Timer(const Duration(milliseconds: 800), () {
-          if (mounted) {
-            ref.read(shellSearchProvider.notifier).activateAiChat();
-          }
-        });
-
       case SearchMode.aiReady:
-        _aiTransitionTimer?.cancel();
-        _glowAnim.stop();
-        _glowAnim.value = 0;
         _shimmerRotationAnim.repeat();
         _getOrCreateAiChat();
 
       case SearchMode.aiChat:
-        _aiTransitionTimer?.cancel();
         _shimmerRotationAnim.stop();
         _shimmerRotationAnim.value = 0;
-        _glowAnim.stop();
-        _glowAnim.value = 0;
         _aiModeAnim.forward();
         // Transfer query text to the bottom input and re-request focus
         final query = ref.read(shellSearchProvider).searchQuery;
@@ -197,9 +172,6 @@ class _AppShellState extends ConsumerState<AppShell>
         });
 
       case SearchMode.search:
-        _aiTransitionTimer?.cancel();
-        _glowAnim.stop();
-        _glowAnim.value = 0;
         _shimmerRotationAnim.stop();
         _shimmerRotationAnim.value = 0;
         _aiModeAnim.reverse();
@@ -309,10 +281,8 @@ class _AppShellState extends ConsumerState<AppShell>
 
   @override
   void dispose() {
-    _aiTransitionTimer?.cancel();
     _searchBarAnim.dispose();
     _aiModeAnim.dispose();
-    _glowAnim.dispose();
     _shimmerRotationAnim.dispose();
     _chatScrollController.dispose();
     _aiChatNotifier?.removeListener(_onAiChatChanged);
@@ -473,13 +443,6 @@ class _AppShellState extends ConsumerState<AppShell>
                 ),
               ),
 
-            // Overlay: no-results glow transition
-            if (searchState.searchMode == SearchMode.noResults)
-              Positioned.fill(
-                top: 60,
-                child: _buildNoResultsGlow(searchState.searchQuery),
-              ),
-
             // Overlay: AI chat mode
             if (isAiMode) _buildAiChatOverlay(),
 
@@ -528,68 +491,6 @@ class _AppShellState extends ConsumerState<AppShell>
     }
 
     return scaffold;
-  }
-
-  /// Glow state: pulsing gold container with "Asking AI..." label.
-  Widget _buildNoResultsGlow(String query) {
-    return AnimatedBuilder(
-      animation: _glowAnim,
-      builder: (context, _) {
-        final glowValue = _glowAnim.value;
-        return Container(
-          decoration: BoxDecoration(
-            color: AppTheme.background,
-            border: Border(
-              top: BorderSide(
-                color: AppTheme.accent.withValues(alpha: 0.3 + glowValue * 0.5),
-                width: 1.5,
-              ),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: AppTheme.accent.withValues(alpha: glowValue * 0.15),
-                blurRadius: 24,
-                spreadRadius: 0,
-                offset: const Offset(0, -4),
-              ),
-            ],
-          ),
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.auto_awesome,
-                  size: 40,
-                  color: AppTheme.accent.withValues(alpha: 0.6 + glowValue * 0.4),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'No results for "$query"',
-                  style: const TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 16,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                AnimatedOpacity(
-                  opacity: glowValue > 0.3 ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 300),
-                  child: Text(
-                    'Asking AI...',
-                    style: TextStyle(
-                      color: AppTheme.accent.withValues(alpha: 0.8),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
   }
 
   /// AI chat overlay: messages above, multiline input at bottom.
