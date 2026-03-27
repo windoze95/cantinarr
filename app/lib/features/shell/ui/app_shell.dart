@@ -343,38 +343,36 @@ class _AppShellState extends ConsumerState<AppShell>
     final isAiMode = searchState.searchMode == SearchMode.aiChat;
     final isAiReady = searchState.searchMode == SearchMode.aiReady;
 
-    final searchBarWidget = isAiReady
-        ? ShimmerBorderWrapper(
-            animation: _shimmerRotationAnim,
-            borderRadius: 14.0,
-            accentColor: AppTheme.accent,
-            child: CantinarrSearchBar(
-              controller: _searchController,
-              focusNode: _searchFocusNode,
-              hintText: 'Edit your question or press send...',
-              aiEnabled: true,
-              multiline: true,
-              onSend: _submitFromAiReady,
-              onChanged: (q) => searchNotifier.updateSearch(q),
-              onClear: _exitAiMode,
-            ),
-          )
-        : CantinarrSearchBar(
-            controller: _searchController,
-            focusNode: _searchFocusNode,
-            hintText: hasAi ? 'Search or ask AI...' : 'Search movies & TV shows...',
-            aiEnabled: hasAi,
-            onChanged: isAiMode ? null : (q) => searchNotifier.updateSearch(q),
-            onClear: isAiMode ? _exitAiMode : () => searchNotifier.updateSearch(''),
-          );
-
     final searchBar = Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 16 : 4, 8, 16, 8),
-      child: AnimatedSize(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOutCubic,
-        alignment: Alignment.topCenter,
-        child: searchBarWidget,
+      child: AnimatedBuilder(
+        animation: _shimmerRotationAnim,
+        builder: (context, child) {
+          return CustomPaint(
+            foregroundPainter: isAiReady
+                ? ShimmerBorderPainter(
+                    progress: _shimmerRotationAnim.value,
+                    borderRadius: 14.0,
+                    accentColor: AppTheme.accent,
+                  )
+                : null,
+            child: child,
+          );
+        },
+        child: CantinarrSearchBar(
+          controller: _searchController,
+          focusNode: _searchFocusNode,
+          hintText: isAiReady
+              ? 'Edit your question or press send...'
+              : (hasAi ? 'Search or ask AI...' : 'Search movies & TV shows...'),
+          aiEnabled: hasAi,
+          maxLines: isAiReady ? 3 : null,
+          onSend: isAiReady ? _submitFromAiReady : null,
+          onChanged: isAiMode ? null : (q) => searchNotifier.updateSearch(q),
+          onClear: isAiReady || isAiMode
+              ? _exitAiMode
+              : () => searchNotifier.updateSearch(''),
+        ),
       ),
     );
 

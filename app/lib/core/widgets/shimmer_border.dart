@@ -26,7 +26,7 @@ class ShimmerBorderWrapper extends StatelessWidget {
       animation: animation,
       builder: (context, child) {
         return CustomPaint(
-          foregroundPainter: _ShimmerBorderPainter(
+          foregroundPainter: ShimmerBorderPainter(
             progress: animation.value,
             borderRadius: borderRadius,
             accentColor: accentColor,
@@ -39,12 +39,12 @@ class ShimmerBorderWrapper extends StatelessWidget {
   }
 }
 
-class _ShimmerBorderPainter extends CustomPainter {
+class ShimmerBorderPainter extends CustomPainter {
   final double progress;
   final double borderRadius;
   final Color accentColor;
 
-  _ShimmerBorderPainter({
+  ShimmerBorderPainter({
     required this.progress,
     required this.borderRadius,
     required this.accentColor,
@@ -91,5 +91,5 @@ class _ShimmerBorderPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_ShimmerBorderPainter old) => old.progress != progress;
+  bool shouldRepaint(ShimmerBorderPainter old) => old.progress != progress;
 }
