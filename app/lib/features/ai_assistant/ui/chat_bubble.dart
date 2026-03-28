@@ -39,6 +39,24 @@ class ChatBubble extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Media result cards (rendered first so interactive
+                // content isn't pushed down while text streams in)
+                if (message.mediaResults.isNotEmpty) ...[
+                  SizedBox(
+                    height: 200,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: message.mediaResults.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        return _MediaResultCard(
+                            item: message.mediaResults[index]);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+
                 // Text bubble
                 if (message.content.isNotEmpty)
                   Container(
@@ -70,23 +88,6 @@ class ChatBubble extends StatelessWidget {
                       ),
                     ),
                   ),
-
-                // Media result cards
-                if (message.mediaResults.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 200,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: message.mediaResults.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (context, index) {
-                        return _MediaResultCard(
-                            item: message.mediaResults[index]);
-                      },
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
