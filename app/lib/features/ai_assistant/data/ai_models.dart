@@ -5,6 +5,7 @@ class ChatMessage {
   final String content;
   final DateTime timestamp;
   final List<MediaResultItem> mediaResults;
+  final bool isStreaming;
 
   const ChatMessage({
     required this.id,
@@ -12,11 +13,13 @@ class ChatMessage {
     required this.content,
     required this.timestamp,
     this.mediaResults = const [],
+    this.isStreaming = false,
   });
 
   ChatMessage copyWith({
     String? content,
     List<MediaResultItem>? mediaResults,
+    bool? isStreaming,
   }) =>
       ChatMessage(
         id: id,
@@ -24,6 +27,7 @@ class ChatMessage {
         content: content ?? this.content,
         timestamp: timestamp,
         mediaResults: mediaResults ?? this.mediaResults,
+        isStreaming: isStreaming ?? this.isStreaming,
       );
 
   Map<String, dynamic> toApiMessage() => {

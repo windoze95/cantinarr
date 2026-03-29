@@ -97,6 +97,7 @@ class AiChatNotifier extends ChangeNotifier {
           content: buffer.toString(),
           timestamp: DateTime.now(),
           mediaResults: List.unmodifiable(mediaItems),
+          isStreaming: true,
         );
 
         if (existingIdx >= 0) {
@@ -106,6 +107,15 @@ class AiChatNotifier extends ChangeNotifier {
         }
 
         state = state.copyWith(messages: updatedMessages);
+      }
+
+      // Mark the streamed message as complete
+      final finalMessages = List<ChatMessage>.from(state.messages);
+      final doneIdx = finalMessages.indexWhere((m) => m.id == responseId);
+      if (doneIdx >= 0) {
+        finalMessages[doneIdx] =
+            finalMessages[doneIdx].copyWith(isStreaming: false);
+        state = state.copyWith(messages: finalMessages);
       }
 
       // If no content was streamed, the response was empty
