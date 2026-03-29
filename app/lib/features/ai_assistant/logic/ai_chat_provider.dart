@@ -66,6 +66,8 @@ class AiChatNotifier extends ChangeNotifier {
 
     state = state.copyWith(isLoading: true, error: null);
 
+    final responseId = _uuid.v4();
+
     try {
       // Build conversation history (skip welcome message)
       final conversationMessages = state.messages
@@ -75,7 +77,6 @@ class AiChatNotifier extends ChangeNotifier {
 
       final buffer = StringBuffer();
       final mediaItems = <MediaResultItem>[];
-      final responseId = _uuid.v4();
 
       await for (final event
           in _chatService.sendMessage(messages: conversationMessages)) {
@@ -130,7 +131,16 @@ class AiChatNotifier extends ChangeNotifier {
 
       state = state.copyWith(isLoading: false);
     } catch (e) {
+      // Clear streaming flag on any partial message so media cards are shown
+      final errMessages = List<ChatMessage>.from(state.messages);
+      final errIdx = errMessages.indexWhere((m) => m.id == responseId);
+      if (errIdx >= 0) {
+        errMessages[errIdx] =
+            errMessages[errIdx].copyWith(isStreaming: false);
+      }
+
       state = state.copyWith(
+        messages: errIdx >= 0 ? errMessages : null,
         isLoading: false,
         error:
             'Failed to get response: ${e.toString().length > 100 ? '${e.toString().substring(0, 100)}...' : e}',
