@@ -82,6 +82,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.requestMedia(input, userID)
 	case "list_my_requests":
 		return s.listMyRequests(userID)
+	case "display_media":
+		return s.displayMedia(input)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}

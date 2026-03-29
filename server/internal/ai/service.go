@@ -27,7 +27,8 @@ Guidelines:
 - Always check request status before suggesting a request
 - When recommending content, include title, year, and a brief description
 - If a user asks to request something, use the request_media tool
-- Format lists neatly with bullets or numbers`
+- Format lists neatly with bullets or numbers
+- IMPORTANT: After selecting specific items to recommend, you MUST call the display_media tool with those items' TMDB IDs and media types. This controls which items appear in the visual carousel the user sees. Order items by relevance. Search results alone do NOT populate the carousel — only display_media does.`
 )
 
 // Message represents a chat message sent to/from the Anthropic API.
