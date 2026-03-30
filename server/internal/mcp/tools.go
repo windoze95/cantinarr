@@ -151,6 +151,36 @@ var toolDefinitions = []Tool{
 			"properties": map[string]interface{}{},
 		},
 	},
+	{
+		Name:        "display_media",
+		Description: "Display specific movies or TV shows in the UI carousel. Call this after searching to show only the items you want to recommend. The carousel will display items in the order provided.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"items": map[string]interface{}{
+					"type":        "array",
+					"description": "List of media items to display, ordered by relevance (max 10)",
+					"maxItems":    10,
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"tmdb_id": map[string]interface{}{
+								"type":        "integer",
+								"description": "The TMDB ID of the movie or TV show",
+							},
+							"media_type": map[string]interface{}{
+								"type":        "string",
+								"enum":        []string{"movie", "tv"},
+								"description": "Whether this is a movie or TV show",
+							},
+						},
+						"required": []string{"tmdb_id", "media_type"},
+					},
+				},
+			},
+			"required": []string{"items"},
+		},
+	},
 }
 
 // MediaResultItem is the structured data the MCP App UI renders.
@@ -173,10 +203,7 @@ type ToolResult struct {
 
 // ToolsWithUI is the set of tool names that have MCP App UI attached.
 var ToolsWithUI = map[string]bool{
-	"search_movies":       true,
-	"search_tv_shows":     true,
-	"get_trending":        true,
-	"get_recommendations": true,
+	"display_media": true,
 }
 
 func toMediaResultItems(results []tmdb.SearchResult, limit int) []MediaResultItem {
@@ -408,6 +435,83 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	}
 	data, _ := json.Marshal(resp)
 	return &ToolResult{Text: string(data)}, nil
+}
+
+const maxDisplayMediaItems = 10
+
+func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
+	tmdbClient := s.creds.TMDB()
+	if tmdbClient == nil {
+		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
+	}
+	var params struct {
+		Items []struct {
+			TmdbID    int    `json:"tmdb_id"`
+			MediaType string `json:"media_type"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	if len(params.Items) > maxDisplayMediaItems {
+		params.Items = params.Items[:maxDisplayMediaItems]
+	}
+
+	items := make([]MediaResultItem, 0, len(params.Items))
+	var failures []string
+	for _, p := range params.Items {
+		switch p.MediaType {
+		case "movie":
+			movie, err := tmdbClient.GetMovieDetails(p.TmdbID)
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("movie %d: %s", p.TmdbID, err.Error()))
+				continue
+			}
+			year := ""
+			if len(movie.ReleaseDate) >= 4 {
+				year = movie.ReleaseDate[:4]
+			}
+			items = append(items, MediaResultItem{
+				ID:          movie.ID,
+				Title:       movie.Title,
+				Year:        year,
+				PosterPath:  movie.PosterPath,
+				VoteAverage: movie.VoteAverage,
+				Overview:    movie.Overview,
+				MediaType:   "movie",
+			})
+		case "tv":
+			tv, err := tmdbClient.GetTVDetails(p.TmdbID)
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("tv %d: %s", p.TmdbID, err.Error()))
+				continue
+			}
+			year := ""
+			if len(tv.FirstAir) >= 4 {
+				year = tv.FirstAir[:4]
+			}
+			items = append(items, MediaResultItem{
+				ID:          tv.ID,
+				Title:       tv.Name,
+				Year:        year,
+				PosterPath:  tv.PosterPath,
+				VoteAverage: tv.VoteAverage,
+				Overview:    tv.Overview,
+				MediaType:   "tv",
+			})
+		}
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Displaying %d media item(s) in the carousel.", len(items))
+	if len(failures) > 0 {
+		fmt.Fprintf(&sb, " Failed to fetch %d item(s): %s", len(failures), strings.Join(failures, "; "))
+	}
+
+	return &ToolResult{
+		Text:           sb.String(),
+		StructuredData: items,
+	}, nil
 }
 
 func (s *ToolServer) listMyRequests(userID int64) (*ToolResult, error) {

@@ -43,16 +43,22 @@ type ExternalIDs struct {
 }
 
 type MovieDetails struct {
-	ID          int    `json:"id"`
-	Title       string `json:"title"`
-	ReleaseDate string `json:"release_date"`
-	IMDBID      string `json:"imdb_id"`
+	ID          int     `json:"id"`
+	Title       string  `json:"title"`
+	ReleaseDate string  `json:"release_date"`
+	IMDBID      string  `json:"imdb_id"`
+	PosterPath  string  `json:"poster_path,omitempty"`
+	Overview    string  `json:"overview,omitempty"`
+	VoteAverage float64 `json:"vote_average,omitempty"`
 }
 
 type TVDetails struct {
-	ID       int    `json:"id"`
-	Name     string `json:"name"`
-	FirstAir string `json:"first_air_date"`
+	ID          int     `json:"id"`
+	Name        string  `json:"name"`
+	FirstAir    string  `json:"first_air_date"`
+	PosterPath  string  `json:"poster_path,omitempty"`
+	Overview    string  `json:"overview,omitempty"`
+	VoteAverage float64 `json:"vote_average,omitempty"`
 }
 
 // DoGetRaw fetches a TMDB API path and returns the raw JSON bytes.
