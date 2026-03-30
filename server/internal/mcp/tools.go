@@ -159,7 +159,8 @@ var toolDefinitions = []Tool{
 			"properties": map[string]interface{}{
 				"items": map[string]interface{}{
 					"type":        "array",
-					"description": "List of media items to display, ordered by relevance",
+					"description": "List of media items to display, ordered by relevance (max 10)",
+					"maxItems":    10,
 					"items": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
@@ -436,6 +437,8 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	return &ToolResult{Text: string(data)}, nil
 }
 
+const maxDisplayMediaItems = 10
+
 func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
@@ -450,13 +453,18 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
+	if len(params.Items) > maxDisplayMediaItems {
+		params.Items = params.Items[:maxDisplayMediaItems]
+	}
 
 	items := make([]MediaResultItem, 0, len(params.Items))
+	var failures []string
 	for _, p := range params.Items {
 		switch p.MediaType {
 		case "movie":
 			movie, err := tmdbClient.GetMovieDetails(p.TmdbID)
 			if err != nil {
+				failures = append(failures, fmt.Sprintf("movie %d: %s", p.TmdbID, err.Error()))
 				continue
 			}
 			year := ""
@@ -475,6 +483,7 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 		case "tv":
 			tv, err := tmdbClient.GetTVDetails(p.TmdbID)
 			if err != nil {
+				failures = append(failures, fmt.Sprintf("tv %d: %s", p.TmdbID, err.Error()))
 				continue
 			}
 			year := ""
@@ -493,8 +502,14 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 		}
 	}
 
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Displaying %d media item(s) in the carousel.", len(items))
+	if len(failures) > 0 {
+		fmt.Fprintf(&sb, " Failed to fetch %d item(s): %s", len(failures), strings.Join(failures, "; "))
+	}
+
 	return &ToolResult{
-		Text:           fmt.Sprintf("Displaying %d media item(s) in the carousel.", len(items)),
+		Text:           sb.String(),
 		StructuredData: items,
 	}, nil
 }
