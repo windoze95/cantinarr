@@ -122,11 +122,18 @@ PUT    /api/admin/ai-tools/:name # { enabled: bool } -- applies to chat and /mcp
 
 ### Downloads (admin only)
 ```
-GET    /api/downloads/:id/queue                 # unified SABnzbd/qBittorrent queue
+GET    /api/downloads/:id/queue                 # unified SABnzbd/qBittorrent/NZBGet/Transmission queue
 POST   /api/downloads/:id/pause|resume          # whole queue
 POST   /api/downloads/:id/queue/:item/pause|resume
 DELETE /api/downloads/:id/queue/:item?deleteData=bool
 GET    /api/downloads/:id/history?limit=50
+```
+
+### Tautulli (admin only)
+```
+GET    /api/tautulli/:id/activity   # current Plex streams + bandwidth
+GET    /api/tautulli/:id/history?limit=50
+GET    /api/tautulli/:id/stats?days=30
 ```
 
 ### MCP (external tool access)
@@ -150,6 +157,14 @@ WS     /api/ws                  # WebSocket (JWT via subprotocol header)
 WebSocket events:
 - `download_progress` -- `{ tmdb_id, media_type, progress, status }`
 - `request_status_changed` -- `{ tmdb_id, media_type, status }`
+- `downloads_queue` -- full download-client queue snapshot `{ instance_id, paused, speed_bps, items }`, sent on change
+- `arr_queue_changed` -- `{ instance_id, service_type }` invalidation ping; refetch the queue via REST
+
+Secrets at rest: instance API keys/passwords, external credentials, and the JWT
+secret are AES-256-GCM encrypted. Key: `CANTINARR_ENCRYPTION_KEY` env var
+(base64, 32 bytes) or the auto-generated `/config/encryption.key` (0600). Keep
+that file with your database backups -- without it encrypted secrets are
+unrecoverable.
 
 ## Architecture
 

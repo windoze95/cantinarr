@@ -307,15 +307,35 @@ type DetailedQueueItem struct {
 	Episode *EpisodeContext `json:"episode,omitempty"`
 }
 
-// GetQueueDetailed returns the full download queue with series and episode context.
+// queuePageSize is the per-request page size for queue pagination, and
+// queueMaxRecords is a safety cap on the total records accumulated.
+const (
+	queuePageSize   = 100
+	queueMaxRecords = 1000
+)
+
+// GetQueueDetailed returns the full download queue with series and episode
+// context, paginating until all records are fetched (capped at queueMaxRecords).
 func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
-	var resp struct {
-		Records []DetailedQueueItem `json:"records"`
+	var all []DetailedQueueItem
+	for page := 1; ; page++ {
+		var resp struct {
+			TotalRecords int                 `json:"totalRecords"`
+			Records      []DetailedQueueItem `json:"records"`
+		}
+		path := fmt.Sprintf("/api/v3/queue?page=%d&pageSize=%d&includeSeries=true&includeEpisode=true", page, queuePageSize)
+		if err := c.do("GET", path, nil, &resp); err != nil {
+			return nil, fmt.Errorf("sonarr queue: %w", err)
+		}
+		all = append(all, resp.Records...)
+		if len(resp.Records) == 0 || len(all) >= resp.TotalRecords || len(all) >= queueMaxRecords {
+			break
+		}
 	}
-	if err := c.do("GET", "/api/v3/queue?page=1&pageSize=100&includeSeries=true&includeEpisode=true", nil, &resp); err != nil {
-		return nil, fmt.Errorf("sonarr queue: %w", err)
+	if len(all) > queueMaxRecords {
+		all = all[:queueMaxRecords]
 	}
-	return resp.Records, nil
+	return all, nil
 }
 
 // RemoveQueueItem removes an item from the download queue.

@@ -25,6 +25,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
+	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
@@ -90,8 +91,11 @@ func main() {
 	registry := instance.NewRegistry(instanceStore)
 	instanceHandler := instance.NewHandler(instanceStore, registry)
 
-	// Downloads handler (SABnzbd / qBittorrent queue management)
+	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission queue management)
 	downloadsHandler := downloads.NewHandler(instanceStore, registry)
+
+	// Tautulli handler (Plex monitoring)
+	tautulliHandler := tautulli.NewHandler(instanceStore, registry)
 
 	// Request service
 	requestService := request.NewService(database, registry, bridge)
@@ -114,7 +118,7 @@ func main() {
 	go wsHub.Run(context.Background())
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, creds, credHandler, toolServer)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

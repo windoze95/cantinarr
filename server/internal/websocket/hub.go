@@ -2,25 +2,35 @@ package websocket
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
 
 const (
-	writeWait  = 60 * time.Second
-	pongWait   = 60 * time.Second
-	pingPeriod = (pongWait * 9) / 10
-	pollPeriod = 30 * time.Second
+	writeWait           = 60 * time.Second
+	pongWait            = 60 * time.Second
+	pingPeriod          = (pongWait * 9) / 10
+	pollPeriod          = 30 * time.Second
+	downloadsPollPeriod = 15 * time.Second
 )
+
+// downloadClientTypes are the service types polled for downloads_queue events.
+var downloadClientTypes = []string{"sabnzbd", "qbittorrent", "nzbget", "transmission"}
 
 // Event represents a WebSocket event sent to clients.
 type Event struct {
@@ -52,20 +62,35 @@ type Hub struct {
 	// Previous polling state for detecting transitions
 	prevRadarrQueue map[string]map[int]float64 // instanceID -> movieId -> progress
 	prevSonarrQueue map[string]map[int]float64 // instanceID -> seriesId -> progress
+
+	// prevArrQueueHash tracks the queue composition (id/status/sizeleft
+	// tuples) per arr instance so any change can emit an invalidation ping.
+	prevArrQueueHash map[string]string // instanceID -> composition hash
+
+	// prevDownloadsHash tracks the marshaled downloads snapshot per download
+	// client instance so downloads_queue is only broadcast on change.
+	prevDownloadsHash map[string]string // instanceID -> snapshot hash
+
+	// downloadsErrLogged suppresses repeat error logs for an instance until
+	// it succeeds again (one log per failure streak).
+	downloadsErrLogged map[string]bool
 }
 
 // NewHub creates a new WebSocket hub.
 func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store) *Hub {
 	return &Hub{
-		clients:         make(map[*Client]bool),
-		broadcast:       make(chan []byte, 256),
-		register:        make(chan *Client),
-		unregister:      make(chan *Client),
-		authService:     authService,
-		registry:        registry,
-		store:           store,
-		prevRadarrQueue: make(map[string]map[int]float64),
-		prevSonarrQueue: make(map[string]map[int]float64),
+		clients:            make(map[*Client]bool),
+		broadcast:          make(chan []byte, 256),
+		register:           make(chan *Client),
+		unregister:         make(chan *Client),
+		authService:        authService,
+		registry:           registry,
+		store:              store,
+		prevRadarrQueue:    make(map[string]map[int]float64),
+		prevSonarrQueue:    make(map[string]map[int]float64),
+		prevArrQueueHash:   make(map[string]string),
+		prevDownloadsHash:  make(map[string]string),
+		downloadsErrLogged: make(map[string]bool),
 	}
 }
 
@@ -195,18 +220,105 @@ func (c *Client) writePump() {
 }
 
 func (h *Hub) pollLoop(ctx context.Context) {
-	ticker := time.NewTicker(pollPeriod)
-	defer ticker.Stop()
+	arrTicker := time.NewTicker(pollPeriod)
+	defer arrTicker.Stop()
+	downloadsTicker := time.NewTicker(downloadsPollPeriod)
+	defer downloadsTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-arrTicker.C:
 			h.pollAllRadarr()
 			h.pollAllSonarr()
+		case <-downloadsTicker.C:
+			h.pollAllDownloadClients()
 		}
 	}
+}
+
+func (h *Hub) pollAllDownloadClients() {
+	if h.store == nil || h.registry == nil {
+		return
+	}
+	for _, serviceType := range downloadClientTypes {
+		instances, err := h.store.List(serviceType)
+		if err != nil {
+			continue
+		}
+		for _, inst := range instances {
+			h.pollDownloadClientInstance(inst)
+		}
+	}
+}
+
+func (h *Hub) pollDownloadClientInstance(inst instance.Instance) {
+	view, err := downloads.Snapshot(h.registry, inst)
+	if err != nil {
+		if !h.downloadsErrLogged[inst.ID] {
+			log.Printf("websocket: poll downloads queue (%s/%s): %v", inst.ServiceType, inst.ID, err)
+			h.downloadsErrLogged[inst.ID] = true
+		}
+		return
+	}
+	delete(h.downloadsErrLogged, inst.ID)
+
+	payload, err := json.Marshal(view)
+	if err != nil {
+		log.Printf("websocket: marshal downloads snapshot (%s): %v", inst.ID, err)
+		return
+	}
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+	if h.prevDownloadsHash[inst.ID] == hash {
+		return
+	}
+	h.prevDownloadsHash[inst.ID] = hash
+
+	// Decode the snapshot back into a map so the event carries exactly the
+	// QueueView JSON shape (paused, speed_bps, items) plus instance_id.
+	data := make(map[string]interface{})
+	if err := json.Unmarshal(payload, &data); err != nil {
+		log.Printf("websocket: decode downloads snapshot (%s): %v", inst.ID, err)
+		return
+	}
+	if data["items"] == nil {
+		data["items"] = []interface{}{}
+	}
+	data["instance_id"] = inst.ID
+
+	h.Broadcast(Event{
+		Type: "downloads_queue",
+		Data: data,
+	})
+}
+
+// queueCompositionHash builds an order-independent hash over per-item tuples
+// so any queue change (add/remove/status/progress) is detected cheaply.
+func queueCompositionHash(tuples []string) string {
+	sort.Strings(tuples)
+	sum := sha256.Sum256([]byte(strings.Join(tuples, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// noteArrQueueComposition compares the instance's queue composition hash to
+// the previous poll and broadcasts an arr_queue_changed invalidation ping on
+// any change. The first poll only seeds the hash.
+func (h *Hub) noteArrQueueComposition(instanceID, serviceType string, tuples []string) {
+	newHash := queueCompositionHash(tuples)
+	prevHash, seen := h.prevArrQueueHash[instanceID]
+	h.prevArrQueueHash[instanceID] = newHash
+	if !seen || prevHash == newHash {
+		return
+	}
+	h.Broadcast(Event{
+		Type: "arr_queue_changed",
+		Data: map[string]interface{}{
+			"instance_id":  instanceID,
+			"service_type": serviceType,
+		},
+	})
 }
 
 func (h *Hub) pollAllRadarr() {
@@ -251,12 +363,14 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	}
 
 	currentQueue := make(map[int]float64)
+	tuples := make([]string, 0, len(queue))
 	for _, item := range queue {
 		var progress float64
 		if item.Size > 0 {
 			progress = (item.Size - item.Sizeleft) / item.Size
 		}
 		currentQueue[item.MovieID] = progress
+		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.MovieID, item.Status, item.Sizeleft))
 
 		// Look up TMDB ID for this movie
 		movie, err := client.GetMovie(item.MovieID)
@@ -303,6 +417,7 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	}
 
 	h.prevRadarrQueue[instanceID] = currentQueue
+	h.noteArrQueueComposition(instanceID, "radarr", tuples)
 }
 
 func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
@@ -313,12 +428,14 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	}
 
 	currentQueue := make(map[int]float64)
+	tuples := make([]string, 0, len(queue))
 	for _, item := range queue {
 		var progress float64
 		if item.Size > 0 {
 			progress = (item.Size - item.Sizeleft) / item.Size
 		}
 		currentQueue[item.SeriesID] = progress
+		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.SeriesID, item.Status, item.Sizeleft))
 
 		series, err := client.GetSeries(item.SeriesID)
 		if err != nil {
@@ -366,4 +483,5 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	}
 
 	h.prevSonarrQueue[instanceID] = currentQueue
+	h.noteArrQueueComposition(instanceID, "sonarr", tuples)
 }

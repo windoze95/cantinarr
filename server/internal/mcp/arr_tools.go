@@ -248,6 +248,19 @@ func (s *ToolServer) findSeriesByTMDB(client *sonarr.Client, tmdbID int) (*sonar
 
 // --- get_queue ---
 
+// maxQueueItems caps how many queue items are rendered per service.
+const maxQueueItems = 30
+
+// renderQueueSection renders up to maxQueueItems lines with a truncation
+// notice when the queue is longer.
+func renderQueueSection(label string, total int, lines []string) string {
+	section := fmt.Sprintf("%s (%d items):\n%s", label, total, strings.Join(lines, "\n"))
+	if total > len(lines) {
+		section += fmt.Sprintf("\n…and %d more (%d total)", total-len(lines), total)
+	}
+	return section
+}
+
 func formatRadarrQueueItem(item radarr.DetailedQueueItem) string {
 	title := item.Title
 	if item.Movie != nil {
@@ -346,11 +359,15 @@ func (s *ToolServer) getQueue(input json.RawMessage) (*ToolResult, error) {
 			if len(items) == 0 {
 				sections = append(sections, "Movie queue: empty.")
 			} else {
-				lines := make([]string, 0, len(items))
-				for _, item := range items {
+				shown := items
+				if len(shown) > maxQueueItems {
+					shown = shown[:maxQueueItems]
+				}
+				lines := make([]string, 0, len(shown))
+				for _, item := range shown {
 					lines = append(lines, formatRadarrQueueItem(item))
 				}
-				sections = append(sections, fmt.Sprintf("Movie queue (%d items):\n%s", len(items), strings.Join(lines, "\n")))
+				sections = append(sections, renderQueueSection("Movie queue", len(items), lines))
 			}
 		}
 	}
@@ -370,11 +387,15 @@ func (s *ToolServer) getQueue(input json.RawMessage) (*ToolResult, error) {
 			if len(items) == 0 {
 				sections = append(sections, "TV queue: empty.")
 			} else {
-				lines := make([]string, 0, len(items))
-				for _, item := range items {
+				shown := items
+				if len(shown) > maxQueueItems {
+					shown = shown[:maxQueueItems]
+				}
+				lines := make([]string, 0, len(shown))
+				for _, item := range shown {
 					lines = append(lines, formatSonarrQueueItem(item))
 				}
-				sections = append(sections, fmt.Sprintf("TV queue (%d items):\n%s", len(items), strings.Join(lines, "\n")))
+				sections = append(sections, renderQueueSection("TV queue", len(items), lines))
 			}
 		}
 	}
@@ -561,7 +582,7 @@ func (s *ToolServer) getLibrary(input json.RawMessage) (*ToolResult, error) {
 		shown := matched
 		if len(shown) > maxLibraryItems {
 			shown = shown[:maxLibraryItems]
-			fmt.Fprintf(&sb, ", showing first %d", maxLibraryItems)
+			fmt.Fprintf(&sb, ", showing first %d of %d matches for filter %q", maxLibraryItems, len(matched), filter)
 		}
 		for _, m := range shown {
 			status := "missing"
@@ -613,7 +634,7 @@ func (s *ToolServer) getLibrary(input json.RawMessage) (*ToolResult, error) {
 		shown := matched
 		if len(shown) > maxLibraryItems {
 			shown = shown[:maxLibraryItems]
-			fmt.Fprintf(&sb, ", showing first %d", maxLibraryItems)
+			fmt.Fprintf(&sb, ", showing first %d of %d matches for filter %q", maxLibraryItems, len(matched), filter)
 		}
 		for _, sr := range shown {
 			fmt.Fprintf(&sb, "\n- %s (%d) [ID %d, TVDB %d", sr.Title, sr.Year, sr.ID, sr.TvdbID)
