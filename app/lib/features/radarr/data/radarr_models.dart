@@ -17,6 +17,9 @@ class RadarrMovie {
   final String? status;
   final double? ratings;
   final int qualityProfileId;
+  final DateTime? inCinemas;
+  final DateTime? physicalRelease;
+  final DateTime? digitalRelease;
 
   const RadarrMovie({
     required this.id,
@@ -36,6 +39,9 @@ class RadarrMovie {
     this.status,
     this.ratings,
     this.qualityProfileId = 0,
+    this.inCinemas,
+    this.physicalRelease,
+    this.digitalRelease,
   });
 
   factory RadarrMovie.fromJson(Map<String, dynamic> json) => RadarrMovie(
@@ -66,6 +72,11 @@ class RadarrMovie {
         ratings:
             (json['ratings'] as Map<String, dynamic>?)?['value'] as double?,
         qualityProfileId: json['qualityProfileId'] as int? ?? 0,
+        inCinemas: DateTime.tryParse(json['inCinemas'] as String? ?? ''),
+        physicalRelease:
+            DateTime.tryParse(json['physicalRelease'] as String? ?? ''),
+        digitalRelease:
+            DateTime.tryParse(json['digitalRelease'] as String? ?? ''),
       );
 
   Map<String, dynamic> toJson() => {
@@ -344,6 +355,23 @@ class RadarrHistoryPage {
         records: (json['records'] as List<dynamic>?)
                 ?.map((r) =>
                     RadarrHistoryRecord.fromJson(r as Map<String, dynamic>))
+                .toList() ??
+            [],
+        totalRecords: json['totalRecords'] as int? ?? 0,
+      );
+}
+
+/// Paged envelope for Radarr wanted movies (missing / cutoff unmet).
+class RadarrWantedPage {
+  final List<RadarrMovie> records;
+  final int totalRecords;
+
+  const RadarrWantedPage({this.records = const [], this.totalRecords = 0});
+
+  factory RadarrWantedPage.fromJson(Map<String, dynamic> json) =>
+      RadarrWantedPage(
+        records: (json['records'] as List<dynamic>?)
+                ?.map((r) => RadarrMovie.fromJson(r as Map<String, dynamic>))
                 .toList() ??
             [],
         totalRecords: json['totalRecords'] as int? ?? 0,

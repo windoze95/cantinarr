@@ -4,7 +4,8 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/instance_dropdown.dart';
 
-/// Radarr module shell with bottom nav: Library | Queue | History | Calendar.
+/// Radarr module shell with bottom nav:
+/// Library | Queue | History | Wanted | Calendar.
 /// Shows instance dropdown in the header when 2+ instances exist.
 class RadarrModuleShell extends ConsumerWidget {
   final int currentIndex;
@@ -59,6 +60,11 @@ class RadarrModuleShell extends ConsumerWidget {
               icon: Icon(Icons.history_outlined),
               activeIcon: Icon(Icons.history),
               label: 'History',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.report_gmailerrorred_outlined),
+              activeIcon: Icon(Icons.report_gmailerrorred),
+              label: 'Wanted',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.calendar_month_outlined),

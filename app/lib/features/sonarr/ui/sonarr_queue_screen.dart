@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
+import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
@@ -21,20 +22,24 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
   bool _isLoading = true;
   String? _error;
   Timer? _refreshTimer;
+  Timer? _wsRefetchDebounce;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadQueue();
+      // Fallback poll only — queue changes arrive as arr_queue_changed
+      // pings over the WebSocket; this covers gaps when the socket is down.
       _refreshTimer =
-          Timer.periodic(const Duration(seconds: 15), (_) => _autoRefresh());
+          Timer.periodic(const Duration(seconds: 45), (_) => _autoRefresh());
     });
   }
 
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _wsRefetchDebounce?.cancel();
     super.dispose();
   }
 
@@ -44,6 +49,13 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
     final route = ModalRoute.of(context);
     if (route != null && !route.isCurrent) return;
     _loadQueue(silent: true);
+  }
+
+  /// Debounced refetch triggered by WebSocket invalidation pings, so a
+  /// burst of changes only causes one REST roundtrip.
+  void _scheduleWsRefetch() {
+    _wsRefetchDebounce?.cancel();
+    _wsRefetchDebounce = Timer(const Duration(milliseconds: 500), _autoRefresh);
   }
 
   SonarrApiService? _buildService() {
@@ -116,6 +128,18 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
     // Rebuild when instance changes
     ref.listen(instanceProvider.select((s) => s.activeSonarrInstanceId),
         (_, __) => _loadQueue());
+
+    // Refetch on server-pushed queue-change pings for the active instance;
+    // the periodic poll remains as a fallback when the socket is down.
+    final wsInstanceId =
+        ref.watch(instanceProvider.select((s) => s.activeSonarrInstance?.id));
+    if (wsInstanceId != null) {
+      ref.listen(
+          arrQueueChangedProvider(
+              (instanceId: wsInstanceId, serviceType: 'sonarr')), (_, next) {
+        if (next.valueOrNull != null) _scheduleWsRefetch();
+      });
+    }
 
     if (_isLoading) {
       return const Center(

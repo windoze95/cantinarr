@@ -7,46 +7,54 @@ class InstanceState {
   final List<ServiceInstance> radarrInstances;
   final List<ServiceInstance> sonarrInstances;
   final List<ServiceInstance> downloadInstances;
+  final List<ServiceInstance> tautulliInstances;
   final String? activeRadarrInstanceId;
   final String? activeSonarrInstanceId;
   final String? activeDownloadInstanceId;
+  final String? activeTautulliInstanceId;
 
   const InstanceState({
     this.radarrInstances = const [],
     this.sonarrInstances = const [],
     this.downloadInstances = const [],
+    this.tautulliInstances = const [],
     this.activeRadarrInstanceId,
     this.activeSonarrInstanceId,
     this.activeDownloadInstanceId,
+    this.activeTautulliInstanceId,
   });
 
   InstanceState copyWith({
     List<ServiceInstance>? radarrInstances,
     List<ServiceInstance>? sonarrInstances,
     List<ServiceInstance>? downloadInstances,
+    List<ServiceInstance>? tautulliInstances,
     String? activeRadarrInstanceId,
     String? activeSonarrInstanceId,
     String? activeDownloadInstanceId,
+    String? activeTautulliInstanceId,
   }) =>
       InstanceState(
         radarrInstances: radarrInstances ?? this.radarrInstances,
         sonarrInstances: sonarrInstances ?? this.sonarrInstances,
         downloadInstances: downloadInstances ?? this.downloadInstances,
+        tautulliInstances: tautulliInstances ?? this.tautulliInstances,
         activeRadarrInstanceId:
             activeRadarrInstanceId ?? this.activeRadarrInstanceId,
         activeSonarrInstanceId:
             activeSonarrInstanceId ?? this.activeSonarrInstanceId,
         activeDownloadInstanceId:
             activeDownloadInstanceId ?? this.activeDownloadInstanceId,
+        activeTautulliInstanceId:
+            activeTautulliInstanceId ?? this.activeTautulliInstanceId,
       );
 
   /// Get the active Radarr instance, falling back to default.
   ServiceInstance? get activeRadarrInstance {
     if (radarrInstances.isEmpty) return null;
     if (activeRadarrInstanceId != null) {
-      final found = radarrInstances
-          .where((i) => i.id == activeRadarrInstanceId)
-          .toList();
+      final found =
+          radarrInstances.where((i) => i.id == activeRadarrInstanceId).toList();
       if (found.isNotEmpty) return found.first;
     }
     return radarrInstances.firstWhere((i) => i.isDefault,
@@ -57,9 +65,8 @@ class InstanceState {
   ServiceInstance? get activeSonarrInstance {
     if (sonarrInstances.isEmpty) return null;
     if (activeSonarrInstanceId != null) {
-      final found = sonarrInstances
-          .where((i) => i.id == activeSonarrInstanceId)
-          .toList();
+      final found =
+          sonarrInstances.where((i) => i.id == activeSonarrInstanceId).toList();
       if (found.isNotEmpty) return found.first;
     }
     return sonarrInstances.firstWhere((i) => i.isDefault,
@@ -78,6 +85,19 @@ class InstanceState {
     return downloadInstances.firstWhere((i) => i.isDefault,
         orElse: () => downloadInstances.first);
   }
+
+  /// Get the active Tautulli instance, falling back to default.
+  ServiceInstance? get activeTautulliInstance {
+    if (tautulliInstances.isEmpty) return null;
+    if (activeTautulliInstanceId != null) {
+      final found = tautulliInstances
+          .where((i) => i.id == activeTautulliInstanceId)
+          .toList();
+      if (found.isNotEmpty) return found.first;
+    }
+    return tautulliInstances.firstWhere((i) => i.isDefault,
+        orElse: () => tautulliInstances.first);
+  }
 }
 
 class InstanceNotifier extends Notifier<InstanceState> {
@@ -90,18 +110,28 @@ class InstanceNotifier extends Notifier<InstanceState> {
     final radarr = connection.radarrInstances;
     final sonarr = connection.sonarrInstances;
     final downloads = connection.downloadInstances;
+    final tautulli = connection.tautulliInstances;
 
     return InstanceState(
       radarrInstances: radarr,
       sonarrInstances: sonarr,
       downloadInstances: downloads,
-      activeRadarrInstanceId:
-          radarr.isNotEmpty ? (radarr.firstWhere((i) => i.isDefault, orElse: () => radarr.first)).id : null,
-      activeSonarrInstanceId:
-          sonarr.isNotEmpty ? (sonarr.firstWhere((i) => i.isDefault, orElse: () => sonarr.first)).id : null,
+      tautulliInstances: tautulli,
+      activeRadarrInstanceId: radarr.isNotEmpty
+          ? (radarr.firstWhere((i) => i.isDefault, orElse: () => radarr.first))
+              .id
+          : null,
+      activeSonarrInstanceId: sonarr.isNotEmpty
+          ? (sonarr.firstWhere((i) => i.isDefault, orElse: () => sonarr.first))
+              .id
+          : null,
       activeDownloadInstanceId: downloads.isNotEmpty
           ? (downloads.firstWhere((i) => i.isDefault,
               orElse: () => downloads.first)).id
+          : null,
+      activeTautulliInstanceId: tautulli.isNotEmpty
+          ? (tautulli.firstWhere((i) => i.isDefault,
+              orElse: () => tautulli.first)).id
           : null,
     );
   }
@@ -116,6 +146,10 @@ class InstanceNotifier extends Notifier<InstanceState> {
 
   void setActiveDownloadInstance(String instanceId) {
     state = state.copyWith(activeDownloadInstanceId: instanceId);
+  }
+
+  void setActiveTautulliInstance(String instanceId) {
+    state = state.copyWith(activeTautulliInstanceId: instanceId);
   }
 }
 

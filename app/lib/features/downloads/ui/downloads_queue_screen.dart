@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/network/websocket_client.dart';
 import '../../../core/providers/instance_provider.dart';
+import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/downloads_api_service.dart';
 import '../data/downloads_models.dart';
@@ -28,8 +30,10 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadQueue();
+      // Fallback poll only — live updates arrive over the WebSocket
+      // (downloads_queue events); this covers gaps when the socket is down.
       _refreshTimer =
-          Timer.periodic(const Duration(seconds: 7), (_) => _autoRefresh());
+          Timer.periodic(const Duration(seconds: 30), (_) => _autoRefresh());
     });
   }
 
@@ -83,6 +87,23 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
         _isLoading = false;
         _error = 'Failed to load queue: $e';
       });
+    }
+  }
+
+  /// Applies a full queue snapshot pushed over the WebSocket — no REST
+  /// roundtrip needed; the event data matches the REST queue payload.
+  void _applyQueueEvent(WsEvent event) {
+    if (!mounted) return;
+    try {
+      final queue = DownloadsQueue.fromJson(event.data);
+      setState(() {
+        _queue = queue;
+        _isLoading = false;
+        _error = null;
+      });
+    } catch (_) {
+      // Malformed payload (e.g. server/app version skew); the polling
+      // fallback will correct any drift.
     }
   }
 
@@ -148,6 +169,17 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
     // Rebuild when instance changes
     ref.listen(instanceProvider.select((s) => s.activeDownloadInstanceId),
         (_, __) => _loadQueue());
+
+    // Live queue snapshots over the WebSocket for the active instance;
+    // the periodic poll remains as a fallback when the socket is down.
+    final wsInstanceId =
+        ref.watch(instanceProvider.select((s) => s.activeDownloadInstance?.id));
+    if (wsInstanceId != null) {
+      ref.listen(downloadsQueueEventsProvider(wsInstanceId), (_, next) {
+        final event = next.valueOrNull;
+        if (event != null) _applyQueueEvent(event);
+      });
+    }
 
     if (_isLoading) {
       return const Center(

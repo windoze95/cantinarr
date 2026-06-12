@@ -51,9 +51,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _SettingsTile(
             icon: Icons.check_circle_outline,
             title: 'Status',
-            subtitle: auth?.isAuthenticated == true
-                ? 'Connected'
-                : 'Disconnected',
+            subtitle:
+                auth?.isAuthenticated == true ? 'Connected' : 'Disconnected',
             trailing: Icon(
               Icons.circle,
               size: 12,
@@ -277,8 +276,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           if (dialogContext.mounted) {
                             ScaffoldMessenger.of(dialogContext).showSnackBar(
                               SnackBar(
-                                  content:
-                                      Text('Failed to generate link: $e')),
+                                  content: Text('Failed to generate link: $e')),
                             );
                           }
                         }
@@ -317,7 +315,11 @@ IconData _serviceIcon(String serviceType) {
       return Icons.tv_outlined;
     case 'sabnzbd':
     case 'qbittorrent':
+    case 'nzbget':
+    case 'transmission':
       return Icons.download_outlined;
+    case 'tautulli':
+      return Icons.monitor_heart_outlined;
     default:
       return Icons.dns_outlined;
   }
@@ -333,6 +335,12 @@ String _serviceLabel(String serviceType) {
       return 'SABnzbd';
     case 'qbittorrent':
       return 'qBittorrent';
+    case 'nzbget':
+      return 'NZBGet';
+    case 'transmission':
+      return 'Transmission';
+    case 'tautulli':
+      return 'Tautulli';
     default:
       return serviceType;
   }
@@ -382,12 +390,10 @@ class _SettingsTile extends StatelessWidget {
           style: const TextStyle(
               color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
       subtitle: Text(subtitle,
-          style:
-              const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
       trailing: trailing ??
           (onTap != null
-              ? const Icon(Icons.chevron_right,
-                  color: AppTheme.textSecondary)
+              ? const Icon(Icons.chevron_right, color: AppTheme.textSecondary)
               : null),
       onTap: onTap,
     );

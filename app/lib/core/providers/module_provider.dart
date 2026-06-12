@@ -25,8 +25,9 @@ class ModuleState {
       ModuleState(
         modules: modules ?? this.modules,
         activeModuleType: activeModuleType ?? this.activeModuleType,
-        activeInstanceId:
-            clearInstanceId ? null : (activeInstanceId ?? this.activeInstanceId),
+        activeInstanceId: clearInstanceId
+            ? null
+            : (activeInstanceId ?? this.activeInstanceId),
       );
 
   int get activeIndex {
@@ -92,6 +93,19 @@ class ModuleNotifier extends Notifier<ModuleState> {
             type: ModuleType.downloads,
             label: inst.name,
             icon: Icons.download,
+            instanceId: inst.id,
+            instanceName: inst.name,
+          ));
+        }
+      }
+
+      // Tautulli instances (admin only)
+      if (isAdmin) {
+        for (final inst in connection.tautulliInstances) {
+          modules.add(AppModule(
+            type: ModuleType.tautulli,
+            label: inst.name,
+            icon: Icons.monitor_heart,
             instanceId: inst.id,
             instanceName: inst.name,
           ));

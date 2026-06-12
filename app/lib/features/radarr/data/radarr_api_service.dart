@@ -139,6 +139,38 @@ class RadarrApiService {
     return RadarrHistoryPage.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Fetches a page of monitored movies that have no file, newest in
+  /// cinemas first.
+  Future<RadarrWantedPage> getWantedMissing({
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    final resp = await _dio.get('$_basePath/wanted/missing', queryParameters: {
+      'page': page,
+      'pageSize': pageSize,
+      'sortKey': 'movieMetadata.inCinemas',
+      'sortDirection': 'descending',
+      'monitored': true,
+    });
+    return RadarrWantedPage.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Fetches a page of monitored movies whose file is below the quality
+  /// profile cutoff, newest in cinemas first.
+  Future<RadarrWantedPage> getWantedCutoff({
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    final resp = await _dio.get('$_basePath/wanted/cutoff', queryParameters: {
+      'page': page,
+      'pageSize': pageSize,
+      'sortKey': 'movieMetadata.inCinemas',
+      'sortDirection': 'descending',
+      'monitored': true,
+    });
+    return RadarrWantedPage.fromJson(resp.data as Map<String, dynamic>);
+  }
+
   /// Interactive release search. Slow (10-60s): indexers are queried live.
   Future<List<RadarrRelease>> getReleases(int movieId) async {
     final resp = await _dio.get(

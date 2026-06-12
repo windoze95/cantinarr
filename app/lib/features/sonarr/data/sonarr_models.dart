@@ -416,6 +416,71 @@ class SonarrHistoryPage {
       );
 }
 
+/// One wanted episode (missing or cutoff unmet) with series context.
+class SonarrWantedRecord {
+  final int id;
+  final int seriesId;
+  final int seasonNumber;
+  final int episodeNumber;
+  final String? title;
+  final DateTime? airDateUtc;
+  final bool monitored;
+  final String? seriesTitle;
+
+  /// Current file quality; only present on cutoff-unmet records fetched
+  /// with includeEpisodeFile.
+  final String? quality;
+
+  const SonarrWantedRecord({
+    required this.id,
+    this.seriesId = 0,
+    this.seasonNumber = 0,
+    this.episodeNumber = 0,
+    this.title,
+    this.airDateUtc,
+    this.monitored = true,
+    this.seriesTitle,
+    this.quality,
+  });
+
+  factory SonarrWantedRecord.fromJson(Map<String, dynamic> json) =>
+      SonarrWantedRecord(
+        id: json['id'] as int? ?? 0,
+        seriesId: json['seriesId'] as int? ?? 0,
+        seasonNumber: json['seasonNumber'] as int? ?? 0,
+        episodeNumber: json['episodeNumber'] as int? ?? 0,
+        title: json['title'] as String?,
+        airDateUtc: DateTime.tryParse(json['airDateUtc'] as String? ?? ''),
+        monitored: json['monitored'] as bool? ?? true,
+        seriesTitle:
+            (json['series'] as Map<String, dynamic>?)?['title'] as String?,
+        quality: (json['episodeFile'] as Map<String, dynamic>?)?['quality']
+            ?['quality']?['name'] as String?,
+      );
+
+  /// e.g. "S01E05".
+  String get seasonEpisodeLabel => 'S${seasonNumber.toString().padLeft(2, '0')}'
+      'E${episodeNumber.toString().padLeft(2, '0')}';
+}
+
+/// Paged envelope for Sonarr wanted episodes (missing / cutoff unmet).
+class SonarrWantedPage {
+  final List<SonarrWantedRecord> records;
+  final int totalRecords;
+
+  const SonarrWantedPage({this.records = const [], this.totalRecords = 0});
+
+  factory SonarrWantedPage.fromJson(Map<String, dynamic> json) =>
+      SonarrWantedPage(
+        records: (json['records'] as List<dynamic>?)
+                ?.map((r) =>
+                    SonarrWantedRecord.fromJson(r as Map<String, dynamic>))
+                .toList() ??
+            [],
+        totalRecords: json['totalRecords'] as int? ?? 0,
+      );
+}
+
 /// A release returned by Sonarr's interactive search.
 class SonarrRelease {
   final String guid;

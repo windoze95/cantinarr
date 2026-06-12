@@ -748,6 +748,8 @@ class _AppShellState extends ConsumerState<AppShell>
           instances.setActiveSonarrInstance(instanceId);
         case ModuleType.downloads:
           instances.setActiveDownloadInstance(instanceId);
+        case ModuleType.tautulli:
+          instances.setActiveTautulliInstance(instanceId);
         default:
           break;
       }
@@ -761,6 +763,8 @@ class _AppShellState extends ConsumerState<AppShell>
         context.go('/sonarr/library');
       case ModuleType.downloads:
         context.go('/downloads/queue');
+      case ModuleType.tautulli:
+        context.go('/tautulli/activity');
       case ModuleType.assistant:
         context.go('/assistant');
     }
