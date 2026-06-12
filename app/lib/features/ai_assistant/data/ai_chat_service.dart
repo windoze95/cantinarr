@@ -34,6 +34,11 @@ class AiChatService {
       },
       options: Options(
         responseType: ResponseType.stream,
+        // The base Dio's 15s receiveTimeout acts as an inter-chunk
+        // inactivity timeout on streams, but agent thinking and slow tools
+        // (indexer searches) legitimately go quiet for longer. The server
+        // sends keepalive comments; disable the local inactivity cap.
+        receiveTimeout: Duration.zero,
         headers: {'Accept': 'text/event-stream'},
       ),
     );

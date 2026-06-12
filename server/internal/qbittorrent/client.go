@@ -20,8 +20,9 @@ type Client struct {
 	password   string
 	httpClient *http.Client
 
-	mu      sync.Mutex
-	cookies []*http.Cookie
+	mu            sync.Mutex
+	cookies       []*http.Cookie
+	authenticated bool
 }
 
 // NewClient creates a new qBittorrent client.
@@ -60,13 +61,12 @@ func (c *Client) Login() error {
 		return fmt.Errorf("qbittorrent login failed: invalid credentials")
 	}
 
-	cookies := resp.Cookies()
-	if len(cookies) == 0 {
-		return fmt.Errorf("qbittorrent login failed: no session cookie returned")
-	}
-
+	// When the WebUI has auth bypass enabled (localhost/whitelisted IPs),
+	// login succeeds with "Ok." but returns no SID cookie — requests work
+	// without one, so an empty cookie set is not an error.
 	c.mu.Lock()
-	c.cookies = cookies
+	c.cookies = resp.Cookies()
+	c.authenticated = true
 	c.mu.Unlock()
 	return nil
 }
@@ -75,7 +75,7 @@ func (c *Client) Login() error {
 // exists and re-logging-in once on a 403 response.
 func (c *Client) do(method, path string, form url.Values) (*http.Response, error) {
 	c.mu.Lock()
-	haveSession := len(c.cookies) > 0
+	haveSession := c.authenticated
 	c.mu.Unlock()
 	if !haveSession {
 		if err := c.Login(); err != nil {

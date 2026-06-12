@@ -40,6 +40,10 @@ class AiChatNotifier extends ChangeNotifier {
   String? _conversationId;
   String? get conversationId => _conversationId;
 
+  /// Monotonic token tying stream updates to the chat session that started
+  /// them; clearChat/new turns bump it so stale streams stop mutating state.
+  int _generation = 0;
+
   AiChatState _state = const AiChatState();
   AiChatState get state => _state;
   set state(AiChatState value) {
@@ -62,6 +66,10 @@ class AiChatNotifier extends ChangeNotifier {
   /// Send a user message and stream the AI response.
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty) return;
+    // One turn at a time: a second concurrent stream would corrupt chat
+    // state and race the server-side conversation store.
+    if (state.isLoading) return;
+    final generation = ++_generation;
 
     _addMessage(ChatMessage(
       id: _uuid.v4(),
@@ -79,6 +87,9 @@ class AiChatNotifier extends ChangeNotifier {
     String? errorText;
 
     void upsertResponse({required bool streaming}) {
+      // A clearChat (or newer turn) since this stream started owns the
+      // state now — drop stale updates instead of resurrecting them.
+      if (generation != _generation) return;
       final updated = List<ChatMessage>.from(state.messages);
       final idx = updated.indexWhere((m) => m.id == responseId);
       final message = ChatMessage(
@@ -149,11 +160,20 @@ class AiChatNotifier extends ChangeNotifier {
       }
 
       upsertResponse(streaming: false);
-      state = state.copyWith(isLoading: false);
+      if (generation == _generation) {
+        // A failed turn desyncs us from the server's stored transcript
+        // (which may also have been invalidated): start the next turn fresh
+        // from the client transcript rather than replaying a broken state.
+        if (errorText != null) _conversationId = null;
+        state = state.copyWith(isLoading: false);
+      }
     } catch (e) {
       errorText ??= _friendlyError(e);
       upsertResponse(streaming: false);
-      state = state.copyWith(isLoading: false);
+      if (generation == _generation) {
+        _conversationId = null;
+        state = state.copyWith(isLoading: false);
+      }
     }
   }
 
@@ -194,6 +214,7 @@ class AiChatNotifier extends ChangeNotifier {
 
   void clearChat() {
     _conversationId = null;
+    _generation++; // orphan any in-flight stream
     state = const AiChatState();
     _addMessage(ChatMessage(
       id: _uuid.v4(),

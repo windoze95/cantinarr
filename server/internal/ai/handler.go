@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -48,7 +50,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}
@@ -68,11 +70,35 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	// Tool calls and thinking can leave the SSE stream silent long enough for
+	// client inactivity timeouts to fire; comment-frame keepalives prevent
+	// that. writeMu serializes them with real frames.
+	var writeMu sync.Mutex
 	emit := func(payload any) {
 		data, _ := json.Marshal(payload)
+		writeMu.Lock()
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
+		writeMu.Unlock()
 	}
+
+	keepaliveDone := make(chan struct{})
+	defer close(keepaliveDone)
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-keepaliveDone:
+				return
+			case <-ticker.C:
+				writeMu.Lock()
+				fmt.Fprint(w, ": keepalive\n\n")
+				flusher.Flush()
+				writeMu.Unlock()
+			}
+		}
+	}()
 
 	callbacks := StreamCallbacks{
 		OnText: func(text string) {
@@ -103,32 +129,41 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	var history []anthropic.MessageParam
 	if convID != "" {
 		if stored, ok := h.conversations.Get(convID, claims.UserID); ok {
-			history = stored
 			if text := latestUserText(req.Messages); text != "" {
-				history = append(history, anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
+				history = append(stored, anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
 			}
 		}
 	}
 	if history == nil {
-		if convID == "" {
-			convID = newConversationID()
-		}
+		// New conversation, or a client-supplied id we couldn't validate
+		// (expired, unknown, or owned by another user): always mint a fresh
+		// id so an attacker-supplied id can never overwrite someone else's
+		// stored conversation.
+		convID = newConversationID()
 		history = toSDKMessages(req.Messages)
+	}
+	if len(history) == 0 {
+		http.Error(w, `{"error":"no usable messages in request"}`, http.StatusBadRequest)
+		return
 	}
 
 	emit(map[string]string{"conversation_id": convID})
 
 	finalHistory, err := service.SendMessage(r.Context(), history, chatCtx, callbacks)
-	h.conversations.Put(convID, claims.UserID, finalHistory)
 	if err != nil {
+		// Drop the stored state rather than persist a possibly poisoned
+		// transcript; the client's retry falls back to its own transcript.
+		h.conversations.Delete(convID)
 		log.Printf("ai chat error: %v", err)
-		errData, _ := json.Marshal(map[string]string{"error": err.Error()})
-		fmt.Fprintf(w, "data: %s\n\n", errData)
-		flusher.Flush()
+		emit(map[string]string{"error": err.Error()})
+	} else {
+		h.conversations.Put(convID, claims.UserID, sanitizeTranscript(finalHistory))
 	}
 
+	writeMu.Lock()
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+	writeMu.Unlock()
 }
 
 // configuredServices reports which backends are available, for system-prompt context.

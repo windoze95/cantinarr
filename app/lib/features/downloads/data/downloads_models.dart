@@ -142,6 +142,17 @@ class DownloadHistoryItem {
   }
 
   String get sizeFormatted => formatBytes(sizeBytes);
-  bool get isFailed => status.toLowerCase().contains('fail');
-  bool get isCompleted => status.toLowerCase().startsWith('complet');
+
+  // SABnzbd reports "Completed"/"Failed"; qBittorrent passes raw torrent
+  // states through ("uploading", "stalledUP", "pausedUP", "error",
+  // "missingFiles") and populates `error` for the failure states.
+  bool get isFailed {
+    final s = status.toLowerCase();
+    return error.isNotEmpty ||
+        s.contains('fail') ||
+        s == 'error' ||
+        s == 'missingfiles';
+  }
+
+  bool get isCompleted => !isFailed;
 }
