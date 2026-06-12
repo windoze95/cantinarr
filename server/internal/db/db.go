@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -41,6 +42,8 @@ CREATE TABLE IF NOT EXISTS service_instances (
     name TEXT NOT NULL,
     url TEXT NOT NULL,
     api_key TEXT NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    password TEXT NOT NULL DEFAULT '',
     is_default BOOLEAN DEFAULT 0,
     sort_order INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -108,6 +111,24 @@ func Open(dbPath string) (*sql.DB, error) {
 	if _, err := db.Exec(initSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
+	}
+
+	// Additive column migrations for databases created by older versions:
+	// CREATE TABLE IF NOT EXISTS does not add new columns to existing tables,
+	// so each new column gets a tolerant ALTER TABLE (duplicate-column errors
+	// are ignored).
+	alterStatements := []string{
+		"ALTER TABLE service_instances ADD COLUMN username TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE service_instances ADD COLUMN password TEXT NOT NULL DEFAULT ''",
+	}
+	for _, stmt := range alterStatements {
+		if _, err := db.Exec(stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			db.Close()
+			return nil, fmt.Errorf("apply migration %q: %w", stmt, err)
+		}
 	}
 
 	return db, nil

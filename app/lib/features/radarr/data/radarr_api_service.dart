@@ -23,8 +23,7 @@ class RadarrApiService {
     if (searchTerm != null && searchTerm.isNotEmpty) {
       params['searchTerm'] = searchTerm;
     }
-    final resp =
-        await _dio.get('$_basePath/movie', queryParameters: params);
+    final resp = await _dio.get('$_basePath/movie', queryParameters: params);
     return (resp.data as List<dynamic>)
         .map((m) => RadarrMovie.fromJson(m as Map<String, dynamic>))
         .toList();
@@ -46,8 +45,7 @@ class RadarrApiService {
   Future<List<RadarrQualityProfile>> getQualityProfiles() async {
     final resp = await _dio.get('$_basePath/qualityprofile');
     return (resp.data as List<dynamic>)
-        .map((p) =>
-            RadarrQualityProfile.fromJson(p as Map<String, dynamic>))
+        .map((p) => RadarrQualityProfile.fromJson(p as Map<String, dynamic>))
         .toList();
   }
 
@@ -65,8 +63,7 @@ class RadarrApiService {
 
   Future<RadarrMovie> updateMovie(
       int id, Map<String, dynamic> movieData) async {
-    final resp =
-        await _dio.put('$_basePath/movie/$id', data: movieData);
+    final resp = await _dio.put('$_basePath/movie/$id', data: movieData);
     return RadarrMovie.fromJson(resp.data as Map<String, dynamic>);
   }
 
@@ -100,5 +97,69 @@ class RadarrApiService {
     final resp = await _dio.get('$_basePath/calendar',
         queryParameters: {'start': start, 'end': end});
     return (resp.data as List<dynamic>).cast<Map<String, dynamic>>();
+  }
+
+  /// Fetches the queue with full movie details, typed.
+  Future<List<RadarrQueueItem>> getQueueDetailed() async {
+    final resp = await _dio.get('$_basePath/queue', queryParameters: {
+      'page': 1,
+      'pageSize': 100,
+      'includeMovie': true,
+    });
+    final records =
+        (resp.data as Map<String, dynamic>)['records'] as List<dynamic>? ?? [];
+    return records
+        .map((r) => RadarrQueueItem.fromJson(r as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Removes a queue item, optionally from the download client / blocklist.
+  Future<void> deleteQueueItem(
+    int id, {
+    bool removeFromClient = true,
+    bool blocklist = false,
+  }) async {
+    await _dio.delete('$_basePath/queue/$id', queryParameters: {
+      'removeFromClient': removeFromClient,
+      'blocklist': blocklist,
+    });
+  }
+
+  /// Fetches a page of history events, newest first.
+  Future<RadarrHistoryPage> getHistory({
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    final resp = await _dio.get('$_basePath/history', queryParameters: {
+      'page': page,
+      'pageSize': pageSize,
+      'sortKey': 'date',
+      'sortDirection': 'descending',
+    });
+    return RadarrHistoryPage.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Interactive release search. Slow (10-60s): indexers are queried live.
+  Future<List<RadarrRelease>> getReleases(int movieId) async {
+    final resp = await _dio.get(
+      '$_basePath/release',
+      queryParameters: {'movieId': movieId},
+      options: Options(receiveTimeout: const Duration(seconds: 120)),
+    );
+    return (resp.data as List<dynamic>)
+        .map((r) => RadarrRelease.fromJson(r as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Sends a release from interactive search to the download client.
+  Future<void> grabRelease({
+    required String guid,
+    required int indexerId,
+  }) async {
+    await _dio.post(
+      '$_basePath/release',
+      data: {'guid': guid, 'indexerId': indexerId},
+      options: Options(receiveTimeout: const Duration(seconds: 60)),
+    );
   }
 }

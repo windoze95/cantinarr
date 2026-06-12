@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/ai_chat_service.dart';
+import '../data/ai_models.dart';
 import '../logic/ai_chat_provider.dart';
 import 'chat_bubble.dart';
 
@@ -94,8 +95,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                 const SizedBox(height: 12),
                 const Text(
                   'The AI assistant is not configured on this server. Ask your server admin to set up an AI provider.',
-                  style:
-                      TextStyle(color: AppTheme.textSecondary, fontSize: 15),
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 15),
                   textAlign: TextAlign.center,
                 ),
               ],
@@ -112,9 +112,9 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         title: const Text('AI Assistant'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.delete_outline),
+            icon: const Icon(Icons.add_comment_outlined),
             onPressed: _notifier!.clearChat,
-            tooltip: 'Clear chat',
+            tooltip: 'New chat',
           ),
         ],
       ),
@@ -122,29 +122,40 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         children: [
           // Messages
           Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(16),
-              itemCount:
-                  state.messages.length + (state.isLoading ? 1 : 0),
-              itemBuilder: (context, index) {
-                if (index >= state.messages.length) {
-                  return const _TypingIndicator();
-                }
-                return ChatBubble(message: state.messages[index]);
-              },
-            ),
+            child: Builder(builder: (context) {
+              // Only show the typing indicator before the assistant bubble
+              // materializes (text, tool activity, or media arriving).
+              final showTyping = state.isLoading &&
+                  (state.messages.isEmpty ||
+                      state.messages.last.role != ChatRole.assistant);
+              return ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.all(16),
+                itemCount: state.messages.length + (showTyping ? 1 : 0),
+                itemBuilder: (context, index) {
+                  if (index >= state.messages.length) {
+                    return const _TypingIndicator();
+                  }
+                  final msg = state.messages[index];
+                  final isLast = index == state.messages.length - 1;
+                  return ChatBubble(
+                    message: msg,
+                    onRetry: isLast && msg.errorText != null
+                        ? _notifier!.retryLast
+                        : null,
+                  );
+                },
+              );
+            }),
           ),
 
           // Error
           if (state.error != null)
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: Text(
                 state.error!,
-                style:
-                    const TextStyle(color: AppTheme.error, fontSize: 12),
+                style: const TextStyle(color: AppTheme.error, fontSize: 12),
                 maxLines: 2,
               ),
             ),
@@ -155,8 +166,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               color: AppTheme.surface,
               border: Border(top: BorderSide(color: AppTheme.border)),
             ),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: SafeArea(
               top: false,
               child: Row(
@@ -173,8 +183,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                       decoration: const InputDecoration(
                         hintText: 'Ask me anything...',
                         border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       ),
                       maxLines: 4,
                       minLines: 1,
@@ -214,8 +224,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
           itemCount: suggestions.length,
           separatorBuilder: (_, __) => const SizedBox(width: 8),
           itemBuilder: (_, index) => ActionChip(
-            label: Text(suggestions[index],
-                style: const TextStyle(fontSize: 12)),
+            label:
+                Text(suggestions[index], style: const TextStyle(fontSize: 12)),
             backgroundColor: AppTheme.surfaceVariant,
             side: const BorderSide(color: AppTheme.border),
             onPressed: () {
@@ -240,8 +250,7 @@ class _TypingIndicator extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
               color: AppTheme.surfaceVariant,
               borderRadius: BorderRadius.circular(16),

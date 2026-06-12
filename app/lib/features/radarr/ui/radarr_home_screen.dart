@@ -5,8 +5,10 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/radarr_api_service.dart';
+import '../data/radarr_models.dart';
 import '../logic/radarr_movies_provider.dart';
 import 'radarr_movie_list.dart';
+import 'radarr_releases_screen.dart';
 
 /// Radarr library management screen (used in the Radarr module).
 /// Instance-aware: uses the active Radarr instance from the instance provider.
@@ -48,6 +50,33 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
     super.dispose();
   }
 
+  Future<void> _triggerAutomaticSearch(int movieId) async {
+    try {
+      await _notifier!.searchForMovie(movieId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Movie search started')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
+    }
+  }
+
+  void _openInteractiveSearch(RadarrMovie movie) {
+    final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
+    if (instanceId == null) return;
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (_) => RadarrReleasesScreen(
+          instanceId: instanceId,
+          movieId: movie.id,
+          movieTitle: movie.title,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Rebuild when active instance changes
@@ -68,8 +97,7 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
           children: [
             // Stats bar
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               color: AppTheme.surface,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -151,8 +179,7 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
             Expanded(
               child: state.isLoading && state.movies.isEmpty
                   ? const Center(
-                      child:
-                          CircularProgressIndicator(color: AppTheme.accent))
+                      child: CircularProgressIndicator(color: AppTheme.accent))
                   : RefreshIndicator(
                       onRefresh: _notifier!.loadMovies,
                       color: AppTheme.accent,
@@ -160,7 +187,8 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
                         movies: state.filtered,
                         onDelete: (id) =>
                             _notifier!.deleteMovie(id, deleteFiles: false),
-                        onSearch: _notifier!.searchForMovie,
+                        onSearch: _triggerAutomaticSearch,
+                        onInteractiveSearch: _openInteractiveSearch,
                       ),
                     ),
             ),
@@ -189,8 +217,8 @@ class _StatChip extends StatelessWidget {
       children: [
         Text(
           count.toString(),
-          style:
-              TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.bold),
+          style: TextStyle(
+              color: color, fontSize: 20, fontWeight: FontWeight.bold),
         ),
         Text(label,
             style:

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/models/app_module.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/search_bar.dart';
@@ -572,7 +573,13 @@ class _AppShellState extends ConsumerState<AppShell>
                         if (index == 0 && msg.role == ChatRole.assistant) {
                           return const SizedBox.shrink();
                         }
-                        return ChatBubble(message: msg);
+                        final isLast = index == messages.length - 1;
+                        return ChatBubble(
+                          message: msg,
+                          onRetry: isLast && msg.errorText != null
+                              ? _aiChatNotifier?.retryLast
+                              : null,
+                        );
                       },
                     ),
                   ),
@@ -728,6 +735,23 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   void _navigateToModule(BuildContext context, AppModule module) {
+    // Drawer entries are per-instance for multi-instance services; make the
+    // tapped instance active so the module opens on it rather than on
+    // whatever instance the in-module dropdown was last set to.
+    final instanceId = module.instanceId;
+    if (instanceId != null) {
+      final instances = ref.read(instanceProvider.notifier);
+      switch (module.type) {
+        case ModuleType.radarr:
+          instances.setActiveRadarrInstance(instanceId);
+        case ModuleType.sonarr:
+          instances.setActiveSonarrInstance(instanceId);
+        case ModuleType.downloads:
+          instances.setActiveDownloadInstance(instanceId);
+        default:
+          break;
+      }
+    }
     switch (module.type) {
       case ModuleType.dashboard:
         context.go('/dashboard/movies');
@@ -735,6 +759,8 @@ class _AppShellState extends ConsumerState<AppShell>
         context.go('/radarr/library');
       case ModuleType.sonarr:
         context.go('/sonarr/library');
+      case ModuleType.downloads:
+        context.go('/downloads/queue');
       case ModuleType.assistant:
         context.go('/assistant');
     }

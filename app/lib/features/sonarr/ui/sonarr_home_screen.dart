@@ -5,7 +5,9 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/sonarr_api_service.dart';
+import '../data/sonarr_models.dart';
 import '../logic/sonarr_series_provider.dart';
+import 'sonarr_releases_screen.dart';
 import 'sonarr_series_list.dart';
 
 /// Sonarr library management screen (used in the Sonarr module).
@@ -48,6 +50,69 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
     super.dispose();
   }
 
+  Future<void> _triggerAutomaticSearch(int seriesId) async {
+    try {
+      await _notifier!.searchForSeries(seriesId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Series search started')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
+    }
+  }
+
+  /// Sonarr's interactive search is per-season, so pick a season first.
+  Future<void> _openInteractiveSearch(SonarrSeries show) async {
+    final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
+    if (instanceId == null) return;
+
+    final seasons = [...show.seasons]
+      ..sort((a, b) => a.seasonNumber.compareTo(b.seasonNumber));
+    if (seasons.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('No seasons available')));
+      return;
+    }
+
+    final seasonNumber = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('Select Season'),
+        children: seasons
+            .map((s) => SimpleDialogOption(
+                  onPressed: () => Navigator.pop(ctx, s.seasonNumber),
+                  child: Text(
+                    s.seasonNumber == 0
+                        ? 'Specials'
+                        : 'Season ${s.seasonNumber}',
+                    style: TextStyle(
+                      color: s.monitored
+                          ? AppTheme.textPrimary
+                          : AppTheme.textSecondary,
+                      fontSize: 15,
+                    ),
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+    if (seasonNumber == null || !mounted) return;
+
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (_) => SonarrReleasesScreen(
+          instanceId: instanceId,
+          seriesId: show.id,
+          seasonNumber: seasonNumber,
+          seriesTitle: show.title,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Rebuild when active instance changes
@@ -68,8 +133,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
           children: [
             // Stats bar
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               color: AppTheme.surface,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -150,8 +214,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
             Expanded(
               child: state.isLoading && state.series.isEmpty
                   ? const Center(
-                      child:
-                          CircularProgressIndicator(color: AppTheme.accent))
+                      child: CircularProgressIndicator(color: AppTheme.accent))
                   : RefreshIndicator(
                       onRefresh: _notifier!.loadSeries,
                       color: AppTheme.accent,
@@ -159,7 +222,8 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                         series: state.filtered,
                         onDelete: (id) =>
                             _notifier!.deleteSeries(id, deleteFiles: false),
-                        onSearch: _notifier!.searchForSeries,
+                        onSearch: _triggerAutomaticSearch,
+                        onInteractiveSearch: _openInteractiveSearch,
                       ),
                     ),
             ),

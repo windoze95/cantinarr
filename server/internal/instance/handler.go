@@ -8,14 +8,26 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
+	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
 )
 
-// instanceResponse is the JSON shape returned to clients — API keys are write-only.
+// allowedServiceTypes is the set of supported service types.
+var allowedServiceTypes = map[string]bool{
+	"radarr":      true,
+	"sonarr":      true,
+	"sabnzbd":     true,
+	"qbittorrent": true,
+}
+
+// instanceResponse is the JSON shape returned to clients — API keys and
+// passwords are write-only.
 type instanceResponse struct {
 	ID          string `json:"id"`
 	ServiceType string `json:"service_type"`
 	Name        string `json:"name"`
 	URL         string `json:"url"`
+	Username    string `json:"username,omitempty"`
 	IsDefault   bool   `json:"is_default"`
 	SortOrder   int    `json:"sort_order"`
 }
@@ -26,6 +38,7 @@ func toResponse(inst *Instance) instanceResponse {
 		ServiceType: inst.ServiceType,
 		Name:        inst.Name,
 		URL:         inst.URL,
+		Username:    inst.Username,
 		IsDefault:   inst.IsDefault,
 		SortOrder:   inst.SortOrder,
 	}
@@ -65,20 +78,20 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" {
-		http.Error(w, `{"error":"service_type must be 'radarr' or 'sonarr'"}`, http.StatusBadRequest)
+	if !allowedServiceTypes[inst.ServiceType] {
+		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'sabnzbd', 'qbittorrent'"}`, http.StatusBadRequest)
 		return
 	}
-	if inst.Name == "" || inst.URL == "" || inst.APIKey == "" {
-		http.Error(w, `{"error":"name, url, and api_key are required"}`, http.StatusBadRequest)
+	if err := validateRequiredFields(&inst); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
 
 	// Normalize URL
 	inst.URL = strings.TrimRight(inst.URL, "/")
 
-	// Validate URL reachability
-	if err := validateInstanceURL(inst.URL, inst.APIKey); err != nil {
+	// Validate reachability/credentials against the actual service
+	if err := validateConnection(&inst); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"connection test failed: %s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -97,21 +110,44 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "instanceID")
 
+	existing, err := h.store.Get(instanceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil {
+		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+		return
+	}
+
 	var inst Instance
 	if err := json.NewDecoder(r.Body).Decode(&inst); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}
 	inst.ID = instanceID
+	// Service type is immutable; validate against the stored type.
+	inst.ServiceType = existing.ServiceType
 
-	if inst.Name == "" || inst.URL == "" || inst.APIKey == "" {
-		http.Error(w, `{"error":"name, url, and api_key are required"}`, http.StatusBadRequest)
+	// Credentials are write-only: a blank value keeps the stored one.
+	if inst.APIKey == "" {
+		inst.APIKey = existing.APIKey
+	}
+	if inst.Username == "" {
+		inst.Username = existing.Username
+	}
+	if inst.Password == "" {
+		inst.Password = existing.Password
+	}
+
+	if err := validateRequiredFields(&inst); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
 
 	inst.URL = strings.TrimRight(inst.URL, "/")
 
-	if err := validateInstanceURL(inst.URL, inst.APIKey); err != nil {
+	if err := validateConnection(&inst); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"connection test failed: %s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -141,8 +177,47 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// validateInstanceURL checks that the instance is reachable by hitting its system/status endpoint.
-func validateInstanceURL(baseURL, apiKey string) error {
+// validateRequiredFields enforces per-service-type required fields.
+func validateRequiredFields(inst *Instance) error {
+	if inst.Name == "" || inst.URL == "" {
+		return fmt.Errorf("name and url are required")
+	}
+	switch inst.ServiceType {
+	case "qbittorrent":
+		if inst.Username == "" || inst.Password == "" {
+			return fmt.Errorf("username and password are required for qbittorrent")
+		}
+	default: // radarr, sonarr, sabnzbd
+		if inst.APIKey == "" {
+			return fmt.Errorf("name, url, and api_key are required")
+		}
+	}
+	return nil
+}
+
+// validateConnection performs a service-type-specific connectivity check.
+func validateConnection(inst *Instance) error {
+	switch inst.ServiceType {
+	case "radarr", "sonarr":
+		return validateArrURL(inst.URL, inst.APIKey)
+	case "sabnzbd":
+		_, err := sabnzbd.NewClient(inst.URL, inst.APIKey).Version()
+		return err
+	case "qbittorrent":
+		client := qbittorrent.NewClient(inst.URL, inst.Username, inst.Password)
+		if err := client.Login(); err != nil {
+			return err
+		}
+		_, err := client.Version()
+		return err
+	default:
+		return fmt.Errorf("unknown service type: %s", inst.ServiceType)
+	}
+}
+
+// validateArrURL checks that a Radarr/Sonarr instance is reachable by hitting
+// its system/status endpoint.
+func validateArrURL(baseURL, apiKey string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("GET", baseURL+"/api/v3/system/status", nil)
 	if err != nil {

@@ -147,7 +147,7 @@ var toolDefinitions = []Tool{
 		Name:        "list_my_requests",
 		Description: "List the current user's media request history",
 		InputSchema: map[string]interface{}{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 	},

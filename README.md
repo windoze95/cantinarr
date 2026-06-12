@@ -10,7 +10,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 │                                                         │
 │  ┌──────────┐  ┌──────────┐  ┌───────────────────────┐  │
 │  │ Auth/JWT │  │ Request  │  │ AI Chat (Claude)      │  │
-│  │          │  │ Service  │  │ + 9 MCP Tools         │  │
+│  │          │  │ Service  │  │ + 19 MCP Tools        │  │
 │  └──────────┘  └────┬─────┘  └───────────────────────┘  │
 │                     │                                    │
 │  ┌──────────────────┼──────────────────────┐             │
@@ -43,8 +43,9 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **Zero-config requesting** -- Your users never see API keys, TVDB IDs, or quality profiles. They browse, they tap, it works.
 - **TMDB + Trakt for discovery** -- The best metadata, images, and trending data. Sonarr's TVDB dependency is invisible.
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
-- **AI assistant** -- "What should I watch tonight?" Claude searches your library, checks availability, and can request for you.
-- **MCP server** -- The same 9 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, so Claude Desktop and other MCP clients can connect directly.
+- **AI assistant** -- "What should I watch tonight?" Claude searches your library, checks availability, and can request for you. Admins can also manage the server conversationally: check the queue, kick off searches, grab a specific release from the indexers, or clean up failed downloads.
+- **MCP server** -- The same 19 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, so Claude Desktop and other MCP clients can connect directly. Every tool can be toggled on/off per server from Settings > AI Tools.
+- **Download clients** -- SABnzbd and qBittorrent modules with live queue management (pause, resume, remove, speeds) alongside full Radarr/Sonarr control: queue actions, history, calendar, and interactive release search.
 - **Household-friendly** -- Connect links, role-based access. Admins manage arr services, users just browse and request.
 - **Single container** -- One Go binary, one port, serves API + web UI. Runs great on a Raspberry Pi or NAS.
 
@@ -84,11 +85,14 @@ cantinarr/
 │   │   ├── config/         # Server configuration (port, name)
 │   │   ├── credentials/   # API credential management + client registry
 │   │   ├── db/             # SQLite with WAL mode
-│   │   ├── mcp/            # 9 AI tools (search, request, status)
+│   │   ├── mcp/            # 19 AI tools + per-tool toggles
+│   │   ├── downloads/      # Unified SABnzbd/qBittorrent queue API
 │   │   ├── mcpserver/      # MCP Streamable HTTP endpoint
 │   │   ├── proxy/          # Arr admin reverse proxy
+│   │   ├── qbittorrent/    # qBittorrent WebUI v2 client
 │   │   ├── radarr/         # Radarr API v3 client
 │   │   ├── request/        # Request orchestration + bridging
+│   │   ├── sabnzbd/        # SABnzbd JSON API client
 │   │   ├── sonarr/         # Sonarr API v3 client
 │   │   ├── tmdb/           # TMDB client + ID bridge
 │   │   ├── trakt/          # Trakt fallback ID resolver
@@ -117,6 +121,7 @@ All service credentials are managed through the admin UI -- no environment varia
 |---|---|---|
 | TMDB access token | Admin UI | Required for media discovery and search ([get one here](https://www.themoviedb.org/settings/api)) |
 | Radarr/Sonarr instances | Admin UI | Add via Settings > Add Instance |
+| SABnzbd/qBittorrent instances | Admin UI | Download client modules (queue, history, speeds) |
 | Anthropic API key | Admin UI | Enables AI assistant |
 | Trakt client ID | Admin UI | Enhances discovery + fallback ID bridging |
 
@@ -127,6 +132,7 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_PORT` | `8585` | HTTP listen port |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for JWT signing |
+| `CANTINARR_AI_MODEL` | `claude-opus-4-8` | Claude model used by the AI assistant |
 
 ## How It Works
 

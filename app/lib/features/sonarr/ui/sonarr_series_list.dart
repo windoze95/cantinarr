@@ -8,6 +8,7 @@ class SonarrSeriesList extends StatelessWidget {
   final List<SonarrSeries> series;
   final void Function(int id) onDelete;
   final void Function(int id) onSearch;
+  final void Function(SonarrSeries show)? onInteractiveSearch;
   final bool embedded;
 
   const SonarrSeriesList({
@@ -15,6 +16,7 @@ class SonarrSeriesList extends StatelessWidget {
     required this.series,
     required this.onDelete,
     required this.onSearch,
+    this.onInteractiveSearch,
     this.embedded = false,
   });
 
@@ -46,7 +48,13 @@ class SonarrSeriesList extends StatelessWidget {
           ),
           confirmDismiss: (_) => _confirmDelete(context, show.title),
           onDismissed: (_) => onDelete(show.id),
-          child: _SeriesTile(show: show, onSearch: () => onSearch(show.id)),
+          child: _SeriesTile(
+            show: show,
+            onSearch: () => onSearch(show.id),
+            onInteractiveSearch: onInteractiveSearch != null
+                ? () => onInteractiveSearch!(show)
+                : null,
+          ),
         );
       },
     );
@@ -77,8 +85,13 @@ class SonarrSeriesList extends StatelessWidget {
 class _SeriesTile extends StatelessWidget {
   final SonarrSeries show;
   final VoidCallback onSearch;
+  final VoidCallback? onInteractiveSearch;
 
-  const _SeriesTile({required this.show, required this.onSearch});
+  const _SeriesTile({
+    required this.show,
+    required this.onSearch,
+    this.onInteractiveSearch,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -123,8 +136,7 @@ class _SeriesTile extends StatelessWidget {
                         color: AppTheme.textSecondary, fontSize: 13)),
               const SizedBox(width: 8),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
                   color: _statusColor.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(4),
@@ -164,10 +176,42 @@ class _SeriesTile extends StatelessWidget {
           ],
         ],
       ),
-      trailing: IconButton(
-        icon: const Icon(Icons.search, color: AppTheme.textSecondary),
-        onPressed: onSearch,
-        tooltip: 'Search for episodes',
+      trailing: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
+        color: AppTheme.surfaceVariant,
+        tooltip: 'Actions',
+        onSelected: (value) {
+          switch (value) {
+            case 'search':
+              onSearch();
+            case 'interactive':
+              onInteractiveSearch?.call();
+          }
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(
+            value: 'search',
+            child: Row(
+              children: [
+                Icon(Icons.search, size: 18, color: AppTheme.textSecondary),
+                SizedBox(width: 10),
+                Text('Automatic search'),
+              ],
+            ),
+          ),
+          if (onInteractiveSearch != null)
+            const PopupMenuItem(
+              value: 'interactive',
+              child: Row(
+                children: [
+                  Icon(Icons.manage_search,
+                      size: 18, color: AppTheme.textSecondary),
+                  SizedBox(width: 10),
+                  Text('Interactive search'),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }

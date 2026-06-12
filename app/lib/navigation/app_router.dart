@@ -9,11 +9,16 @@ import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
 import '../features/dashboard/ui/dashboard_tv_tab.dart';
 import '../features/discover/data/tmdb_models.dart';
+import '../features/downloads/ui/downloads_history_screen.dart';
+import '../features/downloads/ui/downloads_module_shell.dart';
+import '../features/downloads/ui/downloads_queue_screen.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
+import '../features/radarr/ui/radarr_history_screen.dart';
 import '../features/radarr/ui/radarr_home_screen.dart';
 import '../features/radarr/ui/radarr_module_shell.dart';
 import '../features/radarr/ui/radarr_queue_screen.dart';
+import '../features/settings/ui/ai_tools_screen.dart';
 import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
@@ -22,6 +27,7 @@ import '../features/setup_wizard/ui/plex_setup_guide.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
 import '../features/shell/ui/app_shell.dart';
 import '../features/sonarr/ui/sonarr_calendar_screen.dart';
+import '../features/sonarr/ui/sonarr_history_screen.dart';
 import '../features/sonarr/ui/sonarr_home_screen.dart';
 import '../features/sonarr/ui/sonarr_module_shell.dart';
 import '../features/sonarr/ui/sonarr_queue_screen.dart';
@@ -45,7 +51,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
       if (!isAuthenticated && !isAuthRoute) return '/login';
       // During passkey offer, force user to /login (where the offer renders)
-      if (isAuthenticated && pendingPasskey) return isAuthRoute ? null : '/login';
+      if (isAuthenticated && pendingPasskey) {
+        return isAuthRoute ? null : '/login';
+      }
       if (isAuthenticated && isAuthRoute) return '/dashboard/movies';
       return null;
     },
@@ -92,7 +100,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
-          // Radarr module (Library/Queue/Calendar tabs)
+          // Radarr module (Library/Queue/History/Calendar tabs)
           StatefulShellRoute.indexedStack(
             builder: (context, state, navigationShell) {
               return RadarrModuleShell(
@@ -121,6 +129,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               StatefulShellBranch(
                 routes: [
                   GoRoute(
+                    path: '/radarr/history',
+                    builder: (_, __) => const RadarrHistoryScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
                     path: '/radarr/calendar',
                     builder: (_, __) => const RadarrCalendarScreen(),
                   ),
@@ -129,7 +145,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
-          // Sonarr module (Library/Queue/Calendar tabs)
+          // Sonarr module (Library/Queue/History/Calendar tabs)
           StatefulShellRoute.indexedStack(
             builder: (context, state, navigationShell) {
               return SonarrModuleShell(
@@ -158,8 +174,45 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               StatefulShellBranch(
                 routes: [
                   GoRoute(
+                    path: '/sonarr/history',
+                    builder: (_, __) => const SonarrHistoryScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
                     path: '/sonarr/calendar',
                     builder: (_, __) => const SonarrCalendarScreen(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          // Downloads module (Queue/History tabs, admin only)
+          StatefulShellRoute.indexedStack(
+            builder: (context, state, navigationShell) {
+              return DownloadsModuleShell(
+                currentIndex: navigationShell.currentIndex,
+                onTabChanged: (index) => navigationShell.goBranch(index),
+                child: navigationShell,
+              );
+            },
+            branches: [
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/downloads/queue',
+                    builder: (_, __) => const DownloadsQueueScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/downloads/history',
+                    builder: (_, __) => const DownloadsHistoryScreen(),
                   ),
                 ],
               ),
@@ -185,8 +238,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) {
           final type = state.pathParameters['type']!;
           final id = int.parse(state.pathParameters['id']!);
-          final mediaType =
-              type == 'tv' ? MediaType.tv : MediaType.movie;
+          final mediaType = type == 'tv' ? MediaType.tv : MediaType.movie;
           return MediaDetailScreen(
             id: id,
             mediaType: mediaType,
@@ -202,6 +254,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/credentials',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const CredentialsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/ai-tools',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const AiToolsScreen(),
       ),
       GoRoute(
         path: '/settings/devices',
@@ -229,6 +286,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             initialName: extra?['name'] as String?,
             initialUrl: extra?['url'] as String?,
             initialApiKey: extra?['api_key'] as String?,
+            initialUsername: extra?['username'] as String?,
             initialIsDefault: extra?['is_default'] as bool? ?? false,
           );
         },
