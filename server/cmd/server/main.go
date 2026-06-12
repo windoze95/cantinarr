@@ -19,6 +19,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/discover"
+	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
@@ -72,6 +73,9 @@ func main() {
 	registry := instance.NewRegistry(instanceStore)
 	instanceHandler := instance.NewHandler(instanceStore, registry)
 
+	// Downloads handler (SABnzbd / qBittorrent queue management)
+	downloadsHandler := downloads.NewHandler(instanceStore, registry)
+
 	// Request service
 	requestService := request.NewService(database, registry, bridge)
 	requestHandler := request.NewHandler(requestService)
@@ -80,7 +84,7 @@ func main() {
 	proxyHandler := proxy.NewHandler(instanceStore)
 
 	// MCP tool server + AI handler
-	toolServer := mcp.NewToolServer(creds, requestService, registry)
+	toolServer := mcp.NewToolServer(creds, requestService, registry, bridge)
 	aiHandler := ai.NewHandler(creds, toolServer)
 
 	// Discover handler (always created — checks credentials at request time)
@@ -93,7 +97,7 @@ func main() {
 	go wsHub.Run(context.Background())
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, creds, credHandler, toolServer)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, creds, credHandler, toolServer)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
@@ -126,4 +130,3 @@ func ensureJWTSecret(database *sql.DB) (string, error) {
 	log.Println("Generated and persisted JWT secret")
 	return secret, nil
 }
-

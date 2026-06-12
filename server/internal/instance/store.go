@@ -8,17 +8,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// Instance represents a configured Radarr or Sonarr service instance.
+// Instance represents a configured service instance (Radarr, Sonarr, SABnzbd,
+// or qBittorrent). Radarr/Sonarr/SABnzbd authenticate with an API key;
+// qBittorrent authenticates with username/password.
 type Instance struct {
 	ID          string    `json:"id"`
-	ServiceType string    `json:"service_type"` // "radarr" or "sonarr"
+	ServiceType string    `json:"service_type"` // "radarr", "sonarr", "sabnzbd", or "qbittorrent"
 	Name        string    `json:"name"`
 	URL         string    `json:"url"`
 	APIKey      string    `json:"api_key"`
+	Username    string    `json:"username"`
+	Password    string    `json:"password"`
 	IsDefault   bool      `json:"is_default"`
 	SortOrder   int       `json:"sort_order"`
 	CreatedAt   time.Time `json:"created_at"`
 }
+
+const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, created_at"
 
 // Store provides CRUD operations for service instances.
 type Store struct {
@@ -33,7 +39,7 @@ func NewStore(db *sql.DB) *Store {
 // List returns all instances of the given service type, ordered by sort_order.
 func (s *Store) List(serviceType string) ([]Instance, error) {
 	rows, err := s.db.Query(
-		"SELECT id, service_type, name, url, api_key, is_default, sort_order, created_at FROM service_instances WHERE service_type = ? ORDER BY sort_order, name",
+		"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? ORDER BY sort_order, name",
 		serviceType,
 	)
 	if err != nil {
@@ -46,7 +52,7 @@ func (s *Store) List(serviceType string) ([]Instance, error) {
 // ListAll returns all instances across all service types.
 func (s *Store) ListAll() ([]Instance, error) {
 	rows, err := s.db.Query(
-		"SELECT id, service_type, name, url, api_key, is_default, sort_order, created_at FROM service_instances ORDER BY service_type, sort_order, name",
+		"SELECT " + instanceColumns + " FROM service_instances ORDER BY service_type, sort_order, name",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list all instances: %w", err)
@@ -59,9 +65,9 @@ func (s *Store) ListAll() ([]Instance, error) {
 func (s *Store) Get(id string) (*Instance, error) {
 	var inst Instance
 	err := s.db.QueryRow(
-		"SELECT id, service_type, name, url, api_key, is_default, sort_order, created_at FROM service_instances WHERE id = ?",
+		"SELECT "+instanceColumns+" FROM service_instances WHERE id = ?",
 		id,
-	).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
+	).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -79,8 +85,8 @@ func (s *Store) Create(inst *Instance) error {
 	inst.CreatedAt = time.Now()
 
 	_, err := s.db.Exec(
-		"INSERT INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		inst.ID, inst.ServiceType, inst.Name, inst.URL, inst.APIKey, inst.IsDefault, inst.SortOrder, inst.CreatedAt,
+		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		inst.ID, inst.ServiceType, inst.Name, inst.URL, inst.APIKey, inst.Username, inst.Password, inst.IsDefault, inst.SortOrder, inst.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create instance: %w", err)
@@ -91,8 +97,8 @@ func (s *Store) Create(inst *Instance) error {
 // Update modifies an existing instance.
 func (s *Store) Update(inst *Instance) error {
 	result, err := s.db.Exec(
-		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, is_default = ?, sort_order = ? WHERE id = ?",
-		inst.Name, inst.URL, inst.APIKey, inst.IsDefault, inst.SortOrder, inst.ID,
+		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ? WHERE id = ?",
+		inst.Name, inst.URL, inst.APIKey, inst.Username, inst.Password, inst.IsDefault, inst.SortOrder, inst.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update instance: %w", err)
@@ -121,15 +127,15 @@ func (s *Store) Delete(id string) error {
 func (s *Store) GetDefault(serviceType string) (*Instance, error) {
 	var inst Instance
 	err := s.db.QueryRow(
-		"SELECT id, service_type, name, url, api_key, is_default, sort_order, created_at FROM service_instances WHERE service_type = ? AND is_default = 1 LIMIT 1",
+		"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? AND is_default = 1 LIMIT 1",
 		serviceType,
-	).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
+	).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
 	if err == sql.ErrNoRows {
 		// Fall back to first instance
 		err = s.db.QueryRow(
-			"SELECT id, service_type, name, url, api_key, is_default, sort_order, created_at FROM service_instances WHERE service_type = ? ORDER BY sort_order LIMIT 1",
+			"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? ORDER BY sort_order LIMIT 1",
 			serviceType,
-		).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
+		).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
 	}
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -151,7 +157,7 @@ func scanInstances(rows *sql.Rows) ([]Instance, error) {
 	var instances []Instance
 	for rows.Next() {
 		var inst Instance
-		if err := rows.Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt); err != nil {
+		if err := rows.Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan instance: %w", err)
 		}
 		instances = append(instances, inst)

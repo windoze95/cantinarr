@@ -13,6 +13,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/discover"
+	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
@@ -33,6 +34,7 @@ func NewRouter(
 	discoverHandler *discover.Handler,
 	instanceHandler *instance.Handler,
 	instanceStore *instance.Store,
+	downloadsHandler *downloads.Handler,
 	creds *credentials.Registry,
 	credHandler *credentials.Handler,
 	toolServer *mcp.ToolServer,
@@ -106,6 +108,11 @@ func NewRouter(
 			r.Get("/credentials", credHandler.Get)
 			r.Put("/credentials", credHandler.Update)
 			r.Delete("/credentials/{key}", credHandler.Delete)
+
+			// AI tool toggles
+			aiToolsHandler := mcp.NewToolSettingsHandler(toolServer)
+			r.Get("/ai-tools", aiToolsHandler.List)
+			r.Put("/ai-tools/{name}", aiToolsHandler.Update)
 		})
 
 		// Config route (authenticated)
@@ -183,6 +190,20 @@ func NewRouter(
 
 			// Instance proxy — forward to specific instance
 			r.HandleFunc("/instances/{instanceID}/*", proxyHandler.InstanceProxy())
+		})
+
+		// Download client routes (admin only)
+		r.Group(func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.Use(auth.AdminMiddleware)
+
+			r.Get("/downloads/{instanceID}/queue", downloadsHandler.GetQueue)
+			r.Post("/downloads/{instanceID}/queue/{itemID}/pause", downloadsHandler.PauseItem)
+			r.Post("/downloads/{instanceID}/queue/{itemID}/resume", downloadsHandler.ResumeItem)
+			r.Delete("/downloads/{instanceID}/queue/{itemID}", downloadsHandler.DeleteItem)
+			r.Post("/downloads/{instanceID}/pause", downloadsHandler.PauseAll)
+			r.Post("/downloads/{instanceID}/resume", downloadsHandler.ResumeAll)
+			r.Get("/downloads/{instanceID}/history", downloadsHandler.GetHistory)
 		})
 
 	})

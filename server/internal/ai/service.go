@@ -30,6 +30,8 @@ How to work:
 - When the user asks to get/download/request a title, search for the exact title first, disambiguate by year if needed, then call request_media. Confirm what you did afterwards.
 - If a tool fails, try a sensible alternative or briefly explain what went wrong. Never invent data the tools did not return.
 - Be concise and conversational. When recommending, give title, year, and a one-line hook. Format lists with bullets.
+- Server management: use get_queue for "what's downloading", get_calendar for "what's coming out", get_library for "what do I have", get_history for "what downloaded recently", and get_disk_space for storage questions. If something in the library is missing or a download failed, trigger_search kicks off a new automatic search. For hands-on control, search_releases lists individual releases from the indexers and grab_release downloads a specific one — when the user wants a particular quality or release group, search first and show the best options before grabbing.
+- Some tools are admin-only or may be disabled. If a tool reports it needs an admin account or is disabled, relay that plainly and suggest what the user can do instead — don't retry the same call.
 - IMPORTANT: After selecting the specific items you are recommending, you MUST call display_media with their TMDB IDs and media types, ordered by relevance — that tool controls the visual carousel the user sees. Search results alone do NOT populate the carousel. Skip display_media for purely informational answers with no items to showcase.`
 )
 
@@ -175,7 +177,7 @@ func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, c
 		input = json.RawMessage("{}")
 	}
 
-	result, err := s.toolServer.ExecuteTool(ctx, toolUse.Name, input, chatCtx.UserID)
+	result, err := s.toolServer.ExecuteTool(ctx, toolUse.Name, input, mcp.CallContext{UserID: chatCtx.UserID, Role: chatCtx.Role})
 	if err != nil {
 		if cb.OnToolEnd != nil {
 			cb.OnToolEnd(toolUse.Name, false)
@@ -306,4 +308,13 @@ var toolLabels = map[string]string{
 	"request_media":        "Sending request",
 	"list_my_requests":     "Fetching your requests",
 	"display_media":        "Preparing results",
+	"get_queue":            "Checking the download queue",
+	"get_calendar":         "Checking upcoming releases",
+	"get_library":          "Browsing the library",
+	"get_history":          "Reading download history",
+	"trigger_search":       "Starting a download search",
+	"search_releases":      "Searching indexers for releases",
+	"grab_release":         "Grabbing release",
+	"remove_queue_item":    "Removing from queue",
+	"get_disk_space":       "Checking disk space",
 }

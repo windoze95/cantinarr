@@ -22,8 +22,12 @@ func mcpAppUIMeta() *mcp.Meta {
 }
 
 // RegisterTools bridges all existing ToolServer tools into the mcp-go MCPServer.
+// Every tool is registered (including currently disabled ones) so that runtime
+// toggle changes take effect without a restart; ToolListFilter hides disabled
+// and admin-only tools from list_tools, and ExecuteTool enforces both at call
+// time.
 func RegisterTools(mcpServer *server.MCPServer, toolServer *internalmcp.ToolServer) {
-	for _, tool := range toolServer.GetTools() {
+	for _, tool := range toolServer.AllTools() {
 		schemaJSON, err := json.Marshal(tool.InputSchema)
 		if err != nil {
 			log.Printf("mcpserver: failed to marshal schema for tool %q: %v", tool.Name, err)
@@ -35,6 +39,31 @@ func RegisterTools(mcpServer *server.MCPServer, toolServer *internalmcp.ToolServ
 			mcpTool.Meta = mcpAppUIMeta()
 		}
 		mcpServer.AddTool(mcpTool, makeToolHandler(toolServer, tool.Name))
+	}
+}
+
+// ToolListFilter hides administrator-disabled tools and, for non-admin (or
+// unknown-role) sessions, admin-only tools from tools/list results.
+func ToolListFilter(toolServer *internalmcp.ToolServer) server.ToolFilterFunc {
+	adminOnly := map[string]bool{}
+	for _, t := range toolServer.AllTools() {
+		if t.AdminOnly {
+			adminOnly[t.Name] = true
+		}
+	}
+	return func(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
+		isAdmin := GetRoleFromContext(ctx) == "admin"
+		filtered := make([]mcp.Tool, 0, len(tools))
+		for _, t := range tools {
+			if !toolServer.IsToolEnabled(t.Name) {
+				continue
+			}
+			if adminOnly[t.Name] && !isAdmin {
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		return filtered
 	}
 }
 
@@ -50,7 +79,8 @@ func makeToolHandler(toolServer *internalmcp.ToolServer, toolName string) server
 			return mcp.NewToolResultError("invalid arguments"), nil
 		}
 
-		result, err := toolServer.ExecuteTool(ctx, toolName, inputJSON, userID)
+		callCtx := internalmcp.CallContext{UserID: userID, Role: GetRoleFromContext(ctx)}
+		result, err := toolServer.ExecuteTool(ctx, toolName, inputJSON, callCtx)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}

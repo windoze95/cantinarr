@@ -17,6 +17,7 @@ func NewMCPHandler(toolServer *mcp.ToolServer) http.Handler {
 		"1.0.0",
 		server.WithToolCapabilities(false),
 		server.WithResourceCapabilities(true, true),
+		server.WithToolFilter(ToolListFilter(toolServer)),
 	)
 
 	RegisterTools(mcpServer, toolServer)
