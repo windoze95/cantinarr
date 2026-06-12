@@ -741,6 +741,8 @@ class _AppShellState extends ConsumerState<AppShell>
         context.go('/radarr/library');
       case ModuleType.sonarr:
         context.go('/sonarr/library');
+      case ModuleType.downloads:
+        context.go('/downloads/queue');
       case ModuleType.assistant:
         context.go('/assistant');
     }

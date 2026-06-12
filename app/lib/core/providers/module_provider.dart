@@ -45,12 +45,14 @@ class ModuleNotifier extends Notifier<ModuleState> {
   ModuleState build() {
     final auth = ref.watch(authProvider).valueOrNull;
     final connection = auth?.connection;
-    final modules = _buildModules(connection);
+    final isAdmin = auth?.user?.isAdmin ?? false;
+    final modules = _buildModules(connection, isAdmin: isAdmin);
 
     return ModuleState(modules: modules);
   }
 
-  List<AppModule> _buildModules(BackendConnection? connection) {
+  List<AppModule> _buildModules(BackendConnection? connection,
+      {bool isAdmin = false}) {
     final modules = <AppModule>[];
 
     // Dashboard is always available
@@ -81,6 +83,19 @@ class ModuleNotifier extends Notifier<ModuleState> {
           instanceId: inst.id,
           instanceName: inst.name,
         ));
+      }
+
+      // Download client instances (admin only)
+      if (isAdmin) {
+        for (final inst in connection.downloadInstances) {
+          modules.add(AppModule(
+            type: ModuleType.downloads,
+            label: inst.name,
+            icon: Icons.download,
+            instanceId: inst.id,
+            instanceName: inst.name,
+          ));
+        }
       }
 
       // AI Assistant

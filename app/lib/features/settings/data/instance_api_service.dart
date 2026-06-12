@@ -14,11 +14,24 @@ class InstanceApiService {
         .toList();
   }
 
+  /// Fetch full details (url, username, ...) for one instance.
+  /// The list endpoint is the only read endpoint; credentials are write-only.
+  Future<Map<String, dynamic>?> getInstanceDetails(String id) async {
+    final resp = await _dio.get('/api/instances');
+    for (final inst in (resp.data as List<dynamic>)) {
+      final map = inst as Map<String, dynamic>;
+      if (map['id'] == id) return map;
+    }
+    return null;
+  }
+
   Future<ServiceInstance> createInstance({
     required String serviceType,
     required String name,
     required String url,
-    required String apiKey,
+    String apiKey = '',
+    String username = '',
+    String password = '',
     bool isDefault = false,
   }) async {
     final resp = await _dio.post('/api/instances', data: {
@@ -26,6 +39,8 @@ class InstanceApiService {
       'name': name,
       'url': url,
       'api_key': apiKey,
+      'username': username,
+      'password': password,
       'is_default': isDefault,
     });
     return ServiceInstance.fromJson(resp.data as Map<String, dynamic>);
@@ -35,13 +50,17 @@ class InstanceApiService {
     required String id,
     required String name,
     required String url,
-    required String apiKey,
+    String apiKey = '',
+    String username = '',
+    String password = '',
     bool isDefault = false,
   }) async {
     final resp = await _dio.put('/api/instances/$id', data: {
       'name': name,
       'url': url,
       'api_key': apiKey,
+      'username': username,
+      'password': password,
       'is_default': isDefault,
     });
     return ServiceInstance.fromJson(resp.data as Map<String, dynamic>);

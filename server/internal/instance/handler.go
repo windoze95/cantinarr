@@ -129,6 +129,17 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	// Service type is immutable; validate against the stored type.
 	inst.ServiceType = existing.ServiceType
 
+	// Credentials are write-only: a blank value keeps the stored one.
+	if inst.APIKey == "" {
+		inst.APIKey = existing.APIKey
+	}
+	if inst.Username == "" {
+		inst.Username = existing.Username
+	}
+	if inst.Password == "" {
+		inst.Password = existing.Password
+	}
+
 	if err := validateRequiredFields(&inst); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return

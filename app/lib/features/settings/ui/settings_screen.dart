@@ -84,19 +84,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               subtitle: 'Add a Radarr or Sonarr instance to get started',
             ),
           ...instances.map((inst) => _SettingsTile(
-                icon: inst.serviceType == 'radarr'
-                    ? Icons.movie_outlined
-                    : Icons.tv_outlined,
+                icon: _serviceIcon(inst.serviceType),
                 title: inst.name,
                 subtitle:
-                    '${inst.serviceType == 'radarr' ? 'Radarr' : 'Sonarr'}${inst.isDefault ? ' (Default)' : ''}',
+                    '${_serviceLabel(inst.serviceType)}${inst.isDefault ? ' (Default)' : ''}',
                 trailing: Icon(
                   Icons.circle,
                   size: 12,
                   color: AppTheme.available,
                 ),
                 onTap: user?.isAdmin == true
-                    ? () => context.push('/settings/instance/${inst.id}')
+                    ? () => context.push(
+                          '/settings/instance/${inst.id}',
+                          extra: {
+                            'service_type': inst.serviceType,
+                            'name': inst.name,
+                            'is_default': inst.isDefault,
+                          },
+                        )
                     : null,
               )),
           _SettingsTile(
@@ -301,6 +306,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
     );
+  }
+}
+
+IconData _serviceIcon(String serviceType) {
+  switch (serviceType) {
+    case 'radarr':
+      return Icons.movie_outlined;
+    case 'sonarr':
+      return Icons.tv_outlined;
+    case 'sabnzbd':
+    case 'qbittorrent':
+      return Icons.download_outlined;
+    default:
+      return Icons.dns_outlined;
+  }
+}
+
+String _serviceLabel(String serviceType) {
+  switch (serviceType) {
+    case 'radarr':
+      return 'Radarr';
+    case 'sonarr':
+      return 'Sonarr';
+    case 'sabnzbd':
+      return 'SABnzbd';
+    case 'qbittorrent':
+      return 'qBittorrent';
+    default:
+      return serviceType;
   }
 }
 

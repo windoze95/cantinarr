@@ -9,6 +9,9 @@ import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
 import '../features/dashboard/ui/dashboard_tv_tab.dart';
 import '../features/discover/data/tmdb_models.dart';
+import '../features/downloads/ui/downloads_history_screen.dart';
+import '../features/downloads/ui/downloads_module_shell.dart';
+import '../features/downloads/ui/downloads_queue_screen.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
 import '../features/radarr/ui/radarr_history_screen.dart';
@@ -187,6 +190,35 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
+          // Downloads module (Queue/History tabs, admin only)
+          StatefulShellRoute.indexedStack(
+            builder: (context, state, navigationShell) {
+              return DownloadsModuleShell(
+                currentIndex: navigationShell.currentIndex,
+                onTabChanged: (index) => navigationShell.goBranch(index),
+                child: navigationShell,
+              );
+            },
+            branches: [
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/downloads/queue',
+                    builder: (_, __) => const DownloadsQueueScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/downloads/history',
+                    builder: (_, __) => const DownloadsHistoryScreen(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
           // AI Assistant module (single route, no bottom nav)
           GoRoute(
             path: '/assistant',
@@ -254,6 +286,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             initialName: extra?['name'] as String?,
             initialUrl: extra?['url'] as String?,
             initialApiKey: extra?['api_key'] as String?,
+            initialUsername: extra?['username'] as String?,
             initialIsDefault: extra?['is_default'] as bool? ?? false,
           );
         },
