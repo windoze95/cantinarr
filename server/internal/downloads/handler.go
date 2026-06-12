@@ -299,7 +299,7 @@ func (h *Handler) PauseAll(w http.ResponseWriter, r *http.Request) {
 		func(c *sabnzbd.Client) error { return c.PauseQueue() },
 		func(c *qbittorrent.Client) error { return c.PauseTorrents("all") },
 		func(c *nzbget.Client) error { return c.PauseDownload() },
-		func(c *transmission.Client) error { return c.StopTorrents(nil) },
+		func(c *transmission.Client) error { return transmissionQueueAction(c, c.StopTorrents) },
 	)
 }
 
@@ -309,8 +309,30 @@ func (h *Handler) ResumeAll(w http.ResponseWriter, r *http.Request) {
 		func(c *sabnzbd.Client) error { return c.ResumeQueue() },
 		func(c *qbittorrent.Client) error { return c.ResumeTorrents("all") },
 		func(c *nzbget.Client) error { return c.ResumeDownload() },
-		func(c *transmission.Client) error { return c.StartTorrents(nil) },
+		func(c *transmission.Client) error { return transmissionQueueAction(c, c.StartTorrents) },
 	)
+}
+
+// transmissionQueueAction applies a start/stop action only to the torrents
+// visible in the unified queue view (incomplete ones). A nil ids list would
+// hit every torrent Transmission knows — silently stopping seeding on
+// completed torrents, or resuming torrents the user deliberately stopped,
+// none of which appear in the queue the user thinks they are acting on.
+func transmissionQueueAction(c *transmission.Client, action func([]string) error) error {
+	torrents, err := c.GetTorrents()
+	if err != nil {
+		return err
+	}
+	var hashes []string
+	for _, t := range torrents {
+		if t.PercentDone < 1 {
+			hashes = append(hashes, t.HashString)
+		}
+	}
+	if len(hashes) == 0 {
+		return nil
+	}
+	return action(hashes)
 }
 
 // GetHistory returns recently completed downloads. ?limit=N (default 50).

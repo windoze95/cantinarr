@@ -40,17 +40,18 @@ type Event struct {
 
 // Client represents a connected WebSocket client.
 type Client struct {
-	hub    *Hub
-	conn   *websocket.Conn
-	userID int64
-	send   chan []byte
+	hub     *Hub
+	conn    *websocket.Conn
+	userID  int64
+	isAdmin bool
+	send    chan []byte
 }
 
 // Hub manages WebSocket clients and broadcasts events.
 type Hub struct {
 	upgrader   websocket.Upgrader
 	clients    map[*Client]bool
-	broadcast  chan []byte
+	broadcast  chan outboundMessage
 	register   chan *Client
 	unregister chan *Client
 	mu         sync.RWMutex
@@ -74,13 +75,17 @@ type Hub struct {
 	// downloadsErrLogged suppresses repeat error logs for an instance until
 	// it succeeds again (one log per failure streak).
 	downloadsErrLogged map[string]bool
+
+	// pollMu guards prevDownloadsHash and downloadsErrLogged, which are
+	// written from concurrent per-instance poll goroutines.
+	pollMu sync.Mutex
 }
 
 // NewHub creates a new WebSocket hub.
 func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store) *Hub {
 	return &Hub{
 		clients:            make(map[*Client]bool),
-		broadcast:          make(chan []byte, 256),
+		broadcast:          make(chan outboundMessage, 256),
 		register:           make(chan *Client),
 		unregister:         make(chan *Client),
 		authService:        authService,
@@ -116,8 +121,11 @@ func (h *Hub) Run(ctx context.Context) {
 		case msg := <-h.broadcast:
 			h.mu.RLock()
 			for client := range h.clients {
+				if msg.adminOnly && !client.isAdmin {
+					continue
+				}
 				select {
-				case client.send <- msg:
+				case client.send <- msg.data:
 				default:
 					close(client.send)
 					delete(h.clients, client)
@@ -128,14 +136,31 @@ func (h *Hub) Run(ctx context.Context) {
 	}
 }
 
+// outboundMessage pairs a marshaled event with its audience.
+type outboundMessage struct {
+	data      []byte
+	adminOnly bool
+}
+
 // Broadcast sends an event to all connected clients.
 func (h *Hub) Broadcast(event Event) {
+	h.enqueue(event, false)
+}
+
+// BroadcastAdmin sends an event only to clients authenticated as admins.
+// Used for payloads whose REST equivalents sit behind the admin middleware
+// (e.g. download-client queue contents).
+func (h *Hub) BroadcastAdmin(event Event) {
+	h.enqueue(event, true)
+}
+
+func (h *Hub) enqueue(event Event, adminOnly bool) {
 	data, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("websocket: marshal event: %v", err)
 		return
 	}
-	h.broadcast <- data
+	h.broadcast <- outboundMessage{data: data, adminOnly: adminOnly}
 }
 
 // ServeWS handles WebSocket upgrade with JWT auth via subprotocol.
@@ -164,10 +189,11 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		hub:    h,
-		conn:   conn,
-		userID: claims.UserID,
-		send:   make(chan []byte, 256),
+		hub:     h,
+		conn:    conn,
+		userID:  claims.UserID,
+		isAdmin: claims.Role == "admin",
+		send:    make(chan []byte, 256),
 	}
 	h.register <- client
 
@@ -242,27 +268,40 @@ func (h *Hub) pollAllDownloadClients() {
 	if h.store == nil || h.registry == nil {
 		return
 	}
+	// Poll instances concurrently: a hung backend (30s client timeout, two
+	// calls per snapshot) would otherwise stall the shared poll goroutine
+	// and starve every other instance's events for minutes.
+	var wg sync.WaitGroup
 	for _, serviceType := range downloadClientTypes {
 		instances, err := h.store.List(serviceType)
 		if err != nil {
 			continue
 		}
 		for _, inst := range instances {
-			h.pollDownloadClientInstance(inst)
+			wg.Add(1)
+			go func(inst instance.Instance) {
+				defer wg.Done()
+				h.pollDownloadClientInstance(inst)
+			}(inst)
 		}
 	}
+	wg.Wait()
 }
 
 func (h *Hub) pollDownloadClientInstance(inst instance.Instance) {
 	view, err := downloads.Snapshot(h.registry, inst)
 	if err != nil {
+		h.pollMu.Lock()
 		if !h.downloadsErrLogged[inst.ID] {
 			log.Printf("websocket: poll downloads queue (%s/%s): %v", inst.ServiceType, inst.ID, err)
 			h.downloadsErrLogged[inst.ID] = true
 		}
+		h.pollMu.Unlock()
 		return
 	}
+	h.pollMu.Lock()
 	delete(h.downloadsErrLogged, inst.ID)
+	h.pollMu.Unlock()
 
 	payload, err := json.Marshal(view)
 	if err != nil {
@@ -271,10 +310,15 @@ func (h *Hub) pollDownloadClientInstance(inst instance.Instance) {
 	}
 	sum := sha256.Sum256(payload)
 	hash := hex.EncodeToString(sum[:])
-	if h.prevDownloadsHash[inst.ID] == hash {
+	h.pollMu.Lock()
+	unchanged := h.prevDownloadsHash[inst.ID] == hash
+	if !unchanged {
+		h.prevDownloadsHash[inst.ID] = hash
+	}
+	h.pollMu.Unlock()
+	if unchanged {
 		return
 	}
-	h.prevDownloadsHash[inst.ID] = hash
 
 	// Decode the snapshot back into a map so the event carries exactly the
 	// QueueView JSON shape (paused, speed_bps, items) plus instance_id.
@@ -288,7 +332,7 @@ func (h *Hub) pollDownloadClientInstance(inst instance.Instance) {
 	}
 	data["instance_id"] = inst.ID
 
-	h.Broadcast(Event{
+	h.BroadcastAdmin(Event{
 		Type: "downloads_queue",
 		Data: data,
 	})

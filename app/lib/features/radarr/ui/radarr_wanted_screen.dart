@@ -29,6 +29,11 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
   int _page = 1;
   bool _isLoading = true;
   bool _isLoadingMore = false;
+
+  /// Bumped by every fresh load (view switch, instance switch, refresh) so
+  /// in-flight responses from a superseded fetch are dropped instead of
+  /// merged into the new list.
+  int _loadGeneration = 0;
   String? _error;
 
   @override
@@ -74,19 +79,23 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
     }
 
     final view = _view;
+    final gen = ++_loadGeneration;
     setState(() => _isLoading = true);
     try {
       final page = await _fetch(service, 1);
-      if (!mounted || view != _view) return;
+      if (!mounted || gen != _loadGeneration || view != _view) return;
       setState(() {
         _records = page.records;
         _totalRecords = page.totalRecords;
         _page = 1;
         _isLoading = false;
+        // A superseded _loadMore bails without clearing this flag; reset it
+        // here so pagination isn't blocked after a refresh/switch.
+        _isLoadingMore = false;
         _error = null;
       });
     } catch (e) {
-      if (!mounted || view != _view) return;
+      if (!mounted || gen != _loadGeneration || view != _view) return;
       setState(() {
         _isLoading = false;
         _error = 'Failed to load wanted movies: $e';
@@ -100,10 +109,11 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
     if (service == null) return;
 
     final view = _view;
+    final gen = _loadGeneration;
     setState(() => _isLoadingMore = true);
     try {
       final next = await _fetch(service, _page + 1);
-      if (!mounted || view != _view) return;
+      if (!mounted || gen != _loadGeneration || view != _view) return;
       setState(() {
         _page += 1;
         _records = [..._records, ...next.records];
@@ -111,7 +121,7 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
         _isLoadingMore = false;
       });
     } catch (_) {
-      if (!mounted || view != _view) return;
+      if (!mounted || gen != _loadGeneration || view != _view) return;
       setState(() => _isLoadingMore = false);
     }
   }

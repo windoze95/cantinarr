@@ -5,6 +5,40 @@ import (
 	"fmt"
 )
 
+const (
+	canaryKey   = "encryption_canary"
+	canaryValue = "cantinarr-canary"
+)
+
+// VerifyKeyIdentity guards against starting with a key that doesn't match
+// already-encrypted data (deleted key file, switched/rotated env key): a
+// canary value encrypted with the first-used key is stored in settings, and
+// every startup must decrypt it. Returns a fatal-worthy error on mismatch —
+// proceeding would brick every stored secret and write new ones with an
+// irreconcilable second key.
+func VerifyKeyIdentity(db *sql.DB, c *Cipher) error {
+	var stored string
+	err := db.QueryRow("SELECT value FROM settings WHERE key = ?", canaryKey).Scan(&stored)
+	if err == sql.ErrNoRows {
+		enc, err := c.Encrypt(canaryValue)
+		if err != nil {
+			return fmt.Errorf("encrypt canary: %w", err)
+		}
+		if _, err := db.Exec("INSERT INTO settings (key, value) VALUES (?, ?)", canaryKey, enc); err != nil {
+			return fmt.Errorf("persist canary: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read canary: %w", err)
+	}
+	plain, err := c.Decrypt(stored)
+	if err != nil || plain != canaryValue {
+		return fmt.Errorf("encryption key does not match existing encrypted data — restore /config/encryption.key (or the original CANTINARR_ENCRYPTION_KEY); generating a new key would orphan all stored secrets")
+	}
+	return nil
+}
+
 // EncryptExisting encrypts legacy plaintext secrets in place: the given
 // settings keys plus the api_key and password columns of service_instances.
 // It is idempotent — already-encrypted values are skipped — and returns the

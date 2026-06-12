@@ -3,6 +3,7 @@ package instance
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -204,7 +205,13 @@ func (s *Store) scanInstances(rows *sql.Rows) ([]Instance, error) {
 			return nil, fmt.Errorf("scan instance: %w", err)
 		}
 		if err := s.decryptSecrets(&inst); err != nil {
-			return nil, err
+			// Degrade rather than fail the whole listing: an undecryptable
+			// row would otherwise brick the instances admin UI, leaving no
+			// way to view, fix, or delete the broken entry. Secrets are
+			// blanked; paths that need the plaintext (client construction
+			// via Get/GetDefault) still fail loudly.
+			log.Printf("instance: %v — listing %s with blanked credentials", err, inst.ID)
+			inst.APIKey, inst.Password = "", ""
 		}
 		instances = append(instances, inst)
 	}

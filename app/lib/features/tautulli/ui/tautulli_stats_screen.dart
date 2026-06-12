@@ -47,17 +47,29 @@ class _TautulliStatsScreenState extends ConsumerState<TautulliStatsScreen> {
       return;
     }
 
+    // Capture the request parameters so a slow response for a previously
+    // selected period (or instance) can't overwrite the current selection.
+    final days = _days;
+    final instanceId =
+        ref.read(instanceProvider.select((s) => s.activeTautulliInstanceId));
+    bool stale() =>
+        !mounted ||
+        days != _days ||
+        instanceId !=
+            ref.read(
+                instanceProvider.select((s) => s.activeTautulliInstanceId));
+
     setState(() => _isLoading = true);
     try {
-      final stats = await service.getStats(days: _days);
-      if (!mounted) return;
+      final stats = await service.getStats(days: days);
+      if (stale()) return;
       setState(() {
         _stats = stats;
         _isLoading = false;
         _error = null;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (stale()) return;
       setState(() {
         _isLoading = false;
         _error = 'Failed to load stats: $e';

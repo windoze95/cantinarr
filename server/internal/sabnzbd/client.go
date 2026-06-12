@@ -45,7 +45,9 @@ func (c *Client) call(params url.Values, out interface{}) error {
 
 	resp, err := c.httpClient.Get(c.baseURL + "/api?" + q.Encode())
 	if err != nil {
-		return fmt.Errorf("sabnzbd request: %w", err)
+		// Transport errors embed the full URL including the apikey query
+		// parameter; redact it before the error can reach logs or clients.
+		return fmt.Errorf("sabnzbd request: %s", redactSecret(err.Error(), c.apiKey))
 	}
 	defer resp.Body.Close()
 
@@ -231,4 +233,13 @@ func (c *Client) SetSpeedLimit(value string) error {
 func parseFloat(s string) float64 {
 	f, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	return f
+}
+
+// redactSecret removes a secret value from an error string before it can
+// escape into logs or HTTP responses.
+func redactSecret(msg, secret string) string {
+	if secret == "" {
+		return msg
+	}
+	return strings.ReplaceAll(msg, secret, "[redacted]")
 }

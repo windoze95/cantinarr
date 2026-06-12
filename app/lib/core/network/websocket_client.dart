@@ -129,9 +129,12 @@ class WebSocketClient extends ChangeNotifier {
     // double-schedule or double-increment the backoff.
     if (_reconnectTimer?.isActive ?? false) return;
 
-    // Exponential backoff: 1s, 2s, 4s, 8s, ... up to 30s
+    // Exponential backoff: 1s, 2s, 4s, 8s, ... up to 30s. Clamp the
+    // exponent, not the result: pow() overflows to infinity after ~1024
+    // straight failures and infinity.toInt() throws, which would kill the
+    // reconnect chain permanently.
     final delay = Duration(
-      seconds: min(pow(2, _reconnectAttempts).toInt(), 30),
+      seconds: min(1 << min(_reconnectAttempts, 5), 30),
     );
     _reconnectAttempts++;
 

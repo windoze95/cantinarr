@@ -57,6 +57,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize secrets cipher: %v", err)
 	}
+	if err := secrets.VerifyKeyIdentity(database, cipher); err != nil {
+		log.Fatalf("Encryption key check failed: %v", err)
+	}
 	secretSettings := append([]string{"jwt_secret"}, credentials.AllKeys...)
 	if n, err := secrets.EncryptExisting(database, cipher, secretSettings); err != nil {
 		log.Fatalf("Failed to encrypt existing secrets: %v", err)

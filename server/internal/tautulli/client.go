@@ -47,7 +47,10 @@ func (c *Client) call(cmd string, params url.Values, out interface{}) error {
 
 	resp, err := c.httpClient.Get(c.baseURL + "/api/v2?" + q.Encode())
 	if err != nil {
-		return fmt.Errorf("tautulli request: %w", err)
+		// Transport errors (*url.Error) embed the full request URL including
+		// the apikey query parameter; redact it so the secret can never leak
+		// into logs or API error responses.
+		return fmt.Errorf("tautulli request: %s", redactSecret(err.Error(), c.apiKey))
 	}
 	defer resp.Body.Close()
 
@@ -202,4 +205,13 @@ func (c *Client) GetHomeStats(days int) ([]HomeStat, error) {
 		return nil, err
 	}
 	return stats, nil
+}
+
+// redactSecret removes a secret value from an error string before it can
+// escape into logs or HTTP responses.
+func redactSecret(msg, secret string) string {
+	if secret == "" {
+		return msg
+	}
+	return strings.ReplaceAll(msg, secret, "[redacted]")
 }
