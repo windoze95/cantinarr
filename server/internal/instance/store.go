@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 // Instance represents a configured service instance (Radarr, Sonarr, SABnzbd,
@@ -26,14 +28,41 @@ type Instance struct {
 
 const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, created_at"
 
-// Store provides CRUD operations for service instances.
+// Store provides CRUD operations for service instances. API keys and
+// passwords are encrypted at rest; legacy plaintext rows decrypt as-is.
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	cipher *secrets.Cipher
 }
 
 // NewStore creates a new instance store.
-func NewStore(db *sql.DB) *Store {
-	return &Store{db: db}
+func NewStore(db *sql.DB, cipher *secrets.Cipher) *Store {
+	return &Store{db: db, cipher: cipher}
+}
+
+// decryptSecrets resolves stored secret fields to plaintext for callers.
+func (s *Store) decryptSecrets(inst *Instance) error {
+	apiKey, err := s.cipher.Decrypt(inst.APIKey)
+	if err != nil {
+		return fmt.Errorf("decrypt api key for %s (wrong encryption key?): %w", inst.ID, err)
+	}
+	password, err := s.cipher.Decrypt(inst.Password)
+	if err != nil {
+		return fmt.Errorf("decrypt password for %s (wrong encryption key?): %w", inst.ID, err)
+	}
+	inst.APIKey, inst.Password = apiKey, password
+	return nil
+}
+
+// encryptSecrets returns the at-rest representations of the secret fields.
+func (s *Store) encryptSecrets(inst *Instance) (apiKey, password string, err error) {
+	if apiKey, err = s.cipher.Encrypt(inst.APIKey); err != nil {
+		return "", "", fmt.Errorf("encrypt api key: %w", err)
+	}
+	if password, err = s.cipher.Encrypt(inst.Password); err != nil {
+		return "", "", fmt.Errorf("encrypt password: %w", err)
+	}
+	return apiKey, password, nil
 }
 
 // List returns all instances of the given service type, ordered by sort_order.
@@ -46,7 +75,7 @@ func (s *Store) List(serviceType string) ([]Instance, error) {
 		return nil, fmt.Errorf("list instances: %w", err)
 	}
 	defer rows.Close()
-	return scanInstances(rows)
+	return s.scanInstances(rows)
 }
 
 // ListAll returns all instances across all service types.
@@ -58,7 +87,7 @@ func (s *Store) ListAll() ([]Instance, error) {
 		return nil, fmt.Errorf("list all instances: %w", err)
 	}
 	defer rows.Close()
-	return scanInstances(rows)
+	return s.scanInstances(rows)
 }
 
 // Get returns a single instance by ID.
@@ -74,6 +103,9 @@ func (s *Store) Get(id string) (*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get instance: %w", err)
 	}
+	if err := s.decryptSecrets(&inst); err != nil {
+		return nil, err
+	}
 	return &inst, nil
 }
 
@@ -84,9 +116,13 @@ func (s *Store) Create(inst *Instance) error {
 	}
 	inst.CreatedAt = time.Now()
 
-	_, err := s.db.Exec(
+	apiKey, password, err := s.encryptSecrets(inst)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
 		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		inst.ID, inst.ServiceType, inst.Name, inst.URL, inst.APIKey, inst.Username, inst.Password, inst.IsDefault, inst.SortOrder, inst.CreatedAt,
+		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create instance: %w", err)
@@ -96,9 +132,13 @@ func (s *Store) Create(inst *Instance) error {
 
 // Update modifies an existing instance.
 func (s *Store) Update(inst *Instance) error {
+	apiKey, password, err := s.encryptSecrets(inst)
+	if err != nil {
+		return err
+	}
 	result, err := s.db.Exec(
 		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ? WHERE id = ?",
-		inst.Name, inst.URL, inst.APIKey, inst.Username, inst.Password, inst.IsDefault, inst.SortOrder, inst.ID,
+		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update instance: %w", err)
@@ -143,6 +183,9 @@ func (s *Store) GetDefault(serviceType string) (*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get default instance: %w", err)
 	}
+	if err := s.decryptSecrets(&inst); err != nil {
+		return nil, err
+	}
 	return &inst, nil
 }
 
@@ -153,12 +196,15 @@ func (s *Store) Count(serviceType string) (int, error) {
 	return count, err
 }
 
-func scanInstances(rows *sql.Rows) ([]Instance, error) {
+func (s *Store) scanInstances(rows *sql.Rows) ([]Instance, error) {
 	var instances []Instance
 	for rows.Next() {
 		var inst Instance
 		if err := rows.Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan instance: %w", err)
+		}
+		if err := s.decryptSecrets(&inst); err != nil {
+			return nil, err
 		}
 		instances = append(instances, inst)
 	}

@@ -2,25 +2,38 @@ package credentials
 
 import (
 	"database/sql"
+	"log"
 	"sync"
 
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	"github.com/windoze95/cantinarr-server/internal/trakt"
 )
 
 // Credential keys stored in the settings table.
 const (
-	KeyTMDBAccessToken   = "tmdb_access_token"
-	KeyAnthropicKey      = "anthropic_key"
-	KeyTraktClientID = "trakt_client_id"
+	KeyTMDBAccessToken = "tmdb_access_token"
+	KeyAnthropicKey    = "anthropic_key"
+	KeyTraktClientID   = "trakt_client_id"
 )
 
-// AllKeys lists every credential key the system manages.
+// AllKeys lists every credential key the system manages. Values for these
+// keys are encrypted at rest; other settings (e.g. tool toggles) stay plain.
 var AllKeys = []string{KeyTMDBAccessToken, KeyAnthropicKey, KeyTraktClientID}
+
+func isSecretKey(key string) bool {
+	for _, k := range AllKeys {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
 
 // Registry lazily creates and caches TMDB/Trakt clients from DB-stored credentials.
 type Registry struct {
-	db *sql.DB
+	db     *sql.DB
+	cipher *secrets.Cipher
 
 	mu          sync.RWMutex
 	cachedTMDB  *tmdb.Client
@@ -29,8 +42,8 @@ type Registry struct {
 }
 
 // NewRegistry creates a new credentials registry.
-func NewRegistry(db *sql.DB) *Registry {
-	return &Registry{db: db}
+func NewRegistry(db *sql.DB, cipher *secrets.Cipher) *Registry {
+	return &Registry{db: db, cipher: cipher}
 }
 
 // TMDB returns the cached TMDB client, creating it lazily from the DB credential.
@@ -73,19 +86,33 @@ func (r *Registry) Trakt() *trakt.Client {
 	return r.cachedTrakt
 }
 
-// GetCredential reads a raw credential value from the DB.
-// Returns empty string if not set.
+// GetCredential reads a credential value from the DB, decrypting stored
+// ciphertext (legacy plaintext passes through). Returns empty string if not
+// set or undecryptable.
 func (r *Registry) GetCredential(key string) string {
 	var value string
 	err := r.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
 	if err != nil {
 		return ""
 	}
-	return value
+	plain, err := r.cipher.Decrypt(value)
+	if err != nil {
+		log.Printf("credentials: failed to decrypt %s (wrong encryption key?): %v", key, err)
+		return ""
+	}
+	return plain
 }
 
-// SetCredential writes a credential to the DB (upsert).
+// SetCredential writes a credential to the DB (upsert). Secret keys are
+// encrypted at rest; non-secret settings are stored as-is.
 func (r *Registry) SetCredential(key, value string) error {
+	if isSecretKey(key) && value != "" {
+		enc, err := r.cipher.Encrypt(value)
+		if err != nil {
+			return err
+		}
+		value = enc
+	}
 	_, err := r.db.Exec(
 		"INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
 		key, value,
@@ -130,5 +157,10 @@ func (r *Registry) load() {
 func (r *Registry) getSettingLocked(key string) string {
 	var value string
 	r.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
-	return value
+	plain, err := r.cipher.Decrypt(value)
+	if err != nil {
+		log.Printf("credentials: failed to decrypt %s (wrong encryption key?): %v", key, err)
+		return ""
+	}
+	return plain
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/request"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
@@ -46,16 +47,32 @@ func main() {
 	}
 	defer database.Close()
 
+	// Secrets-at-rest cipher: env key > key file next to the DB
+	encKey, err := secrets.LoadKey(cfg.EncryptionKeyFile)
+	if err != nil {
+		log.Fatalf("Failed to resolve encryption key: %v", err)
+	}
+	cipher, err := secrets.NewCipher(encKey)
+	if err != nil {
+		log.Fatalf("Failed to initialize secrets cipher: %v", err)
+	}
+	secretSettings := append([]string{"jwt_secret"}, credentials.AllKeys...)
+	if n, err := secrets.EncryptExisting(database, cipher, secretSettings); err != nil {
+		log.Fatalf("Failed to encrypt existing secrets: %v", err)
+	} else if n > 0 {
+		log.Printf("Encrypted %d existing secret value(s) at rest", n)
+	}
+
 	// Resolve JWT secret: env var > DB > generate and persist
 	if cfg.JWTSecret == "" {
-		cfg.JWTSecret, err = ensureJWTSecret(database)
+		cfg.JWTSecret, err = ensureJWTSecret(database, cipher)
 		if err != nil {
 			log.Fatalf("Failed to resolve JWT secret: %v", err)
 		}
 	}
 
 	// Credentials registry (lazy-creates TMDB/Trakt clients from DB)
-	creds := credentials.NewRegistry(database)
+	creds := credentials.NewRegistry(database, cipher)
 	credHandler := credentials.NewHandler(creds)
 
 	// Auth
@@ -69,7 +86,7 @@ func main() {
 	bridge := tmdb.NewBridge(creds, database)
 
 	// Instance store and registry
-	instanceStore := instance.NewStore(database)
+	instanceStore := instance.NewStore(database, cipher)
 	registry := instance.NewRegistry(instanceStore)
 	instanceHandler := instance.NewHandler(instanceStore, registry)
 
@@ -108,11 +125,11 @@ func main() {
 
 // ensureJWTSecret loads the JWT secret from the settings table, or generates
 // and persists a new one. This ensures tokens survive server restarts.
-func ensureJWTSecret(database *sql.DB) (string, error) {
-	var secret string
-	err := database.QueryRow("SELECT value FROM settings WHERE key = 'jwt_secret'").Scan(&secret)
+func ensureJWTSecret(database *sql.DB, cipher *secrets.Cipher) (string, error) {
+	var stored string
+	err := database.QueryRow("SELECT value FROM settings WHERE key = 'jwt_secret'").Scan(&stored)
 	if err == nil {
-		return secret, nil
+		return cipher.Decrypt(stored)
 	}
 
 	// Generate a new secret
@@ -120,9 +137,13 @@ func ensureJWTSecret(database *sql.DB) (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generate secret: %w", err)
 	}
-	secret = hex.EncodeToString(b)
+	secret := hex.EncodeToString(b)
 
-	_, err = database.Exec("INSERT INTO settings (key, value) VALUES ('jwt_secret', ?)", secret)
+	enc, err := cipher.Encrypt(secret)
+	if err != nil {
+		return "", fmt.Errorf("encrypt secret: %w", err)
+	}
+	_, err = database.Exec("INSERT INTO settings (key, value) VALUES ('jwt_secret', ?)", enc)
 	if err != nil {
 		return "", fmt.Errorf("persist secret: %w", err)
 	}
