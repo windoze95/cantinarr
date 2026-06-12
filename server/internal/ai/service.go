@@ -1,37 +1,39 @@
 package ai
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
+	"os"
 	"strings"
 	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
 const (
-	anthropicURL   = "https://api.anthropic.com/v1/messages"
-	anthropicModel = "claude-sonnet-4-20250514"
-	maxTokens      = 4096
-	systemPrompt   = `You are Cantinarr's AI assistant — a friendly, knowledgeable media companion. You help users discover movies and TV shows, check what's available on their media server, and make requests.
+	defaultModel = "claude-opus-4-8"
+	maxTokens    = 64000
+	// maxToolIterations bounds the agent loop. On the final iteration the
+	// model is forced to answer in text (tool_choice: none) so the user
+	// always gets a reply instead of a hard error.
+	maxToolIterations = 15
 
-Guidelines:
-- Be concise and conversational
-- Use the search tools to find content before recommending
-- Always check request status before suggesting a request
-- When recommending content, include title, year, and a brief description
-- If a user asks to request something, use the request_media tool
-- Format lists neatly with bullets or numbers
-- IMPORTANT: After selecting specific items to recommend, you MUST call the display_media tool with those items' TMDB IDs and media types. This controls which items appear in the visual carousel the user sees. Order items by relevance. Search results alone do NOT populate the carousel — only display_media does.`
+	systemPrompt = `You are Cantinarr's AI assistant — a knowledgeable, friendly media companion embedded in the Cantinarr app. Cantinarr manages a household media server: users discover movies and TV shows, request them, and the server adds them to Radarr (movies) or Sonarr (TV) for automatic downloading.
+
+How to work:
+- Ground every answer in tools: search before recommending, and check request status before suggesting a request.
+- Multi-step requests are normal. Chain tool calls (search → details → status → request) without asking permission between steps.
+- When the user asks to get/download/request a title, search for the exact title first, disambiguate by year if needed, then call request_media. Confirm what you did afterwards.
+- If a tool fails, try a sensible alternative or briefly explain what went wrong. Never invent data the tools did not return.
+- Be concise and conversational. When recommending, give title, year, and a one-line hook. Format lists with bullets.
+- IMPORTANT: After selecting the specific items you are recommending, you MUST call display_media with their TMDB IDs and media types, ordered by relevance — that tool controls the visual carousel the user sees. Search results alone do NOT populate the carousel. Skip display_media for purely informational answers with no items to showcase.`
 )
 
-// Message represents a chat message sent to/from the Anthropic API.
+// Message represents a chat message in the client request payload.
 type Message struct {
 	Role    string      `json:"role"`
 	Content interface{} `json:"content"` // string or []ContentBlock
@@ -48,239 +50,260 @@ type ContentBlock struct {
 	Content   string          `json:"content,omitempty"`
 }
 
+// ChatContext carries per-request user and deployment context into the loop.
+type ChatContext struct {
+	UserID   int64
+	Username string
+	Role     string
+	Services []string // human-readable names of configured backends
+}
+
+// StreamCallbacks receives streaming output from the agent loop. All callbacks
+// fire from the calling goroutine. Nil callbacks are skipped.
+type StreamCallbacks struct {
+	OnText       func(text string)
+	OnToolStart  func(name, label string)
+	OnToolEnd    func(name string, ok bool)
+	OnToolResult func(toolName string, data any) // structured data for rich UI rendering
+}
+
 // Service manages interactions with the Anthropic API.
 type Service struct {
-	apiKey     string
+	client     anthropic.Client
+	model      anthropic.Model
 	toolServer *mcp.ToolServer
-	httpClient *http.Client
 }
 
 // NewService creates a new AI service.
 func NewService(apiKey string, toolServer *mcp.ToolServer) *Service {
+	model := os.Getenv("CANTINARR_AI_MODEL")
+	if model == "" {
+		model = defaultModel
+	}
 	return &Service{
-		apiKey:     apiKey,
+		client:     anthropic.NewClient(option.WithAPIKey(apiKey)),
+		model:      anthropic.Model(model),
 		toolServer: toolServer,
-		httpClient: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
-// anthropicRequest is the request body for the Anthropic Messages API.
-type anthropicRequest struct {
-	Model     string        `json:"model"`
-	MaxTokens int           `json:"max_tokens"`
-	System    string        `json:"system"`
-	Messages  []Message     `json:"messages"`
-	Tools     []mcp.Tool    `json:"tools,omitempty"`
-	Stream    bool          `json:"stream"`
-}
-
-// anthropicResponse is a non-streaming response from the Anthropic API.
-type anthropicResponse struct {
-	Content    []ContentBlock `json:"content"`
-	StopReason string         `json:"stop_reason"`
-}
-
-// streamEvent represents a parsed SSE event from the Anthropic streaming API.
-type streamEvent struct {
-	Type  string          `json:"type"`
-	Index int             `json:"index"`
-	Delta json.RawMessage `json:"delta,omitempty"`
-	ContentBlock *ContentBlock `json:"content_block,omitempty"`
-}
-
-// SendMessage handles the full conversation loop with tool execution.
-// It streams text back via onText and structured tool results via onToolResult.
-func (s *Service) SendMessage(ctx context.Context, messages []Message, userID int64, onText func(string), onToolResult func(string, any)) error {
-	tools := s.toolServer.GetTools()
-
-	for {
-		resp, err := s.callAnthropicStreaming(ctx, messages, tools, onText)
-		if err != nil {
-			return err
-		}
-
-		// If no tool use, we're done
-		if resp.StopReason != "tool_use" {
-			return nil
-		}
-
-		// Append assistant response to conversation
-		messages = append(messages, Message{
-			Role:    "assistant",
-			Content: resp.Content,
-		})
-
-		// Execute each tool call and collect results
-		var toolResults []ContentBlock
-		for _, block := range resp.Content {
-			if block.Type != "tool_use" {
-				continue
-			}
-			toolResult, err := s.toolServer.ExecuteTool(ctx, block.Name, block.Input, userID)
-			var resultText string
-			if err != nil {
-				resultText = fmt.Sprintf("Error: %s", err.Error())
-			} else {
-				resultText = toolResult.Text
-				// Send structured data to the frontend for rich UI rendering
-				if toolResult.StructuredData != nil && mcp.ToolsWithUI[block.Name] {
-					onToolResult(block.Name, toolResult.StructuredData)
-				}
-			}
-			toolResults = append(toolResults, ContentBlock{
-				Type:      "tool_result",
-				ToolUseID: block.ID,
-				Content:   resultText,
-			})
-		}
-
-		// Append tool results as user message
-		messages = append(messages, Message{
-			Role:    "user",
-			Content: toolResults,
-		})
-	}
-}
-
-// callAnthropicStreaming sends a streaming request to the Anthropic API.
-// It calls onText for each text delta and returns the full response with content blocks.
-func (s *Service) callAnthropicStreaming(ctx context.Context, messages []Message, tools []mcp.Tool, onText func(string)) (*anthropicResponse, error) {
-	reqBody := anthropicRequest{
-		Model:     anthropicModel,
+// SendMessage runs the full agent loop with tool execution, streaming text and
+// tool activity back through cb. It returns the final transcript (including
+// tool_use/tool_result blocks) so the caller can persist conversation state.
+func (s *Service) SendMessage(ctx context.Context, history []anthropic.MessageParam, chatCtx ChatContext, cb StreamCallbacks) ([]anthropic.MessageParam, error) {
+	params := anthropic.MessageNewParams{
+		Model:     s.model,
 		MaxTokens: maxTokens,
-		System:    systemPrompt,
-		Messages:  messages,
-		Tools:     tools,
-		Stream:    true,
+		Thinking:  anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}},
+		System: []anthropic.TextBlockParam{
+			// Static prompt carries the cache breakpoint so tools + prompt cache together.
+			{Text: systemPrompt, CacheControl: anthropic.NewCacheControlEphemeralParam()},
+			// Volatile context goes after the breakpoint to keep the prefix stable.
+			{Text: dynamicContext(chatCtx)},
+		},
+		Messages: history,
+		Tools:    toSDKTools(s.toolServer.GetTools()),
 	}
 
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+	for iteration := 0; iteration < maxToolIterations; iteration++ {
+		if iteration == maxToolIterations-1 {
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{OfNone: &anthropic.ToolChoiceNoneParam{}}
+		}
+
+		message, err := s.streamOne(ctx, params, cb)
+		if err != nil {
+			return params.Messages, err
+		}
+
+		params.Messages = append(params.Messages, message.ToParam())
+
+		if message.StopReason != anthropic.StopReasonToolUse {
+			if message.StopReason == anthropic.StopReasonMaxTokens && cb.OnText != nil {
+				cb.OnText("\n\n_(Reply truncated at the length limit — ask me to continue.)_")
+			}
+			return params.Messages, nil
+		}
+
+		var toolResults []anthropic.ContentBlockParamUnion
+		for _, block := range message.Content {
+			toolUse, ok := block.AsAny().(anthropic.ToolUseBlock)
+			if !ok {
+				continue
+			}
+			toolResults = append(toolResults, s.runTool(ctx, toolUse, chatCtx, cb))
+		}
+		if len(toolResults) == 0 {
+			// stop_reason said tool_use but no tool blocks arrived; bail out
+			// rather than re-sending an identical request forever.
+			return params.Messages, fmt.Errorf("model requested tool use but sent no tool blocks")
+		}
+		params.Messages = append(params.Messages, anthropic.NewUserMessage(toolResults...))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", s.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("anthropic API error (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	return s.parseSSEStream(resp.Body, onText)
+	return params.Messages, fmt.Errorf("agent loop exceeded %d iterations", maxToolIterations)
 }
 
-// parseSSEStream reads the Anthropic SSE stream, emitting text deltas and
-// collecting the full response including any tool_use blocks.
-func (s *Service) parseSSEStream(reader io.Reader, onText func(string)) (*anthropicResponse, error) {
-	scanner := bufio.NewScanner(reader)
-	// Increase buffer for potentially large responses
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	var contentBlocks []ContentBlock
-	var currentBlock *ContentBlock
-	stopReason := "end_turn"
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if !strings.HasPrefix(line, "data: ") {
-			continue
+// streamOne sends a single streaming request and returns the accumulated message.
+func (s *Service) streamOne(ctx context.Context, params anthropic.MessageNewParams, cb StreamCallbacks) (*anthropic.Message, error) {
+	stream := s.client.Messages.NewStreaming(ctx, params)
+	message := anthropic.Message{}
+	for stream.Next() {
+		event := stream.Current()
+		if err := message.Accumulate(event); err != nil {
+			return nil, fmt.Errorf("accumulate stream event: %w", err)
 		}
-
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
-		var event streamEvent
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			log.Printf("ai: failed to parse SSE event: %v", err)
-			continue
-		}
-
-		switch event.Type {
-		case "content_block_start":
-			if event.ContentBlock != nil {
-				block := *event.ContentBlock
-				// Clear the initial empty input from tool_use blocks;
-				// the real input arrives via input_json_delta events.
-				if block.Type == "tool_use" {
-					block.Input = nil
-				}
-				currentBlock = &block
-			}
-
-		case "content_block_delta":
-			if currentBlock == nil {
-				continue
-			}
-			var delta struct {
-				Type  string          `json:"type"`
-				Text  string          `json:"text,omitempty"`
-				PartialJSON string   `json:"partial_json,omitempty"`
-			}
-			if err := json.Unmarshal(event.Delta, &delta); err != nil {
-				continue
-			}
-			switch delta.Type {
-			case "text_delta":
-				currentBlock.Text += delta.Text
-				onText(delta.Text)
-			case "input_json_delta":
-				// Accumulate raw JSON for tool input
-				if currentBlock.Input == nil {
-					currentBlock.Input = json.RawMessage(delta.PartialJSON)
-				} else {
-					currentBlock.Input = append(currentBlock.Input, []byte(delta.PartialJSON)...)
-				}
-			}
-
-		case "content_block_stop":
-			if currentBlock != nil {
-				contentBlocks = append(contentBlocks, *currentBlock)
-				currentBlock = nil
-			}
-
-		case "message_delta":
-			var msgDelta struct {
-				StopReason string `json:"stop_reason"`
-			}
-			if err := json.Unmarshal(event.Delta, &msgDelta); err == nil && msgDelta.StopReason != "" {
-				stopReason = msgDelta.StopReason
-			}
-
-		case "message_stop":
-			// End of message
-
-		case "error":
-			var errData struct {
-				Type    string `json:"type"`
-				Message string `json:"message"`
-			}
-			if err := json.Unmarshal([]byte(data), &errData); err == nil {
-				return nil, fmt.Errorf("anthropic stream error: %s", errData.Message)
+		if ev, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+			if delta, ok := ev.Delta.AsAny().(anthropic.TextDelta); ok && cb.OnText != nil {
+				cb.OnText(delta.Text)
 			}
 		}
 	}
+	if err := stream.Err(); err != nil {
+		return nil, fmt.Errorf("anthropic stream: %w", err)
+	}
+	return &message, nil
+}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read SSE stream: %w", err)
+// runTool executes one tool call and returns its tool_result block.
+func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, chatCtx ChatContext, cb StreamCallbacks) anthropic.ContentBlockParamUnion {
+	if cb.OnToolStart != nil {
+		cb.OnToolStart(toolUse.Name, toolLabel(toolUse.Name))
 	}
 
-	return &anthropicResponse{
-		Content:    contentBlocks,
-		StopReason: stopReason,
-	}, nil
+	input := json.RawMessage(toolUse.JSON.Input.Raw())
+	if len(input) == 0 || string(input) == "null" {
+		input = json.RawMessage("{}")
+	}
+
+	result, err := s.toolServer.ExecuteTool(ctx, toolUse.Name, input, chatCtx.UserID)
+	if err != nil {
+		if cb.OnToolEnd != nil {
+			cb.OnToolEnd(toolUse.Name, false)
+		}
+		return anthropic.NewToolResultBlock(toolUse.ID, fmt.Sprintf("Error: %s", err.Error()), true)
+	}
+
+	if result.StructuredData != nil && mcp.ToolsWithUI[toolUse.Name] && cb.OnToolResult != nil {
+		cb.OnToolResult(toolUse.Name, result.StructuredData)
+	}
+	if cb.OnToolEnd != nil {
+		cb.OnToolEnd(toolUse.Name, true)
+	}
+	return anthropic.NewToolResultBlock(toolUse.ID, result.Text, false)
+}
+
+// dynamicContext renders per-request context placed after the cache breakpoint.
+func dynamicContext(chatCtx ChatContext) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Current date: %s.", time.Now().Format("Monday, January 2, 2006"))
+	if chatCtx.Username != "" {
+		fmt.Fprintf(&sb, " You are talking to %s (role: %s).", chatCtx.Username, chatCtx.Role)
+	}
+	if len(chatCtx.Services) > 0 {
+		fmt.Fprintf(&sb, " Configured services: %s.", strings.Join(chatCtx.Services, ", "))
+	}
+	return sb.String()
+}
+
+// latestUserText returns the text of the most recent user message, used to
+// extend a server-stored conversation with the new turn.
+func latestUserText(messages []Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return messageText(messages[i].Content)
+		}
+	}
+	return ""
+}
+
+// toSDKMessages converts client-supplied history into SDK message params.
+// Client history carries plain text (string content or text blocks); it is
+// the fallback when no server-side conversation state exists.
+func toSDKMessages(messages []Message) []anthropic.MessageParam {
+	out := make([]anthropic.MessageParam, 0, len(messages))
+	for _, m := range messages {
+		text := messageText(m.Content)
+		if text == "" {
+			continue
+		}
+		switch m.Role {
+		case "assistant":
+			out = append(out, anthropic.NewAssistantMessage(anthropic.NewTextBlock(text)))
+		default:
+			out = append(out, anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
+		}
+	}
+	return out
+}
+
+func messageText(content interface{}) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []interface{}:
+		var sb strings.Builder
+		for _, item := range v {
+			block, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if block["type"] == "text" {
+				if t, ok := block["text"].(string); ok {
+					sb.WriteString(t)
+				}
+			}
+		}
+		return sb.String()
+	}
+	return ""
+}
+
+// toSDKTools converts the in-process tool definitions to SDK tool params.
+func toSDKTools(tools []mcp.Tool) []anthropic.ToolUnionParam {
+	out := make([]anthropic.ToolUnionParam, 0, len(tools))
+	for i := range tools {
+		t := tools[i]
+		schema := anthropic.ToolInputSchemaParam{}
+		if props, ok := t.InputSchema["properties"]; ok {
+			schema.Properties = props
+		}
+		switch req := t.InputSchema["required"].(type) {
+		case []string:
+			schema.Required = req
+		case []interface{}:
+			for _, item := range req {
+				if s, ok := item.(string); ok {
+					schema.Required = append(schema.Required, s)
+				}
+			}
+		}
+		tp := anthropic.ToolParam{
+			Name:        t.Name,
+			Description: anthropic.String(t.Description),
+			InputSchema: schema,
+		}
+		out = append(out, anthropic.ToolUnionParam{OfTool: &tp})
+	}
+	return out
+}
+
+// toolLabel renders a human-friendly activity label for a tool name.
+func toolLabel(name string) string {
+	if label, ok := toolLabels[name]; ok {
+		return label
+	}
+	return strings.ReplaceAll(name, "_", " ")
+}
+
+var toolLabels = map[string]string{
+	"search_movies":        "Searching movies",
+	"search_tv_shows":      "Searching TV shows",
+	"get_trending":         "Checking what's trending",
+	"get_movie_details":    "Looking up movie details",
+	"get_tv_details":       "Looking up show details",
+	"get_recommendations":  "Finding similar titles",
+	"check_request_status": "Checking availability",
+	"request_media":        "Sending request",
+	"list_my_requests":     "Fetching your requests",
+	"display_media":        "Preparing results",
 }

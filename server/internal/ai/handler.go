@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/anthropics/anthropic-sdk-go"
+
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
@@ -13,17 +15,21 @@ import (
 
 // Handler provides HTTP handlers for AI chat endpoints.
 type Handler struct {
-	creds      *credentials.Registry
-	toolServer *mcp.ToolServer
+	creds         *credentials.Registry
+	toolServer    *mcp.ToolServer
+	conversations *conversationStore
 }
 
 // NewHandler creates a new AI handler.
 func NewHandler(creds *credentials.Registry, toolServer *mcp.ToolServer) *Handler {
-	return &Handler{creds: creds, toolServer: toolServer}
+	return &Handler{creds: creds, toolServer: toolServer, conversations: newConversationStore()}
 }
 
 type chatRequest struct {
 	Messages []Message `json:"messages"`
+	// ConversationID resumes a server-stored transcript that retains tool
+	// context across turns. Empty for new conversations or legacy clients.
+	ConversationID string `json:"conversation_id,omitempty"`
 }
 
 // Chat handles POST /api/ai/chat with SSE streaming.
@@ -62,21 +68,58 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	onText := func(text string) {
-		data, _ := json.Marshal(map[string]string{"text": text})
+	emit := func(payload any) {
+		data, _ := json.Marshal(payload)
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
 
-	onToolResult := func(toolName string, structuredData any) {
-		data, _ := json.Marshal(map[string]interface{}{
-			"media_results": structuredData,
-		})
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+	callbacks := StreamCallbacks{
+		OnText: func(text string) {
+			emit(map[string]string{"text": text})
+		},
+		OnToolStart: func(name, label string) {
+			emit(map[string]any{"tool_start": map[string]string{"name": name, "label": label}})
+		},
+		OnToolEnd: func(name string, ok bool) {
+			emit(map[string]any{"tool_end": map[string]any{"name": name, "ok": ok}})
+		},
+		OnToolResult: func(toolName string, structuredData any) {
+			emit(map[string]any{"media_results": structuredData})
+		},
 	}
 
-	err := service.SendMessage(r.Context(), req.Messages, claims.UserID, onText, onToolResult)
+	chatCtx := ChatContext{
+		UserID:   claims.UserID,
+		Username: claims.Username,
+		Role:     claims.Role,
+		Services: h.configuredServices(),
+	}
+
+	// Resolve history: prefer the server-stored transcript (which keeps tool
+	// context across turns) and append the new user message; fall back to
+	// the client's plain-text transcript for new or expired conversations.
+	convID := req.ConversationID
+	var history []anthropic.MessageParam
+	if convID != "" {
+		if stored, ok := h.conversations.Get(convID, claims.UserID); ok {
+			history = stored
+			if text := latestUserText(req.Messages); text != "" {
+				history = append(history, anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
+			}
+		}
+	}
+	if history == nil {
+		if convID == "" {
+			convID = newConversationID()
+		}
+		history = toSDKMessages(req.Messages)
+	}
+
+	emit(map[string]string{"conversation_id": convID})
+
+	finalHistory, err := service.SendMessage(r.Context(), history, chatCtx, callbacks)
+	h.conversations.Put(convID, claims.UserID, finalHistory)
 	if err != nil {
 		log.Printf("ai chat error: %v", err)
 		errData, _ := json.Marshal(map[string]string{"error": err.Error()})
@@ -86,6 +129,24 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+}
+
+// configuredServices reports which backends are available, for system-prompt context.
+func (h *Handler) configuredServices() []string {
+	var services []string
+	if h.creds.IsConfigured(credentials.KeyTMDBAccessToken) {
+		services = append(services, "TMDB (discovery)")
+	}
+	if h.creds.IsConfigured(credentials.KeyTraktClientID) {
+		services = append(services, "Trakt (trending)")
+	}
+	if h.toolServer.GetRadarr() != nil {
+		services = append(services, "Radarr (movies)")
+	}
+	if h.toolServer.GetSonarr() != nil {
+		services = append(services, "Sonarr (TV)")
+	}
+	return services
 }
 
 // Available handles GET /api/ai/available.
