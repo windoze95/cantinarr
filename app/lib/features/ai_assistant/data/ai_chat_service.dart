@@ -11,9 +11,14 @@ class AiChatService {
 
   AiChatService({required Dio backendDio}) : _backendDio = backendDio;
 
-  /// Send messages and stream response events (text chunks + media results) via SSE.
+  /// Send messages and stream response events via SSE.
+  ///
+  /// Pass the [conversationId] from a previous [ConversationIdEvent] so the
+  /// server can keep full tool context across turns. The transcript in
+  /// [messages] is still sent as a fallback for when server state expired.
   Stream<ChatStreamEvent> sendMessage({
     required List<ChatMessage> messages,
+    String? conversationId,
   }) async* {
     final apiMessages = messages
         .where((m) => m.role != ChatRole.system)
@@ -22,7 +27,11 @@ class AiChatService {
 
     final resp = await _backendDio.post(
       '/api/ai/chat',
-      data: {'messages': apiMessages},
+      data: {
+        'messages': apiMessages,
+        if (conversationId != null && conversationId.isNotEmpty)
+          'conversation_id': conversationId,
+      },
       options: Options(
         responseType: ResponseType.stream,
         headers: {'Accept': 'text/event-stream'},
@@ -53,6 +62,22 @@ class AiChatService {
                 if (text != null && text.isNotEmpty) {
                   yield TextChunkEvent(text);
                 }
+              } else if (json.containsKey('conversation_id')) {
+                final id = json['conversation_id'] as String?;
+                if (id != null && id.isNotEmpty) {
+                  yield ConversationIdEvent(id);
+                }
+              } else if (json.containsKey('tool_start')) {
+                final tool = json['tool_start'] as Map<String, dynamic>;
+                final name = tool['name'] as String? ?? '';
+                final label = tool['label'] as String? ?? _humanize(name);
+                yield ToolStartEvent(name, label);
+              } else if (json.containsKey('tool_end')) {
+                final tool = json['tool_end'] as Map<String, dynamic>;
+                yield ToolEndEvent(
+                  tool['name'] as String? ?? '',
+                  tool['ok'] != false,
+                );
               } else if (json.containsKey('media_results')) {
                 final items = (json['media_results'] as List)
                     .map((e) =>
@@ -61,6 +86,13 @@ class AiChatService {
                 if (items.isNotEmpty) {
                   yield MediaResultsEvent(items);
                 }
+              } else if (json.containsKey('error')) {
+                final message = json['error'] as String?;
+                yield StreamErrorEvent(
+                  (message == null || message.isEmpty)
+                      ? 'Something went wrong.'
+                      : message,
+                );
               }
             } catch (_) {
               // If it's not JSON, yield the raw data as text
@@ -70,6 +102,16 @@ class AiChatService {
         }
       }
     }
+  }
+
+  /// Turns a snake_case tool name into a readable label.
+  static String _humanize(String name) {
+    if (name.isEmpty) return 'Working';
+    return name
+        .split('_')
+        .where((w) => w.isNotEmpty)
+        .map((w) => w[0].toUpperCase() + w.substring(1))
+        .join(' ');
   }
 
   /// Check if the AI service is available on this server.

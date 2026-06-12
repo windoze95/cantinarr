@@ -137,8 +137,7 @@ class SonarrStatistics {
         episodeCount: json['episodeCount'] as int? ?? 0,
         totalEpisodeCount: json['totalEpisodeCount'] as int? ?? 0,
         sizeOnDisk: json['sizeOnDisk'] as int? ?? 0,
-        percentOfEpisodes:
-            (json['percentOfEpisodes'] as num?)?.toDouble() ?? 0,
+        percentOfEpisodes: (json['percentOfEpisodes'] as num?)?.toDouble() ?? 0,
       );
 
   String get sizeFormatted {
@@ -227,7 +226,8 @@ class SonarrRootFolder {
   final String path;
   final int? freeSpace;
 
-  const SonarrRootFolder({required this.id, required this.path, this.freeSpace});
+  const SonarrRootFolder(
+      {required this.id, required this.path, this.freeSpace});
 
   factory SonarrRootFolder.fromJson(Map<String, dynamic> json) =>
       SonarrRootFolder(
@@ -244,4 +244,238 @@ class SonarrSystemStatus {
 
   factory SonarrSystemStatus.fromJson(Map<String, dynamic> json) =>
       SonarrSystemStatus(version: json['version'] as String? ?? 'Unknown');
+}
+
+String _formatBytes(num bytes) {
+  if (bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var value = bytes.toDouble();
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  final decimals = value >= 100 || unit == 0 ? 0 : 1;
+  return '${value.toStringAsFixed(decimals)} ${units[unit]}';
+}
+
+/// One item in the Sonarr download queue (fetched with series + episode
+/// details).
+class SonarrQueueItem {
+  final int id;
+  final int? seriesId;
+  final String title;
+  final String? seriesTitle;
+  final int? seasonNumber;
+  final int? episodeNumber;
+  final String? episodeTitle;
+  final String status;
+  final String? trackedDownloadState;
+  final String? trackedDownloadStatus;
+  final String protocol;
+  final String? indexer;
+  final String? downloadClient;
+  final double size;
+  final double sizeleft;
+  final String? timeleft;
+  final String? errorMessage;
+  final List<String> statusMessages;
+  final String? quality;
+
+  const SonarrQueueItem({
+    required this.id,
+    this.seriesId,
+    required this.title,
+    this.seriesTitle,
+    this.seasonNumber,
+    this.episodeNumber,
+    this.episodeTitle,
+    this.status = '',
+    this.trackedDownloadState,
+    this.trackedDownloadStatus,
+    this.protocol = 'unknown',
+    this.indexer,
+    this.downloadClient,
+    this.size = 0,
+    this.sizeleft = 0,
+    this.timeleft,
+    this.errorMessage,
+    this.statusMessages = const [],
+    this.quality,
+  });
+
+  factory SonarrQueueItem.fromJson(Map<String, dynamic> json) {
+    final messages = <String>[];
+    for (final entry in (json['statusMessages'] as List<dynamic>? ?? [])) {
+      final map = entry as Map<String, dynamic>;
+      for (final msg in (map['messages'] as List<dynamic>? ?? [])) {
+        final text = msg.toString();
+        if (text.isNotEmpty) messages.add(text);
+      }
+      if (map['messages'] == null || (map['messages'] as List).isEmpty) {
+        final title = map['title'] as String?;
+        if (title != null && title.isNotEmpty) messages.add(title);
+      }
+    }
+    final episode = json['episode'] as Map<String, dynamic>?;
+    return SonarrQueueItem(
+      id: json['id'] as int? ?? 0,
+      seriesId: json['seriesId'] as int?,
+      title: json['title'] as String? ?? 'Unknown',
+      seriesTitle:
+          (json['series'] as Map<String, dynamic>?)?['title'] as String?,
+      seasonNumber:
+          episode?['seasonNumber'] as int? ?? json['seasonNumber'] as int?,
+      episodeNumber: episode?['episodeNumber'] as int?,
+      episodeTitle: episode?['title'] as String?,
+      status: json['status'] as String? ?? '',
+      trackedDownloadState: json['trackedDownloadState'] as String?,
+      trackedDownloadStatus: json['trackedDownloadStatus'] as String?,
+      protocol: json['protocol'] as String? ?? 'unknown',
+      indexer: json['indexer'] as String?,
+      downloadClient: json['downloadClient'] as String?,
+      size: (json['size'] as num?)?.toDouble() ?? 0,
+      sizeleft: (json['sizeleft'] as num?)?.toDouble() ?? 0,
+      timeleft: json['timeleft'] as String?,
+      errorMessage: json['errorMessage'] as String?,
+      statusMessages: messages,
+      quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
+          as String?,
+    );
+  }
+
+  double get progress =>
+      size > 0 ? ((size - sizeleft) / size).clamp(0.0, 1.0) : 0;
+  String get sizeFormatted => _formatBytes(size);
+  String get downloadedFormatted => _formatBytes(size - sizeleft);
+  bool get hasIssues =>
+      (errorMessage?.isNotEmpty ?? false) ||
+      statusMessages.isNotEmpty ||
+      trackedDownloadStatus == 'warning' ||
+      trackedDownloadStatus == 'error';
+
+  /// e.g. "S01E05 • Episode title", or null when episode info is missing.
+  String? get episodeLabel {
+    if (seasonNumber == null || episodeNumber == null) return null;
+    final se = 'S${seasonNumber!.toString().padLeft(2, '0')}'
+        'E${episodeNumber!.toString().padLeft(2, '0')}';
+    return (episodeTitle != null && episodeTitle!.isNotEmpty)
+        ? '$se • $episodeTitle'
+        : se;
+  }
+}
+
+/// A single Sonarr history event.
+class SonarrHistoryRecord {
+  final int id;
+  final String sourceTitle;
+  final String eventType;
+  final DateTime? date;
+  final String? quality;
+  final int? seriesId;
+  final int? episodeId;
+
+  const SonarrHistoryRecord({
+    required this.id,
+    this.sourceTitle = '',
+    this.eventType = '',
+    this.date,
+    this.quality,
+    this.seriesId,
+    this.episodeId,
+  });
+
+  factory SonarrHistoryRecord.fromJson(Map<String, dynamic> json) =>
+      SonarrHistoryRecord(
+        id: json['id'] as int? ?? 0,
+        sourceTitle: json['sourceTitle'] as String? ?? '',
+        eventType: json['eventType'] as String? ?? '',
+        date: DateTime.tryParse(json['date'] as String? ?? ''),
+        quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
+            as String?,
+        seriesId: json['seriesId'] as int?,
+        episodeId: json['episodeId'] as int?,
+      );
+}
+
+/// Paged envelope for Sonarr history.
+class SonarrHistoryPage {
+  final List<SonarrHistoryRecord> records;
+  final int totalRecords;
+
+  const SonarrHistoryPage({this.records = const [], this.totalRecords = 0});
+
+  factory SonarrHistoryPage.fromJson(Map<String, dynamic> json) =>
+      SonarrHistoryPage(
+        records: (json['records'] as List<dynamic>?)
+                ?.map((r) =>
+                    SonarrHistoryRecord.fromJson(r as Map<String, dynamic>))
+                .toList() ??
+            [],
+        totalRecords: json['totalRecords'] as int? ?? 0,
+      );
+}
+
+/// A release returned by Sonarr's interactive search.
+class SonarrRelease {
+  final String guid;
+  final int indexerId;
+  final String title;
+  final String? quality;
+  final int size;
+  final int age;
+  final double ageHours;
+  final String? indexer;
+  final String protocol;
+  final int? seeders;
+  final int? leechers;
+  final bool rejected;
+  final List<String> rejections;
+
+  const SonarrRelease({
+    required this.guid,
+    required this.indexerId,
+    required this.title,
+    this.quality,
+    this.size = 0,
+    this.age = 0,
+    this.ageHours = 0,
+    this.indexer,
+    this.protocol = 'unknown',
+    this.seeders,
+    this.leechers,
+    this.rejected = false,
+    this.rejections = const [],
+  });
+
+  factory SonarrRelease.fromJson(Map<String, dynamic> json) => SonarrRelease(
+        guid: json['guid'] as String? ?? '',
+        indexerId: json['indexerId'] as int? ?? 0,
+        title: json['title'] as String? ?? 'Unknown',
+        quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
+            as String?,
+        size: (json['size'] as num?)?.toInt() ?? 0,
+        age: json['age'] as int? ?? 0,
+        ageHours: (json['ageHours'] as num?)?.toDouble() ?? 0,
+        indexer: json['indexer'] as String?,
+        protocol: json['protocol'] as String? ?? 'unknown',
+        seeders: json['seeders'] as int?,
+        leechers: json['leechers'] as int?,
+        rejected: json['rejected'] as bool? ?? false,
+        rejections: (json['rejections'] as List<dynamic>?)
+                ?.map((r) => r is Map<String, dynamic>
+                    ? (r['reason']?.toString() ?? '')
+                    : r.toString())
+                .where((r) => r.isNotEmpty)
+                .toList() ??
+            [],
+      );
+
+  bool get isTorrent => protocol == 'torrent';
+  String get sizeFormatted => _formatBytes(size);
+  String get ageFormatted {
+    if (age >= 1) return '${age}d';
+    if (ageHours >= 1) return '${ageHours.round()}h';
+    return '<1h';
+  }
 }

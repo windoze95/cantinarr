@@ -8,6 +8,7 @@ class RadarrMovieList extends StatelessWidget {
   final List<RadarrMovie> movies;
   final void Function(int id) onDelete;
   final void Function(int id) onSearch;
+  final void Function(RadarrMovie movie)? onInteractiveSearch;
   final bool embedded;
 
   const RadarrMovieList({
@@ -15,6 +16,7 @@ class RadarrMovieList extends StatelessWidget {
     required this.movies,
     required this.onDelete,
     required this.onSearch,
+    this.onInteractiveSearch,
     this.embedded = false,
   });
 
@@ -49,6 +51,9 @@ class RadarrMovieList extends StatelessWidget {
           child: _MovieTile(
             movie: movie,
             onSearch: () => onSearch(movie.id),
+            onInteractiveSearch: onInteractiveSearch != null
+                ? () => onInteractiveSearch!(movie)
+                : null,
           ),
         );
       },
@@ -80,8 +85,13 @@ class RadarrMovieList extends StatelessWidget {
 class _MovieTile extends StatelessWidget {
   final RadarrMovie movie;
   final VoidCallback onSearch;
+  final VoidCallback? onInteractiveSearch;
 
-  const _MovieTile({required this.movie, required this.onSearch});
+  const _MovieTile({
+    required this.movie,
+    required this.onSearch,
+    this.onInteractiveSearch,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -114,8 +124,8 @@ class _MovieTile extends StatelessWidget {
       subtitle: Row(
         children: [
           Text('${movie.year}',
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 13)),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
           const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -148,16 +158,48 @@ class _MovieTile extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               movie.movieFile!.sizeFormatted,
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 11),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
             ),
           ],
         ],
       ),
-      trailing: IconButton(
-        icon: const Icon(Icons.search, color: AppTheme.textSecondary),
-        onPressed: onSearch,
-        tooltip: 'Search for download',
+      trailing: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
+        color: AppTheme.surfaceVariant,
+        tooltip: 'Actions',
+        onSelected: (value) {
+          switch (value) {
+            case 'search':
+              onSearch();
+            case 'interactive':
+              onInteractiveSearch?.call();
+          }
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(
+            value: 'search',
+            child: Row(
+              children: [
+                Icon(Icons.search, size: 18, color: AppTheme.textSecondary),
+                SizedBox(width: 10),
+                Text('Automatic search'),
+              ],
+            ),
+          ),
+          if (onInteractiveSearch != null)
+            const PopupMenuItem(
+              value: 'interactive',
+              child: Row(
+                children: [
+                  Icon(Icons.manage_search,
+                      size: 18, color: AppTheme.textSecondary),
+                  SizedBox(width: 10),
+                  Text('Interactive search'),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }

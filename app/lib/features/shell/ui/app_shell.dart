@@ -572,7 +572,13 @@ class _AppShellState extends ConsumerState<AppShell>
                         if (index == 0 && msg.role == ChatRole.assistant) {
                           return const SizedBox.shrink();
                         }
-                        return ChatBubble(message: msg);
+                        final isLast = index == messages.length - 1;
+                        return ChatBubble(
+                          message: msg,
+                          onRetry: isLast && msg.errorText != null
+                              ? _aiChatNotifier?.retryLast
+                              : null,
+                        );
                       },
                     ),
                   ),

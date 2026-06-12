@@ -151,6 +151,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/credentials'),
             ),
             _SettingsTile(
+              icon: Icons.handyman_outlined,
+              title: 'AI Tools',
+              subtitle: 'Enable or disable assistant tools',
+              onTap: () => context.push('/settings/ai-tools'),
+            ),
+            _SettingsTile(
               icon: Icons.link,
               title: 'Generate Connect Link',
               subtitle: 'Create a link to invite a new user',
