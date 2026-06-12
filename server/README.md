@@ -109,6 +109,25 @@ GET    /api/requests            # request history for current user
 POST   /api/ai/chat             # SSE-streamed Claude conversation with tool use
 GET    /api/ai/available        # { available: true/false }
 ```
+The chat request accepts an optional `conversation_id`; when supplied, the server
+replays its stored transcript (including tool results) so follow-up turns keep
+full grounding. SSE frames: `{conversation_id}`, `{text}`, `{tool_start: {name, label}}`,
+`{tool_end: {name, ok}}`, `{media_results}`, `{error}`, then `[DONE]`.
+
+### AI Tool Toggles (admin only)
+```
+GET    /api/admin/ai-tools       # list tools: { name, description, enabled, admin_only }
+PUT    /api/admin/ai-tools/:name # { enabled: bool } -- applies to chat and /mcp immediately
+```
+
+### Downloads (admin only)
+```
+GET    /api/downloads/:id/queue                 # unified SABnzbd/qBittorrent queue
+POST   /api/downloads/:id/pause|resume          # whole queue
+POST   /api/downloads/:id/queue/:item/pause|resume
+DELETE /api/downloads/:id/queue/:item?deleteData=bool
+GET    /api/downloads/:id/history?limit=50
+```
 
 ### MCP (external tool access)
 ```
@@ -162,7 +181,7 @@ Movies skip bridging entirely -- Radarr natively supports `term=tmdb:{id}`.
 
 ### MCP Tools
 
-The same 9 tools power both the in-app AI assistant and the external MCP endpoint:
+The same 19 tools power both the in-app AI assistant and the external MCP endpoint. Tools marked admin require an admin account; every tool can be disabled from Settings > AI Tools:
 
 | Tool | Description |
 |---|---|
@@ -175,6 +194,16 @@ The same 9 tools power both the in-app AI assistant and the external MCP endpoin
 | `check_request_status` | Is this on my server? |
 | `request_media` | Actually add to Radarr/Sonarr |
 | `list_my_requests` | User's request history |
+| `display_media` | Curate the visual results carousel |
+| `get_queue` | Combined Radarr/Sonarr download queue |
+| `get_calendar` | Upcoming releases |
+| `get_library` | What's on the server (filterable) |
+| `get_history` | Recent grabs/imports/failures |
+| `trigger_search` | Kick off an automatic download search |
+| `search_releases` | Interactive indexer release search (admin) |
+| `grab_release` | Download a specific release (admin) |
+| `remove_queue_item` | Remove/blocklist a queue item (admin) |
+| `get_disk_space` | Disk space across instances (admin) |
 
 ### MCP Server Endpoint
 
