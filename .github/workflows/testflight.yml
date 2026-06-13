@@ -10,7 +10,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: macos-15
+    runs-on: macos-26
 
     defaults:
       run:
@@ -35,10 +35,10 @@ jobs:
           gem install fastlane
           APP_VERSION=$VERSION fastlane next_build_number
 
-      - name: Setup Xcode 16
+      - name: Setup Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16"
+          xcode-version: latest-stable
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
