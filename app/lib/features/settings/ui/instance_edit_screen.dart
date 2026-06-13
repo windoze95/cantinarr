@@ -45,9 +45,35 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _isTesting = false;
   String? _testResult;
 
-  bool get _isQbittorrent => _serviceType == 'qbittorrent';
+  static const _serviceTypes = <(String, String)>[
+    ('radarr', 'Radarr'),
+    ('sonarr', 'Sonarr'),
+    ('sabnzbd', 'SABnzbd'),
+    ('qbittorrent', 'qBittorrent'),
+    ('nzbget', 'NZBGet'),
+    ('transmission', 'Transmission'),
+    ('tautulli', 'Tautulli'),
+  ];
+
+  /// Types that authenticate with username/password instead of an API key.
+  bool get _usesUserPass =>
+      _serviceType == 'qbittorrent' ||
+      _serviceType == 'nzbget' ||
+      _serviceType == 'transmission';
+
+  /// Transmission auth is optional (only when the daemon requires it).
+  bool get _credentialsOptional => _serviceType == 'transmission';
+
   bool get _isDownloadClient =>
-      _serviceType == 'sabnzbd' || _serviceType == 'qbittorrent';
+      _serviceType == 'sabnzbd' ||
+      _serviceType == 'qbittorrent' ||
+      _serviceType == 'nzbget' ||
+      _serviceType == 'transmission';
+
+  /// Only the arr services support a device-direct connection test; the
+  /// rest are validated by the backend when saving.
+  bool get _supportsDirectTest =>
+      _serviceType == 'radarr' || _serviceType == 'sonarr';
 
   @override
   void initState() {
@@ -125,7 +151,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     }
     // When editing, blank credentials keep the existing ones.
     if (widget.isEditing) return null;
-    if (_isQbittorrent) {
+    if (_usesUserPass) {
+      if (_credentialsOptional) return null;
       if (_usernameController.text.trim().isEmpty ||
           _passwordController.text.isEmpty) {
         return 'Username and password are required';
@@ -254,6 +281,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://192.168.1.100:8080';
       case 'qbittorrent':
         return 'http://192.168.1.100:8081';
+      case 'nzbget':
+        return 'http://192.168.1.100:6789';
+      case 'transmission':
+        return 'http://192.168.1.100:9091';
+      case 'tautulli':
+        return 'http://192.168.1.100:8181';
       default:
         return 'http://192.168.1.100:7878';
     }
@@ -283,23 +316,24 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     fontSize: 13,
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SegmentedButton<String>(
-                showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(value: 'radarr', label: Text('Radarr')),
-                  ButtonSegment(value: 'sonarr', label: Text('Sonarr')),
-                  ButtonSegment(value: 'sabnzbd', label: Text('SABnzbd')),
-                  ButtonSegment(
-                      value: 'qbittorrent', label: Text('qBittorrent')),
-                ],
-                selected: {_serviceType},
-                onSelectionChanged: (value) => setState(() {
-                  _serviceType = value.first;
+            // With 7 service types a segmented control no longer fits on a
+            // phone, so use a dropdown instead.
+            DropdownButtonFormField<String>(
+              initialValue: _serviceType,
+              dropdownColor: AppTheme.surfaceVariant,
+              items: _serviceTypes
+                  .map((t) => DropdownMenuItem(
+                        value: t.$1,
+                        child: Text(t.$2),
+                      ))
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() {
+                  _serviceType = value;
                   _testResult = null;
-                }),
-              ),
+                });
+              },
             ),
             const SizedBox(height: 24),
           ],
@@ -310,7 +344,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               labelText: 'Name',
               hintText: _isDownloadClient
                   ? 'e.g. SABnzbd, qBittorrent'
-                  : 'e.g. Movies, 4K Movies',
+                  : (_serviceType == 'tautulli'
+                      ? 'e.g. Tautulli'
+                      : 'e.g. Movies, 4K Movies'),
             ),
           ),
           const SizedBox(height: 16),
@@ -325,15 +361,18 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ),
           const SizedBox(height: 16),
 
-          // qBittorrent authenticates with username/password; everything
-          // else uses an API key. Credentials are write-only: when editing,
-          // blank keeps the existing value.
-          if (_isQbittorrent) ...[
+          // qBittorrent, NZBGet and Transmission authenticate with
+          // username/password; everything else uses an API key. Credentials
+          // are write-only: when editing, blank keeps the existing value.
+          if (_usesUserPass) ...[
             TextField(
               controller: _usernameController,
-              decoration: const InputDecoration(
-                labelText: 'Username',
-                hintText: 'qBittorrent Web UI username',
+              decoration: InputDecoration(
+                labelText:
+                    _credentialsOptional ? 'Username (optional)' : 'Username',
+                hintText: _credentialsOptional
+                    ? 'Only if authentication is enabled'
+                    : 'Web UI username',
               ),
               autocorrect: false,
             ),
@@ -341,10 +380,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             TextField(
               controller: _passwordController,
               decoration: InputDecoration(
-                labelText: 'Password',
+                labelText:
+                    _credentialsOptional ? 'Password (optional)' : 'Password',
                 hintText: widget.isEditing
                     ? 'Leave blank to keep existing'
-                    : 'qBittorrent Web UI password',
+                    : (_credentialsOptional
+                        ? 'Only if authentication is enabled'
+                        : 'Web UI password'),
               ),
               obscureText: true,
             ),
@@ -357,7 +399,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     ? 'Leave blank to keep existing'
                     : (_serviceType == 'sabnzbd'
                         ? 'Your SABnzbd API key'
-                        : 'Your Radarr/Sonarr API key'),
+                        : (_serviceType == 'tautulli'
+                            ? 'Your Tautulli API key'
+                            : 'Your Radarr/Sonarr API key')),
               ),
               obscureText: true,
             ),
@@ -369,7 +413,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             subtitle: Text(
                 _isDownloadClient
                     ? 'Use this as the default download client'
-                    : 'Use this as the default for media requests',
+                    : (_serviceType == 'tautulli'
+                        ? 'Use this as the default Tautulli instance'
+                        : 'Use this as the default for media requests'),
                 style: const TextStyle(
                     color: AppTheme.textSecondary, fontSize: 13)),
             value: _isDefault,
@@ -380,9 +426,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           const SizedBox(height: 24),
 
           // Test connection button (Radarr/Sonarr only — the device calls
-          // the arr server directly). Download clients are validated by the
-          // backend when saving.
-          if (!_isDownloadClient) ...[
+          // the arr server directly). Download clients and Tautulli are
+          // validated by the backend when saving.
+          if (_supportsDirectTest) ...[
             OutlinedButton.icon(
               onPressed: _isTesting ? null : _testConnection,
               icon: _isTesting

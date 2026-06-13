@@ -14,6 +14,9 @@ type Config struct {
 	DBPath     string
 	Port       int
 	ServerName string
+	// EncryptionKeyFile backs secrets-at-rest when CANTINARR_ENCRYPTION_KEY
+	// is not set; it lives next to the database.
+	EncryptionKeyFile string
 }
 
 func Load() (*Config, error) {
@@ -23,9 +26,10 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		JWTSecret:  os.Getenv("CANTINARR_JWT_SECRET"),
-		DBPath:     "/config/cantinarr.db",
-		ServerName: os.Getenv("CANTINARR_SERVER_NAME"),
+		JWTSecret:         os.Getenv("CANTINARR_JWT_SECRET"),
+		DBPath:            "/config/cantinarr.db",
+		ServerName:        os.Getenv("CANTINARR_SERVER_NAME"),
+		EncryptionKeyFile: "/config/encryption.key",
 	}
 
 	if cfg.ServerName == "" {

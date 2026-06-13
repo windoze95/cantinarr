@@ -18,6 +18,7 @@ import '../features/radarr/ui/radarr_history_screen.dart';
 import '../features/radarr/ui/radarr_home_screen.dart';
 import '../features/radarr/ui/radarr_module_shell.dart';
 import '../features/radarr/ui/radarr_queue_screen.dart';
+import '../features/radarr/ui/radarr_wanted_screen.dart';
 import '../features/settings/ui/ai_tools_screen.dart';
 import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
@@ -31,6 +32,11 @@ import '../features/sonarr/ui/sonarr_history_screen.dart';
 import '../features/sonarr/ui/sonarr_home_screen.dart';
 import '../features/sonarr/ui/sonarr_module_shell.dart';
 import '../features/sonarr/ui/sonarr_queue_screen.dart';
+import '../features/sonarr/ui/sonarr_wanted_screen.dart';
+import '../features/tautulli/ui/tautulli_activity_screen.dart';
+import '../features/tautulli/ui/tautulli_history_screen.dart';
+import '../features/tautulli/ui/tautulli_module_shell.dart';
+import '../features/tautulli/ui/tautulli_stats_screen.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -100,7 +106,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
-          // Radarr module (Library/Queue/History/Calendar tabs)
+          // Radarr module (Library/Queue/History/Wanted/Calendar tabs)
           StatefulShellRoute.indexedStack(
             builder: (context, state, navigationShell) {
               return RadarrModuleShell(
@@ -137,6 +143,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               StatefulShellBranch(
                 routes: [
                   GoRoute(
+                    path: '/radarr/wanted',
+                    builder: (_, __) => const RadarrWantedScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
                     path: '/radarr/calendar',
                     builder: (_, __) => const RadarrCalendarScreen(),
                   ),
@@ -145,7 +159,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
-          // Sonarr module (Library/Queue/History/Calendar tabs)
+          // Sonarr module (Library/Queue/History/Wanted/Calendar tabs)
           StatefulShellRoute.indexedStack(
             builder: (context, state, navigationShell) {
               return SonarrModuleShell(
@@ -176,6 +190,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: '/sonarr/history',
                     builder: (_, __) => const SonarrHistoryScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/sonarr/wanted',
+                    builder: (_, __) => const SonarrWantedScreen(),
                   ),
                 ],
               ),
@@ -213,6 +235,43 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: '/downloads/history',
                     builder: (_, __) => const DownloadsHistoryScreen(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          // Tautulli module (Activity/History/Stats tabs, admin only)
+          StatefulShellRoute.indexedStack(
+            builder: (context, state, navigationShell) {
+              return TautulliModuleShell(
+                currentIndex: navigationShell.currentIndex,
+                onTabChanged: (index) => navigationShell.goBranch(index),
+                child: navigationShell,
+              );
+            },
+            branches: [
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/tautulli/activity',
+                    builder: (_, __) => const TautulliActivityScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/tautulli/history',
+                    builder: (_, __) => const TautulliHistoryScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/tautulli/stats',
+                    builder: (_, __) => const TautulliStatsScreen(),
                   ),
                 ],
               ),

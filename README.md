@@ -45,7 +45,9 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
 - **AI assistant** -- "What should I watch tonight?" Claude searches your library, checks availability, and can request for you. Admins can also manage the server conversationally: check the queue, kick off searches, grab a specific release from the indexers, or clean up failed downloads.
 - **MCP server** -- The same 19 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, so Claude Desktop and other MCP clients can connect directly. Every tool can be toggled on/off per server from Settings > AI Tools.
-- **Download clients** -- SABnzbd and qBittorrent modules with live queue management (pause, resume, remove, speeds) alongside full Radarr/Sonarr control: queue actions, history, calendar, and interactive release search.
+- **Download clients** -- SABnzbd, qBittorrent, NZBGet, and Transmission modules with live queue management (pause, resume, remove, speeds, real-time push updates) alongside full Radarr/Sonarr control: queue actions, history, wanted/missing, calendar, and interactive release search.
+- **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
+- **Secrets encrypted at rest** -- arr API keys, download-client passwords, and external credentials are AES-256-GCM encrypted in the database.
 - **Household-friendly** -- Connect links, role-based access. Admins manage arr services, users just browse and request.
 - **Single container** -- One Go binary, one port, serves API + web UI. Runs great on a Raspberry Pi or NAS.
 
@@ -89,12 +91,16 @@ cantinarr/
 │   │   ├── downloads/      # Unified SABnzbd/qBittorrent queue API
 │   │   ├── mcpserver/      # MCP Streamable HTTP endpoint
 │   │   ├── proxy/          # Arr admin reverse proxy
+│   │   ├── nzbget/         # NZBGet JSON-RPC client
 │   │   ├── qbittorrent/    # qBittorrent WebUI v2 client
 │   │   ├── radarr/         # Radarr API v3 client
 │   │   ├── request/        # Request orchestration + bridging
 │   │   ├── sabnzbd/        # SABnzbd JSON API client
+│   │   ├── secrets/        # AES-256-GCM secrets-at-rest
 │   │   ├── sonarr/         # Sonarr API v3 client
+│   │   ├── tautulli/       # Tautulli activity/history/stats
 │   │   ├── tmdb/           # TMDB client + ID bridge
+│   │   ├── transmission/   # Transmission RPC client
 │   │   ├── trakt/          # Trakt fallback ID resolver
 │   │   ├── web/            # Flutter web embed (go:embed)
 │   │   └── websocket/      # Real-time download progress
@@ -121,7 +127,8 @@ All service credentials are managed through the admin UI -- no environment varia
 |---|---|---|
 | TMDB access token | Admin UI | Required for media discovery and search ([get one here](https://www.themoviedb.org/settings/api)) |
 | Radarr/Sonarr instances | Admin UI | Add via Settings > Add Instance |
-| SABnzbd/qBittorrent instances | Admin UI | Download client modules (queue, history, speeds) |
+| SABnzbd/qBittorrent/NZBGet/Transmission instances | Admin UI | Download client modules (queue, history, speeds) |
+| Tautulli instance | Admin UI | Plex activity, watch history, stats |
 | Anthropic API key | Admin UI | Enables AI assistant |
 | Trakt client ID | Admin UI | Enhances discovery + fallback ID bridging |
 
@@ -133,6 +140,7 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for JWT signing |
 | `CANTINARR_AI_MODEL` | `claude-opus-4-8` | Claude model used by the AI assistant |
+| `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
 
 ## How It Works
 

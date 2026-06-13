@@ -71,11 +71,19 @@ class BackendConnection {
   List<ServiceInstance> get sonarrInstances =>
       instances.where((i) => i.serviceType == 'sonarr').toList();
 
-  /// Get all download client instances (SABnzbd or qBittorrent).
+  /// Get all download client instances
+  /// (SABnzbd, qBittorrent, NZBGet or Transmission).
   List<ServiceInstance> get downloadInstances => instances
-      .where(
-          (i) => i.serviceType == 'sabnzbd' || i.serviceType == 'qbittorrent')
+      .where((i) =>
+          i.serviceType == 'sabnzbd' ||
+          i.serviceType == 'qbittorrent' ||
+          i.serviceType == 'nzbget' ||
+          i.serviceType == 'transmission')
       .toList();
+
+  /// Get all Tautulli instances.
+  List<ServiceInstance> get tautulliInstances =>
+      instances.where((i) => i.serviceType == 'tautulli').toList();
 
   /// Get the default Radarr instance, if any.
   ServiceInstance? get defaultRadarrInstance {

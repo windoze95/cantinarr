@@ -19,6 +19,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/request"
+	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/web"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
@@ -35,6 +36,7 @@ func NewRouter(
 	instanceHandler *instance.Handler,
 	instanceStore *instance.Store,
 	downloadsHandler *downloads.Handler,
+	tautulliHandler *tautulli.Handler,
 	creds *credentials.Registry,
 	credHandler *credentials.Handler,
 	toolServer *mcp.ToolServer,
@@ -204,6 +206,16 @@ func NewRouter(
 			r.Post("/downloads/{instanceID}/pause", downloadsHandler.PauseAll)
 			r.Post("/downloads/{instanceID}/resume", downloadsHandler.ResumeAll)
 			r.Get("/downloads/{instanceID}/history", downloadsHandler.GetHistory)
+		})
+
+		// Tautulli (Plex monitoring) routes (admin only)
+		r.Group(func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.Use(auth.AdminMiddleware)
+
+			r.Get("/tautulli/{instanceID}/activity", tautulliHandler.GetActivity)
+			r.Get("/tautulli/{instanceID}/history", tautulliHandler.GetHistory)
+			r.Get("/tautulli/{instanceID}/stats", tautulliHandler.GetStats)
 		})
 
 	})

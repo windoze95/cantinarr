@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// Types of modules available in the app.
-enum ModuleType { dashboard, radarr, sonarr, downloads, assistant }
+enum ModuleType { dashboard, radarr, sonarr, downloads, tautulli, assistant }
 
 /// Represents a navigable module in the app (shown in drawer).
 class AppModule {

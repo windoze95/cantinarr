@@ -1,5 +1,6 @@
-// Package downloads exposes a unified REST API over SABnzbd and qBittorrent
-// download-client instances, normalizing both backends into a common shape.
+// Package downloads exposes a unified REST API over SABnzbd, qBittorrent,
+// NZBGet, and Transmission download-client instances, normalizing all
+// backends into a common shape.
 package downloads
 
 import (
@@ -8,12 +9,15 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
+	"github.com/windoze95/cantinarr-server/internal/transmission"
 )
 
 // qBittorrent reports this ETA when it is unknown/infinite; normalize to 0.
@@ -30,9 +34,10 @@ func NewHandler(store *instance.Store, registry *instance.Registry) *Handler {
 	return &Handler{store: store, registry: registry}
 }
 
-// queueItem is the normalized shape of a single download across backends.
-// id is the SABnzbd nzo_id or the qBittorrent torrent hash.
-type queueItem struct {
+// QueueItem is the normalized shape of a single download across backends.
+// id is the SABnzbd nzo_id, the qBittorrent/Transmission torrent hash, or the
+// NZBGet NZBID.
+type QueueItem struct {
 	ID            string  `json:"id"`
 	Name          string  `json:"name"`
 	SizeBytes     int64   `json:"size_bytes"`
@@ -44,10 +49,13 @@ type queueItem struct {
 	Category      string  `json:"category"`
 }
 
-type queueResponse struct {
+// QueueView is the normalized download queue for one instance. It is the
+// response body of the queue endpoint and the payload of the websocket
+// downloads_queue event.
+type QueueView struct {
 	Paused   bool        `json:"paused"`
 	SpeedBPS int64       `json:"speed_bps"`
-	Items    []queueItem `json:"items"`
+	Items    []QueueItem `json:"items"`
 }
 
 type historyItem struct {
@@ -63,36 +71,31 @@ type historyResponse struct {
 	Items []historyItem `json:"items"`
 }
 
-// GetQueue returns the normalized download queue for an instance.
-func (h *Handler) GetQueue(w http.ResponseWriter, r *http.Request) {
-	inst := h.resolveInstance(w, r)
-	if inst == nil {
-		return
-	}
-
+// Snapshot builds the normalized queue view for a download-client instance.
+// It is the single implementation behind both the HTTP queue endpoint and the
+// websocket hub's downloads poller.
+func Snapshot(reg *instance.Registry, inst instance.Instance) (*QueueView, error) {
 	switch inst.ServiceType {
 	case "sabnzbd":
-		client, err := h.registry.GetSabnzbdClient(inst.ID)
+		client, err := reg.GetSabnzbdClient(inst.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+			return nil, err
 		}
 		queue, err := client.GetQueue()
 		if err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
+			return nil, err
 		}
-		resp := queueResponse{
+		view := &QueueView{
 			Paused:   queue.Paused,
 			SpeedBPS: queue.SpeedBPS(),
-			Items:    make([]queueItem, 0, len(queue.Slots)),
+			Items:    make([]QueueItem, 0, len(queue.Slots)),
 		}
 		for _, slot := range queue.Slots {
 			category := slot.Category
 			if category == "*" {
 				category = ""
 			}
-			resp.Items = append(resp.Items, queueItem{
+			view.Items = append(view.Items, QueueItem{
 				ID:            slot.NzoID,
 				Name:          slot.Filename,
 				SizeBytes:     slot.SizeBytes(),
@@ -104,28 +107,24 @@ func (h *Handler) GetQueue(w http.ResponseWriter, r *http.Request) {
 				Category:      category,
 			})
 		}
-		writeJSON(w, resp)
+		return view, nil
 
 	case "qbittorrent":
-		client, err := h.registry.GetQbittorrentClient(inst.ID)
+		client, err := reg.GetQbittorrentClient(inst.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+			return nil, err
 		}
 		torrents, err := client.GetTorrents()
 		if err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
+			return nil, err
 		}
 		info, err := client.GetTransferInfo()
 		if err != nil {
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
+			return nil, err
 		}
-
-		resp := queueResponse{
+		view := &QueueView{
 			SpeedBPS: info.DLInfoSpeed,
-			Items:    make([]queueItem, 0),
+			Items:    make([]QueueItem, 0),
 		}
 		anyActive := false
 		for _, t := range torrents {
@@ -143,7 +142,7 @@ func (h *Handler) GetQueue(w http.ResponseWriter, r *http.Request) {
 			if sizeLeft < 0 {
 				sizeLeft = 0
 			}
-			resp.Items = append(resp.Items, queueItem{
+			view.Items = append(view.Items, QueueItem{
 				ID:            t.Hash,
 				Name:          t.Name,
 				SizeBytes:     t.Size,
@@ -155,9 +154,112 @@ func (h *Handler) GetQueue(w http.ResponseWriter, r *http.Request) {
 				Category:      t.Category,
 			})
 		}
-		resp.Paused = len(resp.Items) > 0 && !anyActive
-		writeJSON(w, resp)
+		view.Paused = len(view.Items) > 0 && !anyActive
+		return view, nil
+
+	case "nzbget":
+		client, err := reg.GetNzbgetClient(inst.ID)
+		if err != nil {
+			return nil, err
+		}
+		groups, err := client.ListGroups()
+		if err != nil {
+			return nil, err
+		}
+		status, err := client.GetStatus()
+		if err != nil {
+			return nil, err
+		}
+		view := &QueueView{
+			Paused:   status.DownloadPaused,
+			SpeedBPS: status.DownloadRate,
+			Items:    make([]QueueItem, 0, len(groups)),
+		}
+		for _, g := range groups {
+			size := g.SizeBytes()
+			left := g.RemainingBytes()
+			progress := 0.0
+			if size > 0 {
+				progress = float64(size-left) / float64(size) * 100
+			}
+			var eta int64
+			if status.DownloadRate > 0 {
+				eta = left / status.DownloadRate
+			}
+			view.Items = append(view.Items, QueueItem{
+				ID:            strconv.Itoa(g.NZBID),
+				Name:          g.NZBName,
+				SizeBytes:     size,
+				SizeLeftBytes: left,
+				Progress:      progress,
+				SpeedBPS:      0, // NZBGet does not report per-item speed
+				ETASeconds:    eta,
+				Status:        g.Status,
+				Category:      g.Category,
+			})
+		}
+		return view, nil
+
+	case "transmission":
+		client, err := reg.GetTransmissionClient(inst.ID)
+		if err != nil {
+			return nil, err
+		}
+		torrents, err := client.GetTorrents()
+		if err != nil {
+			return nil, err
+		}
+		stats, err := client.GetSessionStats()
+		if err != nil {
+			return nil, err
+		}
+		view := &QueueView{
+			SpeedBPS: stats.DownloadSpeed,
+			Items:    make([]QueueItem, 0),
+		}
+		anyActive := false
+		for _, t := range torrents {
+			if t.PercentDone >= 1 {
+				continue // completed torrents are reported via /history
+			}
+			if t.Status != transmission.StatusStopped {
+				anyActive = true
+			}
+			eta := t.ETA
+			if eta < 0 {
+				eta = 0 // negative = unknown/unavailable
+			}
+			view.Items = append(view.Items, QueueItem{
+				ID:            t.HashString,
+				Name:          t.Name,
+				SizeBytes:     t.TotalSize,
+				SizeLeftBytes: t.LeftUntilDone,
+				Progress:      t.PercentDone * 100,
+				SpeedBPS:      t.RateDownload,
+				ETASeconds:    eta,
+				Status:        transmission.StatusString(t.Status),
+				Category:      transmissionCategory(t),
+			})
+		}
+		view.Paused = len(view.Items) > 0 && !anyActive
+		return view, nil
 	}
+	return nil, fmt.Errorf("instance %s is not a download client", inst.ID)
+}
+
+// GetQueue returns the normalized download queue for an instance.
+func (h *Handler) GetQueue(w http.ResponseWriter, r *http.Request) {
+	inst := h.resolveInstance(w, r)
+	if inst == nil {
+		return
+	}
+
+	view, err := Snapshot(h.registry, *inst)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, view)
 }
 
 // PauseItem pauses a single queue item.
@@ -165,6 +267,8 @@ func (h *Handler) PauseItem(w http.ResponseWriter, r *http.Request) {
 	h.itemAction(w, r,
 		func(c *sabnzbd.Client, itemID string) error { return c.PauseItem(itemID) },
 		func(c *qbittorrent.Client, itemID string) error { return c.PauseTorrents(itemID) },
+		func(c *nzbget.Client, nzbID int) error { return c.PauseGroups([]int{nzbID}) },
+		func(c *transmission.Client, hash string) error { return c.StopTorrents([]string{hash}) },
 	)
 }
 
@@ -173,6 +277,8 @@ func (h *Handler) ResumeItem(w http.ResponseWriter, r *http.Request) {
 	h.itemAction(w, r,
 		func(c *sabnzbd.Client, itemID string) error { return c.ResumeItem(itemID) },
 		func(c *qbittorrent.Client, itemID string) error { return c.ResumeTorrents(itemID) },
+		func(c *nzbget.Client, nzbID int) error { return c.ResumeGroups([]int{nzbID}) },
+		func(c *transmission.Client, hash string) error { return c.StartTorrents([]string{hash}) },
 	)
 }
 
@@ -182,6 +288,8 @@ func (h *Handler) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	h.itemAction(w, r,
 		func(c *sabnzbd.Client, itemID string) error { return c.DeleteItem(itemID, deleteData) },
 		func(c *qbittorrent.Client, itemID string) error { return c.Delete(itemID, deleteData) },
+		func(c *nzbget.Client, nzbID int) error { return c.DeleteGroups([]int{nzbID}) },
+		func(c *transmission.Client, hash string) error { return c.RemoveTorrents([]string{hash}, deleteData) },
 	)
 }
 
@@ -190,6 +298,8 @@ func (h *Handler) PauseAll(w http.ResponseWriter, r *http.Request) {
 	h.queueAction(w, r,
 		func(c *sabnzbd.Client) error { return c.PauseQueue() },
 		func(c *qbittorrent.Client) error { return c.PauseTorrents("all") },
+		func(c *nzbget.Client) error { return c.PauseDownload() },
+		func(c *transmission.Client) error { return transmissionQueueAction(c, c.StopTorrents) },
 	)
 }
 
@@ -198,7 +308,31 @@ func (h *Handler) ResumeAll(w http.ResponseWriter, r *http.Request) {
 	h.queueAction(w, r,
 		func(c *sabnzbd.Client) error { return c.ResumeQueue() },
 		func(c *qbittorrent.Client) error { return c.ResumeTorrents("all") },
+		func(c *nzbget.Client) error { return c.ResumeDownload() },
+		func(c *transmission.Client) error { return transmissionQueueAction(c, c.StartTorrents) },
 	)
+}
+
+// transmissionQueueAction applies a start/stop action only to the torrents
+// visible in the unified queue view (incomplete ones). A nil ids list would
+// hit every torrent Transmission knows — silently stopping seeding on
+// completed torrents, or resuming torrents the user deliberately stopped,
+// none of which appear in the queue the user thinks they are acting on.
+func transmissionQueueAction(c *transmission.Client, action func([]string) error) error {
+	torrents, err := c.GetTorrents()
+	if err != nil {
+		return err
+	}
+	var hashes []string
+	for _, t := range torrents {
+		if t.PercentDone < 1 {
+			hashes = append(hashes, t.HashString)
+		}
+	}
+	if len(hashes) == 0 {
+		return nil
+	}
+	return action(hashes)
 }
 
 // GetHistory returns recently completed downloads. ?limit=N (default 50).
@@ -287,6 +421,93 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		writeJSON(w, resp)
+
+	case "nzbget":
+		client, err := h.registry.GetNzbgetClient(inst.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		entries, err := client.GetHistory()
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].HistoryTime > entries[j].HistoryTime
+		})
+		if len(entries) > limit {
+			entries = entries[:limit]
+		}
+		resp := historyResponse{Items: make([]historyItem, 0, len(entries))}
+		for _, e := range entries {
+			completedAt := ""
+			if e.HistoryTime > 0 {
+				completedAt = time.Unix(e.HistoryTime, 0).UTC().Format(time.RFC3339)
+			}
+			status := e.Status
+			errMsg := ""
+			switch {
+			case strings.HasPrefix(e.Status, "SUCCESS"):
+				status = "Completed"
+			case strings.HasPrefix(e.Status, "FAILURE"):
+				status = "Failed"
+				errMsg = e.Status
+			}
+			resp.Items = append(resp.Items, historyItem{
+				Name:        e.Name,
+				Status:      status,
+				SizeBytes:   e.SizeBytes(),
+				CompletedAt: completedAt,
+				Category:    e.Category,
+				Error:       errMsg,
+			})
+		}
+		writeJSON(w, resp)
+
+	case "transmission":
+		client, err := h.registry.GetTransmissionClient(inst.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		torrents, err := client.GetTorrents()
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		completed := torrents[:0:0]
+		for _, t := range torrents {
+			if t.PercentDone >= 1 {
+				completed = append(completed, t)
+			}
+		}
+		sort.Slice(completed, func(i, j int) bool {
+			return completed[i].DoneDate > completed[j].DoneDate
+		})
+		if len(completed) > limit {
+			completed = completed[:limit]
+		}
+		resp := historyResponse{Items: make([]historyItem, 0, len(completed))}
+		for _, t := range completed {
+			completedAt := ""
+			if t.DoneDate > 0 {
+				completedAt = time.Unix(t.DoneDate, 0).UTC().Format(time.RFC3339)
+			}
+			errMsg := ""
+			if t.Error != 0 {
+				errMsg = t.ErrorString
+			}
+			resp.Items = append(resp.Items, historyItem{
+				Name:        t.Name,
+				Status:      transmission.StatusString(t.Status),
+				SizeBytes:   t.TotalSize,
+				CompletedAt: completedAt,
+				Category:    transmissionCategory(t),
+				Error:       errMsg,
+			})
+		}
+		writeJSON(w, resp)
 	}
 }
 
@@ -294,7 +515,12 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
 
 // itemAction resolves the instance and itemID, dispatches the per-item action
 // for the backend, and replies 204 on success.
-func (h *Handler) itemAction(w http.ResponseWriter, r *http.Request, sabFn func(*sabnzbd.Client, string) error, qbitFn func(*qbittorrent.Client, string) error) {
+func (h *Handler) itemAction(w http.ResponseWriter, r *http.Request,
+	sabFn func(*sabnzbd.Client, string) error,
+	qbitFn func(*qbittorrent.Client, string) error,
+	nzbFn func(*nzbget.Client, int) error,
+	transFn func(*transmission.Client, string) error,
+) {
 	inst := h.resolveInstance(w, r)
 	if inst == nil {
 		return
@@ -326,13 +552,43 @@ func (h *Handler) itemAction(w http.ResponseWriter, r *http.Request, sabFn func(
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+	case "nzbget":
+		nzbID, err := strconv.Atoi(itemID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "item id must be a numeric NZBGet id")
+			return
+		}
+		client, err := h.registry.GetNzbgetClient(inst.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := nzbFn(client, nzbID); err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	case "transmission":
+		client, err := h.registry.GetTransmissionClient(inst.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := transFn(client, itemID); err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // queueAction resolves the instance, dispatches the whole-queue action for
 // the backend, and replies 204 on success.
-func (h *Handler) queueAction(w http.ResponseWriter, r *http.Request, sabFn func(*sabnzbd.Client) error, qbitFn func(*qbittorrent.Client) error) {
+func (h *Handler) queueAction(w http.ResponseWriter, r *http.Request,
+	sabFn func(*sabnzbd.Client) error,
+	qbitFn func(*qbittorrent.Client) error,
+	nzbFn func(*nzbget.Client) error,
+	transFn func(*transmission.Client) error,
+) {
 	inst := h.resolveInstance(w, r)
 	if inst == nil {
 		return
@@ -359,6 +615,26 @@ func (h *Handler) queueAction(w http.ResponseWriter, r *http.Request, sabFn func
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+	case "nzbget":
+		client, err := h.registry.GetNzbgetClient(inst.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := nzbFn(client); err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	case "transmission":
+		client, err := h.registry.GetTransmissionClient(inst.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := transFn(client); err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -376,11 +652,22 @@ func (h *Handler) resolveInstance(w http.ResponseWriter, r *http.Request) *insta
 		writeError(w, http.StatusNotFound, "instance not found")
 		return nil
 	}
-	if inst.ServiceType != "sabnzbd" && inst.ServiceType != "qbittorrent" {
+	switch inst.ServiceType {
+	case "sabnzbd", "qbittorrent", "nzbget", "transmission":
+	default:
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("instance %s is not a download client", instanceID))
 		return nil
 	}
 	return inst
+}
+
+// transmissionCategory maps a torrent's labels to the unified category field:
+// the first label, or "" when unlabeled.
+func transmissionCategory(t transmission.Torrent) string {
+	if len(t.Labels) > 0 {
+		return t.Labels[0]
+	}
+	return ""
 }
 
 func isQbitPausedState(state string) bool {

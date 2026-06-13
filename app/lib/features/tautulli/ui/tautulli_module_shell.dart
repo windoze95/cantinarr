@@ -4,15 +4,14 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/instance_dropdown.dart';
 
-/// Sonarr module shell with bottom nav:
-/// Library | Queue | History | Wanted | Calendar.
-/// Shows instance dropdown in the header when 2+ instances exist.
-class SonarrModuleShell extends ConsumerWidget {
+/// Tautulli module shell with bottom nav: Activity | History | Stats.
+/// Shows instance dropdown in the header when 2+ Tautulli instances exist.
+class TautulliModuleShell extends ConsumerWidget {
   final int currentIndex;
   final ValueChanged<int> onTabChanged;
   final Widget child;
 
-  const SonarrModuleShell({
+  const TautulliModuleShell({
     super.key,
     required this.currentIndex,
     required this.onTabChanged,
@@ -24,14 +23,14 @@ class SonarrModuleShell extends ConsumerWidget {
     final instanceState = ref.watch(instanceProvider);
 
     return Scaffold(
-      appBar: instanceState.sonarrInstances.length > 1
+      appBar: instanceState.tautulliInstances.length > 1
           ? AppBar(
               title: InstanceDropdown(
-                instances: instanceState.sonarrInstances,
-                activeInstanceId: instanceState.activeSonarrInstanceId,
+                instances: instanceState.tautulliInstances,
+                activeInstanceId: instanceState.activeTautulliInstanceId,
                 onChanged: (id) => ref
                     .read(instanceProvider.notifier)
-                    .setActiveSonarrInstance(id),
+                    .setActiveTautulliInstance(id),
               ),
               backgroundColor: AppTheme.background,
               elevation: 0,
@@ -47,14 +46,9 @@ class SonarrModuleShell extends ConsumerWidget {
           onTap: onTabChanged,
           items: const [
             BottomNavigationBarItem(
-              icon: Icon(Icons.video_library_outlined),
-              activeIcon: Icon(Icons.video_library),
-              label: 'Library',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.downloading_outlined),
-              activeIcon: Icon(Icons.downloading),
-              label: 'Queue',
+              icon: Icon(Icons.play_circle_outline),
+              activeIcon: Icon(Icons.play_circle),
+              label: 'Activity',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.history_outlined),
@@ -62,14 +56,9 @@ class SonarrModuleShell extends ConsumerWidget {
               label: 'History',
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.report_gmailerrorred_outlined),
-              activeIcon: Icon(Icons.report_gmailerrorred),
-              label: 'Wanted',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.calendar_month_outlined),
-              activeIcon: Icon(Icons.calendar_month),
-              label: 'Calendar',
+              icon: Icon(Icons.insights_outlined),
+              activeIcon: Icon(Icons.insights),
+              label: 'Stats',
             ),
           ],
         ),

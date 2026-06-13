@@ -90,6 +90,14 @@ class SonarrApiService {
     });
   }
 
+  /// Triggers an automatic indexer search for the given episodes.
+  Future<void> searchEpisodes(List<int> episodeIds) async {
+    await _dio.post('$_basePath/command', data: {
+      'name': 'EpisodeSearch',
+      'episodeIds': episodeIds,
+    });
+  }
+
   Future<List<Map<String, dynamic>>> getQueue() async {
     final resp = await _dio.get('$_basePath/queue',
         queryParameters: {'includeSeries': true, 'pageSize': 50});
@@ -146,6 +154,42 @@ class SonarrApiService {
       'sortDirection': 'descending',
     });
     return SonarrHistoryPage.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Fetches a page of monitored episodes that are missing a file, newest
+  /// air date first. Records include series context.
+  Future<SonarrWantedPage> getWantedMissing({
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    final resp = await _dio.get('$_basePath/wanted/missing', queryParameters: {
+      'page': page,
+      'pageSize': pageSize,
+      'sortKey': 'episodes.airDateUtc',
+      'sortDirection': 'descending',
+      'monitored': true,
+      'includeSeries': true,
+    });
+    return SonarrWantedPage.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Fetches a page of monitored episodes whose file is below the quality
+  /// profile cutoff, newest air date first. Records include series context
+  /// and the current episode file (for its quality).
+  Future<SonarrWantedPage> getWantedCutoff({
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    final resp = await _dio.get('$_basePath/wanted/cutoff', queryParameters: {
+      'page': page,
+      'pageSize': pageSize,
+      'sortKey': 'episodes.airDateUtc',
+      'sortDirection': 'descending',
+      'monitored': true,
+      'includeSeries': true,
+      'includeEpisodeFile': true,
+    });
+    return SonarrWantedPage.fromJson(resp.data as Map<String, dynamic>);
   }
 
   /// Interactive release search for one season.

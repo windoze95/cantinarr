@@ -8,16 +8,22 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
+	"github.com/windoze95/cantinarr-server/internal/tautulli"
+	"github.com/windoze95/cantinarr-server/internal/transmission"
 )
 
 // allowedServiceTypes is the set of supported service types.
 var allowedServiceTypes = map[string]bool{
-	"radarr":      true,
-	"sonarr":      true,
-	"sabnzbd":     true,
-	"qbittorrent": true,
+	"radarr":       true,
+	"sonarr":       true,
+	"sabnzbd":      true,
+	"qbittorrent":  true,
+	"nzbget":       true,
+	"transmission": true,
+	"tautulli":     true,
 }
 
 // instanceResponse is the JSON shape returned to clients — API keys and
@@ -79,7 +85,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !allowedServiceTypes[inst.ServiceType] {
-		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'sabnzbd', 'qbittorrent'"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"}`, http.StatusBadRequest)
 		return
 	}
 	if err := validateRequiredFields(&inst); err != nil {
@@ -183,11 +189,13 @@ func validateRequiredFields(inst *Instance) error {
 		return fmt.Errorf("name and url are required")
 	}
 	switch inst.ServiceType {
-	case "qbittorrent":
+	case "qbittorrent", "nzbget":
 		if inst.Username == "" || inst.Password == "" {
-			return fmt.Errorf("username and password are required for qbittorrent")
+			return fmt.Errorf("username and password are required for %s", inst.ServiceType)
 		}
-	default: // radarr, sonarr, sabnzbd
+	case "transmission":
+		// Username/password are optional: Transmission RPC may run without auth.
+	default: // radarr, sonarr, sabnzbd, tautulli
 		if inst.APIKey == "" {
 			return fmt.Errorf("name, url, and api_key are required")
 		}
@@ -209,6 +217,15 @@ func validateConnection(inst *Instance) error {
 			return err
 		}
 		_, err := client.Version()
+		return err
+	case "nzbget":
+		_, err := nzbget.NewClient(inst.URL, inst.Username, inst.Password).Version()
+		return err
+	case "transmission":
+		_, err := transmission.NewClient(inst.URL, inst.Username, inst.Password).SessionGet()
+		return err
+	case "tautulli":
+		_, err := tautulli.NewClient(inst.URL, inst.APIKey).GetServerInfo()
 		return err
 	default:
 		return fmt.Errorf("unknown service type: %s", inst.ServiceType)
