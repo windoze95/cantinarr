@@ -26,7 +26,7 @@ func (s *ToolServer) loadTogglesLocked() {
 	if s.creds == nil {
 		return
 	}
-	raw := s.creds.GetCredential(disabledToolsKey)
+	raw := s.creds.GetSetting(disabledToolsKey)
 	if raw == "" {
 		return
 	}
@@ -102,7 +102,7 @@ func (s *ToolServer) SetToolEnabled(name string, enabled bool) error {
 	if err != nil {
 		return fmt.Errorf("marshal disabled tools: %w", err)
 	}
-	if err := s.creds.SetCredential(disabledToolsKey, string(data)); err != nil {
+	if err := s.creds.SetSetting(disabledToolsKey, string(data)); err != nil {
 		return fmt.Errorf("persist disabled tools: %w", err)
 	}
 	return nil

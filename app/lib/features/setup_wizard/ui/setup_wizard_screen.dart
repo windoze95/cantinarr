@@ -45,9 +45,9 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
       title: 'AI Assistant (Optional)',
       icon: Icons.smart_toy_outlined,
       description:
-          'Add an Anthropic API key to unlock the AI assistant. It can help you discover content, get personalized recommendations, and guide you through setup.',
+          'Add an Anthropic, OpenAI, or Gemini API key to unlock the AI assistant. It can help you discover content, get personalized recommendations, and guide you through setup.',
       hasTextField: true,
-      textFieldHint: 'Anthropic API Key (optional)',
+      textFieldHint: 'AI provider API key (optional)',
     ),
     _SetupStep(
       title: 'You\'re All Set!',
@@ -134,7 +134,9 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
                     Text(
                       step.description,
                       style: const TextStyle(
-                          color: AppTheme.textSecondary, fontSize: 16, height: 1.5),
+                          color: AppTheme.textSecondary,
+                          fontSize: 16,
+                          height: 1.5),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 32),
@@ -187,8 +189,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
                   if (!isFirst)
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: () =>
-                            setState(() => _currentStep--),
+                        onPressed: () => setState(() => _currentStep--),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: AppTheme.textPrimary,
                           side: const BorderSide(color: AppTheme.border),

@@ -3,6 +3,7 @@ package credentials
 import (
 	"database/sql"
 	"log"
+	"os"
 	"sync"
 
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -14,16 +15,142 @@ import (
 const (
 	KeyTMDBAccessToken = "tmdb_access_token"
 	KeyAnthropicKey    = "anthropic_key"
+	KeyOpenAIKey       = "openai_key"
+	KeyGeminiKey       = "gemini_key"
 	KeyTraktClientID   = "trakt_client_id"
+
+	KeyAIProvider = "ai_provider"
+	KeyAIModel    = "ai_model"
 )
 
 // AllKeys lists every credential key the system manages. Values for these
 // keys are encrypted at rest; other settings (e.g. tool toggles) stay plain.
-var AllKeys = []string{KeyTMDBAccessToken, KeyAnthropicKey, KeyTraktClientID}
+var AllKeys = []string{KeyTMDBAccessToken, KeyAnthropicKey, KeyOpenAIKey, KeyGeminiKey, KeyTraktClientID}
+
+const (
+	AIProviderAnthropic = "anthropic"
+	AIProviderOpenAI    = "openai"
+	AIProviderGemini    = "gemini"
+
+	DefaultAIProvider = AIProviderAnthropic
+)
+
+// AIModelOption describes one selectable chat model for the admin UI.
+type AIModelOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// AIProviderOption describes a supported AI provider and its default models.
+type AIProviderOption struct {
+	ID            string          `json:"id"`
+	Label         string          `json:"label"`
+	CredentialKey string          `json:"credential_key"`
+	Models        []AIModelOption `json:"models"`
+}
+
+// AIConfig is the active provider/model pair used by the AI assistant.
+type AIConfig struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+var AIProviders = []AIProviderOption{
+	{
+		ID:            AIProviderAnthropic,
+		Label:         "Anthropic",
+		CredentialKey: KeyAnthropicKey,
+		Models: []AIModelOption{
+			{ID: "claude-opus-4-8", Label: "Claude Opus 4.8", Description: "Most capable Claude Opus-tier model"},
+			{ID: "claude-fable-5", Label: "Claude Fable 5", Description: "Highest-capability Claude model"},
+			{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Description: "Balanced speed and intelligence"},
+			{ID: "claude-haiku-4-5", Label: "Claude Haiku 4.5", Description: "Fastest, lowest-cost Claude option"},
+		},
+	},
+	{
+		ID:            AIProviderOpenAI,
+		Label:         "OpenAI",
+		CredentialKey: KeyOpenAIKey,
+		Models: []AIModelOption{
+			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Flagship OpenAI model"},
+			{ID: "gpt-5.4", Label: "GPT-5.4", Description: "Affordable frontier model"},
+			{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Description: "Lower latency and cost"},
+			{ID: "gpt-5.4-nano", Label: "GPT-5.4 nano", Description: "Smallest current GPT-5.4 model"},
+			{ID: "gpt-4.1", Label: "GPT-4.1", Description: "Stable previous-generation model"},
+			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Fast previous-generation model"},
+		},
+	},
+	{
+		ID:            AIProviderGemini,
+		Label:         "Google Gemini",
+		CredentialKey: KeyGeminiKey,
+		Models: []AIModelOption{
+			{ID: "gemini-3.5-flash", Label: "Gemini 3.5 Flash", Description: "Current stable Gemini Flash model"},
+			{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro", Description: "Advanced reasoning and coding"},
+			{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash", Description: "Low-latency reasoning"},
+			{ID: "gemini-2.5-flash-lite", Label: "Gemini 2.5 Flash-Lite", Description: "Fastest budget Gemini option"},
+		},
+	},
+}
 
 func isSecretKey(key string) bool {
 	for _, k := range AllKeys {
 		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultAIModel returns the default model for a provider.
+func DefaultAIModel(provider string) string {
+	for _, p := range AIProviders {
+		if p.ID == provider && len(p.Models) > 0 {
+			return p.Models[0].ID
+		}
+	}
+	return AIProviders[0].Models[0].ID
+}
+
+// AIKeyCredentialKey returns the secret setting key for a provider API key.
+func AIKeyCredentialKey(provider string) string {
+	for _, p := range AIProviders {
+		if p.ID == provider {
+			return p.CredentialKey
+		}
+	}
+	return KeyAnthropicKey
+}
+
+// IsValidAIProvider reports whether provider is supported.
+func IsValidAIProvider(provider string) bool {
+	for _, p := range AIProviders {
+		if p.ID == provider {
+			return true
+		}
+	}
+	return false
+}
+
+func inferAIProvider(model string) string {
+	switch {
+	case model == "":
+		return ""
+	case hasAnyPrefix(model, "claude-"):
+		return AIProviderAnthropic
+	case hasAnyPrefix(model, "gpt-", "o1", "o3", "o4"):
+		return AIProviderOpenAI
+	case hasAnyPrefix(model, "gemini-"):
+		return AIProviderGemini
+	default:
+		return ""
+	}
+}
+
+func hasAnyPrefix(value string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if len(value) >= len(prefix) && value[:len(prefix)] == prefix {
 			return true
 		}
 	}
@@ -103,6 +230,24 @@ func (r *Registry) GetCredential(key string) string {
 	return plain
 }
 
+// GetSetting reads a non-secret setting value from the DB.
+func (r *Registry) GetSetting(key string) string {
+	var value string
+	if err := r.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value); err != nil {
+		return ""
+	}
+	return value
+}
+
+// SetSetting writes a non-secret setting value to the DB.
+func (r *Registry) SetSetting(key, value string) error {
+	_, err := r.db.Exec(
+		"INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+		key, value,
+	)
+	return err
+}
+
 // SetCredential writes a credential to the DB (upsert). Secret keys are
 // encrypted at rest; non-secret settings are stored as-is.
 func (r *Registry) SetCredential(key, value string) error {
@@ -118,6 +263,51 @@ func (r *Registry) SetCredential(key, value string) error {
 		key, value,
 	)
 	return err
+}
+
+// GetAIConfig resolves the active AI provider/model. Stored settings win over
+// environment defaults, and custom model IDs are allowed.
+func (r *Registry) GetAIConfig() AIConfig {
+	provider := r.GetSetting(KeyAIProvider)
+	model := r.GetSetting(KeyAIModel)
+
+	if model == "" {
+		model = os.Getenv("CANTINARR_AI_MODEL")
+	}
+	if provider == "" {
+		provider = os.Getenv("CANTINARR_AI_PROVIDER")
+	}
+	if provider == "" {
+		provider = inferAIProvider(model)
+	}
+	if !IsValidAIProvider(provider) {
+		provider = DefaultAIProvider
+	}
+	if model == "" {
+		model = DefaultAIModel(provider)
+	}
+	return AIConfig{Provider: provider, Model: model}
+}
+
+// SetAIConfig persists the active AI provider/model. Unknown providers are
+// rejected; model is intentionally free-form so admins can use new provider IDs.
+func (r *Registry) SetAIConfig(provider, model string) error {
+	if !IsValidAIProvider(provider) {
+		provider = DefaultAIProvider
+	}
+	if model == "" {
+		model = DefaultAIModel(provider)
+	}
+	if err := r.SetSetting(KeyAIProvider, provider); err != nil {
+		return err
+	}
+	return r.SetSetting(KeyAIModel, model)
+}
+
+// IsAIConfigured reports whether the selected provider has an API key.
+func (r *Registry) IsAIConfigured() bool {
+	cfg := r.GetAIConfig()
+	return r.IsConfigured(AIKeyCredentialKey(cfg.Provider))
 }
 
 // DeleteCredential removes a credential from the DB.

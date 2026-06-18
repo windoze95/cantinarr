@@ -8,7 +8,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
                         Cantinarr Server (:8585)
     ┌──────────────────────────────────────────────────┐
     │                                                  │
-    │   Auth (JWT)    Requests    AI Chat (Claude)     │
+    │   Auth (JWT)    Requests    AI Chat              │
     │       │             │             │              │
     │       │      ┌──────┴──────┐      │              │
     │       │      │    ID       │      │              │
@@ -16,7 +16,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
     │       │      │             │      │              │
     │       │      └──┬─────┬───┘      │              │
     │       │         │     │          │              │
-    │       │    Radarr   Sonarr    Anthropic         │
+    │       │    Radarr   Sonarr    AI Providers      │
     │       │         │     │       API               │
     │   Flutter Web (embedded)     WebSocket Hub      │
     └──────────────────────────────────────────────────┘
@@ -27,7 +27,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 - **One-tap requests** -- Users browse TMDB/Trakt on the app, tap request, and the server handles everything: ID bridging, arr lookups, quality profiles, root folders.
 - **Automatic ID bridging** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then title+year search. Results cached in SQLite for 30 days.
 - **Connect link auth** -- Admin generates one-time connect links for household members. JWT-based sessions with 15-minute access / 30-day refresh tokens.
-- **AI assistant** -- Claude-powered chat with server-side tool execution (search, recommendations, request status, make requests). Streams responses via SSE.
+- **AI assistant** -- Anthropic, OpenAI, or Gemini-powered chat with server-side tool execution (search, recommendations, request status, make requests). Streams responses via SSE.
 - **Real-time updates** -- WebSocket hub polls arr queues every 30 seconds and pushes download progress to connected clients.
 - **Arr proxy** -- Admins get full passthrough to Radarr/Sonarr APIs for management without exposing keys.
 - **Flutter web embed** -- The Flutter web build is embedded in the binary via `go:embed`. One container, one port, serves both API and UI.
@@ -65,7 +65,7 @@ go build -o cantinarr ./cmd/server
 
 ## Configuration
 
-Service credentials (TMDB, Anthropic, Trakt) and Radarr/Sonarr instances are managed through the admin UI at **Settings > API Credentials** and **Settings > Add Instance**. No environment variables needed for API keys.
+Service credentials (TMDB, Anthropic/OpenAI/Gemini, Trakt) and Radarr/Sonarr instances are managed through the admin UI at **Settings > API Credentials** and **Settings > Add Instance**. No environment variables needed for API keys.
 
 Optional env vars for deployment tuning:
 
@@ -106,7 +106,7 @@ GET    /api/requests            # request history for current user
 
 ### AI Chat
 ```
-POST   /api/ai/chat             # SSE-streamed Claude conversation with tool use
+POST   /api/ai/chat             # SSE-streamed AI conversation with tool use
 GET    /api/ai/available        # { available: true/false }
 ```
 The chat request accepts an optional `conversation_id`; when supplied, the server
@@ -260,7 +260,8 @@ server/
 ├── internal/
 │   ├── ai/
 │   │   ├── handler.go              # SSE streaming chat endpoint
-│   │   └── service.go              # Anthropic API client + tool loop
+│   │   ├── service.go              # Anthropic API client + tool loop
+│   │   └── http_providers.go       # OpenAI/Gemini API clients + tool loops
 │   ├── api/router.go               # Chi router, CORS, middleware, routes
 │   ├── auth/
 │   │   ├── handler.go              # Login, refresh, connect token
@@ -305,7 +306,7 @@ server/
 - **SQLite** via [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) (pure Go, no CGO)
 - **JWT** via [golang-jwt](https://github.com/golang-jwt/jwt)
 - **WebSocket** via [gorilla/websocket](https://github.com/gorilla/websocket)
-- **Anthropic Messages API** (raw HTTP, no SDK)
+- **Anthropic Messages API** (SDK), **OpenAI Chat Completions API**, and **Gemini generateContent API**
 
 ## License
 
