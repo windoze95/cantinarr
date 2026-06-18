@@ -8,7 +8,6 @@ import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/search_bar.dart';
 import '../../../core/widgets/shimmer_border.dart';
-import '../../ai_assistant/data/ai_chat_service.dart';
 import '../../ai_assistant/data/ai_models.dart';
 import '../../ai_assistant/logic/ai_chat_provider.dart';
 import '../../ai_assistant/ui/chat_bubble.dart';
@@ -119,16 +118,20 @@ class _AppShellState extends ConsumerState<AppShell>
     FocusManager.instance.primaryFocus?.unfocus();
   }
 
-  /// Lazily create the shell-scoped AI chat notifier.
+  /// Lazily attach to the shared AI chat notifier.
   AiChatNotifier _getOrCreateAiChat() {
-    if (_aiChatNotifier == null) {
-      final backendDio = ref.read(backendClientProvider);
-      _aiChatNotifier = AiChatNotifier(
-        chatService: AiChatService(backendDio: backendDio),
-      );
-      _aiChatNotifier!.addListener(_onAiChatChanged);
-    }
-    return _aiChatNotifier!;
+    final existing = _aiChatNotifier;
+    if (existing != null) return existing;
+    final notifier = ref.read(aiChatProvider);
+    _setAiChatNotifier(notifier);
+    return notifier;
+  }
+
+  void _setAiChatNotifier(AiChatNotifier? notifier) {
+    if (identical(_aiChatNotifier, notifier)) return;
+    _aiChatNotifier?.removeListener(_onAiChatChanged);
+    _aiChatNotifier = notifier;
+    _aiChatNotifier?.addListener(_onAiChatChanged);
   }
 
   void _onAiChatChanged() {
@@ -156,7 +159,6 @@ class _AppShellState extends ConsumerState<AppShell>
       case SearchMode.noResults:
       case SearchMode.aiReady:
         _shimmerRotationAnim.repeat();
-        _getOrCreateAiChat();
 
       case SearchMode.aiChat:
         _shimmerRotationAnim.stop();
@@ -315,8 +317,7 @@ class _AppShellState extends ConsumerState<AppShell>
     _aiModeAnim.dispose();
     _shimmerRotationAnim.dispose();
     _chatScrollController.dispose();
-    _aiChatNotifier?.removeListener(_onAiChatChanged);
-    _aiChatNotifier?.dispose();
+    _setAiChatNotifier(null);
     _radarrNotifier?.removeListener(_onLibraryChanged);
     _sonarrNotifier?.removeListener(_onLibraryChanged);
     _searchController.dispose();
@@ -344,6 +345,11 @@ class _AppShellState extends ConsumerState<AppShell>
 
     final isAiMode = searchState.searchMode == SearchMode.aiChat;
     final isAiReady = searchState.searchMode == SearchMode.aiReady;
+    if (isAiMode) {
+      _setAiChatNotifier(ref.watch(aiChatProvider));
+    } else {
+      _setAiChatNotifier(null);
+    }
 
     final searchBar = Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 16 : 4, 8, 16, 8),
@@ -769,10 +775,12 @@ class _AppShellState extends ConsumerState<AppShell>
                   onTap: () {
                     if (isOverlay) Navigator.pop(context);
                     _navigateToModule(context, module);
-                    ref.read(moduleProvider.notifier).setActiveModule(
-                          module.type,
-                          instanceId: module.instanceId,
-                        );
+                    if (module.type != ModuleType.assistant) {
+                      ref.read(moduleProvider.notifier).setActiveModule(
+                            module.type,
+                            instanceId: module.instanceId,
+                          );
+                    }
                   },
                 );
               }).toList(),
@@ -835,7 +843,7 @@ class _AppShellState extends ConsumerState<AppShell>
       case ModuleType.tautulli:
         context.go('/tautulli/activity');
       case ModuleType.assistant:
-        context.go('/assistant');
+        context.push('/assistant');
     }
   }
 }

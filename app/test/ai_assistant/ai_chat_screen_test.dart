@@ -37,4 +37,53 @@ void main() {
 
     expect(find.text('Dashboard'), findsOneWidget);
   });
+
+  testWidgets('assistant conversation persists after route close and reopen',
+      (tester) async {
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        GoRoute(
+          path: '/dashboard/movies',
+          builder: (context, __) => Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                onPressed: () => context.push('/assistant'),
+                child: const Text('Open assistant'),
+              ),
+            ),
+          ),
+        ),
+        GoRoute(
+          path: '/assistant',
+          builder: (_, __) => const AiChatScreen(aiAvailable: true),
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Open assistant'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('New chat'));
+    await tester.pumpAndSettle();
+    expect(
+        find.text('Chat cleared! What can I help you find?'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Exit assistant'));
+    await tester.pumpAndSettle();
+    expect(find.text('Open assistant'), findsOneWidget);
+
+    await tester.tap(find.text('Open assistant'));
+    await tester.pumpAndSettle();
+
+    expect(
+        find.text('Chat cleared! What can I help you find?'), findsOneWidget);
+  });
 }
