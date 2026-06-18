@@ -114,6 +114,7 @@ func NewRouter(
 			// AI tool toggles
 			aiToolsHandler := mcp.NewToolSettingsHandler(toolServer)
 			r.Get("/ai-tools", aiToolsHandler.List)
+			r.Put("/ai-tools/debug", aiToolsHandler.UpdateDebug)
 			r.Put("/ai-tools/{name}", aiToolsHandler.Update)
 		})
 

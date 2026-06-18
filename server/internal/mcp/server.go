@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -99,7 +102,21 @@ func findToolDefinition(name string) *Tool {
 }
 
 // ExecuteTool runs the named tool with the given JSON input.
-func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.RawMessage, callCtx CallContext) (*ToolResult, error) {
+func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.RawMessage, callCtx CallContext) (result *ToolResult, err error) {
+	debug := s.IsAIDebugEnabled()
+	start := time.Now()
+	if debug {
+		log.Printf("ai debug: tool start name=%s user_id=%d role=%s input=%s", name, callCtx.UserID, callCtx.Role, truncateLog(string(input), 2000))
+		defer func() {
+			status := "ok"
+			if err != nil {
+				status = "error"
+			}
+			log.Printf("ai debug: tool end name=%s status=%s duration_ms=%d result=%s err=%v",
+				name, status, time.Since(start).Milliseconds(), toolResultLog(result), err)
+		}()
+	}
+
 	def := findToolDefinition(name)
 	if def == nil {
 		return nil, fmt.Errorf("unknown tool: %s", name)
@@ -153,4 +170,31 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
+}
+
+func toolResultLog(result *ToolResult) string {
+	if result == nil {
+		return ""
+	}
+	var parts []string
+	if result.Text != "" {
+		parts = append(parts, "text="+truncateLog(result.Text, 2000))
+	}
+	if result.StructuredData != nil {
+		switch v := result.StructuredData.(type) {
+		case []MediaResultItem:
+			parts = append(parts, fmt.Sprintf("structured_media_items=%d", len(v)))
+		default:
+			parts = append(parts, fmt.Sprintf("structured_type=%T", result.StructuredData))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func truncateLog(value string, max int) string {
+	value = strings.ReplaceAll(value, "\n", "\\n")
+	if len(value) <= max {
+		return value
+	}
+	return value[:max] + "..."
 }

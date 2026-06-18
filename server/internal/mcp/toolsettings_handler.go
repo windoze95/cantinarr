@@ -22,6 +22,7 @@ func (h *ToolSettingsHandler) List(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"tools": h.server.ListToolStatuses(),
+		"debug": h.server.AIDebugStatus(),
 	})
 }
 
@@ -55,4 +56,35 @@ func (h *ToolSettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Enabled:     h.server.IsToolEnabled(name),
 		AdminOnly:   def.AdminOnly,
 	})
+}
+
+// UpdateDebug handles PUT /api/admin/ai-tools/debug with body
+// {"enabled": bool, "hours": int}. Enabling extends from the current expiry by
+// whole hours; disabling turns debug logging off immediately.
+func (h *ToolSettingsHandler) UpdateDebug(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled *bool `json:"enabled"`
+		Hours   int   `json:"hours"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Enabled == nil {
+		http.Error(w, `{"error":"body must be {\"enabled\": bool, \"hours\": int}"}`, http.StatusBadRequest)
+		return
+	}
+
+	var (
+		status AIDebugStatus
+		err    error
+	)
+	if *body.Enabled {
+		status, err = h.server.ExtendAIDebug(body.Hours)
+	} else {
+		status, err = h.server.DisableAIDebug()
+	}
+	if err != nil {
+		http.Error(w, `{"error":"failed to update AI debug logging"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
 }

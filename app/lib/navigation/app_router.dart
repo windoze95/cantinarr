@@ -277,20 +277,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
-
-          // AI Assistant module (single route, no bottom nav)
-          GoRoute(
-            path: '/assistant',
-            builder: (_, __) {
-              final auth = ref.read(authProvider).valueOrNull;
-              final hasAi = auth?.connection?.services.ai ?? false;
-              return AiChatScreen(aiAvailable: hasAi);
-            },
-          ),
         ],
       ),
 
       // Full-screen routes (outside the shell)
+      GoRoute(
+        path: '/assistant',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) {
+          final auth = ref.read(authProvider).valueOrNull;
+          final hasAi = auth?.connection?.services.ai ?? false;
+          return AiChatScreen(aiAvailable: hasAi);
+        },
+      ),
       GoRoute(
         path: '/detail/:type/:id',
         parentNavigatorKey: _rootNavigatorKey,
