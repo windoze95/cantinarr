@@ -334,10 +334,11 @@ class _AppShellState extends ConsumerState<AppShell>
     final searchNotifier = ref.read(shellSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
-    final libraryStatus =
-        searchState.isSearching && searchState.searchMode == SearchMode.search
-            ? _buildLibraryStatus(searchState.searchResults)
-            : const <int, LibraryStatus>{};
+    final showSearchResults = searchState.searchMode == SearchMode.search ||
+        searchState.searchMode == SearchMode.aiReady;
+    final libraryStatus = searchState.isSearching && showSearchResults
+        ? _buildLibraryStatus(searchState.searchResults)
+        : const <int, LibraryStatus>{};
 
     final mobile = _isMobile(context);
     final desktop = _isDesktop(context);
@@ -444,20 +445,42 @@ class _AppShellState extends ConsumerState<AppShell>
                             color: AppTheme.background,
                             child: Column(
                               children: [
-                                const SizedBox(height: 48),
-                                Icon(
-                                  Icons.auto_awesome,
-                                  size: 32,
-                                  color: AppTheme.accent.withValues(alpha: 0.5),
-                                ),
-                                const SizedBox(height: 8),
-                                const Text(
-                                  'Press send to ask AI',
-                                  style: TextStyle(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 14,
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(16, 20, 16, 12),
+                                  child: Column(
+                                    children: [
+                                      Icon(
+                                        Icons.auto_awesome,
+                                        size: 32,
+                                        color: AppTheme.accent
+                                            .withValues(alpha: 0.5),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      const Text(
+                                        'Press send to ask AI',
+                                        style: TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
+                                if (searchState.searchResults.isNotEmpty ||
+                                    searchState.isLoadingSearch)
+                                  Expanded(
+                                    child: SearchResultsView(
+                                      results: searchState.searchResults,
+                                      isLoading: searchState.isLoadingSearch,
+                                      query: searchState.searchQuery,
+                                      onLoadMore: searchNotifier.loadMoreSearch,
+                                      libraryStatus: libraryStatus,
+                                      onResultTap: _dismissKeyboard,
+                                    ),
+                                  )
+                                else
+                                  const Spacer(),
                               ],
                             ),
                           ),

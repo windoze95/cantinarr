@@ -122,6 +122,9 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
     final trimmed = query.trim();
     _searchDebounce?.cancel();
     final generation = ++_searchGeneration;
+    final mode = aiAvailable && isAiPromptQuery(trimmed)
+        ? SearchMode.aiReady
+        : SearchMode.search;
 
     if (trimmed.isEmpty) {
       state = state.copyWith(
@@ -134,31 +137,22 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
       return;
     }
 
-    if (aiAvailable && isAiPromptQuery(trimmed)) {
-      state = state.copyWith(
-        searchQuery: query,
-        searchResults: [],
-        isLoadingSearch: false,
-        searchMode: SearchMode.aiReady,
-      );
-      _searchLoader.reset();
-      return;
-    }
-
     state = state.copyWith(
       searchQuery: query,
+      searchResults: [],
       isLoadingSearch: true,
-      searchMode: SearchMode.search,
+      searchMode: mode,
     );
     _searchDebounce = Timer(
       AppConfig.searchDebounce,
-      () => _executeSearch(query: query, generation: generation),
+      () => _executeSearch(query: query, generation: generation, mode: mode),
     );
   }
 
   Future<void> _executeSearch({
     required String query,
     required int generation,
+    required SearchMode mode,
   }) async {
     _searchLoader.reset();
     if (!_searchLoader.beginLoading()) return;
@@ -171,7 +165,7 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
 
       if (generation != _searchGeneration ||
           state.searchQuery != query ||
-          state.searchMode != SearchMode.search) {
+          state.searchMode != mode) {
         return;
       }
 
@@ -191,7 +185,7 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
     } catch (e) {
       if (generation != _searchGeneration ||
           state.searchQuery != query ||
-          state.searchMode != SearchMode.search) {
+          state.searchMode != mode) {
         return;
       }
       _searchLoader.cancelLoading();
@@ -238,6 +232,7 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
     if (!_searchLoader.beginLoading()) return;
     final generation = _searchGeneration;
     final query = state.searchQuery;
+    final mode = state.searchMode;
     state = state.copyWith(isLoadingSearch: true);
     try {
       final page = await _api.multiSearch(
@@ -246,7 +241,7 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
       );
       if (generation != _searchGeneration ||
           state.searchQuery != query ||
-          state.searchMode != SearchMode.search) {
+          state.searchMode != mode) {
         return;
       }
       state = state.copyWith(
@@ -257,7 +252,7 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
     } catch (_) {
       if (generation != _searchGeneration ||
           state.searchQuery != query ||
-          state.searchMode != SearchMode.search) {
+          state.searchMode != mode) {
         return;
       }
       _searchLoader.cancelLoading();
