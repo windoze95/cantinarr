@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../../../core/models/app_module.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/ai_chat_service.dart';
 import '../data/ai_models.dart';
@@ -71,20 +74,38 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     _notifier!.sendMessage(text);
   }
 
+  void _exitAssistant() {
+    if (context.canPop()) {
+      context.pop();
+      return;
+    }
+
+    ref.read(moduleProvider.notifier).setActiveModule(ModuleType.dashboard);
+    context.go('/dashboard/movies');
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!widget.aiAvailable || _notifier == null) {
       return Scaffold(
-        body: Center(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.close),
+            onPressed: _exitAssistant,
+            tooltip: 'Exit assistant',
+          ),
+          title: const Text('AI Assistant'),
+        ),
+        body: const Center(
           child: Padding(
-            padding: const EdgeInsets.all(32),
+            padding: EdgeInsets.all(32),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.smart_toy_outlined,
+                Icon(Icons.smart_toy_outlined,
                     size: 64, color: AppTheme.accent),
-                const SizedBox(height: 16),
-                const Text(
+                SizedBox(height: 16),
+                Text(
                   'AI Assistant',
                   style: TextStyle(
                     color: AppTheme.textPrimary,
@@ -92,8 +113,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(height: 12),
-                const Text(
+                SizedBox(height: 12),
+                Text(
                   'The AI assistant is not configured on this server. Ask your server admin to set up an AI provider.',
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 15),
                   textAlign: TextAlign.center,
@@ -109,6 +130,11 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: Icon(context.canPop() ? Icons.arrow_back : Icons.close),
+          onPressed: _exitAssistant,
+          tooltip: 'Exit assistant',
+        ),
         title: const Text('AI Assistant'),
         actions: [
           IconButton(
@@ -169,35 +195,42 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: SafeArea(
               top: false,
-              child: Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Suggestions
-                  if (state.messages.length <= 1) ..._buildSuggestions(),
-
-                  Expanded(
-                    child: TextField(
-                      controller: _inputController,
-                      focusNode: _focusNode,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _send(),
-                      decoration: const InputDecoration(
-                        hintText: 'Ask me anything...',
-                        border: InputBorder.none,
-                        contentPadding:
-                            EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  if (state.messages.length <= 1) ...[
+                    _buildSuggestions(),
+                    const SizedBox(height: 8),
+                  ],
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _inputController,
+                          focusNode: _focusNode,
+                          keyboardType: TextInputType.multiline,
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => _send(),
+                          decoration: const InputDecoration(
+                            hintText: 'Ask me anything...',
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                          ),
+                          maxLines: 4,
+                          minLines: 1,
+                        ),
                       ),
-                      maxLines: 4,
-                      minLines: 1,
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: state.isLoading ? null : _send,
-                    icon: Icon(
-                      Icons.send_rounded,
-                      color: state.isLoading
-                          ? AppTheme.textSecondary
-                          : AppTheme.accent,
-                    ),
+                      IconButton(
+                        onPressed: state.isLoading ? null : _send,
+                        icon: Icon(
+                          Icons.send_rounded,
+                          color: state.isLoading
+                              ? AppTheme.textSecondary
+                              : AppTheme.accent,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -208,35 +241,30 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     );
   }
 
-  List<Widget> _buildSuggestions() {
+  Widget _buildSuggestions() {
     final suggestions = [
       "What's trending?",
       'Recommend sci-fi movies',
       'Help me set up Plex',
     ];
 
-    return [
-      SizedBox(
-        height: 36,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          shrinkWrap: true,
-          itemCount: suggestions.length,
-          separatorBuilder: (_, __) => const SizedBox(width: 8),
-          itemBuilder: (_, index) => ActionChip(
-            label:
-                Text(suggestions[index], style: const TextStyle(fontSize: 12)),
-            backgroundColor: AppTheme.surfaceVariant,
-            side: const BorderSide(color: AppTheme.border),
-            onPressed: () {
-              _inputController.text = suggestions[index];
-              _send();
-            },
-          ),
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: suggestions.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, index) => ActionChip(
+          label: Text(suggestions[index], style: const TextStyle(fontSize: 12)),
+          backgroundColor: AppTheme.surfaceVariant,
+          side: const BorderSide(color: AppTheme.border),
+          onPressed: () {
+            _inputController.text = suggestions[index];
+            _send();
+          },
         ),
       ),
-      const SizedBox(width: 8),
-    ];
+    );
   }
 }
 
