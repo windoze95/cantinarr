@@ -285,27 +285,30 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                       onDelete: () =>
                           _deleteCredential('anthropic_key', 'Anthropic'),
                     ),
-                    const SizedBox(height: 20),
-                    _CredentialSection(
-                      title: 'OpenAI (AI)',
-                      description: 'GPT model provider',
-                      isConfigured:
-                          _status?.isConfigured('openai_key') ?? false,
-                      controller: _openAIController,
-                      hint: 'OpenAI API key',
-                      onDelete: () => _deleteCredential('openai_key', 'OpenAI'),
-                    ),
-                    const SizedBox(height: 20),
-                    _CredentialSection(
-                      title: 'Google Gemini (AI)',
-                      description: 'Gemini model provider',
-                      isConfigured:
-                          _status?.isConfigured('gemini_key') ?? false,
-                      controller: _geminiController,
-                      hint: 'Gemini API key',
-                      onDelete: () =>
-                          _deleteCredential('gemini_key', 'Google Gemini'),
-                    ),
+                    if (_status?.ai.providers.isNotEmpty ?? false) ...[
+                      const SizedBox(height: 20),
+                      _CredentialSection(
+                        title: 'OpenAI (AI)',
+                        description: 'GPT model provider',
+                        isConfigured:
+                            _status?.isConfigured('openai_key') ?? false,
+                        controller: _openAIController,
+                        hint: 'OpenAI API key',
+                        onDelete: () =>
+                            _deleteCredential('openai_key', 'OpenAI'),
+                      ),
+                      const SizedBox(height: 20),
+                      _CredentialSection(
+                        title: 'Google Gemini (AI)',
+                        description: 'Gemini model provider',
+                        isConfigured:
+                            _status?.isConfigured('gemini_key') ?? false,
+                        controller: _geminiController,
+                        hint: 'Gemini API key',
+                        onDelete: () =>
+                            _deleteCredential('gemini_key', 'Google Gemini'),
+                      ),
+                    ],
                     const SizedBox(height: 20),
                     _CredentialSection(
                       title: 'Trakt',
@@ -363,9 +366,23 @@ class _AISelectionSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (providers.isEmpty) {
-      return const Text(
-        'AI model options are unavailable from this server.',
-        style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+      return const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'AI Model',
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(
+            'Update the server container to configure OpenAI, Gemini, and AI model selection. This server only supports the legacy Anthropic AI key.',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
+        ],
       );
     }
 
