@@ -17,6 +17,9 @@ class ChatBubble extends StatelessWidget {
 
   bool get isUser => message.role == ChatRole.user;
 
+  String get displayContent =>
+      isUser ? message.content : message.content.replaceAll('**', '');
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -80,7 +83,7 @@ class ChatBubble extends StatelessWidget {
                       ),
                     ),
                     child: SelectableText(
-                      message.content,
+                      displayContent,
                       style: TextStyle(
                         color: AppTheme.textPrimary,
                         fontSize: 15,
@@ -104,7 +107,7 @@ class ChatBubble extends StatelessWidget {
                     !message.isStreaming) ...[
                   const SizedBox(height: 8),
                   SizedBox(
-                    height: 200,
+                    height: 232,
                     child: ListView.separated(
                       scrollDirection: Axis.horizontal,
                       itemCount: message.mediaResults.length,
@@ -265,7 +268,7 @@ class _MediaResultCard extends StatelessWidget {
     return GestureDetector(
       onTap: () => context.push('/detail/$mediaType/${item.id}'),
       child: SizedBox(
-        width: 110,
+        width: 120,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

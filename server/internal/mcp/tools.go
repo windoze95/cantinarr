@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
@@ -153,7 +154,7 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "display_media",
-		Description: "Display specific movies or TV shows in the UI carousel. Call this after searching to show only the items you want to recommend. The carousel will display items in the order provided.",
+		Description: "Display specific movies or TV shows in the UI carousel. Call this after searching to show only the items you want to recommend. Pass the exact title and year from the search/tool result so the server can verify the TMDB ID before displaying it.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -173,8 +174,16 @@ var toolDefinitions = []Tool{
 								"enum":        []string{"movie", "tv"},
 								"description": "Whether this is a movie or TV show",
 							},
+							"title": map[string]interface{}{
+								"type":        "string",
+								"description": "Exact title from the prior search/tool result for this TMDB ID",
+							},
+							"year": map[string]interface{}{
+								"type":        "string",
+								"description": "Four-digit release/first-air year from the prior search/tool result, if available",
+							},
 						},
-						"required": []string{"tmdb_id", "media_type"},
+						"required": []string{"tmdb_id", "media_type", "title"},
 					},
 				},
 			},
@@ -263,6 +272,9 @@ func formatSearchResults(results []tmdb.SearchResult, limit int) string {
 			fmt.Fprintf(&sb, " (%s)", year)
 		}
 		fmt.Fprintf(&sb, " [TMDB ID: %d]", r.ID)
+		if r.MediaType != "" {
+			fmt.Fprintf(&sb, " [media_type: %s]", r.MediaType)
+		}
 		if r.VoteAverage > 0 {
 			fmt.Fprintf(&sb, " - Rating: %.1f/10", r.VoteAverage)
 		}
@@ -448,6 +460,8 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 		Items []struct {
 			TmdbID    int    `json:"tmdb_id"`
 			MediaType string `json:"media_type"`
+			Title     string `json:"title"`
+			Year      string `json:"year"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -460,6 +474,10 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 	items := make([]MediaResultItem, 0, len(params.Items))
 	var failures []string
 	for _, p := range params.Items {
+		if strings.TrimSpace(p.Title) == "" {
+			failures = append(failures, fmt.Sprintf("%s %d: missing title; pass the exact title from the prior tool result", p.MediaType, p.TmdbID))
+			continue
+		}
 		switch p.MediaType {
 		case "movie":
 			movie, err := tmdbClient.GetMovieDetails(p.TmdbID)
@@ -470,6 +488,10 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 			year := ""
 			if len(movie.ReleaseDate) >= 4 {
 				year = movie.ReleaseDate[:4]
+			}
+			if reason := displayMediaMismatch(p.Title, p.Year, movie.Title, year); reason != "" {
+				failures = append(failures, fmt.Sprintf("movie %d: %s", p.TmdbID, reason))
+				continue
 			}
 			items = append(items, MediaResultItem{
 				ID:          movie.ID,
@@ -490,6 +512,10 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 			if len(tv.FirstAir) >= 4 {
 				year = tv.FirstAir[:4]
 			}
+			if reason := displayMediaMismatch(p.Title, p.Year, tv.Name, year); reason != "" {
+				failures = append(failures, fmt.Sprintf("tv %d: %s", p.TmdbID, reason))
+				continue
+			}
 			items = append(items, MediaResultItem{
 				ID:          tv.ID,
 				Title:       tv.Name,
@@ -499,19 +525,52 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 				Overview:    tv.Overview,
 				MediaType:   "tv",
 			})
+		default:
+			failures = append(failures, fmt.Sprintf("item %d: invalid media_type %q", p.TmdbID, p.MediaType))
 		}
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Displaying %d media item(s) in the carousel.", len(items))
 	if len(failures) > 0 {
-		fmt.Fprintf(&sb, " Failed to fetch %d item(s): %s", len(failures), strings.Join(failures, "; "))
+		fmt.Fprintf(&sb, " Rejected or failed %d item(s): %s. If the user expects these items, call display_media again with TMDB IDs, media types, titles, and years copied exactly from the prior search/tool result.", len(failures), strings.Join(failures, "; "))
 	}
 
 	return &ToolResult{
 		Text:           sb.String(),
 		StructuredData: items,
 	}, nil
+}
+
+func displayMediaMismatch(expectedTitle, expectedYear, actualTitle, actualYear string) string {
+	if normalizeMediaTitle(expectedTitle) != normalizeMediaTitle(actualTitle) {
+		return fmt.Sprintf("title mismatch: expected %q, got %q", expectedTitle, actualTitle)
+	}
+	expectedYear = strings.TrimSpace(expectedYear)
+	if expectedYear != "" && actualYear != "" && expectedYear != actualYear {
+		return fmt.Sprintf("year mismatch for %q: expected %s, got %s", actualTitle, expectedYear, actualYear)
+	}
+	return ""
+}
+
+func normalizeMediaTitle(title string) string {
+	title = strings.ToLower(strings.TrimSpace(title))
+	var sb strings.Builder
+	lastSpace := false
+	for _, r := range title {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			sb.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			if !lastSpace && sb.Len() > 0 {
+				sb.WriteByte(' ')
+				lastSpace = true
+			}
+		}
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func (s *ToolServer) listMyRequests(userID int64) (*ToolResult, error) {
