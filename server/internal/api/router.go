@@ -285,7 +285,7 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 			"services": map[string]bool{
 				"radarr": hasRadarr,
 				"sonarr": hasSonarr,
-				"ai":     creds.IsConfigured(credentials.KeyAnthropicKey),
+				"ai":     creds.IsAIConfigured(),
 				"tmdb":   creds.IsConfigured(credentials.KeyTMDBAccessToken),
 				"trakt":  creds.IsConfigured(credentials.KeyTraktClientID),
 			},

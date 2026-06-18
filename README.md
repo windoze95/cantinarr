@@ -9,7 +9,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 │  Cantinarr Server (Go, single container, port 8585)     │
 │                                                         │
 │  ┌──────────┐  ┌──────────┐  ┌───────────────────────┐  │
-│  │ Auth/JWT │  │ Request  │  │ AI Chat (Claude)      │  │
+│  │ Auth/JWT │  │ Request  │  │ AI Chat               │  │
 │  │          │  │ Service  │  │ + 19 MCP Tools        │  │
 │  └──────────┘  └────┬─────┘  └───────────────────────┘  │
 │                     │                                    │
@@ -43,7 +43,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **Zero-config requesting** -- Your users never see API keys, TVDB IDs, or quality profiles. They browse, they tap, it works.
 - **TMDB + Trakt for discovery** -- The best metadata, images, and trending data. Sonarr's TVDB dependency is invisible.
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
-- **AI assistant** -- "What should I watch tonight?" Claude searches your library, checks availability, and can request for you. Admins can also manage the server conversationally: check the queue, kick off searches, grab a specific release from the indexers, or clean up failed downloads.
+- **AI assistant** -- "What should I watch tonight?" Bring Anthropic, OpenAI, or Gemini; the assistant searches your library, checks availability, and can request for you. Admins can also manage the server conversationally: check the queue, kick off searches, grab a specific release from the indexers, or clean up failed downloads.
 - **MCP server** -- The same 19 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, so Claude Desktop and other MCP clients can connect directly. Every tool can be toggled on/off per server from Settings > AI Tools.
 - **Download clients** -- SABnzbd, qBittorrent, NZBGet, and Transmission modules with live queue management (pause, resume, remove, speeds, real-time push updates) alongside full Radarr/Sonarr control: queue actions, history, wanted/missing, calendar, and interactive release search.
 - **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
@@ -81,7 +81,7 @@ cantinarr/
 ├── server/                 # Go backend
 │   ├── cmd/server/         # Entry point
 │   ├── internal/
-│   │   ├── ai/             # Claude AI chat with SSE streaming
+│   │   ├── ai/             # Multi-provider AI chat with SSE streaming
 │   │   ├── api/            # Chi router, middleware, routes
 │   │   ├── auth/           # JWT, bcrypt, connect tokens
 │   │   ├── config/         # Server configuration (port, name)
@@ -129,7 +129,7 @@ All service credentials are managed through the admin UI -- no environment varia
 | Radarr/Sonarr instances | Admin UI | Add via Settings > Add Instance |
 | SABnzbd/qBittorrent/NZBGet/Transmission instances | Admin UI | Download client modules (queue, history, speeds) |
 | Tautulli instance | Admin UI | Plex activity, watch history, stats |
-| Anthropic API key | Admin UI | Enables AI assistant |
+| Anthropic/OpenAI/Gemini API key | Admin UI | Enables AI assistant for the selected provider |
 | Trakt client ID | Admin UI | Enhances discovery + fallback ID bridging |
 
 Optional server env vars for deployment tuning:
@@ -139,7 +139,8 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_PORT` | `8585` | HTTP listen port |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for JWT signing |
-| `CANTINARR_AI_MODEL` | `claude-opus-4-8` | Claude model used by the AI assistant |
+| `CANTINARR_AI_PROVIDER` | `anthropic` | AI provider used by the assistant (`anthropic`, `openai`, or `gemini`) |
+| `CANTINARR_AI_MODEL` | provider default | Model used by the AI assistant when no admin UI model is saved |
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
 
 ## How It Works
@@ -184,7 +185,7 @@ Movies don't need bridging -- Radarr natively supports TMDB IDs.
 | Server | Go, Chi router, SQLite (pure Go) |
 | Client | Flutter (Dart), Riverpod, GoRouter |
 | Auth | JWT (HS256), bcrypt, connect tokens |
-| AI | Anthropic Claude API, SSE streaming |
+| AI | Anthropic, OpenAI, or Gemini APIs with SSE app streaming |
 | MCP | [mcp-go](https://github.com/mark3labs/mcp-go), Streamable HTTP |
 | Real-time | gorilla/websocket |
 | Discovery | TMDB API v3, Trakt API v2 |

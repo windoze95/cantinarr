@@ -36,12 +36,12 @@ type chatRequest struct {
 
 // Chat handles POST /api/ai/chat with SSE streaming.
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
-	apiKey := h.creds.GetCredential(credentials.KeyAnthropicKey)
+	aiConfig := h.creds.GetAIConfig()
+	apiKey := h.creds.GetCredential(credentials.AIKeyCredentialKey(aiConfig.Provider))
 	if apiKey == "" {
 		http.Error(w, `{"error":"AI is not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
-	service := NewService(apiKey, h.toolServer)
 
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -149,15 +149,32 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	emit(map[string]string{"conversation_id": convID})
 
-	finalHistory, err := service.SendMessage(r.Context(), history, chatCtx, callbacks)
+	var err error
+	switch aiConfig.Provider {
+	case credentials.AIProviderAnthropic:
+		service := NewService(apiKey, aiConfig.Model, h.toolServer)
+		var finalHistory []anthropic.MessageParam
+		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+		if err == nil {
+			h.conversations.Put(convID, claims.UserID, sanitizeTranscript(finalHistory))
+		}
+	case credentials.AIProviderOpenAI:
+		service := NewOpenAIService(apiKey, aiConfig.Model, h.toolServer)
+		err = service.SendMessage(r.Context(), req.Messages, chatCtx, callbacks)
+	case credentials.AIProviderGemini:
+		service := NewGeminiService(apiKey, aiConfig.Model, h.toolServer)
+		err = service.SendMessage(r.Context(), req.Messages, chatCtx, callbacks)
+	default:
+		err = fmt.Errorf("unsupported AI provider: %s", aiConfig.Provider)
+	}
 	if err != nil {
-		// Drop the stored state rather than persist a possibly poisoned
+		// Drop Anthropic stored state rather than persist a possibly poisoned
 		// transcript; the client's retry falls back to its own transcript.
-		h.conversations.Delete(convID)
+		if aiConfig.Provider == credentials.AIProviderAnthropic {
+			h.conversations.Delete(convID)
+		}
 		log.Printf("ai chat error: %v", err)
 		emit(map[string]string{"error": err.Error()})
-	} else {
-		h.conversations.Put(convID, claims.UserID, sanitizeTranscript(finalHistory))
 	}
 
 	writeMu.Lock()
@@ -187,7 +204,10 @@ func (h *Handler) configuredServices() []string {
 // Available handles GET /api/ai/available.
 func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{
-		"available": h.creds.IsConfigured(credentials.KeyAnthropicKey),
+	cfg := h.creds.GetAIConfig()
+	json.NewEncoder(w).Encode(map[string]any{
+		"available": h.creds.IsConfigured(credentials.AIKeyCredentialKey(cfg.Provider)),
+		"provider":  cfg.Provider,
+		"model":     cfg.Model,
 	})
 }

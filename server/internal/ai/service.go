@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -15,8 +14,8 @@ import (
 )
 
 const (
-	defaultModel = "claude-opus-4-8"
-	maxTokens    = 64000
+	defaultAnthropicModel = "claude-opus-4-8"
+	maxTokens             = 64000
 	// maxToolIterations bounds the agent loop. On the final iteration the
 	// model is forced to answer in text (tool_choice: none) so the user
 	// always gets a reply instead of a hard error.
@@ -78,10 +77,9 @@ type Service struct {
 }
 
 // NewService creates a new AI service.
-func NewService(apiKey string, toolServer *mcp.ToolServer) *Service {
-	model := os.Getenv("CANTINARR_AI_MODEL")
+func NewService(apiKey, model string, toolServer *mcp.ToolServer) *Service {
 	if model == "" {
-		model = defaultModel
+		model = defaultAnthropicModel
 	}
 	return &Service{
 		client:     anthropic.NewClient(option.WithAPIKey(apiKey)),
@@ -97,7 +95,6 @@ func (s *Service) SendMessage(ctx context.Context, history []anthropic.MessagePa
 	params := anthropic.MessageNewParams{
 		Model:     s.model,
 		MaxTokens: maxTokens,
-		Thinking:  anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}},
 		// Top-level cache_control auto-places a breakpoint on the last
 		// cacheable block each request, so the growing transcript reuses the
 		// cache across loop iterations and follow-up turns.
@@ -110,6 +107,9 @@ func (s *Service) SendMessage(ctx context.Context, history []anthropic.MessagePa
 		},
 		Messages: history,
 		Tools:    toSDKTools(s.toolServer.GetTools()),
+	}
+	if supportsAnthropicAdaptiveThinking(s.model) {
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
 	}
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
@@ -148,6 +148,14 @@ func (s *Service) SendMessage(ctx context.Context, history []anthropic.MessagePa
 	}
 
 	return params.Messages, fmt.Errorf("agent loop exceeded %d iterations", maxToolIterations)
+}
+
+func supportsAnthropicAdaptiveThinking(model anthropic.Model) bool {
+	m := string(model)
+	return strings.Contains(m, "opus-4") ||
+		strings.Contains(m, "sonnet-4") ||
+		strings.Contains(m, "fable-5") ||
+		strings.Contains(m, "mythos-5")
 }
 
 // streamOne sends a single streaming request and returns the accumulated message.
