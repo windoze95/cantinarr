@@ -48,6 +48,7 @@ class CantinarrSearchBar extends StatelessWidget {
     final borderColor = hasGlow
         ? Color.lerp(AppTheme.border, AppTheme.accent, glowIntensity)!
         : AppTheme.border;
+    final submitAction = multiline ? onSend : onSubmitted;
 
     return Container(
       decoration: BoxDecoration(
@@ -69,10 +70,11 @@ class CantinarrSearchBar extends StatelessWidget {
         focusNode: focusNode,
         keyboardType: TextInputType.text,
         onChanged: onChanged,
-        onSubmitted: multiline ? null : (_) => onSubmitted?.call(),
+        onSubmitted: submitAction == null ? null : (_) => submitAction(),
         onTapOutside: (_) => focusNode.unfocus(),
-        textInputAction:
-            multiline ? TextInputAction.newline : TextInputAction.search,
+        textInputAction: multiline
+            ? (onSend == null ? TextInputAction.newline : TextInputAction.send)
+            : TextInputAction.search,
         maxLines: maxLines ?? (multiline ? 3 : 1),
         minLines: multiline ? 2 : 1,
         style: const TextStyle(color: AppTheme.textPrimary, fontSize: 16),

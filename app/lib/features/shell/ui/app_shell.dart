@@ -209,11 +209,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (text.isEmpty) return;
 
     final searchState = ref.read(shellSearchProvider);
-    final searchNotifier = ref.read(shellSearchProvider.notifier);
-    final shouldAskAi = searchState.searchMode == SearchMode.aiReady ||
-        (searchNotifier.aiAvailable && isAiPromptQuery(text));
-
-    if (shouldAskAi) {
+    if (searchState.searchMode == SearchMode.aiReady) {
       _submitSearchBarToAi();
       return;
     }

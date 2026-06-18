@@ -37,4 +37,20 @@ void main() {
     expect(notifier.state.searchMode, SearchMode.search);
     expect(notifier.state.isLoadingSearch, true);
   });
+
+  test('ai-ready mode sticks while the user appends more text', () {
+    final notifier = ShellSearchNotifier(
+      DiscoverApiService(backendDio: Dio()),
+      aiAvailable: true,
+    );
+
+    addTearDown(notifier.dispose);
+
+    notifier.updateSearch('Dune?');
+    expect(notifier.state.searchMode, SearchMode.aiReady);
+
+    notifier.updateSearch('Dune? part two');
+    expect(notifier.state.searchMode, SearchMode.aiReady);
+    expect(notifier.state.isLoadingSearch, true);
+  });
 }
