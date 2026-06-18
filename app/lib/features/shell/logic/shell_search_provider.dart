@@ -120,11 +120,19 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
 
   void updateSearch(String query) {
     final trimmed = query.trim();
+    final normalized = trimmed.toLowerCase();
+    final previousNormalized = state.searchQuery.trim().toLowerCase();
+    final continuingAiReadyInput = aiAvailable &&
+        state.searchMode == SearchMode.aiReady &&
+        previousNormalized.isNotEmpty &&
+        normalized.length >= previousNormalized.length &&
+        normalized.startsWith(previousNormalized);
     _searchDebounce?.cancel();
     final generation = ++_searchGeneration;
-    final mode = aiAvailable && isAiPromptQuery(trimmed)
-        ? SearchMode.aiReady
-        : SearchMode.search;
+    final mode =
+        continuingAiReadyInput || (aiAvailable && isAiPromptQuery(trimmed))
+            ? SearchMode.aiReady
+            : SearchMode.search;
 
     if (trimmed.isEmpty) {
       state = state.copyWith(
