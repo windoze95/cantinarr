@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -169,6 +170,7 @@ func (c *Client) SearchMovies(query string) ([]SearchResult, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode search results: %w", err)
 	}
+	setSearchResultMediaType(result.Results, "movie")
 	return result.Results, nil
 }
 
@@ -188,10 +190,28 @@ func (c *Client) SearchTV(query string) ([]SearchResult, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode search results: %w", err)
 	}
+	setSearchResultMediaType(result.Results, "tv")
 	return result.Results, nil
 }
 
 func (c *Client) GetTrending(mediaType, timeWindow string) ([]SearchResult, error) {
+	mediaType = normalizeTrendingMediaType(mediaType)
+	timeWindow = normalizeTrendingTimeWindow(timeWindow)
+	if mediaType == "all" {
+		movies, err := c.getTrendingByType("movie", timeWindow)
+		if err != nil {
+			return nil, err
+		}
+		tv, err := c.getTrendingByType("tv", timeWindow)
+		if err != nil {
+			return nil, err
+		}
+		return balancedTrendingResults(movies, tv, 10), nil
+	}
+	return c.getTrendingByType(mediaType, timeWindow)
+}
+
+func (c *Client) getTrendingByType(mediaType, timeWindow string) ([]SearchResult, error) {
 	u := fmt.Sprintf("%s/trending/%s/%s", baseURL, mediaType, timeWindow)
 	resp, err := c.doGet(u)
 	if err != nil {
@@ -207,7 +227,61 @@ func (c *Client) GetTrending(mediaType, timeWindow string) ([]SearchResult, erro
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode trending results: %w", err)
 	}
+	setSearchResultMediaType(result.Results, mediaType)
 	return result.Results, nil
+}
+
+func normalizeTrendingMediaType(mediaType string) string {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "movie", "movies":
+		return "movie"
+	case "tv", "show", "shows", "series":
+		return "tv"
+	default:
+		return "all"
+	}
+}
+
+func normalizeTrendingTimeWindow(timeWindow string) string {
+	switch strings.ToLower(strings.TrimSpace(timeWindow)) {
+	case "week":
+		return "week"
+	default:
+		return "day"
+	}
+}
+
+func setSearchResultMediaType(results []SearchResult, mediaType string) {
+	if mediaType != "movie" && mediaType != "tv" {
+		return
+	}
+	for i := range results {
+		results[i].MediaType = mediaType
+	}
+}
+
+func balancedTrendingResults(movies, tv []SearchResult, limit int) []SearchResult {
+	if limit <= 0 {
+		return nil
+	}
+	setSearchResultMediaType(movies, "movie")
+	setSearchResultMediaType(tv, "tv")
+
+	out := make([]SearchResult, 0, limit)
+	for movieIndex, tvIndex := 0, 0; len(out) < limit && (movieIndex < len(movies) || tvIndex < len(tv)); {
+		if movieIndex < len(movies) {
+			out = append(out, movies[movieIndex])
+			movieIndex++
+			if len(out) == limit {
+				break
+			}
+		}
+		if tvIndex < len(tv) {
+			out = append(out, tv[tvIndex])
+			tvIndex++
+		}
+	}
+	return out
 }
 
 func (c *Client) GetRecommendations(tmdbID int, mediaType string) ([]SearchResult, error) {
