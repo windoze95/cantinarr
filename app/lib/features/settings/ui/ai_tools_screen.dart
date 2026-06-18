@@ -15,8 +15,10 @@ class AiToolsScreen extends ConsumerStatefulWidget {
 class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
   late final AiToolsService _service;
   List<AiToolInfo>? _tools;
+  AiDebugStatus _debug = const AiDebugStatus(enabled: false);
   bool _isLoading = true;
   String? _error;
+  bool _debugPending = false;
 
   /// Tools with a toggle in flight (switch disabled while pending).
   final Set<String> _pending = {};
@@ -38,10 +40,11 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
       _error = null;
     });
     try {
-      final tools = await _service.getTools();
+      final status = await _service.getStatus();
       if (!mounted) return;
       setState(() {
-        _tools = tools;
+        _tools = status.tools;
+        _debug = status.debug;
         _isLoading = false;
       });
     } catch (e) {
@@ -50,6 +53,25 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
         _error = e.toString();
         _isLoading = false;
       });
+    }
+  }
+
+  Future<void> _setDebug(bool enabled, {int hours = 1}) async {
+    if (_debugPending) return;
+    setState(() => _debugPending = true);
+    try {
+      final debug = await _service.setDebug(enabled: enabled, hours: hours);
+      if (!mounted) return;
+      setState(() {
+        _debug = debug;
+        _debugPending = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _debugPending = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update AI debug logging: $e')),
+      );
     }
   }
 
@@ -126,6 +148,13 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
                               color: AppTheme.textSecondary, fontSize: 13),
                         ),
                       ),
+                      _DebugLoggingTile(
+                        status: _debug,
+                        pending: _debugPending,
+                        onToggle: (enabled) => _setDebug(enabled),
+                        onExtend: () => _setDebug(true),
+                      ),
+                      const Divider(color: AppTheme.border),
                       if (_tools?.isEmpty ?? false)
                         const Padding(
                           padding: EdgeInsets.all(24),
@@ -145,6 +174,83 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
                     ],
                   ),
                 ),
+    );
+  }
+}
+
+class _DebugLoggingTile extends StatelessWidget {
+  final AiDebugStatus status;
+  final bool pending;
+  final ValueChanged<bool> onToggle;
+  final VoidCallback onExtend;
+
+  const _DebugLoggingTile({
+    required this.status,
+    required this.pending,
+    required this.onToggle,
+    required this.onExtend,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final until = status.enabledUntil;
+    final untilLabel = until == null
+        ? null
+        : 'Ends ${TimeOfDay.fromDateTime(until).format(context)}';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppTheme.surfaceVariant,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Column(
+          children: [
+            SwitchListTile(
+              value: status.enabled,
+              onChanged: pending ? null : onToggle,
+              activeThumbColor: AppTheme.accent,
+              title: const Text(
+                'AI Debug Logging',
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Text(
+                [
+                  status.remainingLabel,
+                  if (untilLabel != null) untilLabel,
+                ].join(' • '),
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 13),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Temporarily logs AI prompts, tool arguments, and tool results on the server. It shuts off automatically.',
+                      style: TextStyle(
+                          color: AppTheme.textSecondary, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: pending ? null : onExtend,
+                    icon: const Icon(Icons.add, size: 16),
+                    label: Text(status.enabled ? '+1 hour' : '1 hour'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

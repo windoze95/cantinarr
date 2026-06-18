@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,6 +122,10 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		Role:     claims.Role,
 		Services: h.configuredServices(),
 	}
+	if h.toolServer.IsAIDebugEnabled() {
+		log.Printf("ai debug: chat start provider=%s model=%s user_id=%d role=%s requested_conversation_id=%s messages=%d latest_user=%q",
+			aiConfig.Provider, aiConfig.Model, claims.UserID, claims.Role, req.ConversationID, len(req.Messages), truncateLog(latestUserText(req.Messages), 1000))
+	}
 
 	// Resolve history: prefer the server-stored transcript (which keeps tool
 	// context across turns) and append the new user message; fall back to
@@ -175,12 +180,22 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("ai chat error: %v", err)
 		emit(map[string]string{"error": err.Error()})
+	} else if h.toolServer.IsAIDebugEnabled() {
+		log.Printf("ai debug: chat complete provider=%s model=%s user_id=%d conversation_id=%s", aiConfig.Provider, aiConfig.Model, claims.UserID, convID)
 	}
 
 	writeMu.Lock()
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 	writeMu.Unlock()
+}
+
+func truncateLog(value string, max int) string {
+	value = strings.ReplaceAll(value, "\n", "\\n")
+	if len(value) <= max {
+		return value
+	}
+	return value[:max] + "..."
 }
 
 // configuredServices reports which backends are available, for system-prompt context.

@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 )
 
 // disabledToolsKey is the settings-table key holding a JSON array of disabled
 // tool names.
 const disabledToolsKey = "ai_disabled_tools"
+
+const aiDebugUntilKey = "ai_debug_until"
 
 // ToolStatus describes a tool plus its admin-configurable enabled state.
 type ToolStatus struct {
@@ -16,6 +19,13 @@ type ToolStatus struct {
 	Description string `json:"description"`
 	Enabled     bool   `json:"enabled"`
 	AdminOnly   bool   `json:"admin_only"`
+}
+
+// AIDebugStatus describes whether verbose AI/tool logging is temporarily on.
+type AIDebugStatus struct {
+	Enabled          bool   `json:"enabled"`
+	EnabledUntil     string `json:"enabled_until,omitempty"`
+	RemainingSeconds int64  `json:"remaining_seconds"`
 }
 
 // loadTogglesLocked populates disabledTools from the settings table. Must be
@@ -106,4 +116,70 @@ func (s *ToolServer) SetToolEnabled(name string, enabled bool) error {
 		return fmt.Errorf("persist disabled tools: %w", err)
 	}
 	return nil
+}
+
+// AIDebugStatus reports the current debug logging state.
+func (s *ToolServer) AIDebugStatus() AIDebugStatus {
+	until := s.aiDebugUntil()
+	now := time.Now()
+	if until.IsZero() || !until.After(now) {
+		return AIDebugStatus{Enabled: false}
+	}
+	return AIDebugStatus{
+		Enabled:          true,
+		EnabledUntil:     until.Format(time.RFC3339),
+		RemainingSeconds: int64(time.Until(until).Seconds()),
+	}
+}
+
+// IsAIDebugEnabled reports whether verbose AI/tool logging is currently active.
+func (s *ToolServer) IsAIDebugEnabled() bool {
+	until := s.aiDebugUntil()
+	return !until.IsZero() && until.After(time.Now())
+}
+
+// ExtendAIDebug enables or extends debug logging by the given whole hours.
+func (s *ToolServer) ExtendAIDebug(hours int) (AIDebugStatus, error) {
+	if hours < 1 {
+		hours = 1
+	}
+	if hours > 24 {
+		hours = 24
+	}
+	base := time.Now()
+	if current := s.aiDebugUntil(); current.After(base) {
+		base = current
+	}
+	until := base.Add(time.Duration(hours) * time.Hour).UTC()
+	if s.creds != nil {
+		if err := s.creds.SetSetting(aiDebugUntilKey, until.Format(time.RFC3339)); err != nil {
+			return AIDebugStatus{}, err
+		}
+	}
+	return s.AIDebugStatus(), nil
+}
+
+// DisableAIDebug turns off verbose AI/tool logging immediately.
+func (s *ToolServer) DisableAIDebug() (AIDebugStatus, error) {
+	if s.creds != nil {
+		if err := s.creds.DeleteCredential(aiDebugUntilKey); err != nil {
+			return AIDebugStatus{}, err
+		}
+	}
+	return s.AIDebugStatus(), nil
+}
+
+func (s *ToolServer) aiDebugUntil() time.Time {
+	if s.creds == nil {
+		return time.Time{}
+	}
+	raw := s.creds.GetSetting(aiDebugUntilKey)
+	if raw == "" {
+		return time.Time{}
+	}
+	until, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return until
 }
