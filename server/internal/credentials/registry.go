@@ -87,6 +87,7 @@ var AIProviders = []AIProviderOption{
 		CredentialKey: KeyGeminiKey,
 		Models: []AIModelOption{
 			{ID: "gemini-3.5-flash", Label: "Gemini 3.5 Flash", Description: "Current stable Gemini Flash model"},
+			{ID: "gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro Preview", Description: "Preview model optimized for agentic and coding workflows"},
 			{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro", Description: "Advanced reasoning and coding"},
 			{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash", Description: "Low-latency reasoning"},
 			{ID: "gemini-2.5-flash-lite", Label: "Gemini 2.5 Flash-Lite", Description: "Fastest budget Gemini option"},

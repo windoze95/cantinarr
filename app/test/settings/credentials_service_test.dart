@@ -36,7 +36,7 @@ void main() {
       expect(status.ai.providers.single.credentialKey, 'openai_key');
     });
 
-    test('falls back to built-in providers when metadata is missing', () {
+    test('handles legacy AI status without provider metadata', () {
       final status = CredentialsStatus.fromJson({
         'anthropic_key': true,
         'ai': true,
@@ -44,11 +44,8 @@ void main() {
 
       expect(status.isConfigured('anthropic_key'), true);
       expect(status.ai.provider, 'anthropic');
-      expect(status.ai.providers, isNotEmpty);
-      expect(
-        status.ai.providers.map((provider) => provider.id),
-        containsAll(['anthropic', 'openai', 'gemini']),
-      );
+      expect(status.ai.model, 'claude-opus-4-8');
+      expect(status.ai.providers, isEmpty);
     });
   });
 }
