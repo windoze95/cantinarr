@@ -41,14 +41,14 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "get_trending",
-		Description: "Get trending movies and/or TV shows",
+		Description: "Get trending movies and/or TV shows. Use media_type \"all\" for general trending, or when the user asks for both movies and shows/TV.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"media_type": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"movie", "tv", "all"},
-					"description": "Type of media to get trending for",
+					"description": "Type of media to get trending for. Use \"all\" for mixed movie/show requests.",
 				},
 				"time_window": map[string]interface{}{
 					"type":        "string",
