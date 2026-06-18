@@ -1,7 +1,101 @@
-import 'package:flutter/foundation.dart';
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
+import '../../../core/network/backend_client.dart';
 import '../data/ai_models.dart';
 import '../data/ai_chat_service.dart';
+
+/// How long an assistant session can sit unused before it is refreshed.
+const aiChatSessionIdleTimeout = Duration(minutes: 30);
+
+/// Shared assistant conversation for both the full-screen assistant and the
+/// shell's inline AI mode.
+///
+/// The keep-alive link lets users leave and reopen the assistant without
+/// losing the active conversation. Auto-dispose still gives us a natural
+/// refresh after the app is backgrounded or the assistant has no listeners for
+/// a while.
+final aiChatProvider =
+    ChangeNotifierProvider.autoDispose<AiChatNotifier>((ref) {
+  final backendDio = ref.watch(backendClientProvider);
+  final notifier = AiChatNotifier(
+    chatService: AiChatService(backendDio: backendDio),
+  );
+  final keepAliveLink = ref.keepAlive();
+
+  Timer? idleTimer;
+  Timer? backgroundTimer;
+
+  void expireSession() {
+    idleTimer?.cancel();
+    backgroundTimer?.cancel();
+    ref.invalidateSelf();
+  }
+
+  void startIdleTimer() {
+    idleTimer?.cancel();
+    idleTimer = Timer(aiChatSessionIdleTimeout, expireSession);
+  }
+
+  void cancelIdleTimer() {
+    idleTimer?.cancel();
+    idleTimer = null;
+  }
+
+  void startBackgroundTimer() {
+    backgroundTimer?.cancel();
+    backgroundTimer = Timer(aiChatSessionIdleTimeout, expireSession);
+  }
+
+  void cancelBackgroundTimer() {
+    backgroundTimer?.cancel();
+    backgroundTimer = null;
+  }
+
+  final lifecycleObserver = _AiChatLifecycleObserver(
+    onBackgrounded: startBackgroundTimer,
+    onResumed: cancelBackgroundTimer,
+  );
+
+  WidgetsBinding.instance.addObserver(lifecycleObserver);
+
+  ref.onCancel(startIdleTimer);
+  ref.onResume(cancelIdleTimer);
+  ref.onDispose(() {
+    cancelIdleTimer();
+    cancelBackgroundTimer();
+    WidgetsBinding.instance.removeObserver(lifecycleObserver);
+    keepAliveLink.close();
+  });
+
+  return notifier;
+});
+
+class _AiChatLifecycleObserver extends WidgetsBindingObserver {
+  final VoidCallback onBackgrounded;
+  final VoidCallback onResumed;
+
+  _AiChatLifecycleObserver({
+    required this.onBackgrounded,
+    required this.onResumed,
+  });
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      onResumed();
+      return;
+    }
+
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      onBackgrounded();
+    }
+  }
+}
 
 /// State for the AI chat conversation.
 class AiChatState {
@@ -34,6 +128,7 @@ class AiChatState {
 class AiChatNotifier extends ChangeNotifier {
   final AiChatService _chatService;
   final _uuid = const Uuid();
+  bool _disposed = false;
 
   /// Server-assigned conversation ID; sent on every turn so the server can
   /// keep full tool context. Reset when the chat is cleared.
@@ -47,6 +142,7 @@ class AiChatNotifier extends ChangeNotifier {
   AiChatState _state = const AiChatState();
   AiChatState get state => _state;
   set state(AiChatState value) {
+    if (_disposed) return;
     _state = value;
     notifyListeners();
   }
@@ -65,6 +161,7 @@ class AiChatNotifier extends ChangeNotifier {
 
   /// Send a user message and stream the AI response.
   Future<void> sendMessage(String text) async {
+    if (_disposed) return;
     if (text.trim().isEmpty) return;
     // One turn at a time: a second concurrent stream would corrupt chat
     // state and race the server-side conversation store.
@@ -213,6 +310,7 @@ class AiChatNotifier extends ChangeNotifier {
   void clearError() => state = state.copyWith(error: null);
 
   void clearChat() {
+    if (_disposed) return;
     _conversationId = null;
     _generation++; // orphan any in-flight stream
     state = const AiChatState();
@@ -223,5 +321,12 @@ class AiChatNotifier extends ChangeNotifier {
       timestamp: DateTime.now(),
       excludeFromHistory: true,
     ));
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _disposed = true;
+    super.dispose();
   }
 }

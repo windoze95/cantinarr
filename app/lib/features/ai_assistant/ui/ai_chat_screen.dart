@@ -2,10 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/models/app_module.dart';
-import '../../../core/network/backend_client.dart';
 import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
-import '../data/ai_chat_service.dart';
 import '../data/ai_models.dart';
 import '../logic/ai_chat_provider.dart';
 import 'chat_bubble.dart';
@@ -29,20 +27,11 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
 
-  @override
-  void initState() {
-    super.initState();
-    if (widget.aiAvailable) {
-      _initNotifier();
-    }
-  }
-
-  void _initNotifier() {
-    final backendDio = ref.read(backendClientProvider);
-    _notifier = AiChatNotifier(
-      chatService: AiChatService(backendDio: backendDio),
-    );
-    _notifier!.addListener(_scrollToBottom);
+  void _setNotifier(AiChatNotifier? notifier) {
+    if (identical(_notifier, notifier)) return;
+    _notifier?.removeListener(_scrollToBottom);
+    _notifier = notifier;
+    _notifier?.addListener(_scrollToBottom);
   }
 
   void _scrollToBottom() {
@@ -60,7 +49,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   @override
   void dispose() {
-    _notifier?.removeListener(_scrollToBottom);
+    _setNotifier(null);
     _inputController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
@@ -92,7 +81,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.aiAvailable || _notifier == null) {
+    if (!widget.aiAvailable) {
+      _setNotifier(null);
       return Scaffold(
         appBar: AppBar(
           leading: IconButton(
@@ -132,7 +122,14 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
       );
     }
 
-    final state = _notifier!.state;
+    final notifier = ref.watch(aiChatProvider);
+    _setNotifier(notifier);
+
+    return _buildChat(context, notifier);
+  }
+
+  Widget _buildChat(BuildContext context, AiChatNotifier notifier) {
+    final state = notifier.state;
 
     return Scaffold(
       appBar: AppBar(
@@ -145,7 +142,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.add_comment_outlined),
-            onPressed: _notifier!.clearChat,
+            onPressed: notifier.clearChat,
             tooltip: 'New chat',
           ),
         ],
@@ -178,7 +175,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                     return ChatBubble(
                       message: msg,
                       onRetry: isLast && msg.errorText != null
-                          ? _notifier!.retryLast
+                          ? notifier.retryLast
                           : null,
                     );
                   },
