@@ -15,10 +15,11 @@ class CredentialsStatus {
         ? rawCredentials.map((k, v) => MapEntry(k, v as bool? ?? false))
         : json.map((k, v) => MapEntry(k, v is bool ? v : false));
 
+    final aiJson = json['ai'];
     return CredentialsStatus(
       credentials: credentials,
       ai: AiCredentialConfig.fromJson(
-        json['ai'] as Map<String, dynamic>? ?? const {},
+        aiJson is Map<String, dynamic> ? aiJson : const {},
       ),
     );
   }
@@ -43,11 +44,13 @@ class AiCredentialConfig {
     final providers = providersJson
         .map((e) => AiProviderOption.fromJson(e as Map<String, dynamic>))
         .toList();
+    final providerOptions =
+        providers.isNotEmpty ? providers : fallbackProviders;
     final defaultProvider =
-        providers.isNotEmpty ? providers.first.id : 'anthropic';
+        providerOptions.isNotEmpty ? providerOptions.first.id : 'anthropic';
     final selectedProvider = config['provider'] as String? ?? defaultProvider;
     AiProviderOption? selected;
-    for (final provider in providers) {
+    for (final provider in providerOptions) {
       if (provider.id == selectedProvider) {
         selected = provider;
         break;
@@ -60,9 +63,103 @@ class AiCredentialConfig {
           (selected?.models.isNotEmpty == true
               ? selected!.models.first.id
               : 'claude-opus-4-8'),
-      providers: providers,
+      providers: providerOptions,
     );
   }
+
+  static const fallbackProviders = [
+    AiProviderOption(
+      id: 'anthropic',
+      label: 'Anthropic',
+      credentialKey: 'anthropic_key',
+      models: [
+        AiModelOption(
+          id: 'claude-opus-4-8',
+          label: 'Claude Opus 4.8',
+          description: 'Most capable Claude Opus-tier model',
+        ),
+        AiModelOption(
+          id: 'claude-fable-5',
+          label: 'Claude Fable 5',
+          description: 'Highest-capability Claude model',
+        ),
+        AiModelOption(
+          id: 'claude-sonnet-4-6',
+          label: 'Claude Sonnet 4.6',
+          description: 'Balanced speed and intelligence',
+        ),
+        AiModelOption(
+          id: 'claude-haiku-4-5',
+          label: 'Claude Haiku 4.5',
+          description: 'Fastest, lowest-cost Claude option',
+        ),
+      ],
+    ),
+    AiProviderOption(
+      id: 'openai',
+      label: 'OpenAI',
+      credentialKey: 'openai_key',
+      models: [
+        AiModelOption(
+          id: 'gpt-5.5',
+          label: 'GPT-5.5',
+          description: 'Flagship OpenAI model',
+        ),
+        AiModelOption(
+          id: 'gpt-5.4',
+          label: 'GPT-5.4',
+          description: 'Affordable frontier model',
+        ),
+        AiModelOption(
+          id: 'gpt-5.4-mini',
+          label: 'GPT-5.4 mini',
+          description: 'Lower latency and cost',
+        ),
+        AiModelOption(
+          id: 'gpt-5.4-nano',
+          label: 'GPT-5.4 nano',
+          description: 'Smallest current GPT-5.4 model',
+        ),
+        AiModelOption(
+          id: 'gpt-4.1',
+          label: 'GPT-4.1',
+          description: 'Stable previous-generation model',
+        ),
+        AiModelOption(
+          id: 'gpt-4.1-mini',
+          label: 'GPT-4.1 mini',
+          description: 'Fast previous-generation model',
+        ),
+      ],
+    ),
+    AiProviderOption(
+      id: 'gemini',
+      label: 'Google Gemini',
+      credentialKey: 'gemini_key',
+      models: [
+        AiModelOption(
+          id: 'gemini-3.5-flash',
+          label: 'Gemini 3.5 Flash',
+          description: 'Current stable Gemini Flash model',
+        ),
+        AiModelOption(
+          id: 'gemini-2.5-pro',
+          label: 'Gemini 2.5 Pro',
+          description: 'Advanced reasoning and coding',
+        ),
+        AiModelOption(
+          id: 'gemini-2.5-flash',
+          label: 'Gemini 2.5 Flash',
+          description: 'Low-latency reasoning',
+        ),
+        AiModelOption(
+          id: 'gemini-2.5-flash-lite',
+          label: 'Gemini 2.5 Flash-Lite',
+          description: 'Fastest budget Gemini option',
+        ),
+      ],
+    ),
+  ];
 }
 
 class AiProviderOption {
