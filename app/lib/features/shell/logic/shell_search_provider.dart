@@ -21,6 +21,58 @@ enum SearchMode {
   aiChat,
 }
 
+/// Lightweight client-side intent hint for the unified search/AI bar.
+///
+/// Title-like input still goes to TMDB search. Question phrases and common
+/// assistant commands should move directly to AI so matching media titles do
+/// not steal an obvious AI prompt.
+bool isAiPromptQuery(String query) {
+  final normalized = query.trim().toLowerCase();
+  if (normalized.isEmpty) return false;
+  if (normalized.endsWith('?')) return true;
+
+  const commandPrefixes = [
+    'tell me ',
+    'recommend ',
+    'suggest ',
+    'show me ',
+    'find me ',
+    'help me ',
+    'give me ',
+    'i want ',
+    'i need ',
+    'im looking for ',
+    "i'm looking for ",
+    'movies like ',
+    'shows like ',
+  ];
+
+  if (commandPrefixes.any(normalized.startsWith)) return true;
+
+  final questionPatterns = [
+    RegExp(
+      r'^what\s+(is|are|was|were|should|can|could|do|does|did|would|will)\b',
+    ),
+    RegExp(r"^(whats|what's)\s+"),
+    RegExp(
+      r'^who\s+(is|are|was|were|plays|played|stars|starred|directed|wrote|made)\b',
+    ),
+    RegExp(r'^when\s+(is|are|was|were|did|does|do|will|can|should)\b'),
+    RegExp(r'^where\s+(is|are|was|were|can|could|do|does|did)\b'),
+    RegExp(r'^why\s+(is|are|was|were|did|does|do|would|should)\b'),
+    RegExp(
+      r'^how\s+(do|does|did|can|could|would|should|is|are|was|were|many|much|long|old|good)\b',
+    ),
+    RegExp(r'^which\s+'),
+    RegExp(r'^(can|could|would|should|do|does|did)\s+(you|i|we)\b'),
+    RegExp(
+      r'^(is|are|was|were)\s+.+\b(available|streaming|worth|good|downloaded|missing|requested|on)\b',
+    ),
+  ];
+
+  return questionPatterns.any((pattern) => pattern.hasMatch(normalized));
+}
+
 /// Shell-level search state visible across all tabs.
 class ShellSearchState {
   final String searchQuery;
@@ -61,14 +113,17 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
   final bool aiAvailable;
   final PagedLoader _searchLoader = PagedLoader();
   Timer? _searchDebounce;
+  int _searchGeneration = 0;
 
   ShellSearchNotifier(this._api, {this.aiAvailable = false})
       : super(const ShellSearchState());
 
   void updateSearch(String query) {
+    final trimmed = query.trim();
     _searchDebounce?.cancel();
+    final generation = ++_searchGeneration;
 
-    if (query.isEmpty) {
+    if (trimmed.isEmpty) {
       state = state.copyWith(
         searchQuery: '',
         searchResults: [],
@@ -79,9 +134,14 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
       return;
     }
 
-    // In aiReady mode, just update the query text — don't re-search TMDB.
-    if (state.searchMode == SearchMode.aiReady) {
-      state = state.copyWith(searchQuery: query);
+    if (aiAvailable && isAiPromptQuery(trimmed)) {
+      state = state.copyWith(
+        searchQuery: query,
+        searchResults: [],
+        isLoadingSearch: false,
+        searchMode: SearchMode.aiReady,
+      );
+      _searchLoader.reset();
       return;
     }
 
@@ -90,18 +150,30 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
       isLoadingSearch: true,
       searchMode: SearchMode.search,
     );
-    _searchDebounce = Timer(AppConfig.searchDebounce, () => _executeSearch());
+    _searchDebounce = Timer(
+      AppConfig.searchDebounce,
+      () => _executeSearch(query: query, generation: generation),
+    );
   }
 
-  Future<void> _executeSearch() async {
+  Future<void> _executeSearch({
+    required String query,
+    required int generation,
+  }) async {
     _searchLoader.reset();
     if (!_searchLoader.beginLoading()) return;
 
     try {
       final page = await _api.multiSearch(
-        query: state.searchQuery,
+        query: query,
         page: _searchLoader.page,
       );
+
+      if (generation != _searchGeneration ||
+          state.searchQuery != query ||
+          state.searchMode != SearchMode.search) {
+        return;
+      }
 
       if (page.results.isEmpty && aiAvailable) {
         state = state.copyWith(
@@ -117,6 +189,11 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
       }
       _searchLoader.endLoading(page.totalPages);
     } catch (e) {
+      if (generation != _searchGeneration ||
+          state.searchQuery != query ||
+          state.searchMode != SearchMode.search) {
+        return;
+      }
       _searchLoader.cancelLoading();
       state = state.copyWith(
         isLoadingSearch: false,
@@ -125,15 +202,22 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
     }
   }
 
-  /// Transition from aiReady to full AI chat mode (after user submits).
-  void submitAiReady() {
-    if (state.searchMode == SearchMode.aiReady) {
-      state = state.copyWith(searchMode: SearchMode.aiChat, searchQuery: '');
-    }
+  /// Transition from top-bar intent capture to full inline AI chat mode.
+  void beginAiChat() {
+    _searchDebounce?.cancel();
+    _searchGeneration++;
+    _searchLoader.reset();
+    state = state.copyWith(
+      searchMode: SearchMode.aiChat,
+      searchQuery: '',
+      searchResults: [],
+      isLoadingSearch: false,
+    );
   }
 
   /// Exit AI mode and return to normal search.
   void exitAiMode() {
+    _searchGeneration++;
     state = state.copyWith(
       searchMode: SearchMode.search,
       searchQuery: '',
@@ -152,18 +236,30 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
 
   Future<void> _loadMoreSearchResults() async {
     if (!_searchLoader.beginLoading()) return;
+    final generation = _searchGeneration;
+    final query = state.searchQuery;
     state = state.copyWith(isLoadingSearch: true);
     try {
       final page = await _api.multiSearch(
-        query: state.searchQuery,
+        query: query,
         page: _searchLoader.page,
       );
+      if (generation != _searchGeneration ||
+          state.searchQuery != query ||
+          state.searchMode != SearchMode.search) {
+        return;
+      }
       state = state.copyWith(
         searchResults: [...state.searchResults, ...page.results],
         isLoadingSearch: false,
       );
       _searchLoader.endLoading(page.totalPages);
     } catch (_) {
+      if (generation != _searchGeneration ||
+          state.searchQuery != query ||
+          state.searchMode != SearchMode.search) {
+        return;
+      }
       _searchLoader.cancelLoading();
       state = state.copyWith(isLoadingSearch: false);
     }

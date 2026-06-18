@@ -114,6 +114,11 @@ class _AppShellState extends ConsumerState<AppShell>
     if (mounted) setState(() {});
   }
 
+  void _dismissKeyboard() {
+    _searchFocusNode.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
   /// Lazily create the shell-scoped AI chat notifier.
   AiChatNotifier _getOrCreateAiChat() {
     if (_aiChatNotifier == null) {
@@ -157,7 +162,8 @@ class _AppShellState extends ConsumerState<AppShell>
         _shimmerRotationAnim.stop();
         _shimmerRotationAnim.value = 0;
         _aiModeAnim.forward();
-        // Transfer query text to the bottom input and re-request focus
+        // Transfer query text to the bottom input if AI chat is opened
+        // without immediately sending the existing prompt.
         final query = ref.read(shellSearchProvider).searchQuery;
         if (query.isNotEmpty && _searchController.text != query) {
           _searchController.text = query;
@@ -166,11 +172,6 @@ class _AppShellState extends ConsumerState<AppShell>
           );
         }
         _getOrCreateAiChat();
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && !_searchFocusNode.hasFocus) {
-            _searchFocusNode.requestFocus();
-          }
-        });
 
       case SearchMode.search:
         _shimmerRotationAnim.stop();
@@ -182,27 +183,45 @@ class _AppShellState extends ConsumerState<AppShell>
   void _exitAiMode() {
     _searchController.clear();
     ref.read(shellSearchProvider.notifier).exitAiMode();
-    _searchFocusNode.unfocus();
+    _dismissKeyboard();
   }
 
   void _sendAiMessage() {
     final text = _searchController.text.trim();
     if (text.isEmpty || _aiChatNotifier == null) return;
     _searchController.clear();
+    _dismissKeyboard();
     _aiChatNotifier!.sendMessage(text);
   }
 
-  /// Submit from the aiReady state: transition to full chat and send message.
-  void _submitFromAiReady() {
+  /// Submit top-bar input as an inline AI chat message.
+  void _submitSearchBarToAi() {
     final text = _searchController.text.trim();
     if (text.isEmpty) return;
-    ref.read(shellSearchProvider.notifier).submitAiReady();
+    ref.read(shellSearchProvider.notifier).beginAiChat();
     _searchController.clear();
+    _dismissKeyboard();
     _getOrCreateAiChat().sendMessage(text);
   }
 
-  Map<int, LibraryStatus> _buildLibraryStatus(
-      List<MediaItem> searchResults) {
+  void _submitSearchBar() {
+    final text = _searchController.text.trim();
+    if (text.isEmpty) return;
+
+    final searchState = ref.read(shellSearchProvider);
+    final searchNotifier = ref.read(shellSearchProvider.notifier);
+    final shouldAskAi = searchState.searchMode == SearchMode.aiReady ||
+        (searchNotifier.aiAvailable && isAiPromptQuery(text));
+
+    if (shouldAskAi) {
+      _submitSearchBarToAi();
+      return;
+    }
+
+    _dismissKeyboard();
+  }
+
+  Map<int, LibraryStatus> _buildLibraryStatus(List<MediaItem> searchResults) {
     final map = <int, LibraryStatus>{};
 
     // Radarr: match by TMDB ID
@@ -269,6 +288,20 @@ class _AppShellState extends ConsumerState<AppShell>
       MediaQuery.sizeOf(context).width >= 900;
 
   bool _handleScrollNotification(ScrollNotification notification) {
+    final atTop =
+        notification.metrics.pixels <= notification.metrics.minScrollExtent + 4;
+
+    if (notification is ScrollStartNotification ||
+        notification is ScrollUpdateNotification ||
+        notification is OverscrollNotification) {
+      _dismissKeyboard();
+    }
+
+    if (atTop) {
+      _searchBarAnim.forward();
+      return false;
+    }
+
     if (notification is ScrollUpdateNotification) {
       final delta = notification.scrollDelta ?? 0;
       if (delta > 2) {
@@ -299,11 +332,12 @@ class _AppShellState extends ConsumerState<AppShell>
   Widget build(BuildContext context) {
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);
-    final hasAi = ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
-    final libraryStatus = searchState.isSearching &&
-            searchState.searchMode == SearchMode.search
-        ? _buildLibraryStatus(searchState.searchResults)
-        : const <int, LibraryStatus>{};
+    final hasAi =
+        ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
+    final libraryStatus =
+        searchState.isSearching && searchState.searchMode == SearchMode.search
+            ? _buildLibraryStatus(searchState.searchResults)
+            : const <int, LibraryStatus>{};
 
     final mobile = _isMobile(context);
     final desktop = _isDesktop(context);
@@ -335,9 +369,12 @@ class _AppShellState extends ConsumerState<AppShell>
           focusNode: _searchFocusNode,
           hintText: isAiReady
               ? 'Edit your question or press send...'
-              : (hasAi ? 'Search or ask AI...' : 'Search by title or person...'),
+              : (hasAi
+                  ? 'Search or ask AI...'
+                  : 'Search by title or person...'),
           aiEnabled: hasAi,
-          onSend: isAiReady ? _submitFromAiReady : null,
+          onSubmitted: _submitSearchBar,
+          onSend: isAiReady ? _submitSearchBarToAi : null,
           onChanged: isAiMode ? null : (q) => searchNotifier.updateSearch(q),
           onClear: isAiReady || isAiMode
               ? _exitAiMode
@@ -357,7 +394,10 @@ class _AppShellState extends ConsumerState<AppShell>
             padding: const EdgeInsets.only(left: 4, top: 8, bottom: 8),
             child: IconButton(
               icon: const Icon(Icons.menu, color: AppTheme.textPrimary),
-              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              onPressed: () {
+                _dismissKeyboard();
+                _scaffoldKey.currentState?.openDrawer();
+              },
             ),
           ),
           Expanded(child: searchBar),
@@ -390,10 +430,12 @@ class _AppShellState extends ConsumerState<AppShell>
                   child: Stack(
                     children: [
                       NotificationListener<ScrollNotification>(
-                        onNotification:
-                            mobile && !searchState.isSearching && !isAiMode && !isAiReady
-                                ? _handleScrollNotification
-                                : null,
+                        onNotification: mobile &&
+                                !searchState.isSearching &&
+                                !isAiMode &&
+                                !isAiReady
+                            ? _handleScrollNotification
+                            : null,
                         child: widget.child,
                       ),
                       if (isAiReady)
@@ -439,6 +481,7 @@ class _AppShellState extends ConsumerState<AppShell>
                     query: searchState.searchQuery,
                     onLoadMore: searchNotifier.loadMoreSearch,
                     libraryStatus: libraryStatus,
+                    onResultTap: _dismissKeyboard,
                   ),
                 ),
               ),
@@ -511,8 +554,8 @@ class _AppShellState extends ConsumerState<AppShell>
                 children: [
                   // Header
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: const BoxDecoration(
                       border: Border(
                         bottom: BorderSide(color: AppTheme.border),
@@ -556,31 +599,39 @@ class _AppShellState extends ConsumerState<AppShell>
 
                   // Chat messages
                   Expanded(
-                    child: ListView.builder(
-                      controller: _chatScrollController,
-                      padding: const EdgeInsets.all(16),
-                      itemCount: messages.length +
-                          (isLoading && (messages.isEmpty ||
-                                  messages.last.role != ChatRole.assistant)
-                              ? 1
-                              : 0),
-                      itemBuilder: (context, index) {
-                        if (index >= messages.length) {
-                          return const _TypingIndicator();
-                        }
-                        // Skip the initial welcome message
-                        final msg = messages[index];
-                        if (index == 0 && msg.role == ChatRole.assistant) {
-                          return const SizedBox.shrink();
-                        }
-                        final isLast = index == messages.length - 1;
-                        return ChatBubble(
-                          message: msg,
-                          onRetry: isLast && msg.errorText != null
-                              ? _aiChatNotifier?.retryLast
-                              : null,
-                        );
-                      },
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: _dismissKeyboard,
+                      child: ListView.builder(
+                        controller: _chatScrollController,
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        padding: const EdgeInsets.all(16),
+                        itemCount: messages.length +
+                            (isLoading &&
+                                    (messages.isEmpty ||
+                                        messages.last.role !=
+                                            ChatRole.assistant)
+                                ? 1
+                                : 0),
+                        itemBuilder: (context, index) {
+                          if (index >= messages.length) {
+                            return const _TypingIndicator();
+                          }
+                          // Skip the initial welcome message
+                          final msg = messages[index];
+                          if (index == 0 && msg.role == ChatRole.assistant) {
+                            return const SizedBox.shrink();
+                          }
+                          final isLast = index == messages.length - 1;
+                          return ChatBubble(
+                            message: msg,
+                            onRetry: isLast && msg.errorText != null
+                                ? _aiChatNotifier?.retryLast
+                                : null,
+                          );
+                        },
+                      ),
                     ),
                   ),
 
@@ -677,8 +728,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 ),
                 const Text(
                   'Your media companion',
-                  style:
-                      TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
                 ),
               ],
             ),
@@ -815,8 +865,7 @@ class _TypingIndicator extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
               color: AppTheme.surfaceVariant,
               borderRadius: BorderRadius.circular(16),

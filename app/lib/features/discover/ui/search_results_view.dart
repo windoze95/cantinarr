@@ -20,6 +20,7 @@ class SearchResultsView extends StatelessWidget {
   final bool isLoading;
   final String query;
   final void Function(MediaItem)? onLoadMore;
+  final VoidCallback? onResultTap;
   final Map<int, LibraryStatus> libraryStatus;
 
   const SearchResultsView({
@@ -28,6 +29,7 @@ class SearchResultsView extends StatelessWidget {
     required this.isLoading,
     required this.query,
     this.onLoadMore,
+    this.onResultTap,
     this.libraryStatus = const {},
   });
 
@@ -47,14 +49,13 @@ class SearchResultsView extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               'No results for "$query"',
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 16),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 16),
             ),
             const SizedBox(height: 4),
             const Text(
               'Try a different search term',
-              style:
-                  TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ],
         ),
@@ -62,6 +63,7 @@ class SearchResultsView extends StatelessWidget {
     }
 
     return ListView.separated(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       itemCount: results.length + (isLoading ? 3 : 0),
       separatorBuilder: (_, __) => const SizedBox.shrink(),
@@ -76,6 +78,7 @@ class SearchResultsView extends StatelessWidget {
         return _SearchResultTile(
           item: item,
           status: libraryStatus[item.id],
+          onTap: onResultTap,
         );
       },
     );
@@ -83,6 +86,7 @@ class SearchResultsView extends StatelessWidget {
 
   Widget _buildLoadingList() {
     return ListView.separated(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       itemCount: 8,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -160,6 +164,7 @@ class SearchResultsView extends StatelessWidget {
 class _SearchResultTile extends StatelessWidget {
   final MediaItem item;
   final LibraryStatus? status;
+  final VoidCallback? onTap;
 
   static const _titleStyle = TextStyle(
     color: AppTheme.textPrimary,
@@ -167,7 +172,7 @@ class _SearchResultTile extends StatelessWidget {
     fontWeight: FontWeight.w600,
   );
 
-  const _SearchResultTile({required this.item, this.status});
+  const _SearchResultTile({required this.item, this.status, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -178,98 +183,102 @@ class _SearchResultTile extends StatelessWidget {
   }
 
   Widget _buildPersonTile(BuildContext context) {
-    final imageUrl = item.posterPath != null &&
-            item.posterPath!.startsWith('http')
-        ? item.posterPath!
-        : AppConfig.tmdbPoster(item.posterPath, width: 154);
+    final imageUrl =
+        item.posterPath != null && item.posterPath!.startsWith('http')
+            ? item.posterPath!
+            : AppConfig.tmdbPoster(item.posterPath, width: 154);
 
     return GestureDetector(
-      onTap: () => showPersonDetailSheet(
-        context,
-        personId: item.id,
-        personName: item.title,
-        profilePath: item.posterPath,
-      ),
+      onTap: () {
+        onTap?.call();
+        showPersonDetailSheet(
+          context,
+          personId: item.id,
+          personName: item.title,
+          profilePath: item.posterPath,
+        );
+      },
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 10),
         child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Circular profile thumbnail
-          ClipOval(
-            child: SizedBox(
-              width: 50,
-              height: 50,
-              child: item.posterPath != null
-                  ? CachedNetworkImage(
-                      imageUrl: imageUrl,
-                      fit: BoxFit.cover,
-                      placeholder: (_, __) => Container(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Circular profile thumbnail
+            ClipOval(
+              child: SizedBox(
+                width: 50,
+                height: 50,
+                child: item.posterPath != null
+                    ? CachedNetworkImage(
+                        imageUrl: imageUrl,
+                        fit: BoxFit.cover,
+                        placeholder: (_, __) => Container(
+                          color: AppTheme.surfaceVariant,
+                          child: const Center(
+                            child: Icon(Icons.person,
+                                color: AppTheme.textSecondary, size: 18),
+                          ),
+                        ),
+                        errorWidget: (_, __, ___) => Container(
+                          color: AppTheme.surfaceVariant,
+                          child: const Center(
+                            child: Icon(Icons.person,
+                                color: AppTheme.textSecondary, size: 18),
+                          ),
+                        ),
+                      )
+                    : Container(
                         color: AppTheme.surfaceVariant,
                         child: const Center(
                           child: Icon(Icons.person,
                               color: AppTheme.textSecondary, size: 18),
                         ),
                       ),
-                      errorWidget: (_, __, ___) => Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.person,
-                              color: AppTheme.textSecondary, size: 18),
-                        ),
-                      ),
-                    )
-                  : Container(
-                      color: AppTheme.surfaceVariant,
-                      child: const Center(
-                        child: Icon(Icons.person,
-                            color: AppTheme.textSecondary, size: 18),
-                      ),
-                    ),
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: _titleStyle,
-                ),
-                const SizedBox(height: 3),
-                const Text(
-                  'Person',
-                  style: TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 12,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: _titleStyle,
                   ),
-                ),
-              ],
+                  const SizedBox(height: 3),
+                  const Text(
+                    'Person',
+                    style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildMediaTile(BuildContext context) {
-    final imageUrl = item.posterPath != null &&
-            item.posterPath!.startsWith('http')
-        ? item.posterPath!
-        : AppConfig.tmdbPoster(item.posterPath, width: 154);
+    final imageUrl =
+        item.posterPath != null && item.posterPath!.startsWith('http')
+            ? item.posterPath!
+            : AppConfig.tmdbPoster(item.posterPath, width: 154);
 
     final year = item.releaseDate != null && item.releaseDate!.length >= 4
         ? item.releaseDate!.substring(0, 4)
         : null;
 
     return GestureDetector(
-      onTap: () => context.push(
-        '/detail/${item.mediaType.name}/${item.id}',
-      ),
+      onTap: () {
+        onTap?.call();
+        context.push('/detail/${item.mediaType.name}/${item.id}');
+      },
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 10),
         child: Row(
@@ -320,10 +329,12 @@ class _SearchResultTile extends StatelessWidget {
                     maxLines: 3,
                     textDirection: TextDirection.ltr,
                   )..layout(maxWidth: constraints.maxWidth);
-                  final titleLines =
-                      titlePainter.computeLineMetrics().length;
-                  final descMaxLines =
-                      titleLines <= 1 ? 2 : titleLines <= 2 ? 1 : 0;
+                  final titleLines = titlePainter.computeLineMetrics().length;
+                  final descMaxLines = titleLines <= 1
+                      ? 2
+                      : titleLines <= 2
+                          ? 1
+                          : 0;
                   final hasOverview = descMaxLines > 0 &&
                       item.overview != null &&
                       item.overview!.isNotEmpty;

@@ -8,6 +8,7 @@ class CantinarrSearchBar extends StatelessWidget {
   final FocusNode focusNode;
   final String hintText;
   final ValueChanged<String>? onChanged;
+  final VoidCallback? onSubmitted;
   final VoidCallback? onClear;
 
   /// When true, shows a sparkle icon hinting at AI capability.
@@ -32,6 +33,7 @@ class CantinarrSearchBar extends StatelessWidget {
     required this.focusNode,
     this.hintText = 'Search movies & TV shows...',
     this.onChanged,
+    this.onSubmitted,
     this.onClear,
     this.aiEnabled = false,
     this.multiline = false,
@@ -67,7 +69,8 @@ class CantinarrSearchBar extends StatelessWidget {
         focusNode: focusNode,
         keyboardType: TextInputType.text,
         onChanged: onChanged,
-        onSubmitted: multiline ? null : null,
+        onSubmitted: multiline ? null : (_) => onSubmitted?.call(),
+        onTapOutside: (_) => focusNode.unfocus(),
         textInputAction:
             multiline ? TextInputAction.newline : TextInputAction.search,
         maxLines: maxLines ?? (multiline ? 3 : 1),
@@ -106,7 +109,8 @@ class CantinarrSearchBar extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            icon: const Icon(Icons.close, size: 20, color: AppTheme.textSecondary),
+            icon: const Icon(Icons.close,
+                size: 20, color: AppTheme.textSecondary),
             onPressed: () {
               controller.clear();
               onClear?.call();

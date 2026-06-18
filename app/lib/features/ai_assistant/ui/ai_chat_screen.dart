@@ -71,7 +71,13 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     final text = _inputController.text.trim();
     if (text.isEmpty || _notifier == null) return;
     _inputController.clear();
+    _dismissKeyboard();
     _notifier!.sendMessage(text);
+  }
+
+  void _dismissKeyboard() {
+    _focusNode.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   void _exitAssistant() {
@@ -148,31 +154,37 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         children: [
           // Messages
           Expanded(
-            child: Builder(builder: (context) {
-              // Only show the typing indicator before the assistant bubble
-              // materializes (text, tool activity, or media arriving).
-              final showTyping = state.isLoading &&
-                  (state.messages.isEmpty ||
-                      state.messages.last.role != ChatRole.assistant);
-              return ListView.builder(
-                controller: _scrollController,
-                padding: const EdgeInsets.all(16),
-                itemCount: state.messages.length + (showTyping ? 1 : 0),
-                itemBuilder: (context, index) {
-                  if (index >= state.messages.length) {
-                    return const _TypingIndicator();
-                  }
-                  final msg = state.messages[index];
-                  final isLast = index == state.messages.length - 1;
-                  return ChatBubble(
-                    message: msg,
-                    onRetry: isLast && msg.errorText != null
-                        ? _notifier!.retryLast
-                        : null,
-                  );
-                },
-              );
-            }),
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _dismissKeyboard,
+              child: Builder(builder: (context) {
+                // Only show the typing indicator before the assistant bubble
+                // materializes (text, tool activity, or media arriving).
+                final showTyping = state.isLoading &&
+                    (state.messages.isEmpty ||
+                        state.messages.last.role != ChatRole.assistant);
+                return ListView.builder(
+                  controller: _scrollController,
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: const EdgeInsets.all(16),
+                  itemCount: state.messages.length + (showTyping ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index >= state.messages.length) {
+                      return const _TypingIndicator();
+                    }
+                    final msg = state.messages[index];
+                    final isLast = index == state.messages.length - 1;
+                    return ChatBubble(
+                      message: msg,
+                      onRetry: isLast && msg.errorText != null
+                          ? _notifier!.retryLast
+                          : null,
+                    );
+                  },
+                );
+              }),
+            ),
           ),
 
           // Error
@@ -211,6 +223,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                           keyboardType: TextInputType.multiline,
                           textInputAction: TextInputAction.send,
                           onSubmitted: (_) => _send(),
+                          onTapOutside: (_) => _dismissKeyboard(),
                           decoration: const InputDecoration(
                             hintText: 'Ask me anything...',
                             border: InputBorder.none,
