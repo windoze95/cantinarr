@@ -219,6 +219,7 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
 
   /// Exit AI mode and return to normal search.
   void exitAiMode() {
+    _searchDebounce?.cancel();
     _searchGeneration++;
     state = state.copyWith(
       searchMode: SearchMode.search,
