@@ -107,7 +107,7 @@ func (s *Service) SendMessage(ctx context.Context, history []anthropic.MessagePa
 			{Text: dynamicContext(chatCtx)},
 		},
 		Messages: history,
-		Tools:    toSDKTools(s.toolServer.GetTools()),
+		Tools:    toSDKTools(s.toolServer.GetToolsForRole(chatCtx.Role)),
 	}
 	if supportsAnthropicAdaptiveThinking(s.model) {
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}

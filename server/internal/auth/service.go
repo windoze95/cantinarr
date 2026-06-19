@@ -22,13 +22,13 @@ func hashToken(token string) string {
 }
 
 var (
-	ErrInvalidCredentials  = errors.New("invalid credentials")
-	ErrUserExists          = errors.New("username already taken")
-	ErrTokenExpired        = errors.New("connect token has expired")
-	ErrTokenRedeemed       = errors.New("connect token has already been used")
-	ErrTokenNotFound       = errors.New("connect token not found")
-	ErrDeviceRevoked       = errors.New("device has been revoked")
-	ErrDeviceNotFound      = errors.New("device not found")
+	ErrInvalidCredentials   = errors.New("invalid credentials")
+	ErrUserExists           = errors.New("username already taken")
+	ErrTokenExpired         = errors.New("connect token has expired")
+	ErrTokenRedeemed        = errors.New("connect token has already been used")
+	ErrTokenNotFound        = errors.New("connect token not found")
+	ErrDeviceRevoked        = errors.New("device has been revoked")
+	ErrDeviceNotFound       = errors.New("device not found")
 	ErrSetupAlreadyComplete = errors.New("setup has already been completed")
 )
 
@@ -37,6 +37,7 @@ type Claims struct {
 	Username string `json:"username"`
 	Role     string `json:"role"`
 	DeviceID string `json:"device_id,omitempty"`
+	Scope    string `json:"scope,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -256,7 +257,12 @@ func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {
 }
 
 func (s *Service) GetUser(userID int64) (*User, error) {
-	return s.getUserByID(userID)
+	user, err := s.getUserByID(userID)
+	if err != nil {
+		return nil, err
+	}
+	withPerms := userWithPermissions(user)
+	return &withPerms, nil
 }
 
 func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*CreateConnectTokenResponse, error) {
@@ -383,6 +389,7 @@ func (s *Service) RevokeDevice(deviceID string) error {
 	}
 	// Invalidate all refresh tokens for this device
 	_, _ = s.db.Exec("DELETE FROM refresh_tokens WHERE device_id = ?", deviceID)
+	_, _ = s.db.Exec("DELETE FROM oauth_refresh_tokens WHERE device_id = ?", deviceID)
 	return nil
 }
 
@@ -399,6 +406,7 @@ func (s *Service) ListUsers() ([]User, error) {
 		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
+		u.Permissions = PermissionsForRole(u.Role)
 		users = append(users, u)
 	}
 	if users == nil {
@@ -422,6 +430,86 @@ func (s *Service) ValidateToken(tokenStr string) (*Claims, error) {
 		return nil, errors.New("invalid token")
 	}
 	return claims, nil
+}
+
+// AuthenticateToken validates a bearer token and rehydrates its identity from
+// the database so current role and device state are enforced for each request.
+func (s *Service) AuthenticateToken(tokenStr string) (*Claims, *User, error) {
+	claims, err := s.ValidateToken(tokenStr)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(claims.Audience) > 0 {
+		return nil, nil, ErrInvalidCredentials
+	}
+
+	return s.authenticateClaims(claims)
+}
+
+// AuthenticateTokenForAudience validates an OAuth access token bound to a
+// specific resource audience, then rehydrates its current user and device.
+func (s *Service) AuthenticateTokenForAudience(tokenStr, audience string) (*Claims, *User, error) {
+	claims, err := s.ValidateToken(tokenStr)
+	if err != nil {
+		return nil, nil, err
+	}
+	if audience == "" || !hasAudience(claims, audience) {
+		return nil, nil, ErrInvalidCredentials
+	}
+
+	return s.authenticateClaims(claims)
+}
+
+func (s *Service) authenticateClaims(claims *Claims) (*Claims, *User, error) {
+	user, err := s.getUserByID(claims.UserID)
+	if err != nil {
+		return nil, nil, ErrInvalidCredentials
+	}
+
+	if claims.DeviceID != "" {
+		if err := s.validateActiveDevice(claims); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	withPerms := userWithPermissions(user)
+	claims.Username = withPerms.Username
+	claims.Role = withPerms.Role
+	return claims, &withPerms, nil
+}
+
+func hasAudience(claims *Claims, audience string) bool {
+	for _, aud := range claims.Audience {
+		if aud == audience {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) validateActiveDevice(claims *Claims) error {
+	var (
+		userID    int64
+		revokedAt sql.NullTime
+	)
+	err := s.db.QueryRow(
+		"SELECT user_id, revoked_at FROM devices WHERE id = ?",
+		claims.DeviceID,
+	).Scan(&userID, &revokedAt)
+	if err != nil {
+		return ErrInvalidCredentials
+	}
+	if userID != claims.UserID {
+		return ErrInvalidCredentials
+	}
+	if revokedAt.Valid {
+		return ErrDeviceRevoked
+	}
+	_, _ = s.db.Exec(
+		"UPDATE devices SET last_seen_at = ? WHERE id = ?",
+		time.Now(), claims.DeviceID,
+	)
+	return nil
 }
 
 func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, error) {
@@ -471,8 +559,14 @@ func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, e
 	return &TokenResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
-		User:         *user,
+		User:         userWithPermissions(user),
 	}, nil
+}
+
+func userWithPermissions(user *User) User {
+	out := *user
+	out.Permissions = PermissionsForRole(user.Role)
+	return out
 }
 
 func (s *Service) getUserByUsername(username string) (*User, error) {

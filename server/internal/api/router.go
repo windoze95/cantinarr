@@ -49,6 +49,20 @@ func NewRouter(
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
+	oauthHandler := auth.NewOAuthHandler(authService)
+	r.Get("/.well-known/oauth-protected-resource", oauthHandler.ProtectedResourceMetadata)
+	r.Get("/.well-known/oauth-protected-resource/mcp", oauthHandler.ProtectedResourceMetadata)
+	r.Get("/.well-known/oauth-authorization-server", oauthHandler.AuthorizationServerMetadata)
+	r.Get("/.well-known/openid-configuration", oauthHandler.AuthorizationServerMetadata)
+	r.Post("/oauth/register", oauthHandler.RegisterClient)
+	r.Get("/oauth/authorize", oauthHandler.Authorize)
+	r.Post("/oauth/authorize", oauthHandler.Authorize)
+	r.Post("/oauth/passkey/login/begin", oauthHandler.BeginOAuthPasskeyLogin)
+	r.Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
+	r.Post("/oauth/token", oauthHandler.Token)
+	r.Get("/passkeys/setup", oauthHandler.PasskeySetup)
+	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
+
 	r.Route("/api", func(r chi.Router) {
 		// CORS: same-origin only (frontend is served from the same origin).
 		r.Use(cors.Handler(cors.Options{
@@ -84,6 +98,8 @@ func NewRouter(
 			// Passkey login (public, rate-limited)
 			r.With(authLimiter.Middleware).Post("/passkey/login/begin", authHandler.BeginPasskeyLogin)
 			r.With(authLimiter.Middleware).Post("/passkey/login/finish", authHandler.FinishPasskeyLogin)
+			r.With(authLimiter.Middleware).Post("/passkey/setup/begin", authHandler.BeginPasskeySetup)
+			r.With(authLimiter.Middleware).Post("/passkey/setup/finish", authHandler.FinishPasskeySetup)
 
 			// Protected auth routes
 			r.Group(func(r chi.Router) {
@@ -93,6 +109,7 @@ func NewRouter(
 				// Passkey registration (authenticated)
 				r.Post("/passkey/register/begin", authHandler.BeginPasskeyRegistration)
 				r.Post("/passkey/register/finish", authHandler.FinishPasskeyRegistration)
+				r.Post("/passkey/setup-link", authHandler.CreatePasskeySetupLink)
 				r.Get("/passkeys", authHandler.ListPasskeys)
 				r.Delete("/passkeys/{credentialID}", authHandler.DeletePasskey)
 			})
@@ -101,21 +118,20 @@ func NewRouter(
 		// Admin routes
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Use(auth.AdminMiddleware)
-			r.Post("/connect-token", authHandler.HandleCreateConnectToken)
-			r.Get("/devices", authHandler.HandleListDevices)
-			r.Delete("/devices/{deviceID}", authHandler.HandleRevokeDevice)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/connect-token", authHandler.HandleCreateConnectToken)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/devices", authHandler.HandleListDevices)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/devices/{deviceID}", authHandler.HandleRevokeDevice)
 
 			// Credential management
-			r.Get("/credentials", credHandler.Get)
-			r.Put("/credentials", credHandler.Update)
-			r.Delete("/credentials/{key}", credHandler.Delete)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/credentials", credHandler.Get)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/credentials", credHandler.Update)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/credentials/{key}", credHandler.Delete)
 
 			// AI tool toggles
 			aiToolsHandler := mcp.NewToolSettingsHandler(toolServer)
-			r.Get("/ai-tools", aiToolsHandler.List)
-			r.Put("/ai-tools/debug", aiToolsHandler.UpdateDebug)
-			r.Put("/ai-tools/{name}", aiToolsHandler.Update)
+			r.With(auth.RequirePermission(auth.PermissionAIToolsManage)).Get("/ai-tools", aiToolsHandler.List)
+			r.With(auth.RequirePermission(auth.PermissionAIToolsManage)).Put("/ai-tools/debug", aiToolsHandler.UpdateDebug)
+			r.With(auth.RequirePermission(auth.PermissionAIToolsManage)).Put("/ai-tools/{name}", aiToolsHandler.Update)
 		})
 
 		// Config route (authenticated)
@@ -127,6 +143,7 @@ func NewRouter(
 		// Request routes (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
+			r.Use(auth.RequirePermission(auth.PermissionMediaRequest))
 			r.Post("/requests", requestHandler.Create)
 			r.Get("/requests", requestHandler.List)
 			r.Get("/requests/{tmdb_id}/status", requestHandler.GetStatus)
@@ -135,6 +152,7 @@ func NewRouter(
 		// Discover / media routes (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
+			r.Use(auth.RequirePermission(auth.PermissionMediaDiscover))
 
 			// Discover
 			r.Get("/discover/trending", discoverHandler.Trending)
@@ -177,6 +195,7 @@ func NewRouter(
 		// AI routes (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
+			r.Use(auth.RequirePermission(auth.PermissionAIChat))
 			r.Post("/ai/chat", aiHandler.Chat)
 			r.Get("/ai/available", aiHandler.Available)
 		})
@@ -184,7 +203,7 @@ func NewRouter(
 		// Instance CRUD routes (admin only)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Use(auth.AdminMiddleware)
+			r.Use(auth.RequirePermission(auth.PermissionInstancesManage))
 
 			r.Get("/instances", instanceHandler.List)
 			r.Post("/instances", instanceHandler.Create)
@@ -198,21 +217,20 @@ func NewRouter(
 		// Download client routes (admin only)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Use(auth.AdminMiddleware)
 
-			r.Get("/downloads/{instanceID}/queue", downloadsHandler.GetQueue)
-			r.Post("/downloads/{instanceID}/queue/{itemID}/pause", downloadsHandler.PauseItem)
-			r.Post("/downloads/{instanceID}/queue/{itemID}/resume", downloadsHandler.ResumeItem)
-			r.Delete("/downloads/{instanceID}/queue/{itemID}", downloadsHandler.DeleteItem)
-			r.Post("/downloads/{instanceID}/pause", downloadsHandler.PauseAll)
-			r.Post("/downloads/{instanceID}/resume", downloadsHandler.ResumeAll)
-			r.Get("/downloads/{instanceID}/history", downloadsHandler.GetHistory)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsRead)).Get("/downloads/{instanceID}/queue", downloadsHandler.GetQueue)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/queue/{itemID}/pause", downloadsHandler.PauseItem)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/queue/{itemID}/resume", downloadsHandler.ResumeItem)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Delete("/downloads/{instanceID}/queue/{itemID}", downloadsHandler.DeleteItem)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/pause", downloadsHandler.PauseAll)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsManage)).Post("/downloads/{instanceID}/resume", downloadsHandler.ResumeAll)
+			r.With(auth.RequirePermission(auth.PermissionDownloadsRead)).Get("/downloads/{instanceID}/history", downloadsHandler.GetHistory)
 		})
 
 		// Tautulli (Plex monitoring) routes (admin only)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Use(auth.AdminMiddleware)
+			r.Use(auth.RequirePermission(auth.PermissionMonitoringRead))
 
 			r.Get("/tautulli/{instanceID}/activity", tautulliHandler.GetActivity)
 			r.Get("/tautulli/{instanceID}/history", tautulliHandler.GetHistory)
@@ -231,7 +249,8 @@ func NewRouter(
 			ExposedHeaders:   []string{"Mcp-Session-Id"},
 			AllowCredentials: false,
 		}))
-		r.Use(authService.AuthMiddleware)
+		r.Use(oauthHandler.MCPAuthMiddleware)
+		r.Use(auth.RequirePermission(auth.PermissionMCPAccess))
 		r.Handle("/", mcpHandler)
 		r.Handle("/*", mcpHandler)
 	})

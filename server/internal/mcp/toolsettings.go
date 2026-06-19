@@ -19,6 +19,7 @@ type ToolStatus struct {
 	Description string `json:"description"`
 	Enabled     bool   `json:"enabled"`
 	AdminOnly   bool   `json:"admin_only"`
+	Permission  string `json:"permission"`
 }
 
 // AIDebugStatus describes whether verbose AI/tool logging is temporarily on.
@@ -76,7 +77,8 @@ func (s *ToolServer) ListToolStatuses() []ToolStatus {
 			Name:        t.Name,
 			Description: t.Description,
 			Enabled:     s.IsToolEnabled(t.Name),
-			AdminOnly:   t.AdminOnly,
+			AdminOnly:   t.IsAdminOnly(),
+			Permission:  string(t.RequiredPermission()),
 		})
 	}
 	return statuses

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../features/ai_assistant/ui/ai_chat_screen.dart';
 import '../features/auth/logic/auth_provider.dart';
 import '../features/auth/ui/auth_screen.dart';
+import '../features/auth/ui/passkey_create_screen.dart';
 import '../features/auth/ui/passkey_management_screen.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
@@ -327,6 +328,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/passkeys',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const PasskeyManagementScreen(),
+      ),
+      GoRoute(
+        path: '/settings/passkeys/new',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const PasskeyCreateScreen(),
       ),
       GoRoute(
         path: '/settings/instance/new',

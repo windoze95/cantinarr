@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -24,6 +25,8 @@ type Tool struct {
 	InputSchema map[string]interface{} `json:"input_schema"`
 	// AdminOnly marks tools that only admin-role users may execute.
 	AdminOnly bool `json:"-"`
+	// Permission is the RBAC capability required to list and execute this tool.
+	Permission auth.Permission `json:"-"`
 }
 
 // CallContext carries per-call user identity into tool execution.
@@ -80,12 +83,17 @@ func (s *ToolServer) AllTools() []Tool {
 	return toolDefinitions
 }
 
-// GetTools returns the list of tools available to the AI, excluding tools
-// disabled by the administrator.
+// GetTools returns all enabled tools. Prefer GetToolsForRole when serving a
+// user request so RBAC filtering happens before tools are offered to the model.
 func (s *ToolServer) GetTools() []Tool {
+	return s.GetToolsForRole(auth.RoleAdmin)
+}
+
+// GetToolsForRole returns the enabled tools a role is allowed to execute.
+func (s *ToolServer) GetToolsForRole(role string) []Tool {
 	tools := make([]Tool, 0, len(toolDefinitions))
 	for _, t := range toolDefinitions {
-		if s.IsToolEnabled(t.Name) {
+		if s.IsToolEnabled(t.Name) && t.AllowedForRole(role) {
 			tools = append(tools, t)
 		}
 	}
@@ -99,6 +107,24 @@ func findToolDefinition(name string) *Tool {
 		}
 	}
 	return nil
+}
+
+func (t Tool) RequiredPermission() auth.Permission {
+	if t.Permission != "" {
+		return t.Permission
+	}
+	if t.AdminOnly {
+		return auth.PermissionAdmin
+	}
+	return ""
+}
+
+func (t Tool) AllowedForRole(role string) bool {
+	return auth.HasPermission(role, t.RequiredPermission())
+}
+
+func (t Tool) IsAdminOnly() bool {
+	return t.AdminOnly || !auth.HasPermission(auth.RoleUser, t.RequiredPermission())
 }
 
 // ExecuteTool runs the named tool with the given JSON input.
@@ -124,8 +150,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	if !s.IsToolEnabled(name) {
 		return &ToolResult{Text: "This tool is disabled by the administrator."}, nil
 	}
-	if def.AdminOnly && callCtx.Role != "admin" {
-		return &ToolResult{Text: "This action requires an admin account."}, nil
+	if !def.AllowedForRole(callCtx.Role) {
+		return &ToolResult{Text: "This action is not permitted for your role."}, nil
 	}
 
 	switch name {

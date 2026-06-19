@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/logic/auth_provider.dart';
 import 'navigation/app_router.dart';
@@ -39,9 +40,56 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp> {
   }
 
   void _handleLink(Uri uri) {
-    if (uri.scheme == 'cantinarr' && uri.host == 'connect') {
+    if (uri.scheme != 'cantinarr') return;
+    if (uri.host == 'connect') {
       ref.read(authProvider.notifier).connectWithLink(uri.toString());
+      return;
     }
+    if (uri.host == 'passkeys') {
+      _openPasskeyCreate(uri);
+    }
+  }
+
+  Future<void> _openPasskeyCreate(Uri uri) async {
+    final auth = await ref.read(authProvider.future);
+    if (!mounted) return;
+    final targetServer = uri.queryParameters['server'];
+    final currentServer = auth.connection?.serverUrl;
+    final matchesServer = targetServer == null ||
+        currentServer == null ||
+        _sameServer(targetServer, currentServer);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (auth.isAuthenticated && matchesServer) {
+        context.go('/settings/passkeys/new');
+      } else {
+        context.go('/login');
+      }
+    });
+  }
+
+  bool _sameServer(String left, String right) =>
+      _normalizeServer(left) == _normalizeServer(right);
+
+  String _normalizeServer(String value) {
+    var normalized = value.trim();
+    if (!normalized.startsWith('http://') &&
+        !normalized.startsWith('https://')) {
+      normalized = 'https://$normalized';
+    }
+    while (normalized.endsWith('/')) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+    final parsed = Uri.tryParse(normalized);
+    if (parsed == null || parsed.host.isEmpty) {
+      return normalized.toLowerCase();
+    }
+    return parsed
+        .replace(
+          scheme: parsed.scheme.toLowerCase(),
+          host: parsed.host.toLowerCase(),
+        )
+        .toString();
   }
 
   @override
