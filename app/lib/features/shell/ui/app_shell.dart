@@ -196,14 +196,17 @@ class _AppShellState extends ConsumerState<AppShell>
     _aiChatNotifier!.sendMessage(text);
   }
 
-  /// Submit top-bar input as an inline AI chat message.
+  /// Submit top-bar input through the full-screen assistant route.
   void _submitSearchBarToAi() {
     final text = _searchController.text.trim();
     if (text.isEmpty) return;
-    ref.read(shellSearchProvider.notifier).beginAiChat();
-    _searchController.clear();
-    _dismissKeyboard();
-    _getOrCreateAiChat().sendMessage(text);
+
+    _exitAiMode();
+    context.push('/assistant');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(aiChatProvider).sendMessage(text);
+    });
   }
 
   void _submitSearchBar() {
