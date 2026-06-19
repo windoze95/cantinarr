@@ -41,7 +41,7 @@ func (s *openAIService) SendMessage(ctx context.Context, history []Message, chat
 		Content: systemPrompt + "\n\n" + dynamicContext(chatCtx),
 	}}
 	messages = append(messages, toOpenAIMessages(history)...)
-	tools := toOpenAITools(s.toolServer.GetTools())
+	tools := toOpenAITools(s.toolServer.GetToolsForRole(chatCtx.Role))
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		req := openAIChatRequest{
@@ -244,7 +244,7 @@ func NewGeminiService(apiKey, model string, toolServer *mcp.ToolServer) *geminiS
 
 func (s *geminiService) SendMessage(ctx context.Context, history []Message, chatCtx ChatContext, cb StreamCallbacks) error {
 	contents := toGeminiContents(history)
-	tools := toGeminiTools(s.toolServer.GetTools())
+	tools := toGeminiTools(s.toolServer.GetToolsForRole(chatCtx.Role))
 	system := geminiContent{Parts: []geminiPart{{Text: systemPrompt + "\n\n" + dynamicContext(chatCtx)}}}
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {

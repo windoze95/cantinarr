@@ -174,7 +174,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 	token := protocols[1]
 
-	claims, err := h.authService.ValidateToken(token)
+	claims, _, err := h.authService.AuthenticateToken(token)
 	if err != nil {
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
@@ -192,7 +192,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		hub:     h,
 		conn:    conn,
 		userID:  claims.UserID,
-		isAdmin: claims.Role == "admin",
+		isAdmin: auth.HasPermission(claims.Role, auth.PermissionAdmin),
 		send:    make(chan []byte, 256),
 	}
 	h.register <- client

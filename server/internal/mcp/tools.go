@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
@@ -13,6 +14,7 @@ import (
 var toolDefinitions = []Tool{
 	{
 		Name:        "search_movies",
+		Permission:  auth.PermissionMediaDiscover,
 		Description: "Search TMDB for movies by title or keyword",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -27,6 +29,7 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "search_tv_shows",
+		Permission:  auth.PermissionMediaDiscover,
 		Description: "Search TMDB for TV shows by title or keyword",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -41,7 +44,8 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "get_trending",
-		Description: "Get trending movies and/or TV shows. Use media_type \"all\" for general trending, or when the user asks for both movies and shows/TV.",
+		Permission:  auth.PermissionMediaDiscover,
+		Description: "Get trending movies and/or TV shows. Use media_type \"all\" for general trending, unspecified category requests, or when the user asks for both movies and shows/TV; it returns a balanced mixed list.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -61,6 +65,7 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "get_movie_details",
+		Permission:  auth.PermissionMediaDiscover,
 		Description: "Get detailed information about a specific movie",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -75,6 +80,7 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "get_tv_details",
+		Permission:  auth.PermissionMediaDiscover,
 		Description: "Get detailed information about a specific TV show",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -89,6 +95,7 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "get_recommendations",
+		Permission:  auth.PermissionMediaDiscover,
 		Description: "Get recommendations based on a movie or TV show",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -108,6 +115,7 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "check_request_status",
+		Permission:  auth.PermissionMediaRequest,
 		Description: "Check if a movie or TV show is available, requested, or downloading on the media server",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -127,6 +135,7 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "request_media",
+		Permission:  auth.PermissionMediaRequest,
 		Description: "Request a movie or TV show to be added to the media server",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -146,6 +155,7 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "list_my_requests",
+		Permission:  auth.PermissionMediaRequest,
 		Description: "List the current user's media request history",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
@@ -154,7 +164,8 @@ var toolDefinitions = []Tool{
 	},
 	{
 		Name:        "display_media",
-		Description: "Display specific movies or TV shows in the UI carousel. Call this after searching to show only the items you want to recommend. Pass the exact title and year from the search/tool result so the server can verify the TMDB ID before displaying it.",
+		Permission:  auth.PermissionMediaDiscover,
+		Description: "Display specific movies or TV shows in the UI carousel. Call this after searching or trending whenever you recommend/showcase concrete titles; search results alone do not populate the carousel. Pass the exact title and year from the search/tool result so the server can verify the TMDB ID before displaying it.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

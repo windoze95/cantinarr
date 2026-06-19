@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -16,7 +17,8 @@ import (
 var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_queue",
-		Description: "Get the current download queue from Radarr/Sonarr with progress, time left, protocol, and any errors per item",
+		Permission:  auth.PermissionArrRead,
+		Description: "Get the current download queue from Radarr/Sonarr with progress, time left, protocol, and any errors per item. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -30,7 +32,8 @@ var arrToolDefinitions = []Tool{
 	},
 	{
 		Name:        "get_calendar",
-		Description: "Get upcoming movie releases and TV episode air dates, grouped by date",
+		Permission:  auth.PermissionArrRead,
+		Description: "Get upcoming movie releases and TV episode air dates, grouped by date. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -50,7 +53,8 @@ var arrToolDefinitions = []Tool{
 	},
 	{
 		Name:        "get_library",
-		Description: "Browse the Radarr/Sonarr library. Filter for missing (monitored but not downloaded) or unmonitored items, optionally narrowed by a title query",
+		Permission:  auth.PermissionArrRead,
+		Description: "Browse the Radarr/Sonarr library. Filter for missing (monitored but not downloaded) or unmonitored items, optionally narrowed by a title query. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -74,7 +78,8 @@ var arrToolDefinitions = []Tool{
 	},
 	{
 		Name:        "get_history",
-		Description: "Get recent download activity (grabs, imports, failures) from Radarr/Sonarr",
+		Permission:  auth.PermissionArrRead,
+		Description: "Get recent download activity (grabs, imports, failures) from Radarr/Sonarr. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -93,7 +98,8 @@ var arrToolDefinitions = []Tool{
 	},
 	{
 		Name:        "trigger_search",
-		Description: "Trigger an automatic indexer search for a movie or series that is already in the library. For TV, pass season_number to search a single season",
+		Permission:  auth.PermissionArrSearch,
+		Description: "Trigger an automatic indexer search for a movie or series that is already in the library. For TV, pass season_number to search a single season. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -117,6 +123,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "search_releases",
 		AdminOnly:   true,
+		Permission:  auth.PermissionArrSearch,
 		Description: "Interactively search indexers for downloadable releases of a library item and list them with the guid and indexer_id needed to grab one. For TV, season_number is required. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -141,6 +148,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "grab_release",
 		AdminOnly:   true,
+		Permission:  auth.PermissionDownloadsManage,
 		Description: "Send a specific release from a previous search_releases call to the download client. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -165,6 +173,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "remove_queue_item",
 		AdminOnly:   true,
+		Permission:  auth.PermissionDownloadsManage,
 		Description: "Remove an item from the download queue (also removes the download from the client). Optionally blocklist the release so it is not grabbed again. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -189,6 +198,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_disk_space",
 		AdminOnly:   true,
+		Permission:  auth.PermissionSystemRead,
 		Description: "Get free and total disk space for the Radarr and Sonarr volumes. Admin only",
 		InputSchema: map[string]interface{}{
 			"type":       "object",

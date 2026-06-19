@@ -3,11 +3,12 @@ package auth
 import "time"
 
 type User struct {
-	ID           int64     `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"`
-	Role         string    `json:"role"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           int64        `json:"id"`
+	Username     string       `json:"username"`
+	PasswordHash string       `json:"-"`
+	Role         string       `json:"role"`
+	Permissions  []Permission `json:"permissions,omitempty"`
+	CreatedAt    time.Time    `json:"created_at"`
 }
 
 type Device struct {

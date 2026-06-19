@@ -17,11 +17,13 @@ func NewMCPHandler(toolServer *mcp.ToolServer) http.Handler {
 		"1.0.0",
 		server.WithToolCapabilities(false),
 		server.WithResourceCapabilities(true, true),
+		server.WithPromptCapabilities(true),
 		server.WithToolFilter(ToolListFilter(toolServer)),
 	)
 
 	RegisterTools(mcpServer, toolServer)
 	registerMediaResultsResource(mcpServer)
+	registerAgentGuidance(mcpServer, toolServer)
 
 	httpServer := server.NewStreamableHTTPServer(mcpServer,
 		server.WithEndpointPath("/mcp"),

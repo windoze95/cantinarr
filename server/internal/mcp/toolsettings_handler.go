@@ -54,7 +54,8 @@ func (h *ToolSettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Name:        def.Name,
 		Description: def.Description,
 		Enabled:     h.server.IsToolEnabled(name),
-		AdminOnly:   def.AdminOnly,
+		AdminOnly:   def.IsAdminOnly(),
+		Permission:  string(def.RequiredPermission()),
 	})
 }
 

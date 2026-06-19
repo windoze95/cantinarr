@@ -43,8 +43,7 @@ class AuthState {
         user: clearUser ? null : (user ?? this.user),
         isLoading: isLoading ?? this.isLoading,
         error: clearError ? null : (error ?? this.error),
-        pendingPasskeyOffer:
-            pendingPasskeyOffer ?? this.pendingPasskeyOffer,
+        pendingPasskeyOffer: pendingPasskeyOffer ?? this.pendingPasskeyOffer,
       );
 }
 
@@ -110,8 +109,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   /// Create admin account during first-run setup.
-  Future<void> setup(
-      String serverUrl, String username, String password) async {
+  Future<void> setup(String serverUrl, String username, String password) async {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
@@ -156,8 +154,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   /// Log in with server URL, username, and password (admin bootstrap).
-  Future<void> login(
-      String serverUrl, String username, String password) async {
+  Future<void> login(String serverUrl, String username, String password) async {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
@@ -183,8 +180,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
       );
 
-      final offerPasskey = authResp.user.isAdmin &&
-          await _shouldOfferPasskey(normalizedUrl);
+      final offerPasskey =
+          authResp.user.isAdmin && await _shouldOfferPasskey(normalizedUrl);
 
       state = AsyncData(AuthState(
         connection: connection,
@@ -224,8 +221,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
       );
 
-      state = AsyncData(
-          AuthState(connection: connection, user: authResp.user));
+      state = AsyncData(AuthState(connection: connection, user: authResp.user));
     } catch (e) {
       state = AsyncData(AuthState(error: _parseConnectError(e)));
     }
@@ -313,6 +309,16 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     );
   }
 
+  Future<String> createPasskeySetupLink() async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    final resp = await _authService.createPasskeySetupLink(
+      conn.serverUrl,
+      conn.accessToken,
+    );
+    return resp.link;
+  }
+
   /// Log in with a passkey (discoverable credential).
   Future<void> loginWithPasskey(String serverUrl) async {
     state = const AsyncData(AuthState(isLoading: true));
@@ -321,8 +327,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       final normalizedUrl = _normalizeUrl(serverUrl);
 
       // Step 1: Begin login on server
-      final beginResp =
-          await _authService.beginPasskeyLogin(normalizedUrl);
+      final beginResp = await _authService.beginPasskeyLogin(normalizedUrl);
 
       // Step 2: Call platform WebAuthn API
       final assertionResponse = await PasskeyService.get(beginResp.options);
@@ -334,8 +339,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         assertionResponse,
       );
 
-      final config = await _authService.fetchConfig(
-          normalizedUrl, authResp.accessToken);
+      final config =
+          await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
 
       await _saveTokens(
         normalizedUrl,
@@ -353,8 +358,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
       );
 
-      state = AsyncData(
-          AuthState(connection: connection, user: authResp.user));
+      state = AsyncData(AuthState(connection: connection, user: authResp.user));
     } catch (e) {
       state = AsyncData(AuthState(error: _parsePasskeyLoginError(e)));
     }
@@ -376,8 +380,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   /// Update tokens after a refresh (called by the auth interceptor).
-  Future<void> updateTokens(
-      String accessToken, String refreshToken) async {
+  Future<void> updateTokens(String accessToken, String refreshToken) async {
     final current = state.valueOrNull;
     if (current?.connection == null) return;
 

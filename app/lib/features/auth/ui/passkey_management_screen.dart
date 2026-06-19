@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/auth_service.dart';
 import '../logic/auth_provider.dart';
@@ -49,53 +50,9 @@ class _PasskeyManagementScreenState
   }
 
   Future<void> _addPasskey() async {
-    final nameController = TextEditingController(text: 'Passkey');
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Passkey'),
-        content: TextField(
-          controller: nameController,
-          decoration: const InputDecoration(
-            labelText: 'Name',
-            hintText: 'e.g. MacBook, iPhone',
-            prefixIcon: Icon(Icons.label_outline),
-          ),
-          textCapitalization: TextCapitalization.words,
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              if (name.isNotEmpty) Navigator.of(context).pop(name);
-            },
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
-
-    if (name == null || !mounted) return;
-
-    try {
-      await ref.read(authProvider.notifier).registerPasskey(name);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Passkey registered')),
-        );
-        _loadPasskeys();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to register passkey: $e')),
-        );
-      }
+    final created = await context.push<bool>('/settings/passkeys/new');
+    if (created == true && mounted) {
+      _loadPasskeys();
     }
   }
 
@@ -104,7 +61,8 @@ class _PasskeyManagementScreenState
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Remove Passkey'),
-        content: Text('Remove "${passkey.name}"? You won\'t be able to use it to sign in anymore.'),
+        content: Text(
+            'Remove "${passkey.name}"? You won\'t be able to use it to sign in anymore.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -153,8 +111,7 @@ class _PasskeyManagementScreenState
                           style: const TextStyle(color: AppTheme.error)),
                       const SizedBox(height: 16),
                       ElevatedButton(
-                          onPressed: _loadPasskeys,
-                          child: const Text('Retry')),
+                          onPressed: _loadPasskeys, child: const Text('Retry')),
                     ],
                   ),
                 )
@@ -205,21 +162,20 @@ class _PasskeyManagementScreenState
             return false; // We handle the removal ourselves
           },
           child: ListTile(
-            leading: const Icon(Icons.fingerprint,
-                color: AppTheme.accent, size: 28),
+            leading:
+                const Icon(Icons.fingerprint, color: AppTheme.accent, size: 28),
             title: Text(passkey.name,
                 style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w500)),
+                    color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
             subtitle: Text(
               'Added ${_formatDate(passkey.createdAt)}'
               '${passkey.lastUsedAt != null ? ' \u00b7 Last used ${_formatDate(passkey.lastUsedAt!)}' : ''}',
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 13),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
             trailing: IconButton(
-              icon:
-                  const Icon(Icons.delete_outline, color: AppTheme.textSecondary),
+              icon: const Icon(Icons.delete_outline,
+                  color: AppTheme.textSecondary),
               onPressed: () => _deletePasskey(passkey),
             ),
           ),

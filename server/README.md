@@ -222,35 +222,35 @@ The same 19 tools power both the in-app AI assistant and the external MCP endpoi
 
 ### MCP Server Endpoint
 
-Cantinarr exposes these tools as a proper [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` using Streamable HTTP transport. External MCP clients (Claude Desktop, Claude Code, etc.) can connect directly.
+Cantinarr exposes these tools as a proper [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` using Streamable HTTP transport. External MCP clients (Claude Desktop, Claude Code, Codex, etc.) can connect directly.
 
-**Authentication:** Uses Cantinarr's existing JWT Bearer tokens. Pass an access token via the `Authorization` header.
+**Authentication:** Uses the MCP HTTP authorization flow: OAuth protected-resource metadata, authorization-server metadata, dynamic client registration, PKCE authorization code flow, and rotating refresh tokens. Clients discover auth from `/mcp`, open a browser login against the Cantinarr server, then keep themselves refreshed without manual token copying.
 
-**Claude Desktop example** (`claude_desktop_config.json`):
+The MCP server also publishes prompt templates and a `guide://cantinarr/agent-guide.md` resource so external agents can pick up the same operating habits as the built-in assistant: mixed movie/TV trending behavior, carousel use via `display_media`, request-status checks before requests, and admin download triage rules.
+
+Users can authorize MCP with a Cantinarr password or a passkey. Connect-link-only users can create their first passkey from the MCP login page: Cantinarr opens the app when available, and the app can mint a short-lived browser setup URL when the platform cannot create passkeys natively.
+
+**Client example**:
 ```json
 {
   "mcpServers": {
     "cantinarr": {
-      "url": "http://your-server:8585/mcp",
-      "headers": {
-        "Authorization": "Bearer <access-token>"
-      }
+      "url": "http://your-server:8585/mcp"
     }
   }
 }
 ```
 
-**Limitations:**
-- Access tokens expire after 15 minutes. MCP clients cannot automatically refresh them because the endpoint uses Cantinarr's JWT auth rather than the MCP spec's OAuth 2.1 flow. Long MCP sessions will require manually providing a fresh access token.
-- A future update may implement the MCP OAuth 2.1 authorization spec, which would allow clients to handle login and token refresh automatically via browser-based auth.
+MCP access tokens are short-lived and audience-bound to `/mcp`. MCP refresh tokens are persisted in SQLite, rotate on use, have a one-year sliding lifetime, and are tied to a Cantinarr device record so revoking the device also revokes the MCP client. Tokens survive server restarts and upgrades because registered OAuth clients and refresh token state live in the database.
 
 ### Database
 
-SQLite with WAL mode for concurrent reads. Four tables:
+SQLite with WAL mode for concurrent reads. Core tables:
 
 - `users` -- accounts with bcrypt password hashes
 - `request_log` -- audit trail of all requests
 - `tmdb_tvdb_cache` -- ID bridge cache (30-day TTL)
+- `oauth_clients`, `oauth_authorization_codes`, `oauth_refresh_tokens` -- MCP OAuth client and token state
 
 ## Project Structure
 
@@ -278,7 +278,8 @@ server/
 │   │   └── tools.go               # 9 tool definitions + implementations
 │   ├── mcpserver/
 │   │   ├── server.go              # MCP Streamable HTTP endpoint (mcp-go)
-│   │   ├── context.go             # JWT auth -> MCP context bridge
+│   │   ├── context.go             # Auth context -> MCP context bridge
+│   │   ├── guidance.go            # MCP prompts + agent guide resource
 │   │   └── tools.go               # Registers existing tools with mcp-go
 │   ├── proxy/handler.go           # Reverse proxy for arr admin access
 │   ├── radarr/client.go           # Radarr API v3 client

@@ -154,7 +154,7 @@ func (h *Handler) HandleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 	resp := AuthStatusResponse{
-		NeedsSetup:       !h.service.IsSetupComplete(),
+		NeedsSetup:        !h.service.IsSetupComplete(),
 		WebAuthnAvailable: isSecureContext(r),
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -208,9 +208,10 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"id":       user.ID,
-		"username": user.Username,
-		"role":     user.Role,
+		"id":          user.ID,
+		"username":    user.Username,
+		"role":        user.Role,
+		"permissions": user.Permissions,
 	})
 }
 

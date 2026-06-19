@@ -171,6 +171,19 @@ class AuthService {
     );
   }
 
+  /// Create a short-lived browser link for passkey setup.
+  Future<PasskeySetupLinkResponse> createPasskeySetupLink(
+    String serverUrl,
+    String accessToken,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.post(
+      '/api/auth/passkey/setup-link',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return PasskeySetupLinkResponse.fromJson(resp.data as Map<String, dynamic>);
+  }
+
   /// Begin passkey login (public).
   Future<BeginLoginResponse> beginPasskeyLogin(String serverUrl) async {
     final dio = _createDio(serverUrl);
@@ -300,8 +313,7 @@ class ServerConfig {
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) {
     final instancesList = (json['instances'] as List<dynamic>?)
-            ?.map((i) =>
-                ServiceInstance.fromJson(i as Map<String, dynamic>))
+            ?.map((i) => ServiceInstance.fromJson(i as Map<String, dynamic>))
             .toList() ??
         [];
 
@@ -345,6 +357,23 @@ class BeginLoginResponse {
       BeginLoginResponse(
         options: json['options'] as Map<String, dynamic>,
         sessionId: json['session_id'] as String,
+      );
+}
+
+/// Response from passkey setup-link generation.
+class PasskeySetupLinkResponse {
+  final String link;
+  final String expiresAt;
+
+  const PasskeySetupLinkResponse({
+    required this.link,
+    required this.expiresAt,
+  });
+
+  factory PasskeySetupLinkResponse.fromJson(Map<String, dynamic> json) =>
+      PasskeySetupLinkResponse(
+        link: json['link'] as String,
+        expiresAt: json['expires_at'] as String,
       );
 }
 
