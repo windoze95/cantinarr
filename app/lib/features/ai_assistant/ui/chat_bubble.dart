@@ -20,6 +20,13 @@ class ChatBubble extends StatelessWidget {
   String get displayContent =>
       isUser ? message.content : message.content.replaceAll('**', '');
 
+  bool get isPreparingMedia =>
+      !isUser &&
+      message.isStreaming &&
+      message.mediaResults.isEmpty &&
+      message.toolActivity.any(
+          (activity) => activity.name == 'display_media' && !activity.done);
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -102,27 +109,98 @@ class ChatBubble extends StatelessWidget {
                   ),
                 ],
 
-                // Media result cards (deferred until streaming completes)
-                if (message.mediaResults.isNotEmpty &&
-                    !message.isStreaming) ...[
+                // Media result cards render as soon as the stream delivers
+                // them; poster images continue loading independently.
+                if (!isUser &&
+                    (message.mediaResults.isNotEmpty || isPreparingMedia)) ...[
                   const SizedBox(height: 8),
-                  SizedBox(
-                    height: 232,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: message.mediaResults.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (context, index) {
-                        return _MediaResultCard(
-                            item: message.mediaResults[index]);
-                      },
-                    ),
-                  ),
+                  message.mediaResults.isNotEmpty
+                      ? _MediaResultsCarousel(items: message.mediaResults)
+                      : const _MediaResultsLoadingStrip(),
                 ],
               ],
             ),
           ),
           if (isUser) const SizedBox(width: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _MediaResultsCarousel extends StatelessWidget {
+  final List<MediaResultItem> items;
+
+  const _MediaResultsCarousel({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 232,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          return _MediaResultCard(item: items[index]);
+        },
+      ),
+    );
+  }
+}
+
+class _MediaResultsLoadingStrip extends StatelessWidget {
+  const _MediaResultsLoadingStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 232,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: 4,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, __) => const _MediaResultPlaceholderCard(),
+      ),
+    );
+  }
+}
+
+class _MediaResultPlaceholderCard extends StatelessWidget {
+  const _MediaResultPlaceholderCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 120,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 2 / 3,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Container(color: AppTheme.surfaceVariant),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            height: 10,
+            width: 104,
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceVariant,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Container(
+            height: 10,
+            width: 72,
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceVariant,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
         ],
       ),
     );
