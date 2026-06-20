@@ -1,5 +1,9 @@
 # Agent Instructions
 
+## Collaboration
+
+- Do not just agree with the user by default. If a request would weaken the project, hurt maintainability, reduce correctness, or make the task outcome worse, push back clearly and suggest the better path.
+
 ## Workflow
 
 - Before starting any PR-sized change, fetch `origin/main`, make sure local `main` is even with `origin/main`, and create a feature branch from that fresh base.
