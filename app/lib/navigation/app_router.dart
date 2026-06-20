@@ -47,13 +47,20 @@ final _rootNavigatorKey = GlobalKey<NavigatorState>();
 /// Outer ShellRoute provides the drawer + search bar.
 /// Inner StatefulShellRoutes provide per-module bottom nav.
 final appRouterProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authProvider);
+  // Re-run redirects when auth state changes WITHOUT rebuilding the router.
+  // Watching authProvider here would create a brand-new GoRouter on every auth
+  // change (token refresh, profile reload, etc.), which resets navigation to
+  // the initial route. A refreshListenable keeps the router instance stable.
+  final authRefresh = ValueNotifier<int>(0);
+  ref.onDispose(authRefresh.dispose);
+  ref.listen(authProvider, (_, __) => authRefresh.value++);
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
     initialLocation: '/dashboard/movies',
+    refreshListenable: authRefresh,
     redirect: (context, state) {
-      final auth = authState.valueOrNull;
+      final auth = ref.read(authProvider).valueOrNull;
       final isAuthenticated = auth?.isAuthenticated ?? false;
       final isAuthRoute = state.matchedLocation == '/login';
       final pendingPasskey = auth?.pendingPasskeyOffer ?? false;
