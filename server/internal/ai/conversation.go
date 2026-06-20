@@ -3,21 +3,46 @@ package ai
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"sync"
 	"time"
-
-	"github.com/anthropics/anthropic-sdk-go"
 )
 
 const (
 	conversationTTL   = 4 * time.Hour
 	maxConversations  = 200
 	maxStoredMessages = 60
+
+	agentRoleUser      = "user"
+	agentRoleAssistant = "assistant"
+
+	blockTypeText       = "text"
+	blockTypeToolUse    = "tool_use"
+	blockTypeToolResult = "tool_result"
 )
 
-// conversationStore keeps full agent transcripts (including tool_use and
-// tool_result blocks) server-side so follow-up turns retain grounding that
-// the client's plain-text transcript cannot carry.
+// transcript is the provider-neutral history used by the agent loop. It keeps
+// tool calls/results server-side so follow-up turns remain grounded no matter
+// which AI provider is selected.
+type transcript []transcriptMessage
+
+type transcriptMessage struct {
+	Role    string
+	Content []transcriptBlock
+}
+
+type transcriptBlock struct {
+	Type      string
+	Text      string
+	ID        string
+	Name      string
+	Input     json.RawMessage
+	ToolUseID string
+	Content   string
+	IsError   bool
+}
+
+// conversationStore keeps full provider-neutral agent transcripts server-side.
 type conversationStore struct {
 	mu            sync.Mutex
 	conversations map[string]*conversation
@@ -25,7 +50,7 @@ type conversationStore struct {
 
 type conversation struct {
 	userID    int64
-	messages  []anthropic.MessageParam
+	messages  transcript
 	updatedAt time.Time
 }
 
@@ -37,20 +62,20 @@ func newConversationStore() *conversationStore {
 // The returned slice is a copy: callers append to it while the loop runs, and
 // sharing the backing array with the stored entry would race with concurrent
 // turns on the same conversation.
-func (s *conversationStore) Get(id string, userID int64) ([]anthropic.MessageParam, bool) {
+func (s *conversationStore) Get(id string, userID int64) (transcript, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	conv, ok := s.conversations[id]
 	if !ok || conv.userID != userID || time.Since(conv.updatedAt) > conversationTTL {
 		return nil, false
 	}
-	return append([]anthropic.MessageParam(nil), conv.messages...), true
+	return cloneTranscript(conv.messages), true
 }
 
 // Put stores the full transcript for id, trimming old turns and evicting
 // stale conversations. The transcript is copied so the store never aliases a
 // caller's slice.
-func (s *conversationStore) Put(id string, userID int64, messages []anthropic.MessageParam) {
+func (s *conversationStore) Put(id string, userID int64, messages transcript) {
 	trimmed := trimHistory(messages, maxStoredMessages)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -58,7 +83,7 @@ func (s *conversationStore) Put(id string, userID int64, messages []anthropic.Me
 	s.evictLocked()
 	s.conversations[id] = &conversation{
 		userID:    userID,
-		messages:  append([]anthropic.MessageParam(nil), trimmed...),
+		messages:  cloneTranscript(trimmed),
 		updatedAt: time.Now(),
 	}
 }
@@ -95,12 +120,12 @@ func (s *conversationStore) evictLocked() {
 // trimHistory bounds the transcript while keeping it valid for the API: the
 // first retained message must be a plain user message (not tool results),
 // so assistant tool_use blocks are never orphaned from their results.
-func trimHistory(messages []anthropic.MessageParam, maxLen int) []anthropic.MessageParam {
+func trimHistory(messages transcript, maxLen int) transcript {
 	if len(messages) <= maxLen {
 		return messages
 	}
 	for i := len(messages) - maxLen; i < len(messages); i++ {
-		if messages[i].Role != anthropic.MessageParamRoleUser {
+		if messages[i].Role != agentRoleUser {
 			continue
 		}
 		if containsToolResult(messages[i]) {
@@ -113,9 +138,9 @@ func trimHistory(messages []anthropic.MessageParam, maxLen int) []anthropic.Mess
 	return messages
 }
 
-func containsToolResult(m anthropic.MessageParam) bool {
+func containsToolResult(m transcriptMessage) bool {
 	for _, block := range m.Content {
-		if block.OfToolResult != nil {
+		if block.Type == blockTypeToolResult {
 			return true
 		}
 	}
@@ -127,10 +152,10 @@ func containsToolResult(m anthropic.MessageParam) bool {
 // stream errors) are stripped, and messages left with no content are dropped.
 // Without this, one bad turn would 400 every subsequent request on the
 // conversation until its TTL expired.
-func sanitizeTranscript(messages []anthropic.MessageParam) []anthropic.MessageParam {
-	out := make([]anthropic.MessageParam, 0, len(messages))
+func sanitizeTranscript(messages transcript) transcript {
+	out := make(transcript, 0, len(messages))
 	for i, m := range messages {
-		if m.Role == anthropic.MessageParamRoleAssistant {
+		if m.Role == agentRoleAssistant {
 			m = stripOrphanToolUse(m, followingToolResults(messages, i))
 		}
 		if len(m.Content) == 0 {
@@ -142,12 +167,12 @@ func sanitizeTranscript(messages []anthropic.MessageParam) []anthropic.MessagePa
 }
 
 // followingToolResults collects tool_use IDs answered by the next message.
-func followingToolResults(messages []anthropic.MessageParam, i int) map[string]bool {
+func followingToolResults(messages transcript, i int) map[string]bool {
 	answered := make(map[string]bool)
 	if i+1 < len(messages) {
 		for _, block := range messages[i+1].Content {
-			if tr := block.OfToolResult; tr != nil {
-				answered[tr.ToolUseID] = true
+			if block.Type == blockTypeToolResult {
+				answered[block.ToolUseID] = true
 			}
 		}
 	}
@@ -155,10 +180,10 @@ func followingToolResults(messages []anthropic.MessageParam, i int) map[string]b
 }
 
 // stripOrphanToolUse removes tool_use blocks that have no matching tool_result.
-func stripOrphanToolUse(m anthropic.MessageParam, answered map[string]bool) anthropic.MessageParam {
+func stripOrphanToolUse(m transcriptMessage, answered map[string]bool) transcriptMessage {
 	hasOrphan := false
 	for _, block := range m.Content {
-		if tu := block.OfToolUse; tu != nil && !answered[tu.ID] {
+		if block.Type == blockTypeToolUse && !answered[block.ID] {
 			hasOrphan = true
 			break
 		}
@@ -166,15 +191,62 @@ func stripOrphanToolUse(m anthropic.MessageParam, answered map[string]bool) anth
 	if !hasOrphan {
 		return m
 	}
-	kept := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
+	kept := make([]transcriptBlock, 0, len(m.Content))
 	for _, block := range m.Content {
-		if tu := block.OfToolUse; tu != nil && !answered[tu.ID] {
+		if block.Type == blockTypeToolUse && !answered[block.ID] {
 			continue
 		}
 		kept = append(kept, block)
 	}
 	m.Content = kept
 	return m
+}
+
+func transcriptFromClient(messages []Message) transcript {
+	out := make(transcript, 0, len(messages))
+	for _, m := range messages {
+		text := messageText(m.Content)
+		if text == "" {
+			continue
+		}
+		switch m.Role {
+		case agentRoleAssistant:
+			// Every provider requires the first conversational message to be
+			// user-authored; drop display-only welcome assistant messages.
+			if len(out) == 0 {
+				continue
+			}
+			out = append(out, textTranscriptMessage(agentRoleAssistant, text))
+		default:
+			out = append(out, textTranscriptMessage(agentRoleUser, text))
+		}
+	}
+	return out
+}
+
+func textTranscriptMessage(role, text string) transcriptMessage {
+	return transcriptMessage{
+		Role:    role,
+		Content: []transcriptBlock{{Type: blockTypeText, Text: text}},
+	}
+}
+
+func cloneTranscript(messages transcript) transcript {
+	out := make(transcript, len(messages))
+	for i, message := range messages {
+		out[i].Role = message.Role
+		if len(message.Content) == 0 {
+			continue
+		}
+		out[i].Content = make([]transcriptBlock, len(message.Content))
+		copy(out[i].Content, message.Content)
+		for j := range out[i].Content {
+			if out[i].Content[j].Input != nil {
+				out[i].Content[j].Input = append(json.RawMessage(nil), out[i].Content[j].Input...)
+			}
+		}
+	}
+	return out
 }
 
 func newConversationID() string {

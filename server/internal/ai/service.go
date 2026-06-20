@@ -92,7 +92,7 @@ func NewService(apiKey, model string, toolServer *mcp.ToolServer) *Service {
 // SendMessage runs the full agent loop with tool execution, streaming text and
 // tool activity back through cb. It returns the final transcript (including
 // tool_use/tool_result blocks) so the caller can persist conversation state.
-func (s *Service) SendMessage(ctx context.Context, history []anthropic.MessageParam, chatCtx ChatContext, cb StreamCallbacks) ([]anthropic.MessageParam, error) {
+func (s *Service) SendMessage(ctx context.Context, history transcript, chatCtx ChatContext, cb StreamCallbacks) (transcript, error) {
 	params := anthropic.MessageNewParams{
 		Model:     s.model,
 		MaxTokens: maxTokens,
@@ -106,13 +106,14 @@ func (s *Service) SendMessage(ctx context.Context, history []anthropic.MessagePa
 			// Volatile context goes after the breakpoint to keep the prefix stable.
 			{Text: dynamicContext(chatCtx)},
 		},
-		Messages: history,
+		Messages: toSDKMessages(history),
 		Tools:    toSDKTools(s.toolServer.GetToolsForRole(chatCtx.Role)),
 	}
 	if supportsAnthropicAdaptiveThinking(s.model) {
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
 	}
 
+	finalHistory := cloneTranscript(history)
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		if iteration == maxToolIterations-1 {
 			params.ToolChoice = anthropic.ToolChoiceUnionParam{OfNone: &anthropic.ToolChoiceNoneParam{}}
@@ -120,35 +121,40 @@ func (s *Service) SendMessage(ctx context.Context, history []anthropic.MessagePa
 
 		message, err := s.streamOne(ctx, params, cb)
 		if err != nil {
-			return params.Messages, err
+			return finalHistory, err
 		}
 
 		params.Messages = append(params.Messages, message.ToParam())
+		finalHistory = append(finalHistory, anthropicMessageToTranscript(*message))
 
 		if message.StopReason != anthropic.StopReasonToolUse {
 			if message.StopReason == anthropic.StopReasonMaxTokens && cb.OnText != nil {
 				cb.OnText("\n\n_(Reply truncated at the length limit — ask me to continue.)_")
 			}
-			return params.Messages, nil
+			return finalHistory, nil
 		}
 
 		var toolResults []anthropic.ContentBlockParamUnion
+		var toolResultBlocks []transcriptBlock
 		for _, block := range message.Content {
 			toolUse, ok := block.AsAny().(anthropic.ToolUseBlock)
 			if !ok {
 				continue
 			}
-			toolResults = append(toolResults, s.runTool(ctx, toolUse, chatCtx, cb))
+			result, transcriptBlock := s.runTool(ctx, toolUse, chatCtx, cb)
+			toolResults = append(toolResults, result)
+			toolResultBlocks = append(toolResultBlocks, transcriptBlock)
 		}
 		if len(toolResults) == 0 {
 			// stop_reason said tool_use but no tool blocks arrived; bail out
 			// rather than re-sending an identical request forever.
-			return params.Messages, fmt.Errorf("model requested tool use but sent no tool blocks")
+			return finalHistory, fmt.Errorf("model requested tool use but sent no tool blocks")
 		}
 		params.Messages = append(params.Messages, anthropic.NewUserMessage(toolResults...))
+		finalHistory = append(finalHistory, transcriptMessage{Role: agentRoleUser, Content: toolResultBlocks})
 	}
 
-	return params.Messages, fmt.Errorf("agent loop exceeded %d iterations", maxToolIterations)
+	return finalHistory, fmt.Errorf("agent loop exceeded %d iterations", maxToolIterations)
 }
 
 func supportsAnthropicAdaptiveThinking(model anthropic.Model) bool {
@@ -181,8 +187,9 @@ func (s *Service) streamOne(ctx context.Context, params anthropic.MessageNewPara
 	return &message, nil
 }
 
-// runTool executes one tool call and returns its tool_result block.
-func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, chatCtx ChatContext, cb StreamCallbacks) anthropic.ContentBlockParamUnion {
+// runTool executes one tool call and returns provider-specific and neutral
+// tool_result blocks.
+func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, chatCtx ChatContext, cb StreamCallbacks) (anthropic.ContentBlockParamUnion, transcriptBlock) {
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(toolUse.Name, toolLabel(toolUse.Name))
 	}
@@ -197,7 +204,14 @@ func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, c
 		if cb.OnToolEnd != nil {
 			cb.OnToolEnd(toolUse.Name, false)
 		}
-		return anthropic.NewToolResultBlock(toolUse.ID, fmt.Sprintf("Error: %s", err.Error()), true)
+		content := fmt.Sprintf("Error: %s", err.Error())
+		return anthropic.NewToolResultBlock(toolUse.ID, content, true), transcriptBlock{
+			Type:      blockTypeToolResult,
+			ToolUseID: toolUse.ID,
+			Name:      toolUse.Name,
+			Content:   content,
+			IsError:   true,
+		}
 	}
 
 	if result.StructuredData != nil && mcp.ToolsWithUI[toolUse.Name] && cb.OnToolResult != nil {
@@ -206,7 +220,12 @@ func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, c
 	if cb.OnToolEnd != nil {
 		cb.OnToolEnd(toolUse.Name, true)
 	}
-	return anthropic.NewToolResultBlock(toolUse.ID, result.Text, false)
+	return anthropic.NewToolResultBlock(toolUse.ID, result.Text, false), transcriptBlock{
+		Type:      blockTypeToolResult,
+		ToolUseID: toolUse.ID,
+		Name:      toolUse.Name,
+		Content:   result.Text,
+	}
 }
 
 // dynamicContext renders per-request context placed after the cache breakpoint.
@@ -233,29 +252,83 @@ func latestUserText(messages []Message) string {
 	return ""
 }
 
-// toSDKMessages converts client-supplied history into SDK message params.
-// Client history carries plain text (string content or text blocks); it is
-// the fallback when no server-side conversation state exists.
-func toSDKMessages(messages []Message) []anthropic.MessageParam {
+// toSDKMessages converts the provider-neutral transcript into Anthropic SDK
+// message params.
+func toSDKMessages(messages transcript) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(messages))
 	for _, m := range messages {
-		text := messageText(m.Content)
-		if text == "" {
+		blocks := toSDKContentBlocks(m.Content)
+		if len(blocks) == 0 {
 			continue
 		}
 		switch m.Role {
-		case "assistant":
+		case agentRoleAssistant:
 			// The API requires the first message to be from the user; drop
 			// leading assistant text (e.g. a client-side welcome message).
 			if len(out) == 0 {
 				continue
 			}
-			out = append(out, anthropic.NewAssistantMessage(anthropic.NewTextBlock(text)))
+			out = append(out, anthropic.NewAssistantMessage(blocks...))
 		default:
-			out = append(out, anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
+			out = append(out, anthropic.NewUserMessage(blocks...))
 		}
 	}
 	return out
+}
+
+func toSDKContentBlocks(blocks []transcriptBlock) []anthropic.ContentBlockParamUnion {
+	out := make([]anthropic.ContentBlockParamUnion, 0, len(blocks))
+	for _, block := range blocks {
+		switch block.Type {
+		case blockTypeText:
+			if block.Text != "" {
+				out = append(out, anthropic.NewTextBlock(block.Text))
+			}
+		case blockTypeToolUse:
+			out = append(out, anthropic.NewToolUseBlock(block.ID, rawJSONValue(block.Input), block.Name))
+		case blockTypeToolResult:
+			out = append(out, anthropic.NewToolResultBlock(block.ToolUseID, block.Content, block.IsError))
+		}
+	}
+	return out
+}
+
+func anthropicMessageToTranscript(message anthropic.Message) transcriptMessage {
+	out := transcriptMessage{Role: string(message.Role)}
+	if out.Role == "" {
+		out.Role = agentRoleAssistant
+	}
+	for _, block := range message.Content {
+		switch v := block.AsAny().(type) {
+		case anthropic.TextBlock:
+			if v.Text != "" {
+				out.Content = append(out.Content, transcriptBlock{Type: blockTypeText, Text: v.Text})
+			}
+		case anthropic.ToolUseBlock:
+			input := append(json.RawMessage(nil), v.Input...)
+			if len(input) == 0 || string(input) == "null" {
+				input = json.RawMessage("{}")
+			}
+			out.Content = append(out.Content, transcriptBlock{
+				Type:  blockTypeToolUse,
+				ID:    v.ID,
+				Name:  v.Name,
+				Input: input,
+			})
+		}
+	}
+	return out
+}
+
+func rawJSONValue(raw json.RawMessage) any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return map[string]any{}
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return map[string]any{}
+	}
+	return value
 }
 
 func messageText(content interface{}) string {

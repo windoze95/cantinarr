@@ -110,9 +110,10 @@ POST   /api/ai/chat             # SSE-streamed AI conversation with tool use
 GET    /api/ai/available        # { available: true/false }
 ```
 The chat request accepts an optional `conversation_id`; when supplied, the server
-replays its stored transcript (including tool results) so follow-up turns keep
-full grounding. SSE frames: `{conversation_id}`, `{text}`, `{tool_start: {name, label}}`,
-`{tool_end: {name, ok}}`, `{media_results}`, `{error}`, then `[DONE]`.
+replays its provider-neutral stored transcript (including tool results) so follow-up
+turns keep full grounding across Anthropic, OpenAI, and Gemini. SSE frames:
+`{conversation_id}`, `{text}`, `{tool_start: {name, label}}`, `{tool_end: {name, ok}}`,
+`{media_results}`, `{error}`, then `[DONE]`.
 
 ### AI Tool Toggles (admin only)
 ```
@@ -260,8 +261,8 @@ server/
 ├── internal/
 │   ├── ai/
 │   │   ├── handler.go              # SSE streaming chat endpoint
-│   │   ├── service.go              # Anthropic API client + tool loop
-│   │   └── http_providers.go       # OpenAI/Gemini API clients + tool loops
+│   │   ├── service.go              # Anthropic streaming API client + tool loop
+│   │   └── http_providers.go       # OpenAI/Gemini streaming API clients + tool loops
 │   ├── api/router.go               # Chi router, CORS, middleware, routes
 │   ├── auth/
 │   │   ├── handler.go              # Login, refresh, connect token
@@ -307,7 +308,7 @@ server/
 - **SQLite** via [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) (pure Go, no CGO)
 - **JWT** via [golang-jwt](https://github.com/golang-jwt/jwt)
 - **WebSocket** via [gorilla/websocket](https://github.com/gorilla/websocket)
-- **Anthropic Messages API** (SDK), **OpenAI Chat Completions API**, and **Gemini generateContent API**
+- **Anthropic Messages API** (SDK streaming), **OpenAI Chat Completions API** (streaming), and **Gemini streamGenerateContent API**
 
 ## License
 
