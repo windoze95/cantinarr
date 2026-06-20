@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -150,6 +151,76 @@ func (h *Handler) HandleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := h.service.ListUsers()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list users"})
+		return
+	}
+	writeJSON(w, http.StatusOK, users)
+}
+
+func (h *Handler) HandleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid user ID"})
+		return
+	}
+
+	var req UpdateUserRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	user, err := h.service.UpdateUserRole(userID, req.Role)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidRole):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid role"})
+		case errors.Is(err, ErrUserNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		case errors.Is(err, ErrLastAdmin):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "cannot demote the last admin"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update role"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, user)
+}
+
+func (h *Handler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid user ID"})
+		return
+	}
+
+	if err := h.service.DeleteUser(claims.UserID, userID); err != nil {
+		switch {
+		case errors.Is(err, ErrUserNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		case errors.Is(err, ErrCannotDeleteSelf):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "you cannot delete your own account"})
+		case errors.Is(err, ErrLastAdmin):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "cannot delete the last admin"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete user"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {

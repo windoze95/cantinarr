@@ -134,6 +134,50 @@ class AuthService {
     );
   }
 
+  /// List all user accounts (admin only).
+  Future<List<UserSummary>> listUsers(
+    String serverUrl,
+    String accessToken,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.get(
+      '/api/admin/users',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return (resp.data as List<dynamic>)
+        .map((u) => UserSummary.fromJson(u as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Change a user's role (admin only).
+  Future<UserSummary> updateUserRole(
+    String serverUrl,
+    String accessToken,
+    int userId,
+    String role,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.patch(
+      '/api/admin/users/$userId',
+      data: {'role': role},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return UserSummary.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Delete a user account (admin only).
+  Future<void> deleteUser(
+    String serverUrl,
+    String accessToken,
+    int userId,
+  ) async {
+    final dio = _createDio(serverUrl);
+    await dio.delete(
+      '/api/admin/users/$userId',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
   // ─── Passkey API Methods ─────────────────────────────
 
   /// Begin passkey registration (authenticated).
@@ -296,6 +340,45 @@ class DeviceInfo {
         deviceName: json['device_name'] as String,
         createdAt: json['created_at'] as String,
         lastSeenAt: json['last_seen_at'] as String,
+      );
+}
+
+/// Enriched user account returned by the admin users endpoint.
+class UserSummary {
+  final int id;
+  final String username;
+  final String role;
+  final List<String> permissions;
+  final String createdAt;
+  final int deviceCount;
+  final bool hasPassword;
+  final bool hasPendingInvite;
+
+  const UserSummary({
+    required this.id,
+    required this.username,
+    required this.role,
+    required this.permissions,
+    required this.createdAt,
+    required this.deviceCount,
+    required this.hasPassword,
+    required this.hasPendingInvite,
+  });
+
+  bool get isAdmin => role == 'admin';
+
+  factory UserSummary.fromJson(Map<String, dynamic> json) => UserSummary(
+        id: json['id'] as int,
+        username: json['username'] as String,
+        role: json['role'] as String,
+        permissions: (json['permissions'] as List<dynamic>?)
+                ?.map((p) => p as String)
+                .toList() ??
+            const [],
+        createdAt: json['created_at'] as String? ?? '',
+        deviceCount: json['device_count'] as int? ?? 0,
+        hasPassword: json['has_password'] as bool? ?? false,
+        hasPendingInvite: json['has_pending_invite'] as bool? ?? false,
       );
 }
 
