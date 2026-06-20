@@ -52,7 +52,7 @@ Dark-first UI with warm gold accents, designed for couch browsing.
 - **Status indicators** -- available (green), requested (orange), downloading (blue), unavailable (grey)
 
 ### AI Assistant
-- **Claude-powered chat** -- ask for recommendations, check availability, make requests via conversation
+- **Multi-provider AI chat** -- ask for recommendations, check availability, make requests via conversation
 - **SSE streaming** -- responses appear incrementally, not all-at-once
 - **Server-side tools** -- the AI can search TMDB, check your server, and make requests on your behalf
 

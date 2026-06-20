@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
-
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
@@ -131,11 +129,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// context across turns) and append the new user message; fall back to
 	// the client's plain-text transcript for new or expired conversations.
 	convID := req.ConversationID
-	var history []anthropic.MessageParam
+	var history transcript
 	if convID != "" {
 		if stored, ok := h.conversations.Get(convID, claims.UserID); ok {
 			if text := latestUserText(req.Messages); text != "" {
-				history = append(stored, anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
+				history = append(stored, textTranscriptMessage(agentRoleUser, text))
 			}
 		}
 	}
@@ -145,7 +143,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		// id so an attacker-supplied id can never overwrite someone else's
 		// stored conversation.
 		convID = newConversationID()
-		history = toSDKMessages(req.Messages)
+		history = transcriptFromClient(req.Messages)
 	}
 	if len(history) == 0 {
 		http.Error(w, `{"error":"no usable messages in request"}`, http.StatusBadRequest)
@@ -155,32 +153,31 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	emit(map[string]string{"conversation_id": convID})
 
 	var err error
+	var finalHistory transcript
 	switch aiConfig.Provider {
 	case credentials.AIProviderAnthropic:
 		service := NewService(apiKey, aiConfig.Model, h.toolServer)
-		var finalHistory []anthropic.MessageParam
 		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
-		if err == nil {
-			h.conversations.Put(convID, claims.UserID, sanitizeTranscript(finalHistory))
-		}
 	case credentials.AIProviderOpenAI:
 		service := NewOpenAIService(apiKey, aiConfig.Model, h.toolServer)
-		err = service.SendMessage(r.Context(), req.Messages, chatCtx, callbacks)
+		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
 	case credentials.AIProviderGemini:
 		service := NewGeminiService(apiKey, aiConfig.Model, h.toolServer)
-		err = service.SendMessage(r.Context(), req.Messages, chatCtx, callbacks)
+		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
 	default:
 		err = fmt.Errorf("unsupported AI provider: %s", aiConfig.Provider)
 	}
 	if err != nil {
-		// Drop Anthropic stored state rather than persist a possibly poisoned
-		// transcript; the client's retry falls back to its own transcript.
-		if aiConfig.Provider == credentials.AIProviderAnthropic {
-			h.conversations.Delete(convID)
-		}
+		// Drop stored state rather than persist a possibly poisoned transcript;
+		// the client's retry falls back to its own plain-text transcript.
+		h.conversations.Delete(convID)
 		log.Printf("ai chat error: %v", err)
 		emit(map[string]string{"error": err.Error()})
-	} else if h.toolServer.IsAIDebugEnabled() {
+	} else {
+		h.conversations.Put(convID, claims.UserID, sanitizeTranscript(finalHistory))
+	}
+
+	if err == nil && h.toolServer.IsAIDebugEnabled() {
 		log.Printf("ai debug: chat complete provider=%s model=%s user_id=%d conversation_id=%s", aiConfig.Provider, aiConfig.Model, claims.UserID, convID)
 	}
 
