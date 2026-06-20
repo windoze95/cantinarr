@@ -26,6 +26,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       setState(() => _appVersion =
           build.isNotEmpty ? '${info.version} ($build)' : info.version);
     });
+    // Learn whether the account has a password so the Account tile reflects it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(authProvider.notifier).refreshUser();
+    });
   }
 
   @override
@@ -70,6 +74,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             icon: Icons.person_outline,
             title: user?.username ?? 'Unknown',
             subtitle: user?.isAdmin == true ? 'Administrator' : 'User',
+          ),
+          _SettingsTile(
+            icon: Icons.lock_outline,
+            title: 'Password',
+            subtitle: user?.hasPassword == null
+                ? 'Set a password for sign-in & MCP'
+                : (user!.hasPassword!
+                    ? 'Change your sign-in password'
+                    : 'Add a password for sign-in & MCP'),
+            onTap: () => context.push('/settings/password'),
           ),
 
           const SizedBox(height: 16),

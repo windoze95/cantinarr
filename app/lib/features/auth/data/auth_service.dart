@@ -77,6 +77,34 @@ class AuthService {
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Fetch the authenticated user's profile, including whether a password is
+  /// set (`has_password`).
+  Future<UserProfile> fetchMe(
+    String serverUrl,
+    String accessToken,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.get(
+      '/api/auth/me',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return UserProfile.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Create or replace the authenticated user's password.
+  Future<void> setPassword(
+    String serverUrl,
+    String accessToken,
+    String newPassword,
+  ) async {
+    final dio = _createDio(serverUrl);
+    await dio.post(
+      '/api/auth/password',
+      data: {'password': newPassword},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
   /// Fetch server configuration (TMDB key, available services, etc.).
   Future<ServerConfig> fetchConfig(
     String serverUrl,

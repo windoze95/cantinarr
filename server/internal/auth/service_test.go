@@ -200,6 +200,104 @@ func TestDeleteUser_Guards(t *testing.T) {
 	}
 }
 
+func TestSetPassword_EnablesLoginForInviteUser(t *testing.T) {
+	svc := setupTestService(t)
+
+	// Invite a user via connect link — they start with no password.
+	if _, err := svc.CreateConnectToken(1, "guest", "http://example.com"); err != nil {
+		t.Fatalf("create connect token: %v", err)
+	}
+	var guestID int64
+	if err := svc.db.QueryRow("SELECT id FROM users WHERE username = ?", "guest").Scan(&guestID); err != nil {
+		t.Fatalf("load guest: %v", err)
+	}
+
+	// Before setting a password, neither password login path should work.
+	if _, err := svc.Login("guest", "hunter2!"); err == nil {
+		t.Fatal("login should fail before a password is set")
+	}
+	if _, err := svc.AuthenticatePassword("guest", "hunter2!"); err == nil {
+		t.Fatal("password auth should fail before a password is set")
+	}
+
+	if err := svc.SetPassword(guestID, "hunter2!"); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+
+	// Both the app login and the MCP/OAuth password path should now succeed.
+	if _, err := svc.Login("guest", "hunter2!"); err != nil {
+		t.Fatalf("login after set password: %v", err)
+	}
+	if _, err := svc.AuthenticatePassword("guest", "hunter2!"); err != nil {
+		t.Fatalf("authenticate password after set password: %v", err)
+	}
+
+	// The admin user list should now report the account as having a password.
+	users, err := svc.ListUsers()
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	var found bool
+	for _, u := range users {
+		if u.ID == guestID {
+			found = true
+			if !u.HasPassword {
+				t.Fatalf("guest summary HasPassword = false, want true")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("guest user missing from list")
+	}
+}
+
+func TestSetPassword_RejectsTooShort(t *testing.T) {
+	svc := setupTestService(t)
+	if _, err := svc.CreateConnectToken(1, "guest", "http://example.com"); err != nil {
+		t.Fatalf("create connect token: %v", err)
+	}
+	var guestID int64
+	if err := svc.db.QueryRow("SELECT id FROM users WHERE username = ?", "guest").Scan(&guestID); err != nil {
+		t.Fatalf("load guest: %v", err)
+	}
+
+	if err := svc.SetPassword(guestID, "short"); err != ErrPasswordTooShort {
+		t.Fatalf("expected ErrPasswordTooShort, got %v", err)
+	}
+	// A too-short password must not have been written.
+	if _, err := svc.AuthenticatePassword("guest", "short"); err == nil {
+		t.Fatal("too-short password should not have been stored")
+	}
+}
+
+func TestSetPassword_ReplacesExisting(t *testing.T) {
+	svc := setupTestService(t)
+
+	var adminID int64
+	if err := svc.db.QueryRow("SELECT id FROM users WHERE username = ?", "admin").Scan(&adminID); err != nil {
+		t.Fatalf("load admin: %v", err)
+	}
+
+	if err := svc.SetPassword(adminID, "rotated-secret"); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+
+	// The old password must stop working, the new one must work.
+	if _, err := svc.Login("admin", "testpass123"); err == nil {
+		t.Fatal("old password should no longer authenticate")
+	}
+	if _, err := svc.Login("admin", "rotated-secret"); err != nil {
+		t.Fatalf("login with rotated password: %v", err)
+	}
+}
+
+func TestSetPassword_UnknownUser(t *testing.T) {
+	svc := setupTestService(t)
+	if err := svc.SetPassword(999999, "long-enough"); err != ErrUserNotFound {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
 func TestHashToken_Deterministic(t *testing.T) {
 	h1 := hashToken("my-token-value")
 	h2 := hashToken("my-token-value")

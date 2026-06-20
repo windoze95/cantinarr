@@ -92,6 +92,11 @@ type SetupRequest struct {
 	Password string `json:"password"`
 }
 
+// SetPasswordRequest sets or replaces the authenticated user's password.
+type SetPasswordRequest struct {
+	Password string `json:"password"`
+}
+
 type AuthStatusResponse struct {
 	NeedsSetup        bool                        `json:"needs_setup"`
 	WebAuthnAvailable bool                        `json:"webauthn_available"`

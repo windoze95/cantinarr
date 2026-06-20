@@ -259,6 +259,40 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     ));
   }
 
+  /// Re-fetch the current user's profile (e.g. to learn whether a password is
+  /// set) and update state.
+  Future<void> refreshUser() async {
+    final current = state.valueOrNull;
+    final conn = current?.connection;
+    if (current == null || conn == null) return;
+    try {
+      final user = await _authService.fetchMe(conn.serverUrl, conn.accessToken);
+      state = AsyncData(current.copyWith(user: user));
+    } catch (e) {
+      debugPrint('refreshUser failed: $e');
+    }
+  }
+
+  /// Create or replace the current user's password. A password enables
+  /// username/password sign-in — and MCP client authorization — on servers
+  /// without HTTPS, where passkeys are unavailable.
+  Future<void> setPassword(String newPassword) async {
+    final current = state.valueOrNull;
+    final conn = current?.connection;
+    if (current == null || conn == null) throw Exception('Not authenticated');
+    await _authService.setPassword(
+      conn.serverUrl,
+      conn.accessToken,
+      newPassword,
+    );
+    final user = current.user;
+    if (user != null) {
+      state = AsyncData(
+        current.copyWith(user: user.copyWith(hasPassword: true)),
+      );
+    }
+  }
+
   /// Generate a connect link for a new user (admin only).
   Future<ConnectTokenResponse> generateConnectToken(String name) async {
     final conn = state.valueOrNull?.connection;

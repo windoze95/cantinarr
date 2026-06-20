@@ -280,11 +280,44 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"id":          user.ID,
-		"username":    user.Username,
-		"role":        user.Role,
-		"permissions": user.Permissions,
+		"id":           user.ID,
+		"username":     user.Username,
+		"role":         user.Role,
+		"permissions":  user.Permissions,
+		"has_password": user.PasswordHash != "",
 	})
+}
+
+// SetPassword creates or replaces the authenticated user's password. It lets a
+// user who signed in via a connect link or passkey add a password so they can
+// log in (and authorize MCP clients) on deployments without HTTPS, where
+// passkeys are unavailable.
+func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	var req SetPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if err := h.service.SetPassword(claims.UserID, req.Password); err != nil {
+		switch {
+		case errors.Is(err, ErrPasswordTooShort):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be at least 8 characters"})
+		case errors.Is(err, ErrUserNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

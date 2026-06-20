@@ -107,6 +107,7 @@ func NewRouter(
 			r.Group(func(r chi.Router) {
 				r.Use(authService.AuthMiddleware)
 				r.Get("/me", authHandler.Me)
+				r.With(authLimiter.Middleware).Post("/password", authHandler.SetPassword)
 
 				// Passkey registration (authenticated)
 				r.Post("/passkey/register/begin", authHandler.BeginPasskeyRegistration)

@@ -34,7 +34,12 @@ var (
 	ErrInvalidRole          = errors.New("invalid role")
 	ErrLastAdmin            = errors.New("cannot remove the last admin")
 	ErrCannotDeleteSelf     = errors.New("cannot delete your own account")
+	ErrPasswordTooShort     = errors.New("password is too short")
 )
+
+// minPasswordLength is the minimum length for an account password. It matches
+// the check enforced during first-run setup.
+const minPasswordLength = 8
 
 type Claims struct {
 	UserID   int64  `json:"user_id"`
@@ -228,6 +233,39 @@ func (s *Service) Login(username, password string) (*TokenResponse, error) {
 	}
 	resp.DeviceID = deviceID
 	return resp, nil
+}
+
+// SetPassword creates or replaces a user's password. It backs self-service
+// password creation — so users on plain HTTP, where passkeys require a secure
+// context and are unavailable, can sign in with a password and authorize MCP
+// clients — and password resets after an admin-issued connect link is redeemed.
+//
+// A valid session (enforced by the auth middleware) is sufficient to set the
+// password; no current password is required. This matches passkey registration,
+// which also re-uses the existing session without re-auth, and it is what lets
+// the connect-link reset flow recover a user who has forgotten their password.
+func (s *Service) SetPassword(userID int64, newPassword string) error {
+	if len(newPassword) < minPasswordLength {
+		return ErrPasswordTooShort
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	result, err := s.db.Exec(
+		"UPDATE users SET password_hash = ? WHERE id = ?",
+		string(hash), userID,
+	)
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return ErrUserNotFound
+	}
+	return nil
 }
 
 func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {

@@ -149,6 +149,8 @@ Optional server env vars for deployment tuning:
 
 Native app passkeys require a public HTTPS server domain that is associated with the app. Apple devices verify `/.well-known/apple-app-site-association`; Android credential providers verify `/.well-known/assetlinks.json` and return an `android:apk-key-hash` origin that Cantinarr validates from the configured signing certificate fingerprint. Windows native passkeys use the `https://host` origin; deployments served from a non-standard HTTPS port should add that origin to `CANTINARR_WEBAUTHN_EXTRA_ORIGINS`. Browser setup remains available when a self-hosted deployment cannot satisfy native app association.
 
+Username/password sign-in is the fallback when passkeys are unavailable -- notably on deployments served over plain HTTP, where WebAuthn requires a secure context. Accounts created from a connect link start with no password; any signed-in user can add one from **Settings > Password** in the app, which then works for both app login and MCP client authorization. To recover a forgotten password, an admin issues a fresh connect link -- redeeming it signs the user back in so they can set a new password.
+
 ## How It Works
 
 ### For Users
