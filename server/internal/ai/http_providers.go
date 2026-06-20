@@ -21,6 +21,7 @@ type openAIService struct {
 	model      string
 	httpClient *http.Client
 	toolServer *mcp.ToolServer
+	chatFn     func(context.Context, openAIChatRequest) (openAIMessage, string, error)
 }
 
 func NewOpenAIService(apiKey, model string, toolServer *mcp.ToolServer) *openAIService {
@@ -54,20 +55,24 @@ func (s *openAIService) SendMessage(ctx context.Context, history []Message, chat
 			req.ToolChoice = "none"
 		}
 
-		message, finishReason, err := s.chat(ctx, req)
+		chat := s.chat
+		if s.chatFn != nil {
+			chat = s.chatFn
+		}
+
+		message, finishReason, err := chat(ctx, req)
 		if err != nil {
 			return err
 		}
 		if len(message.ToolCalls) == 0 {
-			if message.Content != "" && cb.OnText != nil {
-				cb.OnText(message.Content)
-			}
+			emitProviderText(message.Content, cb)
 			if finishReason == "length" && cb.OnText != nil {
 				cb.OnText("\n\n_(Reply truncated at the length limit - ask me to continue.)_")
 			}
 			return nil
 		}
 
+		emitProviderText(message.Content, cb)
 		messages = append(messages, message)
 		for _, toolCall := range message.ToolCalls {
 			messages = append(messages, s.runOpenAITool(ctx, toolCall, chatCtx, cb))
@@ -228,6 +233,7 @@ type geminiService struct {
 	model      string
 	httpClient *http.Client
 	toolServer *mcp.ToolServer
+	generateFn func(context.Context, geminiGenerateRequest) (geminiGenerateResponse, error)
 }
 
 func NewGeminiService(apiKey, model string, toolServer *mcp.ToolServer) *geminiService {
@@ -249,7 +255,12 @@ func (s *geminiService) SendMessage(ctx context.Context, history []Message, chat
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		useTools := iteration != maxToolIterations-1
-		resp, err := s.generate(ctx, geminiGenerateRequest{
+		generate := s.generate
+		if s.generateFn != nil {
+			generate = s.generateFn
+		}
+
+		resp, err := generate(ctx, geminiGenerateRequest{
 			SystemInstruction: &system,
 			Contents:          contents,
 			Tools:             enabledGeminiTools(tools, useTools),
@@ -267,17 +278,16 @@ func (s *geminiService) SendMessage(ctx context.Context, history []Message, chat
 			content.Role = "model"
 		}
 		functionCalls := geminiFunctionCalls(content)
+		text := geminiText(content)
 		if len(functionCalls) == 0 {
-			text := geminiText(content)
-			if text != "" && cb.OnText != nil {
-				cb.OnText(text)
-			}
+			emitProviderText(text, cb)
 			if resp.Candidates[0].FinishReason == "MAX_TOKENS" && cb.OnText != nil {
 				cb.OnText("\n\n_(Reply truncated at the length limit - ask me to continue.)_")
 			}
 			return nil
 		}
 
+		emitProviderText(text, cb)
 		contents = append(contents, content)
 		resultParts := make([]geminiPart, 0, len(functionCalls))
 		for _, call := range functionCalls {
@@ -499,4 +509,10 @@ func providerErrorMessage(data []byte) string {
 		return text[:1000] + "..."
 	}
 	return text
+}
+
+func emitProviderText(text string, cb StreamCallbacks) {
+	if text != "" && cb.OnText != nil {
+		cb.OnText(text)
+	}
 }

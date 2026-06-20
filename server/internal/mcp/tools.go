@@ -165,7 +165,7 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "display_media",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Display specific movies or TV shows in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Prefer TMDB IDs copied from prior tool results; if you only have exact title/year values, omit tmdb_id and the server will resolve and verify them.",
+		Description: "Display specific movies or TV shows in the UI carousel. When answering in chat, write the visible text answer first, then call this tool at the end of the same assistant turn so the text can show while carousel data resolves. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Prefer TMDB IDs copied from prior tool results; if you only have exact title/year values, omit tmdb_id and the server will resolve and verify them.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

@@ -65,7 +65,7 @@ func registerAgentPrompts(mcpServer *server.MCPServer, toolServer *internalmcp.T
 Workflow:
 1. Ground recommendations in tools. Use search_movies/search_tv_shows for specific asks, or get_trending for trending/general discovery.
 2. If the user did not ask specifically for only movies or only TV, use get_trending with media_type "all". That returns a balanced movie/TV mix.
-3. Choose the items you actually want to show, then call display_media in the same order you will mention them in text. Prefer exact TMDB IDs, media_type values, titles, and years copied from prior tool output; if you only have exact title/year values, omit tmdb_id and let display_media resolve them.
+3. Write the visible text answer first. Then call display_media at the end of the same assistant turn in the same order you mentioned items in text. Prefer exact TMDB IDs, media_type values, titles, and years copied from prior tool output; if you only have exact title/year values, omit tmdb_id and let display_media resolve them.
 4. Search/get_trending results alone are not enough for the native carousel. display_media is what prepares the rich visual result set, including franchise/title-list and count answers that enumerate concrete titles.
 5. Keep the answer concise: title, year, and a short hook for each recommendation.`, userRequest)
 			return promptResult("Discover and recommend media", text), nil
@@ -181,9 +181,9 @@ Tools may be hidden or disabled by RBAC and administrator settings. If a tool re
 - For general trending requests, or when the user mentions both movies and shows/TV, call get_trending with media_type "all".
 - Only use media_type "movie" or "tv" when the user asks for that category specifically.
 - get_trending with media_type "all" returns a balanced movie/TV mix.
-- Search or trending results alone do not prepare the native visual carousel. After selecting the items to show, call display_media in the same order you will mention them in text, with exact TMDB IDs, media_type values, titles, and years copied from prior tool results when available.
+- Search or trending results alone do not prepare the native visual carousel. After selecting the items to show, write the visible text answer first, then call display_media at the end of the same assistant turn in the same order you mentioned items in text, with exact TMDB IDs, media_type values, titles, and years copied from prior tool results when available.
 - Franchise/title-list and count answers that enumerate concrete movies or shows should call display_media for those titles in the enumerated order.
-- If display_media rejects an item as a mismatch, correct the ID or metadata from tool results before answering.
+- If display_media rejects an item as a mismatch, correct the ID or metadata from tool results. Do not restate the full list after display_media returns; only mention rejected/missing carousel items if needed.
 - Skip display_media only for answers with no concrete media items to showcase.
 
 ## Requesting Media
