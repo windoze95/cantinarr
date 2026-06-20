@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -17,6 +18,10 @@ func (h *Handler) BeginPasskeyRegistration(w http.ResponseWriter, r *http.Reques
 
 	options, sessionID, err := h.service.BeginPasskeyRegistration(claims.UserID, r)
 	if err != nil {
+		if errors.Is(err, ErrPasskeyNotAllowed) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "passkeys are not enabled for your account"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to begin registration"})
 		return
 	}
@@ -85,6 +90,10 @@ func (h *Handler) BeginPasskeySetup(w http.ResponseWriter, r *http.Request) {
 
 	options, sessionID, err := h.service.BeginPasskeySetup(token, r)
 	if err != nil {
+		if errors.Is(err, ErrPasskeyNotAllowed) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "passkeys are not enabled for your account"})
+			return
+		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired token"})
 		return
 	}

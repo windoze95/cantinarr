@@ -193,6 +193,42 @@ func (h *Handler) HandleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+// HandleUpdateUserAuthMethods toggles a user's password / passkey sign-in
+// ability. Both default off, so admins use this to grant a credential — notably
+// a password, which is the prerequisite for using MCP on a non-HTTPS server.
+func (h *Handler) HandleUpdateUserAuthMethods(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid user ID"})
+		return
+	}
+
+	var req UpdateUserAuthMethodsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.PasswordEnabled == nil && req.PasskeyEnabled == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no changes provided"})
+		return
+	}
+
+	user, err := h.service.SetUserAuthMethods(userID, req.PasswordEnabled, req.PasskeyEnabled)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrUserNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		case errors.Is(err, ErrCannotModifyAdmin):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "admins always keep password and passkey sign-in"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update sign-in methods"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, user)
+}
+
 func (h *Handler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r.Context())
 	if claims == nil {
@@ -280,11 +316,13 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"id":           user.ID,
-		"username":     user.Username,
-		"role":         user.Role,
-		"permissions":  user.Permissions,
-		"has_password": user.PasswordHash != "",
+		"id":               user.ID,
+		"username":         user.Username,
+		"role":             user.Role,
+		"permissions":      user.Permissions,
+		"has_password":     user.PasswordHash != "",
+		"password_enabled": user.PasswordEnabled,
+		"passkey_enabled":  user.PasskeyEnabled,
 	})
 }
 
@@ -309,6 +347,8 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrPasswordTooShort):
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be at least 8 characters"})
+		case errors.Is(err, ErrPasswordNotAllowed):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "password sign-in is not enabled for your account"})
 		case errors.Is(err, ErrUserNotFound):
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
 		default:

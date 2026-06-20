@@ -138,6 +138,13 @@ func (s *Service) AuthenticatePassword(username, password string) (*User, error)
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
+	// Password sign-in must be enabled for this account. Because passkeys need a
+	// secure context (HTTPS), this flag is effectively what authorizes MCP
+	// clients on plain-HTTP deployments, where the password form is the only
+	// usable credential on the OAuth authorize page.
+	if !passwordAllowed(user) {
+		return nil, ErrInvalidCredentials
+	}
 	if user.PasswordHash == "" {
 		return nil, ErrInvalidCredentials
 	}

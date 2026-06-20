@@ -8,7 +8,12 @@ type User struct {
 	PasswordHash string       `json:"-"`
 	Role         string       `json:"role"`
 	Permissions  []Permission `json:"permissions,omitempty"`
-	CreatedAt    time.Time    `json:"created_at"`
+	// PasswordEnabled / PasskeyEnabled are admin-controlled policy: whether the
+	// account may create a password / register a passkey. Both default off for
+	// new users so the default sign-in is a connect link.
+	PasswordEnabled bool      `json:"password_enabled"`
+	PasskeyEnabled  bool      `json:"passkey_enabled"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // UserSummary is an enriched view of a user for admin user-management screens.
@@ -22,12 +27,21 @@ type UserSummary struct {
 	CreatedAt        time.Time    `json:"created_at"`
 	DeviceCount      int          `json:"device_count"`
 	HasPassword      bool         `json:"has_password"`
+	PasswordEnabled  bool         `json:"password_enabled"`
+	PasskeyEnabled   bool         `json:"passkey_enabled"`
 	HasPendingInvite bool         `json:"has_pending_invite"`
 }
 
 // UpdateUserRoleRequest changes a user's role.
 type UpdateUserRoleRequest struct {
 	Role string `json:"role"`
+}
+
+// UpdateUserAuthMethodsRequest toggles whether a user may use a password and/or
+// passkeys. Omitted (nil) fields are left unchanged.
+type UpdateUserAuthMethodsRequest struct {
+	PasswordEnabled *bool `json:"password_enabled"`
+	PasskeyEnabled  *bool `json:"passkey_enabled"`
 }
 
 type Device struct {

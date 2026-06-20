@@ -128,6 +128,7 @@ func NewRouter(
 			// User management
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users", authHandler.HandleListUsers)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}", authHandler.HandleUpdateUserRole)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}/auth-methods", authHandler.HandleUpdateUserAuthMethods)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}", authHandler.HandleDeleteUser)
 
 			// Credential management

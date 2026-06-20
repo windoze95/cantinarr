@@ -184,6 +184,65 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     );
   }
 
+  /// Enable or disable a user's password / passkey sign-in. Disabling is a real
+  /// revoke (clears the password / deletes passkeys), so confirm it first.
+  Future<void> _setAuthMethods(
+    UserSummary user, {
+    bool? passwordEnabled,
+    bool? passkeyEnabled,
+  }) async {
+    if (passwordEnabled == false || passkeyEnabled == false) {
+      final isPassword = passwordEnabled == false;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(isPassword ? 'Disable password?' : 'Disable passkeys?'),
+          content: Text(
+            isPassword
+                ? "This clears ${user.username}'s password. They can set a new "
+                    'one only if you re-enable it.'
+                : "This deletes ${user.username}'s passkeys. They'll need to "
+                    'register again if you re-enable them.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Disable'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
+    try {
+      await ref.read(authProvider.notifier).updateUserAuthMethods(
+            user.id,
+            passwordEnabled: passwordEnabled,
+            passkeyEnabled: passkeyEnabled,
+          );
+      await _loadUsers();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Updated ${user.username}'s sign-in methods")),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_friendlyError(e, 'Failed to update sign-in methods')),
+          ),
+        );
+      }
+    }
+  }
+
   String _friendlyError(Object e, String fallback) {
     final msg = e.toString();
     // Surface the backend's error message when present.
@@ -244,6 +303,12 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             onChangeRole: (role) => _changeRole(user, role),
             onDelete: () => _deleteUser(user),
             onResendInvite: () => _resendInvite(user),
+            onSetAuthMethods: ({bool? passwordEnabled, bool? passkeyEnabled}) =>
+                _setAuthMethods(
+              user,
+              passwordEnabled: passwordEnabled,
+              passkeyEnabled: passkeyEnabled,
+            ),
           );
         },
       ),
@@ -258,6 +323,7 @@ class _UserTile extends StatelessWidget {
     required this.onChangeRole,
     required this.onDelete,
     required this.onResendInvite,
+    required this.onSetAuthMethods,
   });
 
   final UserSummary user;
@@ -265,6 +331,8 @@ class _UserTile extends StatelessWidget {
   final ValueChanged<String> onChangeRole;
   final VoidCallback onDelete;
   final VoidCallback onResendInvite;
+  final void Function({bool? passwordEnabled, bool? passkeyEnabled})
+      onSetAuthMethods;
 
   /// A user who has never connected a device is stuck in "invited limbo":
   /// either their invite is still pending or the link was lost/expired.
@@ -323,6 +391,10 @@ class _UserTile extends StatelessWidget {
                   ? AppTheme.available
                   : AppTheme.unavailable,
             ),
+            if (user.passwordEnabled)
+              const _Tag(label: 'Password', color: AppTheme.textSecondary),
+            if (user.passkeyEnabled)
+              const _Tag(label: 'Passkey', color: AppTheme.textSecondary),
           ],
         ),
       ),
@@ -343,6 +415,18 @@ class _UserTile extends StatelessWidget {
             break;
           case 'resend_invite':
             onResendInvite();
+            break;
+          case 'enable_password':
+            onSetAuthMethods(passwordEnabled: true);
+            break;
+          case 'disable_password':
+            onSetAuthMethods(passwordEnabled: false);
+            break;
+          case 'enable_passkey':
+            onSetAuthMethods(passkeyEnabled: true);
+            break;
+          case 'disable_passkey':
+            onSetAuthMethods(passkeyEnabled: false);
             break;
           case 'delete':
             onDelete();
@@ -376,6 +460,28 @@ class _UserTile extends StatelessWidget {
             child: ListTile(
               leading: Icon(Icons.arrow_downward),
               title: Text('Make user'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        // Admins always keep both methods, so toggles are only for other users.
+        if (!user.isAdmin)
+          PopupMenuItem(
+            value: user.passwordEnabled ? 'disable_password' : 'enable_password',
+            child: ListTile(
+              leading: Icon(
+                  user.passwordEnabled ? Icons.lock_outline : Icons.lock_open),
+              title: Text(
+                  user.passwordEnabled ? 'Disable password' : 'Enable password'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        if (!user.isAdmin)
+          PopupMenuItem(
+            value: user.passkeyEnabled ? 'disable_passkey' : 'enable_passkey',
+            child: ListTile(
+              leading: const Icon(Icons.fingerprint),
+              title: Text(
+                  user.passkeyEnabled ? 'Disable passkeys' : 'Enable passkeys'),
               contentPadding: EdgeInsets.zero,
             ),
           ),

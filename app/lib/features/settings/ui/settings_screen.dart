@@ -75,16 +75,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             title: user?.username ?? 'Unknown',
             subtitle: user?.isAdmin == true ? 'Administrator' : 'User',
           ),
-          _SettingsTile(
-            icon: Icons.lock_outline,
-            title: 'Password',
-            subtitle: user?.hasPassword == null
-                ? 'Set a password for sign-in & MCP'
-                : (user!.hasPassword!
-                    ? 'Change your sign-in password'
-                    : 'Add a password for sign-in & MCP'),
-            onTap: () => context.push('/settings/password'),
-          ),
+          if (user?.canUsePassword == true)
+            _SettingsTile(
+              icon: Icons.lock_outline,
+              title: 'Password',
+              subtitle: user?.hasPassword == null
+                  ? 'Set a password for sign-in & MCP'
+                  : (user!.hasPassword!
+                      ? 'Change your sign-in password'
+                      : 'Add a password for sign-in & MCP'),
+              onTap: () => context.push('/settings/password'),
+            ),
 
           const SizedBox(height: 16),
 
@@ -151,12 +152,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
 
-          _SettingsTile(
-            icon: Icons.fingerprint,
-            title: 'Passkeys',
-            subtitle: 'Manage passkey sign-in methods',
-            onTap: () => context.push('/settings/passkeys'),
-          ),
+          if (user?.canUsePasskey == true)
+            _SettingsTile(
+              icon: Icons.fingerprint,
+              title: 'Passkeys',
+              subtitle: 'Manage passkey sign-in methods',
+              onTap: () => context.push('/settings/passkeys'),
+            ),
 
           // Admin section
           if (user?.isAdmin == true) ...[

@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
+    password_enabled BOOLEAN NOT NULL DEFAULT 0,
+    passkey_enabled BOOLEAN NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -76,6 +78,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     device_id TEXT NOT NULL,
     user_id INTEGER NOT NULL REFERENCES users(id),
     expires_at DATETIME NOT NULL,
+    superseded_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -150,18 +153,45 @@ func Open(dbPath string) (*sql.DB, error) {
 	// Additive column migrations for databases created by older versions:
 	// CREATE TABLE IF NOT EXISTS does not add new columns to existing tables,
 	// so each new column gets a tolerant ALTER TABLE (duplicate-column errors
-	// are ignored).
-	alterStatements := []string{
-		"ALTER TABLE service_instances ADD COLUMN username TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE service_instances ADD COLUMN password TEXT NOT NULL DEFAULT ''",
+	// are ignored). Backfill statements run only when the column is first added
+	// so they execute exactly once per database.
+	migrations := []struct {
+		alter    string
+		backfill []string
+	}{
+		{alter: "ALTER TABLE service_instances ADD COLUMN username TEXT NOT NULL DEFAULT ''"},
+		{alter: "ALTER TABLE service_instances ADD COLUMN password TEXT NOT NULL DEFAULT ''"},
+		{
+			// Self-service password creation is admin-gated. Preserve access for
+			// accounts that already rely on a password and for all admins.
+			alter: "ALTER TABLE users ADD COLUMN password_enabled BOOLEAN NOT NULL DEFAULT 0",
+			backfill: []string{
+				"UPDATE users SET password_enabled = 1 WHERE password_hash != '' OR role = 'admin'",
+			},
+		},
+		{
+			// Passkey registration is admin-gated. Preserve access for accounts
+			// that already have a passkey and for all admins.
+			alter: "ALTER TABLE users ADD COLUMN passkey_enabled BOOLEAN NOT NULL DEFAULT 0",
+			backfill: []string{
+				"UPDATE users SET passkey_enabled = 1 WHERE role = 'admin' OR id IN (SELECT DISTINCT user_id FROM webauthn_credentials)",
+			},
+		},
+		{alter: "ALTER TABLE refresh_tokens ADD COLUMN superseded_at DATETIME"},
 	}
-	for _, stmt := range alterStatements {
-		if _, err := db.Exec(stmt); err != nil {
+	for _, m := range migrations {
+		if _, err := db.Exec(m.alter); err != nil {
 			if strings.Contains(err.Error(), "duplicate column") {
-				continue
+				continue // already applied; skip the one-time backfill
 			}
 			db.Close()
-			return nil, fmt.Errorf("apply migration %q: %w", stmt, err)
+			return nil, fmt.Errorf("apply migration %q: %w", m.alter, err)
+		}
+		for _, stmt := range m.backfill {
+			if _, err := db.Exec(stmt); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("apply backfill %q: %w", stmt, err)
+			}
 		}
 	}
 

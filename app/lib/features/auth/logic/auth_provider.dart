@@ -341,6 +341,23 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     await _authService.deleteUser(conn.serverUrl, conn.accessToken, userId);
   }
 
+  /// Enable or disable a user's password / passkey sign-in (admin only).
+  Future<UserSummary> updateUserAuthMethods(
+    int userId, {
+    bool? passwordEnabled,
+    bool? passkeyEnabled,
+  }) async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    return _authService.updateUserAuthMethods(
+      conn.serverUrl,
+      conn.accessToken,
+      userId,
+      passwordEnabled: passwordEnabled,
+      passkeyEnabled: passkeyEnabled,
+    );
+  }
+
   // ─── Passkey Methods ─────────────────────────────────
 
   /// Register a new passkey for the current user.

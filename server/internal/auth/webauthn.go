@@ -341,6 +341,9 @@ func (s *Service) BeginPasskeyRegistration(userID int64, r *http.Request) (inter
 	if err != nil {
 		return nil, "", fmt.Errorf("load user: %w", err)
 	}
+	if !passkeyAllowed(waUser.user) {
+		return nil, "", ErrPasskeyNotAllowed
+	}
 
 	options, session, err := wa.BeginRegistration(waUser,
 		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
@@ -528,6 +531,11 @@ func (s *Service) finishPasskeyLoginUser(sessionID string, r *http.Request) (*We
 		return nil, fmt.Errorf("finish login: %w", err)
 	}
 
+	waUser := user.(*WebAuthnUser)
+	if !passkeyAllowed(waUser.user) {
+		return nil, ErrPasskeyNotAllowed
+	}
+
 	// Update sign count and last_used_at
 	credID := hex.EncodeToString(cred.ID)
 	_, _ = s.db.Exec(
@@ -535,8 +543,6 @@ func (s *Service) finishPasskeyLoginUser(sessionID string, r *http.Request) (*We
 		cred.Authenticator.SignCount, time.Now(), credID,
 	)
 
-	// Extract user ID from the WebAuthn user
-	waUser := user.(*WebAuthnUser)
 	return waUser, nil
 }
 
