@@ -37,6 +37,43 @@ func TestFormatSearchResultsIncludesMediaType(t *testing.T) {
 	}
 }
 
+func TestFormatMovieCollectionResultsIncludesPartsAndCount(t *testing.T) {
+	text := formatMovieCollectionResults([]tmdb.MovieCollection{
+		{
+			ID:   10,
+			Name: "Minions Collection",
+			Parts: []tmdb.SearchResult{
+				{
+					ID:          1,
+					Title:       "Minions",
+					ReleaseDate: "2015-06-17",
+				},
+				{
+					ID:          2,
+					Title:       "Minions: The Rise of Gru",
+					ReleaseDate: "2022-06-29",
+				},
+				{
+					ID:          3,
+					Title:       "Minions & Monsters",
+					ReleaseDate: "2026-07-01",
+				},
+			},
+		},
+	}, 10)
+
+	for _, want := range []string{
+		"Minions Collection [collection ID: 10] - 3 movie(s)",
+		"Minions (2015) [TMDB ID: 1] [media_type: movie]",
+		"Minions: The Rise of Gru (2022) [TMDB ID: 2] [media_type: movie]",
+		"Minions & Monsters (2026) [TMDB ID: 3] [media_type: movie]",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("formatted collection missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestResolveDisplayMediaSearchResultUsesExactTitleAndYear(t *testing.T) {
 	got, err := resolveDisplayMediaSearchResult(
 		func(query string) ([]tmdb.SearchResult, error) {
@@ -100,6 +137,9 @@ func TestGetToolsForRoleFiltersOperationalTools(t *testing.T) {
 
 	if !hasTool(userTools, "search_movies") {
 		t.Fatal("user tools should include media discovery")
+	}
+	if !hasTool(userTools, "search_movie_collections") {
+		t.Fatal("user tools should include movie collection discovery")
 	}
 	if hasTool(userTools, "get_queue") {
 		t.Fatal("user tools should not include operational queue access")

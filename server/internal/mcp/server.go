@@ -157,6 +157,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	switch name {
 	case "search_movies":
 		return s.searchMovies(input)
+	case "search_movie_collections":
+		return s.searchMovieCollections(input)
 	case "search_tv_shows":
 		return s.searchTVShows(input)
 	case "get_trending":
