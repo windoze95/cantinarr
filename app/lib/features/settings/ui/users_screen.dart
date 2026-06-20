@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/data/auth_service.dart';
@@ -110,6 +111,79 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     }
   }
 
+  /// Issue a fresh connect link for a user who hasn't connected a device yet.
+  ///
+  /// Reuses the connect-token endpoint, which finds the existing account by
+  /// username and attaches a new token — so a user stuck in invited limbo
+  /// (lost or expired link) can be re-invited without losing their account.
+  Future<void> _resendInvite(UserSummary user) async {
+    String? link;
+    try {
+      final resp =
+          await ref.read(authProvider.notifier).generateConnectToken(
+                user.username,
+              );
+      link = resp.link;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_friendlyError(e, 'Failed to create link'))),
+        );
+      }
+      return;
+    }
+
+    await _loadUsers();
+    if (!mounted) return;
+
+    final newLink = link;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Invite link for ${user.username}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Share this link with them. It replaces any previous link and '
+              'expires in 7 days.',
+              style: TextStyle(color: AppTheme.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppTheme.accent.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: SelectableText(
+                newLink,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Done'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: newLink));
+              ScaffoldMessenger.of(dialogContext).showSnackBar(
+                const SnackBar(content: Text('Link copied!')),
+              );
+            },
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy'),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _friendlyError(Object e, String fallback) {
     final msg = e.toString();
     // Surface the backend's error message when present.
@@ -169,6 +243,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             isSelf: user.id == currentUserId,
             onChangeRole: (role) => _changeRole(user, role),
             onDelete: () => _deleteUser(user),
+            onResendInvite: () => _resendInvite(user),
           );
         },
       ),
@@ -182,12 +257,18 @@ class _UserTile extends StatelessWidget {
     required this.isSelf,
     required this.onChangeRole,
     required this.onDelete,
+    required this.onResendInvite,
   });
 
   final UserSummary user;
   final bool isSelf;
   final ValueChanged<String> onChangeRole;
   final VoidCallback onDelete;
+  final VoidCallback onResendInvite;
+
+  /// A user who has never connected a device is stuck in "invited limbo":
+  /// either their invite is still pending or the link was lost/expired.
+  bool get _needsInvite => user.deviceCount == 0;
 
   @override
   Widget build(BuildContext context) {
@@ -231,7 +312,9 @@ class _UserTile extends StatelessWidget {
               color: user.isAdmin ? AppTheme.accent : AppTheme.textSecondary,
             ),
             if (user.hasPendingInvite)
-              _Tag(label: 'Invited', color: AppTheme.requested),
+              _Tag(label: 'Invited', color: AppTheme.requested)
+            else if (_needsInvite)
+              _Tag(label: 'Invite expired', color: AppTheme.unavailable),
             _Tag(
               label: user.deviceCount == 1
                   ? '1 device'
@@ -258,12 +341,26 @@ class _UserTile extends StatelessWidget {
           case 'make_user':
             onChangeRole('user');
             break;
+          case 'resend_invite':
+            onResendInvite();
+            break;
           case 'delete':
             onDelete();
             break;
         }
       },
       itemBuilder: (context) => [
+        if (_needsInvite)
+          PopupMenuItem(
+            value: 'resend_invite',
+            child: ListTile(
+              leading: const Icon(Icons.link),
+              title: Text(
+                user.hasPendingInvite ? 'New invite link' : 'Re-invite',
+              ),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
         if (!user.isAdmin)
           const PopupMenuItem(
             value: 'make_admin',
