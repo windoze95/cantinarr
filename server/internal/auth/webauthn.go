@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -53,9 +54,9 @@ func rpIDFromRequest(r *http.Request) string {
 	return host
 }
 
-// rpConfigFromRequest derives the WebAuthn relying party config from the
+// baseRPConfigFromRequest derives the WebAuthn relying party config from the
 // incoming HTTP request. Each self-hosted deployment has a different domain.
-func rpConfigFromRequest(r *http.Request) *webauthn.Config {
+func baseRPConfigFromRequest(r *http.Request) *webauthn.Config {
 	host := r.Host
 
 	// RP ID is the hostname without port
@@ -81,6 +82,58 @@ func rpConfigFromRequest(r *http.Request) *webauthn.Config {
 		RPDisplayName: "Cantinarr",
 		RPOrigins:     []string{origin},
 	}
+}
+
+func (s *Service) rpConfigFromRequest(r *http.Request) *webauthn.Config {
+	cfg := baseRPConfigFromRequest(r)
+	cfg.RPOrigins = appendUnique(cfg.RPOrigins, s.webauthnOrigins...)
+	return cfg
+}
+
+func (s *Service) nativePasskeyStatusFromRequest(r *http.Request) NativePasskeyStatusResponse {
+	if !isSecureContext(r) {
+		return NativePasskeyStatusResponse{}
+	}
+	associationHost := isNativeAssociationHost(r)
+	return NativePasskeyStatusResponse{
+		AppleConfigured:      associationHost && len(s.appleAppIDs) > 0,
+		AndroidConfigured:    associationHost && len(s.androidCertFingerprints) > 0,
+		WindowsOriginTrusted: s.windowsNativeOriginTrusted(r),
+	}
+}
+
+func isNativeAssociationHost(r *http.Request) bool {
+	host := strings.ToLower(strings.Trim(rpIDFromRequest(r), "[]"))
+	if host == "localhost" || host == "" {
+		return false
+	}
+	return net.ParseIP(host) == nil
+}
+
+func (s *Service) windowsNativeOriginTrusted(r *http.Request) bool {
+	origin := "https://" + rpIDFromRequest(r)
+	for _, trusted := range s.rpConfigFromRequest(r).RPOrigins {
+		if trusted == origin {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(values []string, extras ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(extras))
+	result := make([]string, 0, len(values)+len(extras))
+	for _, value := range append(values, extras...) {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // ─── WebAuthn User Adapter ───────────────────────────────
@@ -278,7 +331,7 @@ func (s *Service) loadAllCredentials(userID int64) ([]webauthn.Credential, error
 }
 
 func (s *Service) BeginPasskeyRegistration(userID int64, r *http.Request) (interface{}, string, error) {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return nil, "", fmt.Errorf("create webauthn: %w", err)
@@ -287,6 +340,9 @@ func (s *Service) BeginPasskeyRegistration(userID int64, r *http.Request) (inter
 	waUser, err := s.loadWebAuthnUser(userID, cfg.RPID)
 	if err != nil {
 		return nil, "", fmt.Errorf("load user: %w", err)
+	}
+	if !passkeyAllowed(waUser.user) {
+		return nil, "", ErrPasskeyNotAllowed
 	}
 
 	options, session, err := wa.BeginRegistration(waUser,
@@ -301,7 +357,7 @@ func (s *Service) BeginPasskeyRegistration(userID int64, r *http.Request) (inter
 }
 
 func (s *Service) FinishPasskeyRegistration(userID int64, sessionID, credentialName string, r *http.Request) error {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return fmt.Errorf("create webauthn: %w", err)
@@ -405,7 +461,7 @@ func (s *Service) FinishPasskeySetup(token, sessionID, credentialName string, r 
 }
 
 func (s *Service) BeginPasskeyLogin(r *http.Request) (interface{}, string, error) {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return nil, "", fmt.Errorf("create webauthn: %w", err)
@@ -446,7 +502,7 @@ func (s *Service) FinishPasskeyLogin(sessionID string, r *http.Request) (*TokenR
 }
 
 func (s *Service) finishPasskeyLoginUser(sessionID string, r *http.Request) (*WebAuthnUser, error) {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create webauthn: %w", err)
@@ -475,6 +531,11 @@ func (s *Service) finishPasskeyLoginUser(sessionID string, r *http.Request) (*We
 		return nil, fmt.Errorf("finish login: %w", err)
 	}
 
+	waUser := user.(*WebAuthnUser)
+	if !passkeyAllowed(waUser.user) {
+		return nil, ErrPasskeyNotAllowed
+	}
+
 	// Update sign count and last_used_at
 	credID := hex.EncodeToString(cred.ID)
 	_, _ = s.db.Exec(
@@ -482,8 +543,6 @@ func (s *Service) finishPasskeyLoginUser(sessionID string, r *http.Request) (*We
 		cred.Authenticator.SignCount, time.Now(), credID,
 	)
 
-	// Extract user ID from the WebAuthn user
-	waUser := user.(*WebAuthnUser)
 	return waUser, nil
 }
 

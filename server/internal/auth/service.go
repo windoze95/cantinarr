@@ -34,7 +34,39 @@ var (
 	ErrInvalidRole          = errors.New("invalid role")
 	ErrLastAdmin            = errors.New("cannot remove the last admin")
 	ErrCannotDeleteSelf     = errors.New("cannot delete your own account")
+	ErrPasswordTooShort     = errors.New("password is too short")
+	ErrPasswordNotAllowed   = errors.New("password sign-in is not enabled for this account")
+	ErrPasskeyNotAllowed    = errors.New("passkeys are not enabled for this account")
+	ErrCannotModifyAdmin    = errors.New("cannot change sign-in methods for an admin")
 )
+
+// minPasswordLength is the minimum length for an account password. It matches
+// the check enforced during first-run setup.
+const minPasswordLength = 8
+
+const (
+	// refreshTokenTTL is how long an idle session survives before it must be
+	// re-established with a fresh connect link. Each refresh issues a new token
+	// with a fresh TTL, so an actively used session effectively never expires.
+	refreshTokenTTL = 365 * 24 * time.Hour
+	// refreshRotationGrace is a short window after a refresh token is rotated
+	// during which the just-superseded token is still accepted. It prevents a
+	// client that fails to persist the rotated token (crash, dropped response)
+	// from being logged out, without leaving tokens replayable indefinitely.
+	refreshRotationGrace = 60 * time.Second
+)
+
+// passwordAllowed reports whether the account may use password sign-in. Admins
+// are always allowed so an install can never be locked out of its own server.
+func passwordAllowed(u *User) bool {
+	return u.Role == RoleAdmin || u.PasswordEnabled
+}
+
+// passkeyAllowed reports whether the account may register and use passkeys.
+// Admins are always allowed.
+func passkeyAllowed(u *User) bool {
+	return u.Role == RoleAdmin || u.PasskeyEnabled
+}
 
 type Claims struct {
 	UserID   int64  `json:"user_id"`
@@ -46,16 +78,40 @@ type Claims struct {
 }
 
 type Service struct {
-	db               *sql.DB
-	jwtSecret        []byte
-	webauthnSessions *SessionStore
+	db                      *sql.DB
+	jwtSecret               []byte
+	webauthnSessions        *SessionStore
+	webauthnOrigins         []string
+	appleAppIDs             []string
+	androidCertFingerprints []string
 }
 
-func NewService(db *sql.DB, jwtSecret string) *Service {
+type WebAuthnConfig struct {
+	ExtraOrigins            []string
+	AppleAppIDs             []string
+	AndroidCertFingerprints []string
+}
+
+func NewService(db *sql.DB, jwtSecret string, webauthnConfig ...WebAuthnConfig) *Service {
+	var extraOrigins []string
+	var appleAppIDs []string
+	var androidCertFingerprints []string
+	if len(webauthnConfig) > 0 {
+		cfg := webauthnConfig[0]
+		extraOrigins = append(extraOrigins, cfg.ExtraOrigins...)
+		appleAppIDs = append(appleAppIDs, cfg.AppleAppIDs...)
+		androidCertFingerprints = append(
+			androidCertFingerprints,
+			cfg.AndroidCertFingerprints...,
+		)
+	}
 	return &Service{
-		db:               db,
-		jwtSecret:        []byte(jwtSecret),
-		webauthnSessions: NewSessionStore(),
+		db:                      db,
+		jwtSecret:               []byte(jwtSecret),
+		webauthnSessions:        NewSessionStore(),
+		webauthnOrigins:         extraOrigins,
+		appleAppIDs:             appleAppIDs,
+		androidCertFingerprints: androidCertFingerprints,
 	}
 }
 
@@ -77,7 +133,7 @@ func (s *Service) EnsureAdmin(adminPassword string) error {
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
-	_, err = s.db.Exec("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", "admin", string(hash), "admin")
+	_, err = s.db.Exec("INSERT INTO users (username, password_hash, role, password_enabled, passkey_enabled) VALUES (?, ?, ?, 1, 1)", "admin", string(hash), "admin")
 	if err != nil {
 		return fmt.Errorf("create admin: %w", err)
 	}
@@ -125,7 +181,7 @@ func (s *Service) Setup(username, password string) (*TokenResponse, error) {
 	}
 
 	result, err := tx.Exec(
-		"INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+		"INSERT INTO users (username, password_hash, role, password_enabled, passkey_enabled) VALUES (?, ?, ?, 1, 1)",
 		username, string(hash), "admin",
 	)
 	if err != nil {
@@ -184,6 +240,9 @@ func (s *Service) Login(username, password string) (*TokenResponse, error) {
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
+	if !passwordAllowed(user) {
+		return nil, ErrInvalidCredentials
+	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
 	}
@@ -206,25 +265,76 @@ func (s *Service) Login(username, password string) (*TokenResponse, error) {
 	return resp, nil
 }
 
+// SetPassword creates or replaces a user's password. It backs self-service
+// password creation — so users on plain HTTP, where passkeys require a secure
+// context and are unavailable, can sign in with a password and authorize MCP
+// clients — and password resets after an admin-issued connect link is redeemed.
+//
+// A valid session (enforced by the auth middleware) is sufficient to set the
+// password; no current password is required. This matches passkey registration,
+// which also re-uses the existing session without re-auth, and it is what lets
+// the connect-link reset flow recover a user who has forgotten their password.
+func (s *Service) SetPassword(userID int64, newPassword string) error {
+	user, err := s.getUserByID(userID)
+	if err != nil {
+		return ErrUserNotFound
+	}
+	if !passwordAllowed(user) {
+		return ErrPasswordNotAllowed
+	}
+	if len(newPassword) < minPasswordLength {
+		return ErrPasswordTooShort
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	if _, err := s.db.Exec(
+		"UPDATE users SET password_hash = ? WHERE id = ?",
+		string(hash), userID,
+	); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {
 	claims, err := s.ValidateToken(refreshToken)
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
 
-	// Verify the refresh token exists in our store (rotation check)
+	// Verify the refresh token exists in our store (rotation check).
 	oldHash := hashToken(refreshToken)
-	var storedDeviceID string
+	var (
+		storedDeviceID string
+		supersededAt   sql.NullTime
+	)
 	err = s.db.QueryRow(
-		"SELECT device_id FROM refresh_tokens WHERE token_hash = ?", oldHash,
-	).Scan(&storedDeviceID)
+		"SELECT device_id, superseded_at FROM refresh_tokens WHERE token_hash = ?", oldHash,
+	).Scan(&storedDeviceID, &supersededAt)
 	if err != nil {
-		// Token not in store — it was already rotated out (possible replay)
+		// Token not in store — never issued, expired and cleaned up, or replayed.
 		return nil, ErrInvalidCredentials
 	}
-
-	// Delete the old refresh token (one-time use)
-	_, _ = s.db.Exec("DELETE FROM refresh_tokens WHERE token_hash = ?", oldHash)
+	if supersededAt.Valid {
+		// Already rotated. Accept it only within the grace window so a client
+		// that failed to persist the rotated token isn't logged out; beyond the
+		// window treat it as a replay.
+		if time.Since(supersededAt.Time) > refreshRotationGrace {
+			return nil, ErrInvalidCredentials
+		}
+	} else {
+		// First use: mark the token superseded (one-time use) but keep the row
+		// so a retry within the grace window still succeeds. Cleanup in
+		// generateTokens removes it once the grace window has passed.
+		_, _ = s.db.Exec(
+			"UPDATE refresh_tokens SET superseded_at = ? WHERE token_hash = ?",
+			time.Now(), oldHash,
+		)
+	}
 
 	// Check device revocation if the token has a device ID
 	if claims.DeviceID != "" {
@@ -407,6 +517,8 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 			u.role,
 			u.created_at,
 			u.password_hash != '' AS has_password,
+			u.password_enabled,
+			u.passkey_enabled,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
@@ -425,7 +537,8 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 		var u UserSummary
 		if err := rows.Scan(
 			&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-			&u.HasPassword, &u.DeviceCount, &u.HasPendingInvite,
+			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled,
+			&u.DeviceCount, &u.HasPendingInvite,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
@@ -475,6 +588,59 @@ func (s *Service) UpdateUserRole(userID int64, role string) (*UserSummary, error
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit role change: %w", err)
+	}
+
+	return s.userSummaryByID(userID)
+}
+
+// SetUserAuthMethods enables or disables password and/or passkey sign-in for a
+// user. Enabling lets the user create that credential; disabling is a real
+// revoke — it clears the stored password / deletes the user's passkeys so the
+// method stops working immediately (the user's existing device session is left
+// intact). Admins always retain both methods and cannot be modified here, so an
+// install can never be locked out of password and passkey sign-in at once.
+func (s *Service) SetUserAuthMethods(userID int64, passwordEnabled, passkeyEnabled *bool) (*UserSummary, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var role string
+	if err := tx.QueryRow("SELECT role FROM users WHERE id = ?", userID).Scan(&role); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("load user: %w", err)
+	}
+	if role == RoleAdmin {
+		return nil, ErrCannotModifyAdmin
+	}
+
+	if passwordEnabled != nil {
+		if _, err := tx.Exec("UPDATE users SET password_enabled = ? WHERE id = ?", *passwordEnabled, userID); err != nil {
+			return nil, fmt.Errorf("update password_enabled: %w", err)
+		}
+		if !*passwordEnabled {
+			if _, err := tx.Exec("UPDATE users SET password_hash = '' WHERE id = ?", userID); err != nil {
+				return nil, fmt.Errorf("clear password: %w", err)
+			}
+		}
+	}
+
+	if passkeyEnabled != nil {
+		if _, err := tx.Exec("UPDATE users SET passkey_enabled = ? WHERE id = ?", *passkeyEnabled, userID); err != nil {
+			return nil, fmt.Errorf("update passkey_enabled: %w", err)
+		}
+		if !*passkeyEnabled {
+			if _, err := tx.Exec("DELETE FROM webauthn_credentials WHERE user_id = ?", userID); err != nil {
+				return nil, fmt.Errorf("clear passkeys: %w", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit auth methods: %w", err)
 	}
 
 	return s.userSummaryByID(userID)
@@ -539,6 +705,8 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 			u.role,
 			u.created_at,
 			u.password_hash != '' AS has_password,
+			u.password_enabled,
+			u.passkey_enabled,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
@@ -548,7 +716,8 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 		WHERE u.id = ?
 	`, time.Now(), userID).Scan(
 		&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-		&u.HasPassword, &u.DeviceCount, &u.HasPendingInvite,
+		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled,
+		&u.DeviceCount, &u.HasPendingInvite,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -675,7 +844,7 @@ func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, e
 		return nil, fmt.Errorf("sign access token: %w", err)
 	}
 
-	refreshExpiry := 30 * 24 * time.Hour
+	refreshExpiry := refreshTokenTTL
 	refreshClaims := &Claims{
 		UserID:   user.ID,
 		Username: user.Username,
@@ -698,8 +867,13 @@ func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, e
 		tokenHash, deviceID, user.ID, now.Add(refreshExpiry),
 	)
 
-	// Clean up expired refresh tokens periodically (best-effort)
+	// Clean up expired refresh tokens, and ones left over past the rotation
+	// grace window, periodically (best-effort).
 	_, _ = s.db.Exec("DELETE FROM refresh_tokens WHERE expires_at < ?", now)
+	_, _ = s.db.Exec(
+		"DELETE FROM refresh_tokens WHERE superseded_at IS NOT NULL AND superseded_at < ?",
+		now.Add(-refreshRotationGrace),
+	)
 
 	return &TokenResponse{
 		AccessToken:  accessToken,
@@ -717,8 +891,8 @@ func userWithPermissions(user *User) User {
 func (s *Service) getUserByUsername(username string) (*User, error) {
 	var user User
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?", username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.CreatedAt)
+		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, created_at FROM users WHERE username = ?", username,
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -728,8 +902,8 @@ func (s *Service) getUserByUsername(username string) (*User, error) {
 func (s *Service) getUserByID(id int64) (*User, error) {
 	var user User
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?", id,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.CreatedAt)
+		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, created_at FROM users WHERE id = ?", id,
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

@@ -77,6 +77,34 @@ class AuthService {
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Fetch the authenticated user's profile, including whether a password is
+  /// set (`has_password`).
+  Future<UserProfile> fetchMe(
+    String serverUrl,
+    String accessToken,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.get(
+      '/api/auth/me',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return UserProfile.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Create or replace the authenticated user's password.
+  Future<void> setPassword(
+    String serverUrl,
+    String accessToken,
+    String newPassword,
+  ) async {
+    final dio = _createDio(serverUrl);
+    await dio.post(
+      '/api/auth/password',
+      data: {'password': newPassword},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
   /// Fetch server configuration (TMDB key, available services, etc.).
   Future<ServerConfig> fetchConfig(
     String serverUrl,
@@ -176,6 +204,27 @@ class AuthService {
       '/api/admin/users/$userId',
       options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
     );
+  }
+
+  /// Enable or disable a user's password / passkey sign-in (admin only).
+  /// Omitted fields are left unchanged; disabling is a real revoke server-side.
+  Future<UserSummary> updateUserAuthMethods(
+    String serverUrl,
+    String accessToken,
+    int userId, {
+    bool? passwordEnabled,
+    bool? passkeyEnabled,
+  }) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.patch(
+      '/api/admin/users/$userId/auth-methods',
+      data: {
+        if (passwordEnabled != null) 'password_enabled': passwordEnabled,
+        if (passkeyEnabled != null) 'passkey_enabled': passkeyEnabled,
+      },
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return UserSummary.fromJson(resp.data as Map<String, dynamic>);
   }
 
   // ─── Passkey API Methods ─────────────────────────────
@@ -352,6 +401,8 @@ class UserSummary {
   final String createdAt;
   final int deviceCount;
   final bool hasPassword;
+  final bool passwordEnabled;
+  final bool passkeyEnabled;
   final bool hasPendingInvite;
 
   const UserSummary({
@@ -362,6 +413,8 @@ class UserSummary {
     required this.createdAt,
     required this.deviceCount,
     required this.hasPassword,
+    required this.passwordEnabled,
+    required this.passkeyEnabled,
     required this.hasPendingInvite,
   });
 
@@ -378,6 +431,8 @@ class UserSummary {
         createdAt: json['created_at'] as String? ?? '',
         deviceCount: json['device_count'] as int? ?? 0,
         hasPassword: json['has_password'] as bool? ?? false,
+        passwordEnabled: json['password_enabled'] as bool? ?? false,
+        passkeyEnabled: json['passkey_enabled'] as bool? ?? false,
         hasPendingInvite: json['has_pending_invite'] as bool? ?? false,
       );
 }

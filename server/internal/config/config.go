@@ -1,10 +1,13 @@
 package config
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -17,6 +20,14 @@ type Config struct {
 	// EncryptionKeyFile backs secrets-at-rest when CANTINARR_ENCRYPTION_KEY
 	// is not set; it lives next to the database.
 	EncryptionKeyFile string
+	// WebAuthnExtraOrigins are trusted in addition to the request origin.
+	// Native Android passkeys use android:apk-key-hash origins.
+	WebAuthnExtraOrigins []string
+	// AppleAppIDs are TeamID.BundleID entries served in the AASA file.
+	AppleAppIDs []string
+	// AndroidPackageName and AndroidCertFingerprints are served in assetlinks.json.
+	AndroidPackageName      string
+	AndroidCertFingerprints []string
 }
 
 func Load() (*Config, error) {
@@ -30,11 +41,35 @@ func Load() (*Config, error) {
 		DBPath:            "/config/cantinarr.db",
 		ServerName:        os.Getenv("CANTINARR_SERVER_NAME"),
 		EncryptionKeyFile: "/config/encryption.key",
+		WebAuthnExtraOrigins: splitEnvList(
+			os.Getenv("CANTINARR_WEBAUTHN_EXTRA_ORIGINS"),
+		),
+		AppleAppIDs:        splitEnvList(os.Getenv("CANTINARR_APPLE_APP_IDS")),
+		AndroidPackageName: os.Getenv("CANTINARR_ANDROID_PACKAGE_NAME"),
 	}
 
 	if cfg.ServerName == "" {
 		cfg.ServerName = "Cantinarr"
 	}
+	if cfg.AndroidPackageName == "" {
+		cfg.AndroidPackageName = "com.cantinarr.cantinarr"
+	}
+
+	androidFingerprints := os.Getenv("CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS")
+	if androidFingerprints == "" {
+		androidFingerprints = os.Getenv("CANTINARR_ANDROID_CERT_SHA256")
+	}
+	var err error
+	cfg.AndroidCertFingerprints, err = normalizeAndroidFingerprints(
+		splitEnvList(androidFingerprints),
+	)
+	if err != nil {
+		return nil, err
+	}
+	cfg.WebAuthnExtraOrigins = append(
+		cfg.WebAuthnExtraOrigins,
+		androidOrigins(cfg.AndroidCertFingerprints)...,
+	)
 
 	portStr := os.Getenv("CANTINARR_PORT")
 	if portStr == "" {
@@ -48,4 +83,59 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func splitEnvList(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func normalizeAndroidFingerprints(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := strings.ToUpper(strings.ReplaceAll(value, ":", ""))
+		if len(normalized) != 64 {
+			return nil, fmt.Errorf("invalid Android SHA-256 fingerprint %q", value)
+		}
+		if _, err := hex.DecodeString(normalized); err != nil {
+			return nil, fmt.Errorf("invalid Android SHA-256 fingerprint %q: %w", value, err)
+		}
+		var builder strings.Builder
+		for i := 0; i < len(normalized); i += 2 {
+			if i > 0 {
+				builder.WriteString(":")
+			}
+			builder.WriteString(normalized[i : i+2])
+		}
+		result = append(result, builder.String())
+	}
+	return result, nil
+}
+
+func androidOrigins(fingerprints []string) []string {
+	origins := make([]string, 0, len(fingerprints))
+	for _, fingerprint := range fingerprints {
+		raw := strings.ReplaceAll(fingerprint, ":", "")
+		bytes, err := hex.DecodeString(raw)
+		if err != nil {
+			continue
+		}
+		origins = append(origins,
+			"android:apk-key-hash:"+base64.RawURLEncoding.EncodeToString(bytes),
+		)
+	}
+	return origins
 }

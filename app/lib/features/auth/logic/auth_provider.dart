@@ -259,6 +259,40 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     ));
   }
 
+  /// Re-fetch the current user's profile (e.g. to learn whether a password is
+  /// set) and update state.
+  Future<void> refreshUser() async {
+    final current = state.valueOrNull;
+    final conn = current?.connection;
+    if (current == null || conn == null) return;
+    try {
+      final user = await _authService.fetchMe(conn.serverUrl, conn.accessToken);
+      state = AsyncData(current.copyWith(user: user));
+    } catch (e) {
+      debugPrint('refreshUser failed: $e');
+    }
+  }
+
+  /// Create or replace the current user's password. A password enables
+  /// username/password sign-in — and MCP client authorization — on servers
+  /// without HTTPS, where passkeys are unavailable.
+  Future<void> setPassword(String newPassword) async {
+    final current = state.valueOrNull;
+    final conn = current?.connection;
+    if (current == null || conn == null) throw Exception('Not authenticated');
+    await _authService.setPassword(
+      conn.serverUrl,
+      conn.accessToken,
+      newPassword,
+    );
+    final user = current.user;
+    if (user != null) {
+      state = AsyncData(
+        current.copyWith(user: user.copyWith(hasPassword: true)),
+      );
+    }
+  }
+
   /// Generate a connect link for a new user (admin only).
   Future<ConnectTokenResponse> generateConnectToken(String name) async {
     final conn = state.valueOrNull?.connection;
@@ -305,6 +339,23 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final conn = state.valueOrNull?.connection;
     if (conn == null) throw Exception('Not authenticated');
     await _authService.deleteUser(conn.serverUrl, conn.accessToken, userId);
+  }
+
+  /// Enable or disable a user's password / passkey sign-in (admin only).
+  Future<UserSummary> updateUserAuthMethods(
+    int userId, {
+    bool? passwordEnabled,
+    bool? passkeyEnabled,
+  }) async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    return _authService.updateUserAuthMethods(
+      conn.serverUrl,
+      conn.accessToken,
+      userId,
+      passwordEnabled: passwordEnabled,
+      passkeyEnabled: passkeyEnabled,
+    );
   }
 
   // ─── Passkey Methods ─────────────────────────────────
@@ -433,10 +484,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   /// Check if passkey offer should be shown — requires both platform
   /// support and server-side secure context (HTTPS / localhost).
   Future<bool> _shouldOfferPasskey(String serverUrl) async {
-    if (!PasskeyService.isAvailable()) return false;
+    if (!await PasskeyService.isAvailableAsync()) return false;
     try {
       final status = await _authService.getServerStatus(serverUrl);
-      return status.webAuthnAvailable;
+      return status.supportsPasskeyPlatform(PasskeyService.platformKind());
     } catch (_) {
       return false;
     }
@@ -518,6 +569,15 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
     if (e is Exception) {
       final msg = e.toString();
+      if (msg.startsWith('Exception: ')) {
+        final message = msg.replaceFirst('Exception: ', '');
+        if (message.contains('passkey') ||
+            message.contains('Passkey') ||
+            message.contains('credential provider') ||
+            message.contains('Google account')) {
+          return message;
+        }
+      }
       if (msg.contains('Connection refused') ||
           msg.contains('SocketException')) {
         return 'Could not connect to server';
@@ -540,6 +600,15 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       if (e.type == DioExceptionType.connectionError ||
           e.type == DioExceptionType.connectionTimeout) {
         return 'Could not connect to server';
+      }
+    }
+    if (e is Exception) {
+      final message = e.toString().replaceFirst('Exception: ', '');
+      if (message.contains('passkey') ||
+          message.contains('Passkey') ||
+          message.contains('credential provider') ||
+          message.contains('Google account')) {
+        return message;
       }
     }
     return 'Passkey authentication failed. Try signing in with your password.';

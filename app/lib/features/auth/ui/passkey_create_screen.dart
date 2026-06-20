@@ -18,7 +18,47 @@ class PasskeyCreateScreen extends ConsumerStatefulWidget {
 class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
   final _nameController = TextEditingController(text: 'Passkey');
   bool _isCreating = false;
+  bool? _passkeyAvailable;
+  bool _devicePasskeyAvailable = false;
+  bool _serverNativePasskeyReady = false;
+  bool _browserFallbackAvailable = false;
+  bool _showBrowserFallback = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPasskeyAvailability();
+  }
+
+  Future<void> _loadPasskeyAvailability() async {
+    final deviceAvailable = await PasskeyService.isAvailableAsync();
+    var serverNativeReady = false;
+    var browserFallbackAvailable = false;
+
+    final conn = ref.read(authProvider).valueOrNull?.connection;
+    if (conn != null) {
+      try {
+        final status =
+            await ref.read(authProvider.notifier).checkServer(conn.serverUrl);
+        serverNativeReady =
+            status.supportsPasskeyPlatform(PasskeyService.platformKind());
+        browserFallbackAvailable = status.webAuthnAvailable;
+      } catch (_) {
+        browserFallbackAvailable = false;
+      }
+    }
+
+    if (!mounted) return;
+    final available = deviceAvailable && serverNativeReady;
+    setState(() {
+      _passkeyAvailable = available;
+      _devicePasskeyAvailable = deviceAvailable;
+      _serverNativePasskeyReady = serverNativeReady;
+      _browserFallbackAvailable = browserFallbackAvailable;
+      _showBrowserFallback = !available && browserFallbackAvailable;
+    });
+  }
 
   @override
   void dispose() {
@@ -33,6 +73,7 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
     setState(() {
       _isCreating = true;
       _error = null;
+      _showBrowserFallback = false;
     });
 
     try {
@@ -46,7 +87,9 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
       if (!mounted) return;
       setState(() {
         _isCreating = false;
-        _error = 'Could not create passkey';
+        _passkeyAvailable = false;
+        _error = _passkeyErrorMessage(e);
+        _showBrowserFallback = _browserFallbackAvailable;
       });
     }
   }
@@ -75,7 +118,8 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final available = PasskeyService.isAvailable();
+    final checkingAvailability = _passkeyAvailable == null;
+    final available = _passkeyAvailable ?? false;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Create Passkey')),
@@ -87,14 +131,14 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
             const SizedBox(height: 24),
             TextField(
               controller: _nameController,
-              enabled: available && !_isCreating,
+              enabled: available && !_isCreating && !checkingAvailability,
               decoration: const InputDecoration(
                 labelText: 'Name',
                 hintText: 'Phone, laptop, browser',
                 prefixIcon: Icon(Icons.label_outline),
               ),
               textCapitalization: TextCapitalization.words,
-              autofocus: available,
+              autofocus: available && !checkingAvailability,
               onSubmitted: (_) => _create(),
             ),
             if (_error != null) ...[
@@ -103,32 +147,64 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
             ],
             const SizedBox(height: 24),
             FilledButton.icon(
-              onPressed: available && !_isCreating ? _create : null,
-              icon: _isCreating
+              onPressed: available && !_isCreating && !checkingAvailability
+                  ? _create
+                  : null,
+              icon: _isCreating || checkingAvailability
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.fingerprint),
-              label: Text(_isCreating ? 'Creating...' : 'Create Passkey'),
+              label: Text(checkingAvailability
+                  ? 'Checking...'
+                  : _isCreating
+                      ? 'Creating...'
+                      : 'Create Passkey'),
             ),
-            if (!available) ...[
+            if (!checkingAvailability && !available) ...[
               const SizedBox(height: 16),
-              const Text(
-                'Passkeys are not available in this app on this device.',
-                style: TextStyle(color: AppTheme.textSecondary),
+              Text(
+                _nativeUnavailableMessage(),
+                style: const TextStyle(color: AppTheme.textSecondary),
               ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: _isCreating ? null : _openBrowser,
-                icon: const Icon(Icons.open_in_browser),
-                label: const Text('Open Browser'),
-              ),
+              if (_showBrowserFallback) ...[
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _isCreating ? null : _openBrowser,
+                  icon: const Icon(Icons.open_in_browser),
+                  label: const Text('Open Browser'),
+                ),
+              ],
             ],
           ],
         ),
       ),
     );
+  }
+
+  String _passkeyErrorMessage(Object e) {
+    final message = e.toString().replaceFirst('Exception: ', '');
+    if (message.contains('passkey') ||
+        message.contains('Passkey') ||
+        message.contains('credential provider') ||
+        message.contains('Google account')) {
+      return message;
+    }
+    return 'Could not create passkey';
+  }
+
+  String _nativeUnavailableMessage() {
+    if (!_devicePasskeyAvailable) {
+      return 'Passkeys are not available in this app on this device.';
+    }
+    if (!_browserFallbackAvailable) {
+      return 'Passkeys require HTTPS or localhost on this server.';
+    }
+    if (!_serverNativePasskeyReady) {
+      return 'Native passkey creation is not configured for this server.';
+    }
+    return 'Native passkey creation is not available for this server yet.';
   }
 }

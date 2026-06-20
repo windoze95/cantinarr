@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
+    password_enabled BOOLEAN NOT NULL DEFAULT 0,
+    passkey_enabled BOOLEAN NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -64,6 +66,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     device_id TEXT NOT NULL,
     user_id INTEGER NOT NULL REFERENCES users(id),
     expires_at DATETIME NOT NULL,
+    superseded_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

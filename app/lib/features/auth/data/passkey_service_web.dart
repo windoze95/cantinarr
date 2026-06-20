@@ -42,6 +42,10 @@ bool isAvailable() {
   }
 }
 
+String platformKind() => 'web';
+
+Future<bool> isAvailableAsync() async => isAvailable();
+
 // ─── Helpers ─────────────────────────────────────────────
 
 Uint8List _decodeBase64Url(String base64url) {
@@ -74,15 +78,20 @@ JSObject _buildCreationOptions(Map<String, dynamic> publicKey) {
   final pk = JSObject();
   _set(pk, 'rp', (publicKey['rp'] as Map<String, dynamic>).jsify() as JSAny);
   _set(pk, 'user', jsUser);
-  _set(pk, 'challenge', _decodeBase64Url(publicKey['challenge'] as String).toJS);
-  _set(pk, 'pubKeyCredParams', (publicKey['pubKeyCredParams'] as List).jsify() as JSAny);
+  _set(
+      pk, 'challenge', _decodeBase64Url(publicKey['challenge'] as String).toJS);
+  _set(pk, 'pubKeyCredParams',
+      (publicKey['pubKeyCredParams'] as List).jsify() as JSAny);
 
   if (publicKey['timeout'] != null) {
     _set(pk, 'timeout', (publicKey['timeout'] as num).toJS);
   }
   if (publicKey['authenticatorSelection'] != null) {
-    _set(pk, 'authenticatorSelection',
-        (publicKey['authenticatorSelection'] as Map<String, dynamic>).jsify() as JSAny);
+    _set(
+        pk,
+        'authenticatorSelection',
+        (publicKey['authenticatorSelection'] as Map<String, dynamic>).jsify()
+            as JSAny);
   }
   if (publicKey['attestation'] != null) {
     _set(pk, 'attestation', (publicKey['attestation'] as String).toJS);
@@ -95,7 +104,8 @@ JSObject _buildCreationOptions(Map<String, dynamic> publicKey) {
       _set(jsCred, 'id', _decodeBase64Url(cred['id'] as String).toJS);
       _set(jsCred, 'type', (cred['type'] as String).toJS);
       if (cred['transports'] != null) {
-        _set(jsCred, 'transports', (cred['transports'] as List).jsify() as JSAny);
+        _set(jsCred, 'transports',
+            (cred['transports'] as List).jsify() as JSAny);
       }
       return jsCred as JSAny;
     }).toList();
@@ -109,7 +119,8 @@ JSObject _buildCreationOptions(Map<String, dynamic> publicKey) {
 
 JSObject _buildRequestOptions(Map<String, dynamic> publicKey) {
   final pk = JSObject();
-  _set(pk, 'challenge', _decodeBase64Url(publicKey['challenge'] as String).toJS);
+  _set(
+      pk, 'challenge', _decodeBase64Url(publicKey['challenge'] as String).toJS);
 
   if (publicKey['timeout'] != null) {
     _set(pk, 'timeout', (publicKey['timeout'] as num).toJS);
@@ -118,7 +129,8 @@ JSObject _buildRequestOptions(Map<String, dynamic> publicKey) {
     _set(pk, 'rpId', (publicKey['rpId'] as String).toJS);
   }
   if (publicKey['userVerification'] != null) {
-    _set(pk, 'userVerification', (publicKey['userVerification'] as String).toJS);
+    _set(
+        pk, 'userVerification', (publicKey['userVerification'] as String).toJS);
   }
 
   if (publicKey['allowCredentials'] != null) {
@@ -128,7 +140,8 @@ JSObject _buildRequestOptions(Map<String, dynamic> publicKey) {
       _set(jsCred, 'id', _decodeBase64Url(cred['id'] as String).toJS);
       _set(jsCred, 'type', (cred['type'] as String).toJS);
       if (cred['transports'] != null) {
-        _set(jsCred, 'transports', (cred['transports'] as List).jsify() as JSAny);
+        _set(jsCred, 'transports',
+            (cred['transports'] as List).jsify() as JSAny);
       }
       return jsCred as JSAny;
     }).toList();
@@ -178,8 +191,8 @@ Map<String, dynamic> _parseCreationResponse(_PublicKeyCredential cred) {
     'rawId': _encodeBase64Url(cred.rawId.toDart.asUint8List().toList()),
     'type': cred.type,
     'response': {
-      'clientDataJSON': _encodeBase64Url(
-          resp.clientDataJSON.toDart.asUint8List().toList()),
+      'clientDataJSON':
+          _encodeBase64Url(resp.clientDataJSON.toDart.asUint8List().toList()),
       'attestationObject': _encodeBase64Url(
           resp.attestationObject.toDart.asUint8List().toList()),
     },
@@ -195,12 +208,12 @@ Map<String, dynamic> _parseAssertionResponse(JSObject rawCredential) {
     'rawId': _encodeBase64Url(cred.rawId.toDart.asUint8List().toList()),
     'type': cred.type,
     'response': {
-      'clientDataJSON': _encodeBase64Url(
-          resp.clientDataJSON.toDart.asUint8List().toList()),
+      'clientDataJSON':
+          _encodeBase64Url(resp.clientDataJSON.toDart.asUint8List().toList()),
       'authenticatorData': _encodeBase64Url(
           resp.authenticatorData.toDart.asUint8List().toList()),
-      'signature': _encodeBase64Url(
-          resp.signature.toDart.asUint8List().toList()),
+      'signature':
+          _encodeBase64Url(resp.signature.toDart.asUint8List().toList()),
     },
   };
 
