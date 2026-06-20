@@ -222,6 +222,10 @@ class AiChatNotifier extends ChangeNotifier {
           case TextChunkEvent(:final text):
             buffer.write(text);
           case MediaResultsEvent(:final items):
+            if (mediaItems.isEmpty && buffer.isNotEmpty) {
+              upsertResponse(streaming: true);
+              await Future<void>.delayed(const Duration(milliseconds: 16));
+            }
             mediaItems.addAll(items);
           case ToolStartEvent(:final name, :final label):
             toolActivity.add(ToolActivity(name: name, label: label));
