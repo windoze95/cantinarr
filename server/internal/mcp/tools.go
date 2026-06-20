@@ -28,6 +28,21 @@ var toolDefinitions = []Tool{
 		},
 	},
 	{
+		Name:        "search_movie_collections",
+		Permission:  auth.PermissionMediaDiscover,
+		Description: "Search TMDB movie collections/franchises by title or keyword. Use this before answering movie franchise, series, saga, collection, count, or title-list questions such as \"how many Minions movies are there?\" so recent and upcoming installments are not missed.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type":        "string",
+					"description": "Franchise, collection, series, saga, or title keyword to search for",
+				},
+			},
+			"required": []string{"query"},
+		},
+	},
+	{
 		Name:        "search_tv_shows",
 		Permission:  auth.PermissionMediaDiscover,
 		Description: "Search TMDB for TV shows by title or keyword",
@@ -320,6 +335,82 @@ func (s *ToolServer) searchMovies(input json.RawMessage) (*ToolResult, error) {
 		Text:           formatSearchResults(results, 10),
 		StructuredData: toMediaResultItems(results, 10),
 	}, nil
+}
+
+const maxMovieCollectionResults = 3
+
+func (s *ToolServer) searchMovieCollections(input json.RawMessage) (*ToolResult, error) {
+	tmdbClient := s.creds.TMDB()
+	if tmdbClient == nil {
+		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
+	}
+	var params struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	matches, err := tmdbClient.SearchMovieCollections(params.Query)
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return &ToolResult{Text: "No movie collections found."}, nil
+	}
+	if len(matches) > maxMovieCollectionResults {
+		matches = matches[:maxMovieCollectionResults]
+	}
+
+	collections := make([]tmdb.MovieCollection, 0, len(matches))
+	var failures []string
+	for _, match := range matches {
+		collection, err := tmdbClient.GetMovieCollection(match.ID)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s [%d]: %s", match.Name, match.ID, err.Error()))
+			continue
+		}
+		collections = append(collections, *collection)
+	}
+	if len(collections) == 0 {
+		return &ToolResult{Text: fmt.Sprintf("Movie collections were found, but details could not be loaded: %s", strings.Join(failures, "; "))}, nil
+	}
+
+	text := formatMovieCollectionResults(collections, maxDisplayMediaItems)
+	if len(failures) > 0 {
+		text += fmt.Sprintf("\nSome collection details could not be loaded: %s\n", strings.Join(failures, "; "))
+	}
+	return &ToolResult{Text: text}, nil
+}
+
+func formatMovieCollectionResults(collections []tmdb.MovieCollection, maxParts int) string {
+	if len(collections) == 0 {
+		return "No movie collections found."
+	}
+	var sb strings.Builder
+	for i, collection := range collections {
+		parts := collection.Parts
+		displayedParts := parts
+		if maxParts > 0 && len(displayedParts) > maxParts {
+			displayedParts = displayedParts[:maxParts]
+		}
+		fmt.Fprintf(&sb, "%d. %s [collection ID: %d] - %d movie(s)\n", i+1, collection.Name, collection.ID, len(parts))
+		for _, part := range displayedParts {
+			title := part.Title
+			if title == "" {
+				title = part.Name
+			}
+			year := searchResultYear(part)
+			fmt.Fprintf(&sb, "   - %s", title)
+			if year != "" {
+				fmt.Fprintf(&sb, " (%s)", year)
+			}
+			fmt.Fprintf(&sb, " [TMDB ID: %d] [media_type: movie]\n", part.ID)
+		}
+		if maxParts > 0 && len(parts) > maxParts {
+			fmt.Fprintf(&sb, "   ...and %d more movie(s).\n", len(parts)-maxParts)
+		}
+	}
+	return sb.String()
 }
 
 func (s *ToolServer) searchTVShows(input json.RawMessage) (*ToolResult, error) {

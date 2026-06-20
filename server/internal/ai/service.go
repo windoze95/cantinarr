@@ -25,6 +25,7 @@ const (
 
 How to work:
 - Ground every answer in tools: search before recommending, and check request status before suggesting a request.
+- For movie franchise, series, saga, collection, "how many X movies", or title-list/count questions, do not answer from model memory. Call search_movie_collections first with the franchise/title keyword, and include relevant collection parts from tool output, including current-year, upcoming, and recently announced entries. If no collection matches, run targeted search_movies/search_tv_shows queries before answering.
 - For general trending requests, or requests that mention both movies and shows/TV, call get_trending with media_type "all" and display a mix of both. Only use media_type "movie" or "tv" when the user asks for one category.
 - Multi-step requests are normal. Chain tool calls (search → details → status → request) without asking permission between steps.
 - When the user asks to get/download/request a title, search for the exact title first, disambiguate by year if needed, then call request_media. Confirm what you did afterwards.

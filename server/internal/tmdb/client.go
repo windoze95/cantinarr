@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -154,6 +155,27 @@ type searchResponse struct {
 	Results []SearchResult `json:"results"`
 }
 
+type CollectionSearchResult struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	Overview     string `json:"overview"`
+	PosterPath   string `json:"poster_path,omitempty"`
+	BackdropPath string `json:"backdrop_path,omitempty"`
+}
+
+type MovieCollection struct {
+	ID           int            `json:"id"`
+	Name         string         `json:"name"`
+	Overview     string         `json:"overview"`
+	PosterPath   string         `json:"poster_path,omitempty"`
+	BackdropPath string         `json:"backdrop_path,omitempty"`
+	Parts        []SearchResult `json:"parts"`
+}
+
+type collectionSearchResponse struct {
+	Results []CollectionSearchResult `json:"results"`
+}
+
 func (c *Client) SearchMovies(query string) ([]SearchResult, error) {
 	u := fmt.Sprintf("%s/search/movie?query=%s", baseURL, url.QueryEscape(query))
 	resp, err := c.doGet(u)
@@ -172,6 +194,56 @@ func (c *Client) SearchMovies(query string) ([]SearchResult, error) {
 	}
 	setSearchResultMediaType(result.Results, "movie")
 	return result.Results, nil
+}
+
+func (c *Client) SearchMovieCollections(query string) ([]CollectionSearchResult, error) {
+	u := fmt.Sprintf("%s/search/collection?query=%s", baseURL, url.QueryEscape(query))
+	resp, err := c.doGet(u)
+	if err != nil {
+		return nil, fmt.Errorf("search movie collections: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB API returned status %d", resp.StatusCode)
+	}
+
+	var result collectionSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode collection search results: %w", err)
+	}
+	return result.Results, nil
+}
+
+func (c *Client) GetMovieCollection(collectionID int) (*MovieCollection, error) {
+	u := fmt.Sprintf("%s/collection/%d", baseURL, collectionID)
+	resp, err := c.doGet(u)
+	if err != nil {
+		return nil, fmt.Errorf("get movie collection: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB API returned status %d", resp.StatusCode)
+	}
+
+	var collection MovieCollection
+	if err := json.NewDecoder(resp.Body).Decode(&collection); err != nil {
+		return nil, fmt.Errorf("decode movie collection: %w", err)
+	}
+	setSearchResultMediaType(collection.Parts, "movie")
+	sort.SliceStable(collection.Parts, func(i, j int) bool {
+		left := collection.Parts[i].ReleaseDate
+		right := collection.Parts[j].ReleaseDate
+		if left == "" {
+			return false
+		}
+		if right == "" {
+			return true
+		}
+		return left < right
+	})
+	return &collection, nil
 }
 
 func (c *Client) SearchTV(query string) ([]SearchResult, error) {
