@@ -1,8 +1,6 @@
 package ai
 
 import (
-	"errors"
-	"strings"
 	"testing"
 )
 
@@ -29,13 +27,17 @@ func TestProviderNeutralTranscriptConvertersPreserveToolContext(t *testing.T) {
 	if len(openAIMessages) != 4 {
 		t.Fatalf("expected 4 OpenAI messages, got %d", len(openAIMessages))
 	}
-	if openAIMessages[1].Role != "assistant" || len(openAIMessages[1].ToolCalls) != 1 {
+	if openAIMessages[1].OfAssistant == nil || len(openAIMessages[1].OfAssistant.ToolCalls) != 1 {
 		t.Fatalf("expected assistant tool call, got %#v", openAIMessages[1])
 	}
-	if got := openAIMessages[1].ToolCalls[0].Function.Arguments; got != `{"query":"Dune"}` {
+	toolCall := openAIMessages[1].OfAssistant.ToolCalls[0].GetFunction()
+	if toolCall == nil {
+		t.Fatalf("expected OpenAI function tool call, got %#v", openAIMessages[1].OfAssistant.ToolCalls[0])
+	}
+	if got := toolCall.Arguments; got != `{"query":"Dune"}` {
 		t.Fatalf("unexpected OpenAI tool args: %s", got)
 	}
-	if openAIMessages[2].Role != "tool" || openAIMessages[2].ToolCallID != "call_1" {
+	if openAIMessages[2].OfTool == nil || openAIMessages[2].OfTool.ToolCallID != "call_1" {
 		t.Fatalf("expected OpenAI tool result message, got %#v", openAIMessages[2])
 	}
 
@@ -59,23 +61,5 @@ func TestProviderNeutralTranscriptConvertersPreserveToolContext(t *testing.T) {
 	}
 	if anthropicMessages[2].Content[0].OfToolResult == nil {
 		t.Fatalf("expected Anthropic tool_result block, got %#v", anthropicMessages[2].Content[0])
-	}
-}
-
-func TestReadSSEHandlesMultilineEventsAndDone(t *testing.T) {
-	body := strings.NewReader("data: first\ndata: second\n\n: keepalive\n\ndata: [DONE]\n\n")
-	var events []string
-	err := readSSE(body, func(data string) error {
-		events = append(events, data)
-		if data == "[DONE]" {
-			return errSSEDone
-		}
-		return nil
-	})
-	if !errors.Is(err, errSSEDone) {
-		t.Fatalf("expected errSSEDone, got %v", err)
-	}
-	if len(events) != 2 || events[0] != "first\nsecond" || events[1] != "[DONE]" {
-		t.Fatalf("unexpected SSE events: %#v", events)
 	}
 }

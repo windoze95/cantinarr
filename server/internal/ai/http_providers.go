@@ -1,30 +1,28 @@
 package ai
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
-	"sort"
 	"strings"
 	"time"
+
+	openai "github.com/openai/openai-go/v3"
+	openaioption "github.com/openai/openai-go/v3/option"
+	"google.golang.org/genai"
 
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
-const httpProviderMaxOutputTokens = 16000
-
-var errSSEDone = errors.New("sse stream complete")
+const (
+	httpProviderMaxOutputTokens int64 = 16000
+	httpProviderStreamTimeout         = 5 * time.Minute
+)
 
 type openAIService struct {
-	apiKey     string
-	model      string
-	httpClient *http.Client
+	client     openai.Client
+	model      openai.ChatModel
 	toolServer *mcp.ToolServer
 }
 
@@ -33,35 +31,35 @@ func NewOpenAIService(apiKey, model string, toolServer *mcp.ToolServer) *openAIS
 		model = "gpt-5.5"
 	}
 	return &openAIService{
-		apiKey:     apiKey,
-		model:      model,
-		httpClient: &http.Client{Timeout: 5 * time.Minute},
+		client: openai.NewClient(
+			openaioption.WithAPIKey(apiKey),
+			openaioption.WithRequestTimeout(httpProviderStreamTimeout),
+		),
+		model:      openai.ChatModel(model),
 		toolServer: toolServer,
 	}
 }
 
 func (s *openAIService) SendMessage(ctx context.Context, history transcript, chatCtx ChatContext, cb StreamCallbacks) (transcript, error) {
-	messages := []openAIMessage{{
-		Role:    "system",
-		Content: systemPrompt + "\n\n" + dynamicContext(chatCtx),
-	}}
+	messages := []openai.ChatCompletionMessageParamUnion{
+		openai.SystemMessage(systemPrompt + "\n\n" + dynamicContext(chatCtx)),
+	}
 	messages = append(messages, toOpenAIMessages(history)...)
 	tools := toOpenAITools(s.toolServer.GetToolsForRole(chatCtx.Role))
 	finalHistory := cloneTranscript(history)
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
-		req := openAIChatRequest{
+		params := openai.ChatCompletionNewParams{
 			Model:               s.model,
 			Messages:            messages,
-			MaxCompletionTokens: httpProviderMaxOutputTokens,
+			MaxCompletionTokens: openai.Int(httpProviderMaxOutputTokens),
 			Tools:               tools,
-			Stream:              true,
 		}
 		if iteration == maxToolIterations-1 {
-			req.ToolChoice = "none"
+			params.ToolChoice.OfAuto = openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone))
 		}
 
-		message, finishReason, err := s.chatStream(ctx, req, cb)
+		message, finishReason, err := s.chatStream(ctx, params, cb)
 		if err != nil {
 			return finalHistory, err
 		}
@@ -78,7 +76,7 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 			return finalHistory, nil
 		}
 
-		messages = append(messages, message)
+		messages = append(messages, openAIMessageToParam(message))
 		finalHistory = append(finalHistory, openAIMessageToTranscript(message))
 		var toolResultBlocks []transcriptBlock
 		for _, toolCall := range message.ToolCalls {
@@ -95,103 +93,34 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 	return finalHistory, fmt.Errorf("agent loop exceeded %d iterations", maxToolIterations)
 }
 
-func (s *openAIService) chatStream(ctx context.Context, payload openAIChatRequest, cb StreamCallbacks) (openAIMessage, string, error) {
-	payload.Stream = true
-	var body bytes.Buffer
-	if err := json.NewEncoder(&body).Encode(payload); err != nil {
-		return openAIMessage{}, "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/chat/completions", &body)
-	if err != nil {
-		return openAIMessage{}, "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+s.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+func (s *openAIService) chatStream(ctx context.Context, params openai.ChatCompletionNewParams, cb StreamCallbacks) (openAIMessage, string, error) {
+	stream := s.client.Chat.Completions.NewStreaming(ctx, params)
+	defer stream.Close()
 
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
+	acc := openai.ChatCompletionAccumulator{}
+	for stream.Next() {
+		chunk := stream.Current()
+		if !acc.AddChunk(chunk) {
+			return openAIMessage{}, "", fmt.Errorf("accumulate openai stream chunk")
+		}
+		for _, choice := range chunk.Choices {
+			if choice.Delta.Content != "" && cb.OnText != nil {
+				cb.OnText(choice.Delta.Content)
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
 		return openAIMessage{}, "", fmt.Errorf("openai chat stream: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		return openAIMessage{}, "", fmt.Errorf("openai chat stream: %s", providerErrorMessage(data))
+	if len(acc.Choices) == 0 {
+		return openAIMessage{}, "", fmt.Errorf("openai chat stream: response had no choices")
 	}
 
-	message := openAIMessage{Role: "assistant"}
-	toolCalls := make(map[int]*openAIToolCall)
-	var toolOrder []int
-	finishReason := ""
-
-	err = readSSE(resp.Body, func(data string) error {
-		if strings.TrimSpace(data) == "[DONE]" {
-			return errSSEDone
-		}
-		var parsed openAIChatStreamResponse
-		if err := json.Unmarshal([]byte(data), &parsed); err != nil {
-			return fmt.Errorf("decode openai stream: %w", err)
-		}
-		if parsed.Error != nil {
-			return fmt.Errorf("openai chat stream: %s", parsed.Error.Message)
-		}
-		for _, choice := range parsed.Choices {
-			if choice.FinishReason != "" {
-				finishReason = choice.FinishReason
-			}
-			delta := choice.Delta
-			if delta.Role != "" {
-				message.Role = delta.Role
-			}
-			if delta.Content != "" {
-				message.Content += delta.Content
-				if cb.OnText != nil {
-					cb.OnText(delta.Content)
-				}
-			}
-			for _, toolDelta := range delta.ToolCalls {
-				call := toolCalls[toolDelta.Index]
-				if call == nil {
-					call = &openAIToolCall{Type: "function"}
-					toolCalls[toolDelta.Index] = call
-					toolOrder = append(toolOrder, toolDelta.Index)
-				}
-				if toolDelta.ID != "" {
-					call.ID = toolDelta.ID
-				}
-				if toolDelta.Type != "" {
-					call.Type = toolDelta.Type
-				}
-				if toolDelta.Function.Name != "" {
-					call.Function.Name += toolDelta.Function.Name
-				}
-				if toolDelta.Function.Arguments != "" {
-					call.Function.Arguments += toolDelta.Function.Arguments
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, errSSEDone) {
-		return openAIMessage{}, "", err
-	}
-
-	sort.Ints(toolOrder)
-	for _, index := range toolOrder {
-		call := toolCalls[index]
-		if call == nil || call.ID == "" || call.Function.Name == "" {
-			continue
-		}
-		if call.Type == "" {
-			call.Type = "function"
-		}
-		message.ToolCalls = append(message.ToolCalls, *call)
-	}
-	return message, finishReason, nil
+	choice := acc.Choices[0]
+	return openAIMessageFromSDK(choice.Message), string(choice.FinishReason), nil
 }
 
-func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCall, chatCtx ChatContext, cb StreamCallbacks) (openAIMessage, transcriptBlock) {
+func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCall, chatCtx ChatContext, cb StreamCallbacks) (openai.ChatCompletionMessageParamUnion, transcriptBlock) {
 	name := toolCall.Function.Name
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(name, toolLabel(name))
@@ -208,7 +137,7 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 			cb.OnToolEnd(name, false)
 		}
 		content := "Error: " + err.Error()
-		return openAIMessage{Role: "tool", ToolCallID: toolCall.ID, Content: content}, transcriptBlock{
+		return openai.ToolMessage(content, toolCall.ID), transcriptBlock{
 			Type:      blockTypeToolResult,
 			ToolUseID: toolCall.ID,
 			Name:      name,
@@ -222,7 +151,7 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 	if cb.OnToolEnd != nil {
 		cb.OnToolEnd(name, true)
 	}
-	return openAIMessage{Role: "tool", ToolCallID: toolCall.ID, Content: result.Text}, transcriptBlock{
+	return openai.ToolMessage(result.Text, toolCall.ID), transcriptBlock{
 		Type:      blockTypeToolResult,
 		ToolUseID: toolCall.ID,
 		Name:      name,
@@ -230,72 +159,26 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 	}
 }
 
-type openAIChatRequest struct {
-	Model               string          `json:"model"`
-	Messages            []openAIMessage `json:"messages"`
-	Tools               []openAITool    `json:"tools,omitempty"`
-	ToolChoice          any             `json:"tool_choice,omitempty"`
-	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
-	Stream              bool            `json:"stream,omitempty"`
-}
-
-type openAIChatStreamResponse struct {
-	Choices []struct {
-		Delta        openAIMessageDelta `json:"delta"`
-		FinishReason string             `json:"finish_reason"`
-	} `json:"choices"`
-	Error *providerError `json:"error,omitempty"`
-}
-
-type openAIMessageDelta struct {
-	Role      string                `json:"role,omitempty"`
-	Content   string                `json:"content,omitempty"`
-	ToolCalls []openAIToolCallDelta `json:"tool_calls,omitempty"`
-}
-
-type openAIToolCallDelta struct {
-	Index    int                     `json:"index"`
-	ID       string                  `json:"id,omitempty"`
-	Type     string                  `json:"type,omitempty"`
-	Function openAIFunctionCallDelta `json:"function,omitempty"`
-}
-
-type openAIFunctionCallDelta struct {
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-}
-
 type openAIMessage struct {
-	Role       string           `json:"role"`
-	Content    string           `json:"content,omitempty"`
-	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
+	Role       string
+	Content    string
+	ToolCalls  []openAIToolCall
+	ToolCallID string
 }
 
 type openAIToolCall struct {
-	ID       string             `json:"id"`
-	Type     string             `json:"type"`
-	Function openAIFunctionCall `json:"function"`
+	ID       string
+	Type     string
+	Function openAIFunctionCall
 }
 
 type openAIFunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	Name      string
+	Arguments string
 }
 
-type openAITool struct {
-	Type     string             `json:"type"`
-	Function openAIFunctionTool `json:"function"`
-}
-
-type openAIFunctionTool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	Parameters  map[string]interface{} `json:"parameters"`
-}
-
-func toOpenAIMessages(messages transcript) []openAIMessage {
-	out := make([]openAIMessage, 0, len(messages))
+func toOpenAIMessages(messages transcript) []openai.ChatCompletionMessageParamUnion {
+	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
 	for _, m := range messages {
 		switch m.Role {
 		case agentRoleAssistant:
@@ -319,7 +202,7 @@ func toOpenAIMessages(messages transcript) []openAIMessage {
 				}
 			}
 			if message.Content != "" || len(message.ToolCalls) > 0 {
-				out = append(out, message)
+				out = append(out, openAIMessageToParam(message))
 			}
 		default:
 			var userText strings.Builder
@@ -328,17 +211,63 @@ func toOpenAIMessages(messages transcript) []openAIMessage {
 				case blockTypeText:
 					userText.WriteString(block.Text)
 				case blockTypeToolResult:
-					out = append(out, openAIMessage{
-						Role:       "tool",
-						ToolCallID: block.ToolUseID,
-						Content:    block.Content,
-					})
+					out = append(out, openai.ToolMessage(block.Content, block.ToolUseID))
 				}
 			}
 			if userText.Len() > 0 {
-				out = append(out, openAIMessage{Role: "user", Content: userText.String()})
+				out = append(out, openai.UserMessage(userText.String()))
 			}
 		}
+	}
+	return out
+}
+
+func openAIMessageToParam(message openAIMessage) openai.ChatCompletionMessageParamUnion {
+	assistant := openai.ChatCompletionAssistantMessageParam{}
+	if message.Content != "" {
+		assistant.Content.OfString = openai.String(message.Content)
+	}
+	for _, call := range message.ToolCalls {
+		if call.Function.Name == "" {
+			continue
+		}
+		assistant.ToolCalls = append(assistant.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{
+			OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+				ID: call.ID,
+				Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+					Name:      call.Function.Name,
+					Arguments: call.Function.Arguments,
+				},
+			},
+		})
+	}
+	return openai.ChatCompletionMessageParamUnion{OfAssistant: &assistant}
+}
+
+func openAIMessageFromSDK(message openai.ChatCompletionMessage) openAIMessage {
+	out := openAIMessage{
+		Role:    string(message.Role),
+		Content: message.Content,
+	}
+	if out.Role == "" {
+		out.Role = "assistant"
+	}
+	for _, call := range message.ToolCalls {
+		if call.Function.Name == "" {
+			continue
+		}
+		callType := string(call.Type)
+		if callType == "" {
+			callType = "function"
+		}
+		out.ToolCalls = append(out.ToolCalls, openAIToolCall{
+			ID:   call.ID,
+			Type: callType,
+			Function: openAIFunctionCall{
+				Name:      call.Function.Name,
+				Arguments: call.Function.Arguments,
+			},
+		})
 	}
 	return out
 }
@@ -363,25 +292,25 @@ func openAIMessageToTranscript(message openAIMessage) transcriptMessage {
 	return out
 }
 
-func toOpenAITools(tools []mcp.Tool) []openAITool {
-	out := make([]openAITool, 0, len(tools))
+func toOpenAITools(tools []mcp.Tool) []openai.ChatCompletionToolUnionParam {
+	out := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
 	for _, t := range tools {
-		out = append(out, openAITool{
-			Type: "function",
-			Function: openAIFunctionTool{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.InputSchema,
-			},
-		})
+		fn := openai.FunctionDefinitionParam{
+			Name:       t.Name,
+			Parameters: openai.FunctionParameters(t.InputSchema),
+		}
+		if t.Description != "" {
+			fn.Description = openai.String(t.Description)
+		}
+		out = append(out, openai.ChatCompletionFunctionTool(fn))
 	}
 	return out
 }
 
 type geminiService struct {
-	apiKey     string
+	client     *genai.Client
+	clientErr  error
 	model      string
-	httpClient *http.Client
 	toolServer *mcp.ToolServer
 }
 
@@ -389,42 +318,56 @@ func NewGeminiService(apiKey, model string, toolServer *mcp.ToolServer) *geminiS
 	if model == "" {
 		model = "gemini-3.5-flash"
 	}
+	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+		APIKey:     apiKey,
+		Backend:    genai.BackendGeminiAPI,
+		HTTPClient: &http.Client{Timeout: httpProviderStreamTimeout},
+		HTTPOptions: genai.HTTPOptions{
+			Timeout: genai.Ptr(httpProviderStreamTimeout),
+		},
+	})
 	return &geminiService{
-		apiKey:     apiKey,
+		client:     client,
+		clientErr:  err,
 		model:      strings.TrimPrefix(model, "models/"),
-		httpClient: &http.Client{Timeout: 5 * time.Minute},
 		toolServer: toolServer,
 	}
 }
 
 func (s *geminiService) SendMessage(ctx context.Context, history transcript, chatCtx ChatContext, cb StreamCallbacks) (transcript, error) {
+	finalHistory := cloneTranscript(history)
+	if s.clientErr != nil {
+		return finalHistory, fmt.Errorf("gemini client: %w", s.clientErr)
+	}
+
 	contents := toGeminiContents(history)
 	tools := toGeminiTools(s.toolServer.GetToolsForRole(chatCtx.Role))
-	system := geminiContent{Parts: []geminiPart{{Text: systemPrompt + "\n\n" + dynamicContext(chatCtx)}}}
-	finalHistory := cloneTranscript(history)
+	system := &genai.Content{Parts: []*genai.Part{genai.NewPartFromText(systemPrompt + "\n\n" + dynamicContext(chatCtx))}}
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		useTools := iteration != maxToolIterations-1
-		resp, err := s.streamGenerate(ctx, geminiGenerateRequest{
-			SystemInstruction: &system,
-			Contents:          contents,
+		resp, err := s.streamGenerate(ctx, contents, &genai.GenerateContentConfig{
+			SystemInstruction: system,
 			Tools:             enabledGeminiTools(tools, useTools),
-			GenerationConfig:  &geminiGenerationConfig{MaxOutputTokens: httpProviderMaxOutputTokens},
+			MaxOutputTokens:   int32(httpProviderMaxOutputTokens),
 		}, cb)
 		if err != nil {
 			return finalHistory, err
 		}
-		if len(resp.Candidates) == 0 {
+		if len(resp.Candidates) == 0 || resp.Candidates[0] == nil {
 			return finalHistory, fmt.Errorf("gemini: response had no candidates")
 		}
 
 		content := resp.Candidates[0].Content
+		if content == nil {
+			content = genai.NewContentFromParts(nil, genai.RoleModel)
+		}
 		if content.Role == "" {
-			content.Role = "model"
+			content.Role = string(genai.RoleModel)
 		}
 		functionCalls := geminiFunctionCalls(content)
 		if len(functionCalls) == 0 {
-			if resp.Candidates[0].FinishReason == "MAX_TOKENS" && cb.OnText != nil {
+			if resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens && cb.OnText != nil {
 				cb.OnText("\n\n_(Reply truncated at the length limit - ask me to continue.)_")
 			}
 			if len(content.Parts) > 0 {
@@ -435,93 +378,68 @@ func (s *geminiService) SendMessage(ctx context.Context, history transcript, cha
 
 		contents = append(contents, content)
 		finalHistory = append(finalHistory, geminiContentToTranscript(content))
-		resultParts := make([]geminiPart, 0, len(functionCalls))
+		resultParts := make([]*genai.Part, 0, len(functionCalls))
 		toolResultBlocks := make([]transcriptBlock, 0, len(functionCalls))
 		for _, call := range functionCalls {
 			result, transcriptBlock := s.runGeminiTool(ctx, call, chatCtx, cb)
 			resultParts = append(resultParts, result)
 			toolResultBlocks = append(toolResultBlocks, transcriptBlock)
 		}
-		contents = append(contents, geminiContent{Role: "user", Parts: resultParts})
+		contents = append(contents, genai.NewContentFromParts(resultParts, genai.RoleUser))
 		finalHistory = append(finalHistory, transcriptMessage{Role: agentRoleUser, Content: toolResultBlocks})
 	}
 
 	return finalHistory, fmt.Errorf("agent loop exceeded %d iterations", maxToolIterations)
 }
 
-func (s *geminiService) streamGenerate(ctx context.Context, payload geminiGenerateRequest, cb StreamCallbacks) (geminiGenerateResponse, error) {
-	var body bytes.Buffer
-	if err := json.NewEncoder(&body).Encode(payload); err != nil {
-		return geminiGenerateResponse{}, err
-	}
-	endpoint := fmt.Sprintf(
-		"https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?alt=sse",
-		url.PathEscape(s.model),
-	)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
-	if err != nil {
-		return geminiGenerateResponse{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("x-goog-api-key", s.apiKey)
+func (s *geminiService) streamGenerate(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, cb StreamCallbacks) (*genai.GenerateContentResponse, error) {
+	aggregated := &genai.GenerateContentResponse{}
+	content := genai.NewContentFromParts(nil, genai.RoleModel)
+	var finishReason genai.FinishReason
 
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return geminiGenerateResponse{}, fmt.Errorf("gemini stream generate: %w", err)
-	}
-	defer resp.Body.Close()
+	for chunk, err := range s.client.Models.GenerateContentStream(ctx, s.model, contents, config) {
+		if err != nil {
+			return nil, fmt.Errorf("gemini stream generate: %w", err)
+		}
+		if chunk == nil {
+			continue
+		}
+		if chunk.PromptFeedback != nil {
+			aggregated.PromptFeedback = chunk.PromptFeedback
+		}
+		if len(chunk.Candidates) == 0 || chunk.Candidates[0] == nil {
+			continue
+		}
 
-	if resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		return geminiGenerateResponse{}, fmt.Errorf("gemini stream generate: %s", providerErrorMessage(data))
-	}
-
-	var aggregated geminiGenerateResponse
-	content := geminiContent{Role: "model"}
-	finishReason := ""
-
-	err = readSSE(resp.Body, func(data string) error {
-		if strings.TrimSpace(data) == "[DONE]" {
-			return errSSEDone
-		}
-		var chunk geminiGenerateResponse
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return fmt.Errorf("decode gemini stream: %w", err)
-		}
-		if chunk.Error != nil {
-			return fmt.Errorf("gemini stream generate: %s", chunk.Error.Message)
-		}
-		if len(chunk.Candidates) == 0 {
-			return nil
-		}
 		candidate := chunk.Candidates[0]
 		if candidate.FinishReason != "" {
 			finishReason = candidate.FinishReason
+		}
+		if candidate.Content == nil {
+			continue
 		}
 		if candidate.Content.Role != "" {
 			content.Role = candidate.Content.Role
 		}
 		for _, part := range candidate.Content.Parts {
+			if part == nil {
+				continue
+			}
 			content.Parts = append(content.Parts, part)
 			if part.Text != "" && !part.Thought && cb.OnText != nil {
 				cb.OnText(part.Text)
 			}
 		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, errSSEDone) {
-		return geminiGenerateResponse{}, err
 	}
 
-	aggregated.Candidates = append(aggregated.Candidates, struct {
-		Content      geminiContent `json:"content"`
-		FinishReason string        `json:"finishReason"`
-	}{Content: content, FinishReason: finishReason})
+	aggregated.Candidates = []*genai.Candidate{{
+		Content:      content,
+		FinishReason: finishReason,
+	}}
 	return aggregated, nil
 }
 
-func (s *geminiService) runGeminiTool(ctx context.Context, call geminiFunctionCall, chatCtx ChatContext, cb StreamCallbacks) (geminiPart, transcriptBlock) {
+func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionCall, chatCtx ChatContext, cb StreamCallbacks) (*genai.Part, transcriptBlock) {
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(call.Name, toolLabel(call.Name))
 	}
@@ -537,7 +455,7 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call geminiFunctionCa
 			cb.OnToolEnd(call.Name, false)
 		}
 		content := "Error: " + err.Error()
-		return geminiPart{FunctionResponse: &geminiFunctionResponse{
+		return &genai.Part{FunctionResponse: &genai.FunctionResponse{
 				Name:     call.Name,
 				ID:       call.ID,
 				Response: map[string]any{"error": err.Error()},
@@ -555,7 +473,7 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call geminiFunctionCa
 	if cb.OnToolEnd != nil {
 		cb.OnToolEnd(call.Name, true)
 	}
-	return geminiPart{FunctionResponse: &geminiFunctionResponse{
+	return &genai.Part{FunctionResponse: &genai.FunctionResponse{
 			Name:     call.Name,
 			ID:       call.ID,
 			Response: map[string]any{"response": result.Text},
@@ -567,77 +485,23 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call geminiFunctionCa
 		}
 }
 
-type geminiGenerateRequest struct {
-	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
-	Contents          []geminiContent         `json:"contents"`
-	Tools             []geminiTool            `json:"tools,omitempty"`
-	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
-}
-
-type geminiGenerationConfig struct {
-	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
-}
-
-type geminiGenerateResponse struct {
-	Candidates []struct {
-		Content      geminiContent `json:"content"`
-		FinishReason string        `json:"finishReason"`
-	} `json:"candidates"`
-	Error *providerError `json:"error,omitempty"`
-}
-
-type geminiContent struct {
-	Role  string       `json:"role,omitempty"`
-	Parts []geminiPart `json:"parts"`
-}
-
-type geminiPart struct {
-	Text             string                  `json:"text,omitempty"`
-	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
-	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
-	Thought          bool                    `json:"thought,omitempty"`
-	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
-}
-
-type geminiFunctionCall struct {
-	Name string         `json:"name"`
-	Args map[string]any `json:"args,omitempty"`
-	ID   string         `json:"id,omitempty"`
-}
-
-type geminiFunctionResponse struct {
-	Name     string         `json:"name"`
-	Response map[string]any `json:"response"`
-	ID       string         `json:"id,omitempty"`
-}
-
-type geminiTool struct {
-	FunctionDeclarations []geminiFunctionDeclaration `json:"functionDeclarations,omitempty"`
-}
-
-type geminiFunctionDeclaration struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	Parameters  map[string]interface{} `json:"parameters"`
-}
-
-func toGeminiContents(messages transcript) []geminiContent {
-	out := make([]geminiContent, 0, len(messages))
+func toGeminiContents(messages transcript) []*genai.Content {
+	out := make([]*genai.Content, 0, len(messages))
 	for _, m := range messages {
 		switch m.Role {
 		case agentRoleAssistant:
 			if len(out) == 0 {
 				continue
 			}
-			content := geminiContent{Role: "model"}
+			content := genai.NewContentFromParts(nil, genai.RoleModel)
 			for _, block := range m.Content {
 				switch block.Type {
 				case blockTypeText:
 					if block.Text != "" {
-						content.Parts = append(content.Parts, geminiPart{Text: block.Text})
+						content.Parts = append(content.Parts, genai.NewPartFromText(block.Text))
 					}
 				case blockTypeToolUse:
-					content.Parts = append(content.Parts, geminiPart{FunctionCall: &geminiFunctionCall{
+					content.Parts = append(content.Parts, &genai.Part{FunctionCall: &genai.FunctionCall{
 						Name: block.Name,
 						Args: rawJSONMap(block.Input),
 						ID:   block.ID,
@@ -648,19 +512,19 @@ func toGeminiContents(messages transcript) []geminiContent {
 				out = append(out, content)
 			}
 		default:
-			content := geminiContent{Role: "user"}
+			content := genai.NewContentFromParts(nil, genai.RoleUser)
 			for _, block := range m.Content {
 				switch block.Type {
 				case blockTypeText:
 					if block.Text != "" {
-						content.Parts = append(content.Parts, geminiPart{Text: block.Text})
+						content.Parts = append(content.Parts, genai.NewPartFromText(block.Text))
 					}
 				case blockTypeToolResult:
 					name := block.Name
 					if name == "" {
 						name = toolNameForResult(messages, block.ToolUseID)
 					}
-					content.Parts = append(content.Parts, geminiPart{FunctionResponse: &geminiFunctionResponse{
+					content.Parts = append(content.Parts, &genai.Part{FunctionResponse: &genai.FunctionResponse{
 						Name:     name,
 						ID:       block.ToolUseID,
 						Response: geminiToolResponse(block),
@@ -675,9 +539,15 @@ func toGeminiContents(messages transcript) []geminiContent {
 	return out
 }
 
-func geminiContentToTranscript(content geminiContent) transcriptMessage {
+func geminiContentToTranscript(content *genai.Content) transcriptMessage {
 	out := transcriptMessage{Role: agentRoleAssistant}
+	if content == nil {
+		return out
+	}
 	for _, part := range content.Parts {
+		if part == nil {
+			continue
+		}
 		if part.Text != "" && !part.Thought {
 			out.Content = append(out.Content, transcriptBlock{Type: blockTypeText, Text: part.Text})
 		}
@@ -715,86 +585,39 @@ func toolNameForResult(messages transcript, toolUseID string) string {
 	return ""
 }
 
-func toGeminiTools(tools []mcp.Tool) []geminiTool {
-	declarations := make([]geminiFunctionDeclaration, 0, len(tools))
+func toGeminiTools(tools []mcp.Tool) []*genai.Tool {
+	declarations := make([]*genai.FunctionDeclaration, 0, len(tools))
 	for _, t := range tools {
-		declarations = append(declarations, geminiFunctionDeclaration{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  t.InputSchema,
+		declarations = append(declarations, &genai.FunctionDeclaration{
+			Name:                 t.Name,
+			Description:          t.Description,
+			ParametersJsonSchema: t.InputSchema,
 		})
 	}
 	if len(declarations) == 0 {
 		return nil
 	}
-	return []geminiTool{{FunctionDeclarations: declarations}}
+	return []*genai.Tool{{FunctionDeclarations: declarations}}
 }
 
-func enabledGeminiTools(tools []geminiTool, enabled bool) []geminiTool {
+func enabledGeminiTools(tools []*genai.Tool, enabled bool) []*genai.Tool {
 	if !enabled {
 		return nil
 	}
 	return tools
 }
 
-func geminiFunctionCalls(content geminiContent) []geminiFunctionCall {
-	var calls []geminiFunctionCall
+func geminiFunctionCalls(content *genai.Content) []*genai.FunctionCall {
+	var calls []*genai.FunctionCall
+	if content == nil {
+		return calls
+	}
 	for _, part := range content.Parts {
-		if part.FunctionCall != nil {
-			calls = append(calls, *part.FunctionCall)
+		if part != nil && part.FunctionCall != nil {
+			calls = append(calls, part.FunctionCall)
 		}
 	}
 	return calls
-}
-
-func geminiText(content geminiContent) string {
-	var sb strings.Builder
-	for _, part := range content.Parts {
-		if !part.Thought {
-			sb.WriteString(part.Text)
-		}
-	}
-	return sb.String()
-}
-
-func readSSE(r io.Reader, handle func(data string) error) error {
-	reader := bufio.NewReader(r)
-	var data strings.Builder
-	flush := func() error {
-		if data.Len() == 0 {
-			return nil
-		}
-		payload := strings.TrimSuffix(data.String(), "\n")
-		data.Reset()
-		if strings.TrimSpace(payload) == "" {
-			return nil
-		}
-		return handle(payload)
-	}
-
-	for {
-		line, err := reader.ReadString('\n')
-		if len(line) > 0 {
-			line = strings.TrimRight(line, "\r\n")
-			switch {
-			case line == "":
-				if flushErr := flush(); flushErr != nil {
-					return flushErr
-				}
-			case strings.HasPrefix(line, "data:"):
-				value := strings.TrimPrefix(line, "data:")
-				value = strings.TrimPrefix(value, " ")
-				data.WriteString(value)
-				data.WriteByte('\n')
-			}
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return flush()
-			}
-			return err
-		}
-	}
 }
 
 func rawJSONString(raw json.RawMessage) string {
@@ -815,28 +638,4 @@ func normalizedRawJSON(raw json.RawMessage) json.RawMessage {
 		return json.RawMessage("{}")
 	}
 	return raw
-}
-
-type providerError struct {
-	Message string `json:"message"`
-	Status  string `json:"status,omitempty"`
-	Type    string `json:"type,omitempty"`
-	Code    any    `json:"code,omitempty"`
-}
-
-func providerErrorMessage(data []byte) string {
-	var wrapped struct {
-		Error *providerError `json:"error"`
-	}
-	if err := json.Unmarshal(data, &wrapped); err == nil && wrapped.Error != nil && wrapped.Error.Message != "" {
-		return wrapped.Error.Message
-	}
-	text := strings.TrimSpace(string(data))
-	if text == "" {
-		return "request failed"
-	}
-	if len(text) > 1000 {
-		return text[:1000] + "..."
-	}
-	return text
 }
