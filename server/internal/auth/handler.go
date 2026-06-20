@@ -227,6 +227,7 @@ func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 	resp := AuthStatusResponse{
 		NeedsSetup:        !h.service.IsSetupComplete(),
 		WebAuthnAvailable: isSecureContext(r),
+		NativePasskeys:    h.service.nativePasskeyStatusFromRequest(r),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

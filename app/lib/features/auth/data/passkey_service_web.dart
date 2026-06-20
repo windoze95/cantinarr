@@ -42,6 +42,8 @@ bool isAvailable() {
   }
 }
 
+String platformKind() => 'web';
+
 Future<bool> isAvailableAsync() async => isAvailable();
 
 // ─── Helpers ─────────────────────────────────────────────

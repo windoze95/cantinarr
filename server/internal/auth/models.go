@@ -93,8 +93,15 @@ type SetupRequest struct {
 }
 
 type AuthStatusResponse struct {
-	NeedsSetup        bool `json:"needs_setup"`
-	WebAuthnAvailable bool `json:"webauthn_available"`
+	NeedsSetup        bool                        `json:"needs_setup"`
+	WebAuthnAvailable bool                        `json:"webauthn_available"`
+	NativePasskeys    NativePasskeyStatusResponse `json:"native_passkeys"`
+}
+
+type NativePasskeyStatusResponse struct {
+	AppleConfigured      bool `json:"apple_configured"`
+	AndroidConfigured    bool `json:"android_configured"`
+	WindowsOriginTrusted bool `json:"windows_origin_trusted"`
 }
 
 type PasskeyInfo struct {

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,45 @@ func setupTestService(t *testing.T) *Service {
 		t.Fatalf("ensure admin: %v", err)
 	}
 	return svc
+}
+
+func TestNativePasskeyStatusFromRequest(t *testing.T) {
+	svc := NewService(nil, "test-secret-key", WebAuthnConfig{
+		AppleAppIDs:             []string{"TEAMID.codes.julian.cantinarr"},
+		AndroidCertFingerprints: []string{"AA:BB"},
+	})
+
+	req := httptest.NewRequest("GET", "https://example.com/api/auth/status", nil)
+	status := svc.nativePasskeyStatusFromRequest(req)
+	if !status.AppleConfigured || !status.AndroidConfigured || !status.WindowsOriginTrusted {
+		t.Fatalf("status = %+v, want all native passkey surfaces configured", status)
+	}
+
+	req = httptest.NewRequest("GET", "https://127.0.0.1/api/auth/status", nil)
+	status = svc.nativePasskeyStatusFromRequest(req)
+	if status.AppleConfigured || status.AndroidConfigured {
+		t.Fatalf("status = %+v, want Apple and Android unavailable on IP hosts", status)
+	}
+
+	req = httptest.NewRequest("GET", "https://example.com:8585/api/auth/status", nil)
+	status = svc.nativePasskeyStatusFromRequest(req)
+	if status.WindowsOriginTrusted {
+		t.Fatalf("WindowsOriginTrusted = true for non-default port without extra origin")
+	}
+
+	svc = NewService(nil, "test-secret-key", WebAuthnConfig{
+		ExtraOrigins: []string{"https://example.com"},
+	})
+	status = svc.nativePasskeyStatusFromRequest(req)
+	if !status.WindowsOriginTrusted {
+		t.Fatalf("WindowsOriginTrusted = false with matching extra origin")
+	}
+
+	req = httptest.NewRequest("GET", "http://example.com/api/auth/status", nil)
+	status = svc.nativePasskeyStatusFromRequest(req)
+	if status.AppleConfigured || status.AndroidConfigured || status.WindowsOriginTrusted {
+		t.Fatalf("status = %+v, want native passkeys unavailable over insecure origin", status)
+	}
 }
 
 func TestListUsers_ReportsDeviceAndInviteState(t *testing.T) {

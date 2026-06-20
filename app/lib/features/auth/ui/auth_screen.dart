@@ -617,7 +617,9 @@ class _LoginViewState extends ConsumerState<_LoginView> {
   bool _platformPasskeyAvailable = false;
 
   bool get _showPasskey =>
-      (widget.serverStatus?.webAuthnAvailable ?? false) &&
+      (widget.serverStatus
+              ?.supportsPasskeyPlatform(PasskeyService.platformKind()) ??
+          false) &&
       _platformPasskeyAvailable;
 
   @override

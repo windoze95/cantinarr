@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -87,6 +88,36 @@ func (s *Service) rpConfigFromRequest(r *http.Request) *webauthn.Config {
 	cfg := baseRPConfigFromRequest(r)
 	cfg.RPOrigins = appendUnique(cfg.RPOrigins, s.webauthnOrigins...)
 	return cfg
+}
+
+func (s *Service) nativePasskeyStatusFromRequest(r *http.Request) NativePasskeyStatusResponse {
+	if !isSecureContext(r) {
+		return NativePasskeyStatusResponse{}
+	}
+	associationHost := isNativeAssociationHost(r)
+	return NativePasskeyStatusResponse{
+		AppleConfigured:      associationHost && len(s.appleAppIDs) > 0,
+		AndroidConfigured:    associationHost && len(s.androidCertFingerprints) > 0,
+		WindowsOriginTrusted: s.windowsNativeOriginTrusted(r),
+	}
+}
+
+func isNativeAssociationHost(r *http.Request) bool {
+	host := strings.ToLower(strings.Trim(rpIDFromRequest(r), "[]"))
+	if host == "localhost" || host == "" {
+		return false
+	}
+	return net.ParseIP(host) == nil
+}
+
+func (s *Service) windowsNativeOriginTrusted(r *http.Request) bool {
+	origin := "https://" + rpIDFromRequest(r)
+	for _, trusted := range s.rpConfigFromRequest(r).RPOrigins {
+		if trusted == origin {
+			return true
+		}
+	}
+	return false
 }
 
 func appendUnique(values []string, extras ...string) []string {

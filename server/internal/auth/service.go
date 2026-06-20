@@ -46,26 +46,40 @@ type Claims struct {
 }
 
 type Service struct {
-	db               *sql.DB
-	jwtSecret        []byte
-	webauthnSessions *SessionStore
-	webauthnOrigins  []string
+	db                      *sql.DB
+	jwtSecret               []byte
+	webauthnSessions        *SessionStore
+	webauthnOrigins         []string
+	appleAppIDs             []string
+	androidCertFingerprints []string
 }
 
 type WebAuthnConfig struct {
-	ExtraOrigins []string
+	ExtraOrigins            []string
+	AppleAppIDs             []string
+	AndroidCertFingerprints []string
 }
 
 func NewService(db *sql.DB, jwtSecret string, webauthnConfig ...WebAuthnConfig) *Service {
 	var extraOrigins []string
+	var appleAppIDs []string
+	var androidCertFingerprints []string
 	if len(webauthnConfig) > 0 {
-		extraOrigins = append(extraOrigins, webauthnConfig[0].ExtraOrigins...)
+		cfg := webauthnConfig[0]
+		extraOrigins = append(extraOrigins, cfg.ExtraOrigins...)
+		appleAppIDs = append(appleAppIDs, cfg.AppleAppIDs...)
+		androidCertFingerprints = append(
+			androidCertFingerprints,
+			cfg.AndroidCertFingerprints...,
+		)
 	}
 	return &Service{
-		db:               db,
-		jwtSecret:        []byte(jwtSecret),
-		webauthnSessions: NewSessionStore(),
-		webauthnOrigins:  extraOrigins,
+		db:                      db,
+		jwtSecret:               []byte(jwtSecret),
+		webauthnSessions:        NewSessionStore(),
+		webauthnOrigins:         extraOrigins,
+		appleAppIDs:             appleAppIDs,
+		androidCertFingerprints: androidCertFingerprints,
 	}
 }
 

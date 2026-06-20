@@ -436,7 +436,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     if (!await PasskeyService.isAvailableAsync()) return false;
     try {
       final status = await _authService.getServerStatus(serverUrl);
-      return status.webAuthnAvailable;
+      return status.supportsPasskeyPlatform(PasskeyService.platformKind());
     } catch (_) {
       return false;
     }

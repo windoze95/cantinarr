@@ -81,7 +81,9 @@ func main() {
 
 	// Auth
 	authService := auth.NewService(database, cfg.JWTSecret, auth.WebAuthnConfig{
-		ExtraOrigins: cfg.WebAuthnExtraOrigins,
+		ExtraOrigins:            cfg.WebAuthnExtraOrigins,
+		AppleAppIDs:             cfg.AppleAppIDs,
+		AndroidCertFingerprints: cfg.AndroidCertFingerprints,
 	})
 	if err := authService.MigrateSetupState(); err != nil {
 		log.Fatalf("Failed to migrate setup state: %v", err)

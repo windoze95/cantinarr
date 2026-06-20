@@ -1,6 +1,8 @@
 /// Stub implementation for platforms that don't support WebAuthn.
 bool isAvailable() => false;
 
+String platformKind() => 'unsupported';
+
 Future<bool> isAvailableAsync() async => false;
 
 Future<Map<String, dynamic>> create(Map<String, dynamic> options) async {

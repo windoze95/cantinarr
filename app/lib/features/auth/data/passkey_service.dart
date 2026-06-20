@@ -9,6 +9,9 @@ class PasskeyService {
   /// Whether WebAuthn/passkeys are supported on this platform.
   static bool isAvailable() => platform.isAvailable();
 
+  /// Platform kind used to match server-side native passkey readiness.
+  static String platformKind() => platform.platformKind();
+
   /// Whether WebAuthn/passkeys are supported on this platform.
   ///
   /// Native platforms need to ask the OS / credential manager, so callers that

@@ -8,6 +8,15 @@ PasskeysPlatform get _platform => PasskeysPlatform.instance;
 
 bool isAvailable() => false;
 
+String platformKind() {
+  if (Platform.isAndroid) return 'android';
+  if (Platform.isIOS) return 'ios';
+  if (Platform.isWindows) return 'windows';
+  if (Platform.isMacOS) return 'macos';
+  if (Platform.isLinux) return 'linux';
+  return 'unsupported';
+}
+
 Future<bool> isAvailableAsync() async {
   if (!Platform.isAndroid && !Platform.isIOS && !Platform.isWindows) {
     return false;

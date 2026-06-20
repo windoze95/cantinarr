@@ -147,7 +147,7 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Comma-separated Android signing certificate SHA-256 fingerprints for `/.well-known/assetlinks.json` and Android WebAuthn origin validation |
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Comma-separated additional WebAuthn origins to trust, for native clients or advanced deployments |
 
-Native app passkeys require a public HTTPS server domain that is associated with the app. Apple devices verify `/.well-known/apple-app-site-association`; Android credential providers verify `/.well-known/assetlinks.json` and return an `android:apk-key-hash` origin that Cantinarr validates from the configured signing certificate fingerprint. Browser setup remains available when a self-hosted deployment cannot satisfy native app association.
+Native app passkeys require a public HTTPS server domain that is associated with the app. Apple devices verify `/.well-known/apple-app-site-association`; Android credential providers verify `/.well-known/assetlinks.json` and return an `android:apk-key-hash` origin that Cantinarr validates from the configured signing certificate fingerprint. Windows native passkeys use the `https://host` origin; deployments served from a non-standard HTTPS port should add that origin to `CANTINARR_WEBAUTHN_EXTRA_ORIGINS`. Browser setup remains available when a self-hosted deployment cannot satisfy native app association.
 
 ## How It Works
 
