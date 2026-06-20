@@ -165,7 +165,7 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "display_media",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Display specific movies or TV shows in the UI carousel. Call this after searching or trending whenever you recommend/showcase concrete titles; search results alone do not populate the carousel. Pass the exact title and year from the search/tool result so the server can verify the TMDB ID before displaying it.",
+		Description: "Display specific movies or TV shows in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Prefer TMDB IDs copied from prior tool results; if you only have exact title/year values, omit tmdb_id and the server will resolve and verify them.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -178,7 +178,7 @@ var toolDefinitions = []Tool{
 						"properties": map[string]interface{}{
 							"tmdb_id": map[string]interface{}{
 								"type":        "integer",
-								"description": "The TMDB ID of the movie or TV show",
+								"description": "The TMDB ID of the movie or TV show when known from prior tool output. Omit or pass 0 to resolve by exact title/year.",
 							},
 							"media_type": map[string]interface{}{
 								"type":        "string",
@@ -194,7 +194,7 @@ var toolDefinitions = []Tool{
 								"description": "Four-digit release/first-air year from the prior search/tool result, if available",
 							},
 						},
-						"required": []string{"tmdb_id", "media_type", "title"},
+						"required": []string{"media_type", "title"},
 					},
 				},
 			},
@@ -486,14 +486,27 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 	var failures []string
 	for _, p := range params.Items {
 		if strings.TrimSpace(p.Title) == "" {
-			failures = append(failures, fmt.Sprintf("%s %d: missing title; pass the exact title from the prior tool result", p.MediaType, p.TmdbID))
+			failures = append(failures, fmt.Sprintf("%s %d: missing title; pass the exact title for every displayed item", p.MediaType, p.TmdbID))
 			continue
 		}
 		switch p.MediaType {
 		case "movie":
-			movie, err := tmdbClient.GetMovieDetails(p.TmdbID)
+			tmdbID := p.TmdbID
+			if tmdbID <= 0 {
+				result, err := resolveDisplayMediaSearchResult(
+					tmdbClient.SearchMovies,
+					p.Title,
+					p.Year,
+				)
+				if err != nil {
+					failures = append(failures, fmt.Sprintf("movie %q: %s", p.Title, err.Error()))
+					continue
+				}
+				tmdbID = result.ID
+			}
+			movie, err := tmdbClient.GetMovieDetails(tmdbID)
 			if err != nil {
-				failures = append(failures, fmt.Sprintf("movie %d: %s", p.TmdbID, err.Error()))
+				failures = append(failures, fmt.Sprintf("movie %d: %s", tmdbID, err.Error()))
 				continue
 			}
 			year := ""
@@ -501,7 +514,7 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 				year = movie.ReleaseDate[:4]
 			}
 			if reason := displayMediaMismatch(p.Title, p.Year, movie.Title, year); reason != "" {
-				failures = append(failures, fmt.Sprintf("movie %d: %s", p.TmdbID, reason))
+				failures = append(failures, fmt.Sprintf("movie %d: %s", tmdbID, reason))
 				continue
 			}
 			items = append(items, MediaResultItem{
@@ -514,9 +527,22 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 				MediaType:   "movie",
 			})
 		case "tv":
-			tv, err := tmdbClient.GetTVDetails(p.TmdbID)
+			tmdbID := p.TmdbID
+			if tmdbID <= 0 {
+				result, err := resolveDisplayMediaSearchResult(
+					tmdbClient.SearchTV,
+					p.Title,
+					p.Year,
+				)
+				if err != nil {
+					failures = append(failures, fmt.Sprintf("tv %q: %s", p.Title, err.Error()))
+					continue
+				}
+				tmdbID = result.ID
+			}
+			tv, err := tmdbClient.GetTVDetails(tmdbID)
 			if err != nil {
-				failures = append(failures, fmt.Sprintf("tv %d: %s", p.TmdbID, err.Error()))
+				failures = append(failures, fmt.Sprintf("tv %d: %s", tmdbID, err.Error()))
 				continue
 			}
 			year := ""
@@ -524,7 +550,7 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 				year = tv.FirstAir[:4]
 			}
 			if reason := displayMediaMismatch(p.Title, p.Year, tv.Name, year); reason != "" {
-				failures = append(failures, fmt.Sprintf("tv %d: %s", p.TmdbID, reason))
+				failures = append(failures, fmt.Sprintf("tv %d: %s", tmdbID, reason))
 				continue
 			}
 			items = append(items, MediaResultItem{
@@ -544,13 +570,64 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Displaying %d media item(s) in the carousel.", len(items))
 	if len(failures) > 0 {
-		fmt.Fprintf(&sb, " Rejected or failed %d item(s): %s. If the user expects these items, call display_media again with TMDB IDs, media types, titles, and years copied exactly from the prior search/tool result.", len(failures), strings.Join(failures, "; "))
+		fmt.Fprintf(&sb, " Rejected or failed %d item(s): %s. If the user expects these items, call display_media again with exact titles, years, media types, and TMDB IDs from search/tool results when available.", len(failures), strings.Join(failures, "; "))
 	}
 
 	return &ToolResult{
 		Text:           sb.String(),
 		StructuredData: items,
 	}, nil
+}
+
+type searchMediaFunc func(query string) ([]tmdb.SearchResult, error)
+
+func resolveDisplayMediaSearchResult(search searchMediaFunc, title, year string) (tmdb.SearchResult, error) {
+	results, err := search(title)
+	if err != nil {
+		return tmdb.SearchResult{}, err
+	}
+	if len(results) == 0 {
+		return tmdb.SearchResult{}, fmt.Errorf("no TMDB results found")
+	}
+
+	wantTitle := normalizeMediaTitle(title)
+	wantYear := strings.TrimSpace(year)
+	var titleMatch *tmdb.SearchResult
+	for i := range results {
+		resultTitle := results[i].Title
+		if resultTitle == "" {
+			resultTitle = results[i].Name
+		}
+		if normalizeMediaTitle(resultTitle) != wantTitle {
+			continue
+		}
+		if titleMatch == nil {
+			titleMatch = &results[i]
+		}
+		resultYear := searchResultYear(results[i])
+		if wantYear == "" || resultYear == "" || resultYear == wantYear {
+			return results[i], nil
+		}
+	}
+
+	if titleMatch != nil && wantYear == "" {
+		return *titleMatch, nil
+	}
+	if wantYear != "" {
+		return tmdb.SearchResult{}, fmt.Errorf("no exact title/year match found for %q (%s)", title, wantYear)
+	}
+	return tmdb.SearchResult{}, fmt.Errorf("no exact title match found for %q", title)
+}
+
+func searchResultYear(result tmdb.SearchResult) string {
+	date := result.ReleaseDate
+	if date == "" {
+		date = result.FirstAirDate
+	}
+	if len(date) >= 4 {
+		return date[:4]
+	}
+	return ""
 }
 
 func displayMediaMismatch(expectedTitle, expectedYear, actualTitle, actualYear string) string {

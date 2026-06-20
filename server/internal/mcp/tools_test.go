@@ -37,6 +37,55 @@ func TestFormatSearchResultsIncludesMediaType(t *testing.T) {
 	}
 }
 
+func TestResolveDisplayMediaSearchResultUsesExactTitleAndYear(t *testing.T) {
+	got, err := resolveDisplayMediaSearchResult(
+		func(query string) ([]tmdb.SearchResult, error) {
+			if query != "Minions: The Rise of Gru" {
+				t.Fatalf("query = %q", query)
+			}
+			return []tmdb.SearchResult{
+				{
+					ID:          1,
+					Title:       "Minions",
+					ReleaseDate: "2015-06-17",
+				},
+				{
+					ID:          2,
+					Title:       "Minions: The Rise of Gru",
+					ReleaseDate: "2022-06-29",
+				},
+			}, nil
+		},
+		"Minions: The Rise of Gru",
+		"2022",
+	)
+	if err != nil {
+		t.Fatalf("resolve returned error: %v", err)
+	}
+	if got.ID != 2 {
+		t.Fatalf("resolved ID = %d, want 2", got.ID)
+	}
+}
+
+func TestResolveDisplayMediaSearchResultRejectsWrongYear(t *testing.T) {
+	_, err := resolveDisplayMediaSearchResult(
+		func(query string) ([]tmdb.SearchResult, error) {
+			return []tmdb.SearchResult{
+				{
+					ID:          1,
+					Title:       "Despicable Me",
+					ReleaseDate: "2010-07-08",
+				},
+			}, nil
+		},
+		"Despicable Me",
+		"2024",
+	)
+	if err == nil {
+		t.Fatal("wrong year was not rejected")
+	}
+}
+
 func TestToolDefinitionsDeclarePermissions(t *testing.T) {
 	for _, tool := range toolDefinitions {
 		if tool.RequiredPermission() == "" {
