@@ -25,6 +25,7 @@ import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
+import '../features/settings/ui/users_screen.dart';
 import '../features/setup_wizard/ui/plex_setup_guide.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
 import '../features/shell/ui/app_shell.dart';
@@ -318,6 +319,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/ai-tools',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const AiToolsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/users',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const UsersScreen(),
       ),
       GoRoute(
         path: '/settings/devices',

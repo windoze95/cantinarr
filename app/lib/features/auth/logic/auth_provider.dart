@@ -285,6 +285,28 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     await _authService.revokeDevice(conn.serverUrl, conn.accessToken, deviceId);
   }
 
+  /// List all user accounts (admin only).
+  Future<List<UserSummary>> listUsers() async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    return _authService.listUsers(conn.serverUrl, conn.accessToken);
+  }
+
+  /// Change a user's role (admin only).
+  Future<UserSummary> updateUserRole(int userId, String role) async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    return _authService.updateUserRole(
+        conn.serverUrl, conn.accessToken, userId, role);
+  }
+
+  /// Delete a user account (admin only).
+  Future<void> deleteUser(int userId) async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    await _authService.deleteUser(conn.serverUrl, conn.accessToken, userId);
+  }
+
   // ─── Passkey Methods ─────────────────────────────────
 
   /// Register a new passkey for the current user.

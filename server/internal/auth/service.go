@@ -30,6 +30,10 @@ var (
 	ErrDeviceRevoked        = errors.New("device has been revoked")
 	ErrDeviceNotFound       = errors.New("device not found")
 	ErrSetupAlreadyComplete = errors.New("setup has already been completed")
+	ErrUserNotFound         = errors.New("user not found")
+	ErrInvalidRole          = errors.New("invalid role")
+	ErrLastAdmin            = errors.New("cannot remove the last admin")
+	ErrCannotDeleteSelf     = errors.New("cannot delete your own account")
 )
 
 type Claims struct {
@@ -393,26 +397,167 @@ func (s *Service) RevokeDevice(deviceID string) error {
 	return nil
 }
 
-func (s *Service) ListUsers() ([]User, error) {
-	rows, err := s.db.Query("SELECT id, username, password_hash, role, created_at FROM users ORDER BY id")
+// ListUsers returns every account enriched with device counts, password state,
+// and whether an unredeemed connect-link invite is still outstanding.
+func (s *Service) ListUsers() ([]UserSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			u.id,
+			u.username,
+			u.role,
+			u.created_at,
+			u.password_hash != '' AS has_password,
+			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
+			EXISTS(
+				SELECT 1 FROM connect_tokens ct
+				WHERE ct.user_id = u.id AND ct.redeemed_at IS NULL AND ct.expires_at > ?
+			) AS has_pending_invite
+		FROM users u
+		ORDER BY u.id
+	`, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
 	defer rows.Close()
 
-	var users []User
+	var users []UserSummary
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
+		var u UserSummary
+		if err := rows.Scan(
+			&u.ID, &u.Username, &u.Role, &u.CreatedAt,
+			&u.HasPassword, &u.DeviceCount, &u.HasPendingInvite,
+		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		u.Permissions = PermissionsForRole(u.Role)
 		users = append(users, u)
 	}
 	if users == nil {
-		users = []User{}
+		users = []UserSummary{}
 	}
 	return users, nil
+}
+
+// UpdateUserRole changes a user's role. It rejects unknown roles and refuses to
+// demote the last remaining admin so an install can never be locked out.
+func (s *Service) UpdateUserRole(userID int64, role string) (*UserSummary, error) {
+	if role != RoleAdmin && role != RoleUser {
+		return nil, ErrInvalidRole
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentRole string
+	if err := tx.QueryRow("SELECT role FROM users WHERE id = ?", userID).Scan(&currentRole); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("load user: %w", err)
+	}
+
+	if currentRole == RoleAdmin && role != RoleAdmin {
+		var adminCount int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM users WHERE role = ?", RoleAdmin).Scan(&adminCount); err != nil {
+			return nil, fmt.Errorf("count admins: %w", err)
+		}
+		if adminCount <= 1 {
+			return nil, ErrLastAdmin
+		}
+	}
+
+	if _, err := tx.Exec("UPDATE users SET role = ? WHERE id = ?", role, userID); err != nil {
+		return nil, fmt.Errorf("update role: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit role change: %w", err)
+	}
+
+	return s.userSummaryByID(userID)
+}
+
+// DeleteUser removes a user and all of their dependent records (devices,
+// tokens, passkeys). It refuses to delete the acting admin's own account or the
+// last remaining admin.
+func (s *Service) DeleteUser(actorID, userID int64) error {
+	if actorID == userID {
+		return ErrCannotDeleteSelf
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var role string
+	if err := tx.QueryRow("SELECT role FROM users WHERE id = ?", userID).Scan(&role); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrUserNotFound
+		}
+		return fmt.Errorf("load user: %w", err)
+	}
+
+	if role == RoleAdmin {
+		var adminCount int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM users WHERE role = ?", RoleAdmin).Scan(&adminCount); err != nil {
+			return fmt.Errorf("count admins: %w", err)
+		}
+		if adminCount <= 1 {
+			return ErrLastAdmin
+		}
+	}
+
+	// Clear references that lack ON DELETE CASCADE before removing the user.
+	// Deleting the user then cascades passkeys and OAuth grants automatically.
+	if _, err := tx.Exec("DELETE FROM refresh_tokens WHERE user_id = ?", userID); err != nil {
+		return fmt.Errorf("delete refresh tokens: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM connect_tokens WHERE user_id = ? OR created_by = ?", userID, userID); err != nil {
+		return fmt.Errorf("delete connect tokens: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM devices WHERE user_id = ?", userID); err != nil {
+		return fmt.Errorf("delete devices: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM users WHERE id = ?", userID); err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
+	var u UserSummary
+	err := s.db.QueryRow(`
+		SELECT
+			u.id,
+			u.username,
+			u.role,
+			u.created_at,
+			u.password_hash != '' AS has_password,
+			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
+			EXISTS(
+				SELECT 1 FROM connect_tokens ct
+				WHERE ct.user_id = u.id AND ct.redeemed_at IS NULL AND ct.expires_at > ?
+			) AS has_pending_invite
+		FROM users u
+		WHERE u.id = ?
+	`, time.Now(), userID).Scan(
+		&u.ID, &u.Username, &u.Role, &u.CreatedAt,
+		&u.HasPassword, &u.DeviceCount, &u.HasPendingInvite,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("load user summary: %w", err)
+	}
+	u.Permissions = PermissionsForRole(u.Role)
+	return &u, nil
 }
 
 func (s *Service) ValidateToken(tokenStr string) (*Claims, error) {

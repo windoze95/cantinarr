@@ -161,6 +161,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/ai-tools'),
             ),
             _SettingsTile(
+              icon: Icons.people_outline,
+              title: 'Users',
+              subtitle: 'Manage accounts, roles, and invites',
+              onTap: () => context.push('/settings/users'),
+            ),
+            _SettingsTile(
               icon: Icons.link,
               title: 'Generate Connect Link',
               subtitle: 'Create a link to invite a new user',

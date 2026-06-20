@@ -11,6 +11,25 @@ type User struct {
 	CreatedAt    time.Time    `json:"created_at"`
 }
 
+// UserSummary is an enriched view of a user for admin user-management screens.
+// It augments the base account with device and invite state so admins can tell
+// active accounts apart from pending invites at a glance.
+type UserSummary struct {
+	ID               int64        `json:"id"`
+	Username         string       `json:"username"`
+	Role             string       `json:"role"`
+	Permissions      []Permission `json:"permissions"`
+	CreatedAt        time.Time    `json:"created_at"`
+	DeviceCount      int          `json:"device_count"`
+	HasPassword      bool         `json:"has_password"`
+	HasPendingInvite bool         `json:"has_pending_invite"`
+}
+
+// UpdateUserRoleRequest changes a user's role.
+type UpdateUserRoleRequest struct {
+	Role string `json:"role"`
+}
+
 type Device struct {
 	ID         string     `json:"id"`
 	UserID     int64      `json:"user_id"`
