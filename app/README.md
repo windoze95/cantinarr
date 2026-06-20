@@ -58,6 +58,7 @@ Dark-first UI with warm gold accents, designed for couch browsing.
 
 ### Auth
 - **Server URL + login** -- point at your Cantinarr server, enter credentials
+- **Passkeys** -- native app passkey creation/sign-in on associated iOS, Android, and Windows deployments, with browser setup fallback
 - **Connect links** -- new users connect via a one-time link from their admin
 - **Automatic session restore** -- JWT stored in secure storage, auto-refreshes on 401
 
@@ -73,6 +74,8 @@ cd app
 flutter pub get
 flutter run
 ```
+
+Native iOS passkeys require iOS 16+, the app build to include the Associated Domains entitlement for the server domain (`webcredentials:your.domain`), and the server to publish an AASA file containing the app's `TeamID.BundleID`. Android passkeys require the server to publish Digital Asset Links for the app package and signing certificate fingerprint. See the server README for the deployment environment variables.
 
 ### Build for web (embedded in server)
 ```bash

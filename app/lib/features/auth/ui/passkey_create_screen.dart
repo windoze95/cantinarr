@@ -18,7 +18,24 @@ class PasskeyCreateScreen extends ConsumerStatefulWidget {
 class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
   final _nameController = TextEditingController(text: 'Passkey');
   bool _isCreating = false;
+  bool? _passkeyAvailable;
+  bool _showBrowserFallback = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPasskeyAvailability();
+  }
+
+  Future<void> _loadPasskeyAvailability() async {
+    final available = await PasskeyService.isAvailableAsync();
+    if (!mounted) return;
+    setState(() {
+      _passkeyAvailable = available;
+      _showBrowserFallback = !available;
+    });
+  }
 
   @override
   void dispose() {
@@ -33,6 +50,7 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
     setState(() {
       _isCreating = true;
       _error = null;
+      _showBrowserFallback = false;
     });
 
     try {
@@ -46,7 +64,8 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
       if (!mounted) return;
       setState(() {
         _isCreating = false;
-        _error = 'Could not create passkey';
+        _error = _passkeyErrorMessage(e);
+        _showBrowserFallback = true;
       });
     }
   }
@@ -75,7 +94,8 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final available = PasskeyService.isAvailable();
+    final checkingAvailability = _passkeyAvailable == null;
+    final available = _passkeyAvailable ?? false;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Create Passkey')),
@@ -87,14 +107,14 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
             const SizedBox(height: 24),
             TextField(
               controller: _nameController,
-              enabled: available && !_isCreating,
+              enabled: available && !_isCreating && !checkingAvailability,
               decoration: const InputDecoration(
                 labelText: 'Name',
                 hintText: 'Phone, laptop, browser',
                 prefixIcon: Icon(Icons.label_outline),
               ),
               textCapitalization: TextCapitalization.words,
-              autofocus: available,
+              autofocus: available && !checkingAvailability,
               onSubmitted: (_) => _create(),
             ),
             if (_error != null) ...[
@@ -103,21 +123,29 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
             ],
             const SizedBox(height: 24),
             FilledButton.icon(
-              onPressed: available && !_isCreating ? _create : null,
-              icon: _isCreating
+              onPressed: available && !_isCreating && !checkingAvailability
+                  ? _create
+                  : null,
+              icon: _isCreating || checkingAvailability
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.fingerprint),
-              label: Text(_isCreating ? 'Creating...' : 'Create Passkey'),
+              label: Text(checkingAvailability
+                  ? 'Checking...'
+                  : _isCreating
+                      ? 'Creating...'
+                      : 'Create Passkey'),
             ),
-            if (!available) ...[
+            if (_showBrowserFallback) ...[
               const SizedBox(height: 16),
-              const Text(
-                'Passkeys are not available in this app on this device.',
-                style: TextStyle(color: AppTheme.textSecondary),
+              Text(
+                available
+                    ? 'Native passkey creation is not available for this server yet.'
+                    : 'Passkeys are not available in this app on this device.',
+                style: const TextStyle(color: AppTheme.textSecondary),
               ),
               const SizedBox(height: 12),
               OutlinedButton.icon(
@@ -130,5 +158,16 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
         ),
       ),
     );
+  }
+
+  String _passkeyErrorMessage(Object e) {
+    final message = e.toString().replaceFirst('Exception: ', '');
+    if (message.contains('passkey') ||
+        message.contains('Passkey') ||
+        message.contains('credential provider') ||
+        message.contains('Google account')) {
+      return message;
+    }
+    return 'Could not create passkey';
   }
 }

@@ -53,9 +53,9 @@ func rpIDFromRequest(r *http.Request) string {
 	return host
 }
 
-// rpConfigFromRequest derives the WebAuthn relying party config from the
+// baseRPConfigFromRequest derives the WebAuthn relying party config from the
 // incoming HTTP request. Each self-hosted deployment has a different domain.
-func rpConfigFromRequest(r *http.Request) *webauthn.Config {
+func baseRPConfigFromRequest(r *http.Request) *webauthn.Config {
 	host := r.Host
 
 	// RP ID is the hostname without port
@@ -81,6 +81,28 @@ func rpConfigFromRequest(r *http.Request) *webauthn.Config {
 		RPDisplayName: "Cantinarr",
 		RPOrigins:     []string{origin},
 	}
+}
+
+func (s *Service) rpConfigFromRequest(r *http.Request) *webauthn.Config {
+	cfg := baseRPConfigFromRequest(r)
+	cfg.RPOrigins = appendUnique(cfg.RPOrigins, s.webauthnOrigins...)
+	return cfg
+}
+
+func appendUnique(values []string, extras ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(extras))
+	result := make([]string, 0, len(values)+len(extras))
+	for _, value := range append(values, extras...) {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // ─── WebAuthn User Adapter ───────────────────────────────
@@ -278,7 +300,7 @@ func (s *Service) loadAllCredentials(userID int64) ([]webauthn.Credential, error
 }
 
 func (s *Service) BeginPasskeyRegistration(userID int64, r *http.Request) (interface{}, string, error) {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return nil, "", fmt.Errorf("create webauthn: %w", err)
@@ -301,7 +323,7 @@ func (s *Service) BeginPasskeyRegistration(userID int64, r *http.Request) (inter
 }
 
 func (s *Service) FinishPasskeyRegistration(userID int64, sessionID, credentialName string, r *http.Request) error {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return fmt.Errorf("create webauthn: %w", err)
@@ -405,7 +427,7 @@ func (s *Service) FinishPasskeySetup(token, sessionID, credentialName string, r 
 }
 
 func (s *Service) BeginPasskeyLogin(r *http.Request) (interface{}, string, error) {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return nil, "", fmt.Errorf("create webauthn: %w", err)
@@ -446,7 +468,7 @@ func (s *Service) FinishPasskeyLogin(sessionID string, r *http.Request) (*TokenR
 }
 
 func (s *Service) finishPasskeyLoginUser(sessionID string, r *http.Request) (*WebAuthnUser, error) {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create webauthn: %w", err)

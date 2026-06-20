@@ -54,6 +54,8 @@ func NewRouter(
 	r.Get("/.well-known/oauth-protected-resource/mcp", oauthHandler.ProtectedResourceMetadata)
 	r.Get("/.well-known/oauth-authorization-server", oauthHandler.AuthorizationServerMetadata)
 	r.Get("/.well-known/openid-configuration", oauthHandler.AuthorizationServerMetadata)
+	r.Get("/.well-known/apple-app-site-association", appleAppSiteAssociationHandler(cfg))
+	r.Get("/.well-known/assetlinks.json", androidAssetLinksHandler(cfg))
 	r.Post("/oauth/register", oauthHandler.RegisterClient)
 	r.Get("/oauth/authorize", oauthHandler.Authorize)
 	r.Post("/oauth/authorize", oauthHandler.Authorize)
@@ -264,6 +266,43 @@ func NewRouter(
 	r.NotFound(web.Handler().ServeHTTP)
 
 	return r
+}
+
+func appleAppSiteAssociationHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if len(cfg.AppleAppIDs) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"webcredentials": map[string]any{
+				"apps": cfg.AppleAppIDs,
+			},
+		})
+	}
+}
+
+func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if len(cfg.AndroidCertFingerprints) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{
+				"relation": []string{
+					"delegate_permission/common.get_login_creds",
+				},
+				"target": map[string]any{
+					"namespace":                "android_app",
+					"package_name":             cfg.AndroidPackageName,
+					"sha256_cert_fingerprints": cfg.AndroidCertFingerprints,
+				},
+			},
+		})
+	}
 }
 
 func configHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry) http.HandlerFunc {

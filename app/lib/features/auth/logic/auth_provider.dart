@@ -433,7 +433,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   /// Check if passkey offer should be shown — requires both platform
   /// support and server-side secure context (HTTPS / localhost).
   Future<bool> _shouldOfferPasskey(String serverUrl) async {
-    if (!PasskeyService.isAvailable()) return false;
+    if (!await PasskeyService.isAvailableAsync()) return false;
     try {
       final status = await _authService.getServerStatus(serverUrl);
       return status.webAuthnAvailable;
@@ -518,6 +518,15 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
     if (e is Exception) {
       final msg = e.toString();
+      if (msg.startsWith('Exception: ')) {
+        final message = msg.replaceFirst('Exception: ', '');
+        if (message.contains('passkey') ||
+            message.contains('Passkey') ||
+            message.contains('credential provider') ||
+            message.contains('Google account')) {
+          return message;
+        }
+      }
       if (msg.contains('Connection refused') ||
           msg.contains('SocketException')) {
         return 'Could not connect to server';
@@ -540,6 +549,15 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       if (e.type == DioExceptionType.connectionError ||
           e.type == DioExceptionType.connectionTimeout) {
         return 'Could not connect to server';
+      }
+    }
+    if (e is Exception) {
+      final message = e.toString().replaceFirst('Exception: ', '');
+      if (message.contains('passkey') ||
+          message.contains('Passkey') ||
+          message.contains('credential provider') ||
+          message.contains('Google account')) {
+        return message;
       }
     }
     return 'Passkey authentication failed. Try signing in with your password.';

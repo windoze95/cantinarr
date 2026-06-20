@@ -74,6 +74,12 @@ Optional env vars for deployment tuning:
 | `CANTINARR_PORT` | `8585` | HTTP listen port |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for JWT signing |
+| `CANTINARR_APPLE_APP_IDS` | unset | Comma-separated `TeamID.BundleID` values for native Apple passkeys |
+| `CANTINARR_ANDROID_PACKAGE_NAME` | `com.cantinarr.cantinarr` | Android package name for native passkeys |
+| `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Comma-separated Android signing certificate SHA-256 fingerprints for Digital Asset Links and native origin validation |
+| `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Comma-separated additional WebAuthn origins to trust |
+
+Native app passkeys require a public HTTPS server domain associated with the app. Cantinarr serves `/.well-known/apple-app-site-association` when `CANTINARR_APPLE_APP_IDS` is set, and `/.well-known/assetlinks.json` when Android signing fingerprints are set. Browser passkey setup remains available for deployments that cannot use native app association.
 
 ## API Reference
 

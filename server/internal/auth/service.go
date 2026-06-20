@@ -49,13 +49,23 @@ type Service struct {
 	db               *sql.DB
 	jwtSecret        []byte
 	webauthnSessions *SessionStore
+	webauthnOrigins  []string
 }
 
-func NewService(db *sql.DB, jwtSecret string) *Service {
+type WebAuthnConfig struct {
+	ExtraOrigins []string
+}
+
+func NewService(db *sql.DB, jwtSecret string, webauthnConfig ...WebAuthnConfig) *Service {
+	var extraOrigins []string
+	if len(webauthnConfig) > 0 {
+		extraOrigins = append(extraOrigins, webauthnConfig[0].ExtraOrigins...)
+	}
 	return &Service{
 		db:               db,
 		jwtSecret:        []byte(jwtSecret),
 		webauthnSessions: NewSessionStore(),
+		webauthnOrigins:  extraOrigins,
 	}
 }
 

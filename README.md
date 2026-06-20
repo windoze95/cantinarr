@@ -142,6 +142,12 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_AI_PROVIDER` | `anthropic` | AI provider used by the assistant (`anthropic`, `openai`, or `gemini`) |
 | `CANTINARR_AI_MODEL` | provider default | Model used by the AI assistant when no admin UI model is saved |
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
+| `CANTINARR_APPLE_APP_IDS` | unset | Comma-separated `TeamID.BundleID` values for native Apple passkeys; served from `/.well-known/apple-app-site-association` |
+| `CANTINARR_ANDROID_PACKAGE_NAME` | `com.cantinarr.cantinarr` | Android package name for native passkeys |
+| `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Comma-separated Android signing certificate SHA-256 fingerprints for `/.well-known/assetlinks.json` and Android WebAuthn origin validation |
+| `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Comma-separated additional WebAuthn origins to trust, for native clients or advanced deployments |
+
+Native app passkeys require a public HTTPS server domain that is associated with the app. Apple devices verify `/.well-known/apple-app-site-association`; Android credential providers verify `/.well-known/assetlinks.json` and return an `android:apk-key-hash` origin that Cantinarr validates from the configured signing certificate fingerprint. Browser setup remains available when a self-hosted deployment cannot satisfy native app association.
 
 ## How It Works
 
