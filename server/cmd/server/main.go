@@ -104,8 +104,13 @@ func main() {
 	// Tautulli handler (Plex monitoring)
 	tautulliHandler := tautulli.NewHandler(instanceStore, registry)
 
+	// WebSocket hub (built before the request service so request approvals
+	// and denials can push realtime events to the requester).
+	wsHub := ws.NewHub(authService, registry, instanceStore)
+	go wsHub.Run(context.Background())
+
 	// Request service
-	requestService := request.NewService(database, registry, bridge)
+	requestService := request.NewService(database, registry, bridge, wsHub)
 	requestHandler := request.NewHandler(requestService)
 
 	// Proxy handler
@@ -119,10 +124,6 @@ func main() {
 	apiCache := cache.New()
 	defer apiCache.Close()
 	discoverHandler := discover.NewHandler(creds, apiCache)
-
-	// WebSocket hub
-	wsHub := ws.NewHub(authService, registry, instanceStore)
-	go wsHub.Run(context.Background())
 
 	// Router
 	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer)

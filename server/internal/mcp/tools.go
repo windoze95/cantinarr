@@ -516,7 +516,7 @@ func (s *ToolServer) getRecommendations(input json.RawMessage) (*ToolResult, err
 	}, nil
 }
 
-func (s *ToolServer) checkRequestStatus(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
 		TmdbID    int    `json:"tmdb_id"`
 		MediaType string `json:"media_type"`
@@ -524,7 +524,7 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage) (*ToolResult, err
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	status, err := s.request.GetStatus(params.TmdbID, params.MediaType)
+	status, err := s.request.GetUserStatus(userID, params.TmdbID, params.MediaType)
 	if err != nil {
 		return nil, err
 	}

@@ -57,21 +57,33 @@ class RequestNotifier extends ChangeNotifier {
     }
   }
 
-  /// One-tap request action.
-  Future<void> request({String? title, int? tvdbId}) async {
+  /// Fetch the option set the current user may choose for this item.
+  Future<RequestOptions?> fetchOptions() => _service.fetchOptions(_mediaType);
+
+  /// Submit the request, optionally with chosen season scope / quality. The
+  /// resulting status (which may be [RequestStatus.pending]) is reflected in
+  /// state rather than assuming "requested".
+  Future<void> request({
+    String? title,
+    int? tvdbId,
+    String? seasonScope,
+    int? qualityProfileId,
+  }) async {
     if (state.isRequesting) return;
     state = state.copyWith(isRequesting: true, error: null);
 
-    final success = await _service.request(
+    final status = await _service.request(
       tmdbId: _tmdbId,
       mediaType: _mediaType,
       title: title,
       tvdbId: tvdbId,
+      seasonScope: seasonScope,
+      qualityProfileId: qualityProfileId,
     );
 
-    if (success) {
+    if (status != null) {
       state = state.copyWith(
-        status: RequestStatus.requested,
+        status: status,
         isRequesting: false,
       );
     } else {

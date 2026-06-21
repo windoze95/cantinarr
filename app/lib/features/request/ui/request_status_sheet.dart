@@ -80,6 +80,10 @@ class RequestStatusSheet extends StatelessWidget {
   String get _statusMessage => switch (status) {
         RequestStatus.unavailable =>
           'This title is not yet on the server. Tap Request to add it!',
+        RequestStatus.pending =>
+          'Your request is awaiting approval from an administrator. You\'ll be notified once it\'s reviewed.',
+        RequestStatus.denied =>
+          'An administrator declined this request. You can request it again.',
         RequestStatus.requested =>
           'Your request has been received! The server is searching for this title and will start downloading it soon.',
         RequestStatus.downloading =>
@@ -99,6 +103,8 @@ class _StatusIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     final (icon, color) = switch (status) {
       RequestStatus.unavailable => (Icons.add_circle_outline, AppTheme.accent),
+      RequestStatus.pending => (Icons.hourglass_empty, AppTheme.requested),
+      RequestStatus.denied => (Icons.block, AppTheme.error),
       RequestStatus.requested => (Icons.hourglass_top, AppTheme.requested),
       RequestStatus.downloading => (Icons.downloading, AppTheme.downloading),
       RequestStatus.available => (Icons.check_circle, AppTheme.available),

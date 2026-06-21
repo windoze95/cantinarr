@@ -45,3 +45,12 @@ final arrQueueChangedProvider =
       e.data['instance_id'] == key.instanceId &&
       e.data['service_type'] == key.serviceType);
 });
+
+/// Approval decisions for the current user's own requests
+/// (`request_decision` events). The backend pushes these only to the
+/// requesting user, carrying `decision` ('approved'|'denied'), `title`,
+/// `media_type`, and an optional `reason`. Used to surface an in-app toast.
+final requestDecisionEventsProvider = StreamProvider.autoDispose<WsEvent>((ref) {
+  final events = ref.watch(realtimeEventsProvider);
+  return events.where((e) => e.type == 'request_decision');
+});

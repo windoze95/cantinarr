@@ -2,6 +2,7 @@ package request
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,17 +12,49 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
+// Request status values stored in request_log.status and returned to clients.
+const (
+	StatusUnavailable = "unavailable"
+	StatusRequested   = "requested"
+	StatusDownloading = "downloading"
+	StatusAvailable   = "available"
+	StatusPartial     = "partial"
+	StatusPending     = "pending"
+	StatusDenied      = "denied"
+)
+
+// Season scope choices a user (or admin) can attach to a TV request.
+const (
+	SeasonScopeAll    = "all"
+	SeasonScopeFirst  = "first"
+	SeasonScopeLatest = "latest"
+	SeasonScopePilot  = "pilot"
+)
+
+// requestSettingsKey is the settings-table key holding the global request
+// defaults (JSON blob), mirroring the toolsettings storage pattern.
+const requestSettingsKey = "request_settings"
+
+// Notifier delivers realtime events about request decisions. The websocket
+// hub satisfies this; it is optional and may be nil.
+type Notifier interface {
+	NotifyUser(userID int64, eventType string, data map[string]interface{})
+	NotifyAdmins(eventType string, data map[string]interface{})
+}
+
 type Service struct {
 	db       *sql.DB
 	registry *instance.Registry
 	bridge   *tmdb.Bridge
+	notifier Notifier
 }
 
-func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge) *Service {
+func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
 	return &Service{
 		db:       db,
 		registry: registry,
 		bridge:   bridge,
+		notifier: notifier,
 	}
 }
 
@@ -48,10 +81,12 @@ func (s *Service) getSonarr() *sonarr.Client {
 }
 
 type CreateRequest struct {
-	TmdbID    int    `json:"tmdb_id"`
-	MediaType string `json:"media_type"`
-	Title     string `json:"title"`
-	TvdbID    int    `json:"tvdb_id"`
+	TmdbID           int    `json:"tmdb_id"`
+	MediaType        string `json:"media_type"`
+	Title            string `json:"title"`
+	TvdbID           int    `json:"tvdb_id"`
+	SeasonScope      string `json:"season_scope"`
+	QualityProfileID int    `json:"quality_profile_id"`
 }
 
 type CreateResponse struct {
@@ -70,148 +105,480 @@ type RequestLog struct {
 	MediaType   string    `json:"media_type"`
 	Title       string    `json:"title"`
 	Status      string    `json:"status"`
+	DenyReason  string    `json:"deny_reason,omitempty"`
 	RequestedAt time.Time `json:"requested_at"`
 }
 
-func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateResponse, error) {
-	switch req.MediaType {
-	case "movie":
-		return s.requestMovie(userID, req.TmdbID)
-	case "tv":
-		return s.requestTV(userID, req)
-	default:
-		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
+// PendingRequest is one row of the admin approval queue.
+type PendingRequest struct {
+	ID               int64     `json:"id"`
+	UserID           int64     `json:"user_id"`
+	Username         string    `json:"username"`
+	TmdbID           int       `json:"tmdb_id"`
+	TvdbID           int       `json:"tvdb_id"`
+	MediaType        string    `json:"media_type"`
+	Title            string    `json:"title"`
+	SeasonScope      string    `json:"season_scope"`
+	QualityProfileID int       `json:"quality_profile_id"`
+	RequestedAt      time.Time `json:"requested_at"`
+}
+
+// QualityProfile is an arr quality profile offered for selection.
+type QualityProfile struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// RequestOptions tells the client what the current user may choose for a request.
+type RequestOptions struct {
+	CanChooseSeason    bool             `json:"can_choose_season"`
+	CanChooseQuality   bool             `json:"can_choose_quality"`
+	DefaultSeasonScope string           `json:"default_season_scope"`
+	QualityProfiles    []QualityProfile `json:"quality_profiles"`
+}
+
+// DecisionOverride lets an admin tweak options when approving a request.
+type DecisionOverride struct {
+	SeasonScope      string `json:"season_scope"`
+	QualityProfileID int    `json:"quality_profile_id"`
+}
+
+// GlobalSettings holds the system-wide request defaults (settings table).
+type GlobalSettings struct {
+	RequireApproval      bool   `json:"require_approval"`
+	AllowSeasonChoice    bool   `json:"allow_season_choice"`
+	DefaultSeasonScope   string `json:"default_season_scope"`
+	AllowQualityChoice   bool   `json:"allow_quality_choice"`
+	DefaultQualityRadarr int    `json:"default_quality_radarr"`
+	DefaultQualitySonarr int    `json:"default_quality_sonarr"`
+}
+
+func defaultGlobalSettings() GlobalSettings {
+	return GlobalSettings{
+		RequireApproval:    false,
+		AllowSeasonChoice:  true,
+		DefaultSeasonScope: SeasonScopeAll,
+		AllowQualityChoice: false,
 	}
 }
 
-func (s *Service) requestMovie(userID int64, tmdbID int) (*CreateResponse, error) {
+// UserSettingsDTO is the per-user override payload. A nil field means the user
+// inherits the global default for that option.
+type UserSettingsDTO struct {
+	RequireApproval      *bool   `json:"require_approval"`
+	AllowSeasonChoice    *bool   `json:"allow_season_choice"`
+	SeasonScope          *string `json:"season_scope"`
+	AllowQualityChoice   *bool   `json:"allow_quality_choice"`
+	QualityProfileRadarr *int    `json:"quality_profile_radarr"`
+	QualityProfileSonarr *int    `json:"quality_profile_sonarr"`
+}
+
+// AdminSettingsView is the global-settings editor payload: the current
+// defaults plus the arr quality profiles an admin chooses among.
+type AdminSettingsView struct {
+	Settings       GlobalSettings   `json:"settings"`
+	RadarrProfiles []QualityProfile `json:"radarr_profiles"`
+	SonarrProfiles []QualityProfile `json:"sonarr_profiles"`
+}
+
+// effective is the resolved option set for one user: global default, then the
+// per-user override, then the admin bypass.
+type effective struct {
+	RequiresApproval   bool
+	AllowSeasonChoice  bool
+	SeasonScope        string
+	AllowQualityChoice bool
+	QualityRadarr      int
+	QualitySonarr      int
+}
+
+// resolvedRequest is a request whose options have all been resolved server-side.
+type resolvedRequest struct {
+	userID           int64
+	tmdbID           int
+	tvdbID           int
+	mediaType        string
+	title            string
+	seasonScope      string
+	qualityProfileID int
+}
+
+// GetGlobalSettings returns the stored global request defaults, falling back
+// to the built-in defaults for any missing field.
+func (s *Service) GetGlobalSettings() GlobalSettings {
+	g := defaultGlobalSettings()
+	var v string
+	if err := s.db.QueryRow("SELECT value FROM settings WHERE key = ?", requestSettingsKey).Scan(&v); err == nil && v != "" {
+		_ = json.Unmarshal([]byte(v), &g)
+	}
+	if !validSeasonScope(g.DefaultSeasonScope) {
+		g.DefaultSeasonScope = SeasonScopeAll
+	}
+	return g
+}
+
+func (s *Service) SetGlobalSettings(g GlobalSettings) error {
+	if !validSeasonScope(g.DefaultSeasonScope) {
+		g.DefaultSeasonScope = SeasonScopeAll
+	}
+	data, err := json.Marshal(g)
+	if err != nil {
+		return fmt.Errorf("encode request settings: %w", err)
+	}
+	if _, err := s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", requestSettingsKey, string(data)); err != nil {
+		return fmt.Errorf("save request settings: %w", err)
+	}
+	return nil
+}
+
+// GetUserSettingsDTO loads a user's per-user overrides; absent columns/rows
+// are returned as nil (inherit).
+func (s *Service) GetUserSettingsDTO(userID int64) (UserSettingsDTO, error) {
+	var dto UserSettingsDTO
+	var ra, asc, aqc sql.NullBool
+	var ss sql.NullString
+	var qr, qs sql.NullInt64
+	err := s.db.QueryRow(
+		"SELECT require_approval, allow_season_choice, season_scope_override, allow_quality_choice, quality_profile_radarr, quality_profile_sonarr FROM user_request_settings WHERE user_id = ?",
+		userID,
+	).Scan(&ra, &asc, &ss, &aqc, &qr, &qs)
+	if err == sql.ErrNoRows {
+		return dto, nil
+	}
+	if err != nil {
+		return dto, fmt.Errorf("load user request settings: %w", err)
+	}
+	if ra.Valid {
+		v := ra.Bool
+		dto.RequireApproval = &v
+	}
+	if asc.Valid {
+		v := asc.Bool
+		dto.AllowSeasonChoice = &v
+	}
+	if ss.Valid {
+		v := ss.String
+		dto.SeasonScope = &v
+	}
+	if aqc.Valid {
+		v := aqc.Bool
+		dto.AllowQualityChoice = &v
+	}
+	if qr.Valid {
+		v := int(qr.Int64)
+		dto.QualityProfileRadarr = &v
+	}
+	if qs.Valid {
+		v := int(qs.Int64)
+		dto.QualityProfileSonarr = &v
+	}
+	return dto, nil
+}
+
+// SetUserSettings upserts a user's per-user overrides. Nil fields persist as
+// NULL (inherit the global default).
+func (s *Service) SetUserSettings(userID int64, dto UserSettingsDTO) error {
+	if dto.SeasonScope != nil && *dto.SeasonScope != "" && !validSeasonScope(*dto.SeasonScope) {
+		return fmt.Errorf("invalid season scope: %s", *dto.SeasonScope)
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO user_request_settings
+			(user_id, require_approval, allow_season_choice, season_scope_override, allow_quality_choice, quality_profile_radarr, quality_profile_sonarr)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id) DO UPDATE SET
+			require_approval = excluded.require_approval,
+			allow_season_choice = excluded.allow_season_choice,
+			season_scope_override = excluded.season_scope_override,
+			allow_quality_choice = excluded.allow_quality_choice,
+			quality_profile_radarr = excluded.quality_profile_radarr,
+			quality_profile_sonarr = excluded.quality_profile_sonarr`,
+		userID, dto.RequireApproval, dto.AllowSeasonChoice, dto.SeasonScope, dto.AllowQualityChoice, dto.QualityProfileRadarr, dto.QualityProfileSonarr,
+	)
+	if err != nil {
+		return fmt.Errorf("save user request settings: %w", err)
+	}
+	return nil
+}
+
+// userIsAdmin reports whether the user has the admin role.
+func (s *Service) userIsAdmin(userID int64) bool {
+	var role string
+	if err := s.db.QueryRow("SELECT role FROM users WHERE id = ?", userID).Scan(&role); err != nil {
+		return false
+	}
+	return role == "admin"
+}
+
+// effectiveSettings resolves the option set for a user: global default, then
+// per-user override, then admin bypass (admins never need approval and may
+// always choose options).
+func (s *Service) effectiveSettings(userID int64, isAdmin bool) (effective, error) {
+	g := s.GetGlobalSettings()
+	dto, err := s.GetUserSettingsDTO(userID)
+	if err != nil {
+		return effective{}, err
+	}
+	eff := effective{
+		RequiresApproval:   g.RequireApproval,
+		AllowSeasonChoice:  g.AllowSeasonChoice,
+		SeasonScope:        g.DefaultSeasonScope,
+		AllowQualityChoice: g.AllowQualityChoice,
+		QualityRadarr:      g.DefaultQualityRadarr,
+		QualitySonarr:      g.DefaultQualitySonarr,
+	}
+	if dto.RequireApproval != nil {
+		eff.RequiresApproval = *dto.RequireApproval
+	}
+	if dto.AllowSeasonChoice != nil {
+		eff.AllowSeasonChoice = *dto.AllowSeasonChoice
+	}
+	if dto.SeasonScope != nil && *dto.SeasonScope != "" {
+		eff.SeasonScope = *dto.SeasonScope
+	}
+	if dto.AllowQualityChoice != nil {
+		eff.AllowQualityChoice = *dto.AllowQualityChoice
+	}
+	if dto.QualityProfileRadarr != nil && *dto.QualityProfileRadarr != 0 {
+		eff.QualityRadarr = *dto.QualityProfileRadarr
+	}
+	if dto.QualityProfileSonarr != nil && *dto.QualityProfileSonarr != 0 {
+		eff.QualitySonarr = *dto.QualityProfileSonarr
+	}
+	if !validSeasonScope(eff.SeasonScope) {
+		eff.SeasonScope = SeasonScopeAll
+	}
+	if isAdmin {
+		eff.RequiresApproval = false
+		eff.AllowSeasonChoice = true
+		eff.AllowQualityChoice = true
+	}
+	return eff, nil
+}
+
+func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateResponse, error) {
+	if req.MediaType != "movie" && req.MediaType != "tv" {
+		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
+	}
+
+	isAdmin := s.userIsAdmin(userID)
+	eff, err := s.effectiveSettings(userID, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved := &resolvedRequest{
+		userID:    userID,
+		tmdbID:    req.TmdbID,
+		tvdbID:    req.TvdbID,
+		mediaType: req.MediaType,
+		title:     req.Title,
+	}
+
+	// Season scope (TV only). Honor the client's choice only when allowed;
+	// otherwise the resolved default stands. Movies keep an empty scope so the
+	// stored row / admin queue don't show a meaningless value.
+	if req.MediaType == "tv" {
+		resolved.seasonScope = eff.SeasonScope
+		if req.SeasonScope != "" && eff.AllowSeasonChoice && validSeasonScope(req.SeasonScope) {
+			resolved.seasonScope = req.SeasonScope
+		}
+	}
+
+	// Quality profile. Default per service; honor the client's choice only
+	// when allowed (out of the box non-admins cannot choose).
+	if req.MediaType == "tv" {
+		resolved.qualityProfileID = eff.QualitySonarr
+	} else {
+		resolved.qualityProfileID = eff.QualityRadarr
+	}
+	if req.QualityProfileID != 0 && eff.AllowQualityChoice {
+		resolved.qualityProfileID = req.QualityProfileID
+	}
+
+	if eff.RequiresApproval {
+		return s.createPending(resolved)
+	}
+
+	status, title, err := s.addToArr(resolved)
+	if err != nil {
+		return nil, err
+	}
+	resolved.title = title
+	s.logRequest(resolved, title, status)
+	return &CreateResponse{Success: true, Status: status, Title: title}, nil
+}
+
+// createPending records a request awaiting admin approval without touching the
+// arr services. The stored options are replayed verbatim on approval.
+func (s *Service) createPending(r *resolvedRequest) (*CreateResponse, error) {
+	// Insert atomically only when no pending row already exists for this
+	// user+title, so a double-submit can't create duplicate queue entries
+	// (the check + insert is one statement under the single-writer DB).
+	res, err := s.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, tvdb_id, media_type, title, status, season_scope, quality_profile_id)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		 WHERE NOT EXISTS (
+		     SELECT 1 FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND status = ?
+		 )`,
+		r.userID, r.tmdbID, sqlNullInt(r.tvdbID), r.mediaType, r.title, StatusPending, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
+		r.userID, r.tmdbID, r.mediaType, StatusPending,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("save pending request: %w", err)
+	}
+
+	// Cache the tvdb mapping so TV status checks resolve while pending.
+	if r.mediaType == "tv" && r.tvdbID != 0 {
+		s.db.Exec("INSERT OR REPLACE INTO tmdb_tvdb_cache (tmdb_id, tvdb_id) VALUES (?, ?)", r.tmdbID, r.tvdbID)
+	}
+
+	// Only notify admins when a new row was actually queued (not a duplicate).
+	if n, _ := res.RowsAffected(); n > 0 && s.notifier != nil {
+		s.notifier.NotifyAdmins("request_pending", map[string]interface{}{
+			"tmdb_id":    r.tmdbID,
+			"media_type": r.mediaType,
+			"title":      r.title,
+		})
+	}
+	return &CreateResponse{Success: true, Status: StatusPending, Title: r.title}, nil
+}
+
+// addToArr performs the actual Radarr/Sonarr add and returns the resulting
+// status + canonical title. It does NOT write to request_log; callers decide
+// whether to insert a new row or update an existing (pending) one.
+func (s *Service) addToArr(r *resolvedRequest) (status string, title string, err error) {
+	switch r.mediaType {
+	case "movie":
+		return s.addMovie(r)
+	case "tv":
+		return s.addSeries(r)
+	default:
+		return "", "", fmt.Errorf("unsupported media type: %s", r.mediaType)
+	}
+}
+
+func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
 	radarrClient := s.getRadarr()
 	if radarrClient == nil {
-		return nil, fmt.Errorf("radarr is not configured")
+		return "", "", fmt.Errorf("radarr is not configured")
 	}
 
-	// Check if already in Radarr
-	existing, err := radarrClient.GetMovieByTMDB(tmdbID)
+	existing, err := radarrClient.GetMovieByTMDB(r.tmdbID)
 	if err == nil && existing != nil {
-		status := "requested"
+		status := StatusRequested
 		if existing.HasFile {
-			status = "available"
+			status = StatusAvailable
 		}
-		s.logRequest(userID, tmdbID, "movie", existing.Title, status)
-		return &CreateResponse{Success: true, Status: status, Title: existing.Title}, nil
+		return status, existing.Title, nil
 	}
 
-	// Lookup movie
-	lookup, err := radarrClient.LookupByTMDB(tmdbID)
+	lookup, err := radarrClient.LookupByTMDB(r.tmdbID)
 	if err != nil {
-		return nil, fmt.Errorf("movie lookup failed: %w", err)
+		return "", "", fmt.Errorf("movie lookup failed: %w", err)
 	}
 
-	// Get defaults
 	profiles, err := radarrClient.GetQualityProfiles()
 	if err != nil || len(profiles) == 0 {
-		return nil, fmt.Errorf("no quality profiles available")
+		return "", "", fmt.Errorf("no quality profiles available")
 	}
 	folders, err := radarrClient.GetRootFolders()
 	if err != nil || len(folders) == 0 {
-		return nil, fmt.Errorf("no root folders available")
+		return "", "", fmt.Errorf("no root folders available")
+	}
+
+	profileID := r.qualityProfileID
+	if profileID == 0 || !radarrProfileExists(profiles, profileID) {
+		profileID = profiles[0].ID
 	}
 
 	addReq := &radarr.AddMovieRequest{
 		Title:            lookup.Title,
 		TmdbID:           lookup.TmdbID,
 		Year:             lookup.Year,
-		QualityProfileID: profiles[0].ID,
+		QualityProfileID: profileID,
 		RootFolderPath:   folders[0].Path,
 		Monitored:        true,
 	}
 	addReq.AddOptions.SearchForMovie = true
 
 	if err := radarrClient.AddMovie(addReq); err != nil {
-		return nil, fmt.Errorf("add movie failed: %w", err)
+		return "", "", fmt.Errorf("add movie failed: %w", err)
 	}
-
-	s.logRequest(userID, tmdbID, "movie", lookup.Title, "requested")
-	return &CreateResponse{Success: true, Status: "requested", Title: lookup.Title}, nil
+	return StatusRequested, lookup.Title, nil
 }
 
-func (s *Service) requestTV(userID int64, req *CreateRequest) (*CreateResponse, error) {
+func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 	sonarrClient := s.getSonarr()
 	if sonarrClient == nil {
-		return nil, fmt.Errorf("sonarr is not configured")
+		return "", "", fmt.Errorf("sonarr is not configured")
 	}
 
-	tvdbID := req.TvdbID
-	title := req.Title
-
-	// Cache the client-provided TVDB ID so getTVStatus works without TMDB calls
+	tvdbID := r.tvdbID
 	if tvdbID != 0 {
-		s.db.Exec(
-			"INSERT OR REPLACE INTO tmdb_tvdb_cache (tmdb_id, tvdb_id) VALUES (?, ?)",
-			req.TmdbID, tvdbID,
-		)
+		s.db.Exec("INSERT OR REPLACE INTO tmdb_tvdb_cache (tmdb_id, tvdb_id) VALUES (?, ?)", r.tmdbID, tvdbID)
 	}
 
-	// Check if already in Sonarr
 	if tvdbID != 0 {
 		existing, err := sonarrClient.GetSeriesByTVDB(tvdbID)
 		if err == nil && existing != nil {
-			status := "requested"
+			status := StatusRequested
 			if existing.Statistics != nil && existing.Statistics.PercentOfEpisodes >= 100 {
-				status = "available"
+				status = StatusAvailable
 			} else if existing.Statistics != nil && existing.Statistics.EpisodeFileCount > 0 {
-				status = "partial"
+				status = StatusPartial
 			}
-			s.logRequest(userID, req.TmdbID, "tv", existing.Title, status)
-			return &CreateResponse{Success: true, Status: status, Title: existing.Title}, nil
+			return status, existing.Title, nil
 		}
 	}
 
-	// Lookup series
 	var lookup *sonarr.LookupResult
 	var err error
 	if tvdbID != 0 {
 		lookup, err = sonarrClient.LookupByTVDB(tvdbID)
 	}
 	if lookup == nil || err != nil {
-		// Fallback to title search
-		if title == "" {
-			return nil, fmt.Errorf("series lookup failed: no TVDB ID or title provided")
+		if r.title == "" {
+			return "", "", fmt.Errorf("series lookup failed: no TVDB ID or title provided")
 		}
-		lookup, err = sonarrClient.LookupByTitle(title)
+		lookup, err = sonarrClient.LookupByTitle(r.title)
 		if err != nil {
-			return nil, fmt.Errorf("series lookup failed: %w", err)
+			return "", "", fmt.Errorf("series lookup failed: %w", err)
 		}
 		tvdbID = lookup.TvdbID
 	}
+	// Persist the resolved TVDB id so an approved title-only request stores it.
+	r.tvdbID = tvdbID
 
-	// Get defaults
 	profiles, err := sonarrClient.GetQualityProfiles()
 	if err != nil || len(profiles) == 0 {
-		return nil, fmt.Errorf("no quality profiles available")
+		return "", "", fmt.Errorf("no quality profiles available")
 	}
 	folders, err := sonarrClient.GetRootFolders()
 	if err != nil || len(folders) == 0 {
-		return nil, fmt.Errorf("no root folders available")
+		return "", "", fmt.Errorf("no root folders available")
+	}
+
+	profileID := r.qualityProfileID
+	if profileID == 0 || !sonarrProfileExists(profiles, profileID) {
+		profileID = profiles[0].ID
 	}
 
 	addReq := &sonarr.AddSeriesRequest{
 		Title:            lookup.Title,
 		TvdbID:           tvdbID,
 		Year:             lookup.Year,
-		QualityProfileID: profiles[0].ID,
+		QualityProfileID: profileID,
 		RootFolderPath:   folders[0].Path,
 		Monitored:        true,
 		SeasonFolder:     true,
 	}
 	addReq.AddOptions.SearchForMissingEpisodes = true
+	addReq.AddOptions.Monitor = sonarrMonitor(r.seasonScope)
 
 	if err := sonarrClient.AddSeries(addReq); err != nil {
-		return nil, fmt.Errorf("add series failed: %w", err)
+		return "", "", fmt.Errorf("add series failed: %w", err)
 	}
-
-	s.logRequest(userID, req.TmdbID, "tv", lookup.Title, "requested")
-	return &CreateResponse{Success: true, Status: "requested", Title: lookup.Title}, nil
+	return StatusRequested, lookup.Title, nil
 }
 
 func (s *Service) GetStatus(tmdbID int, mediaType string) (*StatusResponse, error) {
@@ -221,26 +588,50 @@ func (s *Service) GetStatus(tmdbID int, mediaType string) (*StatusResponse, erro
 	case "tv":
 		return s.getTVStatus(tmdbID)
 	default:
-		return &StatusResponse{Status: "unavailable"}, nil
+		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
+}
+
+// GetUserStatus surfaces a user's own pending/denied request first, then falls
+// back to the live arr availability that GetStatus reports.
+func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType string) (*StatusResponse, error) {
+	var status string
+	err := s.db.QueryRow(
+		"SELECT status FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ? ORDER BY requested_at DESC, id DESC LIMIT 1",
+		userID, tmdbID, mediaType,
+	).Scan(&status)
+	if err == nil {
+		// A pending request isn't in the arr yet, so always surface it.
+		if status == StatusPending {
+			return &StatusResponse{Status: StatusPending}, nil
+		}
+		// A denied request shows "denied" only while the title isn't otherwise
+		// available; if it later lands in the arr, prefer the live state.
+		if status == StatusDenied {
+			if live, lerr := s.GetStatus(tmdbID, mediaType); lerr == nil && live != nil && live.Status != StatusUnavailable {
+				return live, nil
+			}
+			return &StatusResponse{Status: StatusDenied}, nil
+		}
+	}
+	return s.GetStatus(tmdbID, mediaType)
 }
 
 func (s *Service) getMovieStatus(tmdbID int) (*StatusResponse, error) {
 	radarrClient := s.getRadarr()
 	if radarrClient == nil {
-		return &StatusResponse{Status: "unavailable"}, nil
+		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
 
 	movie, err := radarrClient.GetMovieByTMDB(tmdbID)
 	if err != nil || movie == nil {
-		return &StatusResponse{Status: "unavailable"}, nil
+		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
 
 	if movie.HasFile {
-		return &StatusResponse{Status: "available", Progress: 1.0}, nil
+		return &StatusResponse{Status: StatusAvailable, Progress: 1.0}, nil
 	}
 
-	// Check queue for download progress
 	queue, err := radarrClient.GetQueue()
 	if err == nil {
 		for _, item := range queue {
@@ -249,61 +640,59 @@ func (s *Service) getMovieStatus(tmdbID int) (*StatusResponse, error) {
 				if item.Size > 0 {
 					progress = (item.Size - item.Sizeleft) / item.Size
 				}
-				return &StatusResponse{Status: "downloading", Progress: progress}, nil
+				return &StatusResponse{Status: StatusDownloading, Progress: progress}, nil
 			}
 		}
 	}
 
 	if movie.Monitored {
-		return &StatusResponse{Status: "requested", Progress: 0}, nil
+		return &StatusResponse{Status: StatusRequested, Progress: 0}, nil
 	}
 
-	return &StatusResponse{Status: "unavailable"}, nil
+	return &StatusResponse{Status: StatusUnavailable}, nil
 }
 
 func (s *Service) getTVStatus(tmdbID int) (*StatusResponse, error) {
 	sonarrClient := s.getSonarr()
 	if sonarrClient == nil {
-		return &StatusResponse{Status: "unavailable"}, nil
+		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
 
-	// Check cache for tvdb_id
 	var tvdbID int
 	err := s.db.QueryRow("SELECT tvdb_id FROM tmdb_tvdb_cache WHERE tmdb_id = ?", tmdbID).Scan(&tvdbID)
 	if err != nil || tvdbID == 0 {
-		// Try to resolve
 		bridgeResult, err := s.bridge.ResolveTVDBID(tmdbID)
 		if err != nil {
-			return &StatusResponse{Status: "unavailable"}, nil
+			return &StatusResponse{Status: StatusUnavailable}, nil
 		}
 		tvdbID = bridgeResult.TVDBID
 	}
 
 	series, err := sonarrClient.GetSeriesByTVDB(tvdbID)
 	if err != nil || series == nil {
-		return &StatusResponse{Status: "unavailable"}, nil
+		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
 
 	if series.Statistics != nil {
 		if series.Statistics.PercentOfEpisodes >= 100 {
-			return &StatusResponse{Status: "available", Progress: 1.0}, nil
+			return &StatusResponse{Status: StatusAvailable, Progress: 1.0}, nil
 		}
 		if series.Statistics.EpisodeFileCount > 0 {
 			progress := series.Statistics.PercentOfEpisodes / 100.0
-			return &StatusResponse{Status: "partial", Progress: progress}, nil
+			return &StatusResponse{Status: StatusPartial, Progress: progress}, nil
 		}
 	}
 
 	if series.Monitored {
-		return &StatusResponse{Status: "requested", Progress: 0}, nil
+		return &StatusResponse{Status: StatusRequested, Progress: 0}, nil
 	}
 
-	return &StatusResponse{Status: "unavailable"}, nil
+	return &StatusResponse{Status: StatusUnavailable}, nil
 }
 
 func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	rows, err := s.db.Query(
-		"SELECT tmdb_id, media_type, title, status, requested_at FROM request_log WHERE user_id = ? ORDER BY requested_at DESC",
+		"SELECT tmdb_id, media_type, title, status, COALESCE(deny_reason, ''), requested_at FROM request_log WHERE user_id = ? ORDER BY requested_at DESC",
 		userID,
 	)
 	if err != nil {
@@ -314,7 +703,7 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	var requests []RequestLog
 	for rows.Next() {
 		var r RequestLog
-		if err := rows.Scan(&r.TmdbID, &r.MediaType, &r.Title, &r.Status, &r.RequestedAt); err != nil {
+		if err := rows.Scan(&r.TmdbID, &r.MediaType, &r.Title, &r.Status, &r.DenyReason, &r.RequestedAt); err != nil {
 			return nil, fmt.Errorf("scan request: %w", err)
 		}
 		requests = append(requests, r)
@@ -322,9 +711,249 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	return requests, rows.Err()
 }
 
-func (s *Service) logRequest(userID int64, tmdbID int, mediaType, title, status string) {
-	s.db.Exec(
-		"INSERT INTO request_log (user_id, tmdb_id, media_type, title, status) VALUES (?, ?, ?, ?, ?)",
-		userID, tmdbID, mediaType, title, status,
+// ListPending returns the admin approval queue (oldest first).
+func (s *Service) ListPending() ([]PendingRequest, error) {
+	rows, err := s.db.Query(
+		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), r.media_type, r.title, COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at
+		 FROM request_log r LEFT JOIN users u ON u.id = r.user_id
+		 WHERE r.status = ? ORDER BY r.requested_at ASC`,
+		StatusPending,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("query pending requests: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PendingRequest
+	for rows.Next() {
+		var p PendingRequest
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.MediaType, &p.Title, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
+			return nil, fmt.Errorf("scan pending request: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// loadRequest reads a request_log row into a resolvedRequest plus its status.
+func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error) {
+	var r resolvedRequest
+	var status string
+	err := s.db.QueryRow(
+		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
+		requestID,
+	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
+	if err == sql.ErrNoRows {
+		return nil, "", fmt.Errorf("request not found")
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("load request: %w", err)
+	}
+	return &r, status, nil
+}
+
+// ApproveRequest fulfills a pending request (optionally with admin overrides)
+// and marks the row approved. The arr add reuses the normal add path.
+func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOverride) (*CreateResponse, error) {
+	r, status, err := s.loadRequest(requestID)
+	if err != nil {
+		return nil, err
+	}
+	if status != StatusPending {
+		return nil, fmt.Errorf("request is not pending")
+	}
+	if override != nil {
+		if override.SeasonScope != "" && validSeasonScope(override.SeasonScope) {
+			r.seasonScope = override.SeasonScope
+		}
+		if override.QualityProfileID != 0 {
+			r.qualityProfileID = override.QualityProfileID
+		}
+	}
+
+	newStatus, title, err := s.addToArr(r)
+	if err != nil {
+		// Leave the row pending so the admin can retry after fixing config.
+		return nil, err
+	}
+
+	res, err := s.db.Exec(
+		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
+		newStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), adminID, requestID, StatusPending,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update request: %w", err)
+	}
+	// Lost a race with a concurrent decision: skip the duplicate notification.
+	if n, _ := res.RowsAffected(); n == 0 {
+		return &CreateResponse{Success: true, Status: newStatus, Title: title}, nil
+	}
+
+	if s.notifier != nil {
+		s.notifier.NotifyUser(r.userID, "request_decision", map[string]interface{}{
+			"decision":   "approved",
+			"tmdb_id":    r.tmdbID,
+			"media_type": r.mediaType,
+			"title":      title,
+			"status":     newStatus,
+		})
+	}
+	return &CreateResponse{Success: true, Status: newStatus, Title: title}, nil
+}
+
+// DenyRequest marks a pending request denied and notifies the requester.
+func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
+	r, status, err := s.loadRequest(requestID)
+	if err != nil {
+		return err
+	}
+	if status != StatusPending {
+		return fmt.Errorf("request is not pending")
+	}
+	res, err := s.db.Exec(
+		"UPDATE request_log SET status = ?, deny_reason = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
+		StatusDenied, sqlNullStr(reason), adminID, requestID, StatusPending,
+	)
+	if err != nil {
+		return fmt.Errorf("update request: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil // already decided by a concurrent action
+	}
+	if s.notifier != nil {
+		s.notifier.NotifyUser(r.userID, "request_decision", map[string]interface{}{
+			"decision":   "denied",
+			"tmdb_id":    r.tmdbID,
+			"media_type": r.mediaType,
+			"title":      r.title,
+			"reason":     reason,
+			"status":     StatusDenied,
+		})
+	}
+	return nil
+}
+
+// GetRequestOptions reports what the current user may choose for a request and
+// (when allowed) the available quality profiles for the relevant service.
+func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType string) (*RequestOptions, error) {
+	eff, err := s.effectiveSettings(userID, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+	opts := &RequestOptions{
+		CanChooseSeason:    eff.AllowSeasonChoice && mediaType == "tv",
+		CanChooseQuality:   eff.AllowQualityChoice,
+		DefaultSeasonScope: eff.SeasonScope,
+		QualityProfiles:    []QualityProfile{},
+	}
+	if eff.AllowQualityChoice {
+		opts.QualityProfiles = s.qualityProfiles(mediaType)
+	}
+	return opts, nil
+}
+
+// qualityProfiles fetches the selectable quality profiles for a media type.
+func (s *Service) qualityProfiles(mediaType string) []QualityProfile {
+	out := []QualityProfile{}
+	if mediaType == "tv" {
+		if c := s.getSonarr(); c != nil {
+			if ps, err := c.GetQualityProfiles(); err == nil {
+				for _, p := range ps {
+					out = append(out, QualityProfile{ID: p.ID, Name: p.Name})
+				}
+			}
+		}
+		return out
+	}
+	if c := s.getRadarr(); c != nil {
+		if ps, err := c.GetQualityProfiles(); err == nil {
+			for _, p := range ps {
+				out = append(out, QualityProfile{ID: p.ID, Name: p.Name})
+			}
+		}
+	}
+	return out
+}
+
+// GetAdminSettings returns the global defaults plus both arrs' quality profiles
+// for the admin settings editor.
+func (s *Service) GetAdminSettings() *AdminSettingsView {
+	return &AdminSettingsView{
+		Settings:       s.GetGlobalSettings(),
+		RadarrProfiles: s.qualityProfiles("movie"),
+		SonarrProfiles: s.qualityProfiles("tv"),
+	}
+}
+
+// insertRequest writes a request_log row and returns its id.
+func (s *Service) insertRequest(r *resolvedRequest, title, status string) (int64, error) {
+	res, err := s.db.Exec(
+		"INSERT INTO request_log (user_id, tmdb_id, tvdb_id, media_type, title, status, season_scope, quality_profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		r.userID, r.tmdbID, sqlNullInt(r.tvdbID), r.mediaType, title, status, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// logRequest records a fulfilled request without failing the caller (the arr
+// add already succeeded; a history-row failure should not surface as an error).
+func (s *Service) logRequest(r *resolvedRequest, title, status string) {
+	_, _ = s.insertRequest(r, title, status)
+}
+
+// sqlNullInt / sqlNullStr map zero values to NULL for nullable columns.
+func sqlNullInt(v int) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+
+func sqlNullStr(v string) interface{} {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+func validSeasonScope(scope string) bool {
+	switch scope {
+	case SeasonScopeAll, SeasonScopeFirst, SeasonScopeLatest, SeasonScopePilot:
+		return true
+	}
+	return false
+}
+
+// sonarrMonitor maps a season scope to Sonarr's addOptions.monitor enum.
+func sonarrMonitor(scope string) string {
+	switch scope {
+	case SeasonScopeFirst:
+		return "firstSeason"
+	case SeasonScopeLatest:
+		return "lastSeason"
+	case SeasonScopePilot:
+		return "pilot"
+	default:
+		return "all"
+	}
+}
+
+func radarrProfileExists(profiles []radarr.QualityProfile, id int) bool {
+	for _, p := range profiles {
+		if p.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func sonarrProfileExists(profiles []sonarr.QualityProfile, id int) bool {
+	for _, p := range profiles {
+		if p.ID == id {
+			return true
+		}
+	}
+	return false
 }

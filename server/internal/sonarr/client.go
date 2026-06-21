@@ -72,6 +72,10 @@ type AddSeriesRequest struct {
 	SeasonFolder     bool   `json:"seasonFolder"`
 	AddOptions       struct {
 		SearchForMissingEpisodes bool `json:"searchForMissingEpisodes"`
+		// Monitor is Sonarr's monitor scope applied at add time: one of
+		// all/future/missing/existing/firstSeason/lastSeason/pilot/none.
+		// Empty means Sonarr's default (all).
+		Monitor string `json:"monitor,omitempty"`
 	} `json:"addOptions"`
 }
 

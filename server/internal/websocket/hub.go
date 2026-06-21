@@ -124,6 +124,9 @@ func (h *Hub) Run(ctx context.Context) {
 				if msg.adminOnly && !client.isAdmin {
 					continue
 				}
+				if msg.userID != 0 && client.userID != msg.userID {
+					continue
+				}
 				select {
 				case client.send <- msg.data:
 				default:
@@ -136,31 +139,53 @@ func (h *Hub) Run(ctx context.Context) {
 	}
 }
 
-// outboundMessage pairs a marshaled event with its audience.
+// outboundMessage pairs a marshaled event with its audience. When userID is
+// non-zero the event is delivered only to that user's connected clients.
 type outboundMessage struct {
 	data      []byte
 	adminOnly bool
+	userID    int64
 }
 
 // Broadcast sends an event to all connected clients.
 func (h *Hub) Broadcast(event Event) {
-	h.enqueue(event, false)
+	h.enqueue(event, false, 0)
 }
 
 // BroadcastAdmin sends an event only to clients authenticated as admins.
 // Used for payloads whose REST equivalents sit behind the admin middleware
 // (e.g. download-client queue contents).
 func (h *Hub) BroadcastAdmin(event Event) {
-	h.enqueue(event, true)
+	h.enqueue(event, true, 0)
 }
 
-func (h *Hub) enqueue(event Event, adminOnly bool) {
+// BroadcastUser sends an event only to the connected clients of one user.
+// A non-positive userID would otherwise degrade to a global broadcast, so it
+// is dropped.
+func (h *Hub) BroadcastUser(userID int64, event Event) {
+	if userID <= 0 {
+		return
+	}
+	h.enqueue(event, false, userID)
+}
+
+// NotifyUser delivers an event to a single user (implements request.Notifier).
+func (h *Hub) NotifyUser(userID int64, eventType string, data map[string]interface{}) {
+	h.BroadcastUser(userID, Event{Type: eventType, Data: data})
+}
+
+// NotifyAdmins delivers an event to all admin clients (implements request.Notifier).
+func (h *Hub) NotifyAdmins(eventType string, data map[string]interface{}) {
+	h.BroadcastAdmin(Event{Type: eventType, Data: data})
+}
+
+func (h *Hub) enqueue(event Event, adminOnly bool, userID int64) {
 	data, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("websocket: marshal event: %v", err)
 		return
 	}
-	h.broadcast <- outboundMessage{data: data, adminOnly: adminOnly}
+	h.broadcast <- outboundMessage{data: data, adminOnly: adminOnly, userID: userID}
 }
 
 // ServeWS handles WebSocket upgrade with JWT auth via subprotocol.

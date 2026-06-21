@@ -16,6 +16,7 @@ const (
 	PermissionAIChat            Permission = "ai:chat"
 	PermissionMCPAccess         Permission = "mcp:access"
 	PermissionUsersManage       Permission = "users:manage"
+	PermissionRequestsManage    Permission = "requests:manage"
 	PermissionCredentialsManage Permission = "credentials:manage"
 	PermissionAIToolsManage     Permission = "ai_tools:manage"
 	PermissionInstancesManage   Permission = "instances:manage"
@@ -79,6 +80,7 @@ func allPermissions() map[Permission]bool {
 		PermissionAIChat:            true,
 		PermissionMCPAccess:         true,
 		PermissionUsersManage:       true,
+		PermissionRequestsManage:    true,
 		PermissionCredentialsManage: true,
 		PermissionAIToolsManage:     true,
 		PermissionInstancesManage:   true,

@@ -45,6 +45,12 @@ class RequestButton extends StatelessWidget {
   Widget _buildButton() {
     final (color, icon, enabled) = switch (status) {
       RequestStatus.unavailable => (AppTheme.accent, Icons.add, true),
+      RequestStatus.pending => (
+          AppTheme.requested,
+          Icons.hourglass_empty,
+          false
+        ),
+      RequestStatus.denied => (AppTheme.accent, Icons.add, true),
       RequestStatus.requested => (
           AppTheme.requested,
           Icons.hourglass_top,
