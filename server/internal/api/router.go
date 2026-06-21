@@ -219,18 +219,25 @@ func NewRouter(
 			r.Get("/ai/available", aiHandler.Available)
 		})
 
-		// Instance CRUD routes (admin only)
+		// Instance routes (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Use(auth.RequirePermission(auth.PermissionInstancesManage))
 
-			r.Get("/instances", instanceHandler.List)
-			r.Post("/instances", instanceHandler.Create)
-			r.Put("/instances/{instanceID}", instanceHandler.Update)
-			r.Delete("/instances/{instanceID}", instanceHandler.Delete)
+			// Instance CRUD — admin only
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequirePermission(auth.PermissionInstancesManage))
+				r.Get("/instances", instanceHandler.List)
+				r.Post("/instances", instanceHandler.Create)
+				r.Put("/instances/{instanceID}", instanceHandler.Update)
+				r.Delete("/instances/{instanceID}", instanceHandler.Delete)
+			})
 
-			// Instance proxy — forward to specific instance
-			r.HandleFunc("/instances/{instanceID}/*", proxyHandler.InstanceProxy())
+			// Instance proxy — forward to specific instance. Read-only
+			// Radarr/Sonarr browsing is allowed for non-admins (arr:browse);
+			// every other request (writes, commands, interactive search, config,
+			// and non-arr services) requires instances:manage. See
+			// auth.RequireArrProxyAccess.
+			r.With(auth.RequireArrProxyAccess).HandleFunc("/instances/{instanceID}/*", proxyHandler.InstanceProxy())
 		})
 
 		// Download client routes (admin only)
