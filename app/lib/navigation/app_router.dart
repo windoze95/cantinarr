@@ -8,6 +8,7 @@ import '../features/auth/ui/passkey_create_screen.dart';
 import '../features/auth/ui/passkey_management_screen.dart';
 import '../features/auth/ui/set_password_screen.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
+import '../features/dashboard/ui/dashboard_releases_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
 import '../features/dashboard/ui/dashboard_tv_tab.dart';
 import '../features/discover/data/tmdb_models.dart';
@@ -113,6 +114,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: '/dashboard/tv',
                     builder: (_, __) => const DashboardTvTab(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/dashboard/releases',
+                    builder: (_, __) => const DashboardReleasesTab(),
                   ),
                 ],
               ),
