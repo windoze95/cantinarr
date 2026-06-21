@@ -141,6 +141,15 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionAIToolsManage)).Get("/ai-tools", aiToolsHandler.List)
 			r.With(auth.RequirePermission(auth.PermissionAIToolsManage)).Put("/ai-tools/debug", aiToolsHandler.UpdateDebug)
 			r.With(auth.RequirePermission(auth.PermissionAIToolsManage)).Put("/ai-tools/{name}", aiToolsHandler.Update)
+
+			// Media request management: approval queue + request defaults
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/requests", requestHandler.ListPending)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/approve", requestHandler.Approve)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/deny", requestHandler.Deny)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/request-settings", requestHandler.GetSettings)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/request-settings", requestHandler.UpdateSettings)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/users/{userID}/request-settings", requestHandler.GetUserSettings)
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/users/{userID}/request-settings", requestHandler.UpdateUserSettings)
 		})
 
 		// Config route (authenticated)
@@ -155,6 +164,7 @@ func NewRouter(
 			r.Use(auth.RequirePermission(auth.PermissionMediaRequest))
 			r.Post("/requests", requestHandler.Create)
 			r.Get("/requests", requestHandler.List)
+			r.Get("/requests/options", requestHandler.Options)
 			r.Get("/requests/{tmdb_id}/status", requestHandler.GetStatus)
 		})
 

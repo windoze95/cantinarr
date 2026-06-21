@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
@@ -12,6 +13,7 @@ import '../../discover/data/discover_api_service.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/request_provider.dart';
 import '../../request/ui/request_button.dart';
+import '../../request/ui/request_options_sheet.dart';
 import '../../request/ui/request_status_sheet.dart';
 import '../logic/media_detail_provider.dart';
 import 'season_grid.dart';
@@ -57,6 +59,17 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Live-update the request button when an approval decision for THIS title
+    // arrives over the socket (complements the global toast).
+    ref.listen(requestDecisionEventsProvider, (_, next) {
+      final event = next.valueOrNull;
+      if (event == null) return;
+      final tmdb = (event.data['tmdb_id'] as num?)?.toInt();
+      if (tmdb == widget.id &&
+          event.data['media_type'] == widget.mediaType.name) {
+        _requestNotifier.checkStatus();
+      }
+    });
     return ListenableBuilder(
       listenable: _detailNotifier,
       builder: (context, _) {
@@ -110,13 +123,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           status: _requestNotifier.state.status,
                           isRequesting: _requestNotifier.state.isRequesting,
                           error: _requestNotifier.state.error,
-                          onRequest: () {
-                            final s = _detailNotifier.state;
-                            _requestNotifier.request(
-                              title: s.title,
-                              tvdbId: s.tvDetail?.externalIds?.tvdbId,
-                            );
-                          },
+                          onRequest: () => _onRequest(),
                         ),
                       ),
                     ),
@@ -296,6 +303,38 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   void _openTrailer(String key) {
     final url = Uri.parse('https://www.youtube.com/watch?v=$key');
     launchUrl(url, mode: LaunchMode.externalApplication);
+  }
+
+  /// Handle a request tap: if the user may choose options (season scope /
+  /// quality), present the picker first; otherwise submit immediately to keep
+  /// the one-tap experience.
+  Future<void> _onRequest() async {
+    final s = _detailNotifier.state;
+    final title = s.title;
+    final tvdbId = s.tvDetail?.externalIds?.tvdbId;
+
+    final options = await _requestNotifier.fetchOptions();
+    String? seasonScope;
+    int? qualityProfileId;
+    if (options != null && options.hasChoices) {
+      if (!mounted) return;
+      final result = await showModalBottomSheet<RequestOptionsResult>(
+        context: context,
+        backgroundColor: Colors.transparent,
+        isScrollControlled: true,
+        builder: (_) => RequestOptionsSheet(options: options),
+      );
+      if (result == null) return; // cancelled
+      seasonScope = result.seasonScope;
+      qualityProfileId = result.qualityProfileId;
+    }
+
+    await _requestNotifier.request(
+      title: title,
+      tvdbId: tvdbId,
+      seasonScope: seasonScope,
+      qualityProfileId: qualityProfileId,
+    );
   }
 
   void _showStatusSheet(

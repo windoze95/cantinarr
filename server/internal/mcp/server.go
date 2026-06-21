@@ -170,7 +170,7 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "get_recommendations":
 		return s.getRecommendations(input)
 	case "check_request_status":
-		return s.checkRequestStatus(input)
+		return s.checkRequestStatus(input, callCtx.UserID)
 	case "request_media":
 		return s.requestMedia(input, callCtx.UserID)
 	case "list_my_requests":

@@ -25,7 +25,10 @@ import '../features/settings/ui/ai_tools_screen.dart';
 import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
+import '../features/settings/ui/pending_requests_screen.dart';
+import '../features/settings/ui/request_settings_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
+import '../features/settings/ui/user_request_settings_screen.dart';
 import '../features/settings/ui/users_screen.dart';
 import '../features/setup_wizard/ui/plex_setup_guide.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
@@ -332,6 +335,25 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/users',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const UsersScreen(),
+      ),
+      GoRoute(
+        path: '/settings/users/:userId/request-settings',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) {
+          final userId = int.parse(state.pathParameters['userId']!);
+          final username = state.extra as String? ?? '';
+          return UserRequestSettingsScreen(userId: userId, username: username);
+        },
+      ),
+      GoRoute(
+        path: '/settings/requests',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const PendingRequestsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/request-settings',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const RequestSettingsScreen(),
       ),
       GoRoute(
         path: '/settings/devices',

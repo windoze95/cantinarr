@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -303,6 +304,10 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             onChangeRole: (role) => _changeRole(user, role),
             onDelete: () => _deleteUser(user),
             onResendInvite: () => _resendInvite(user),
+            onRequestSettings: () => context.push(
+              '/settings/users/${user.id}/request-settings',
+              extra: user.username,
+            ),
             onSetAuthMethods: ({bool? passwordEnabled, bool? passkeyEnabled}) =>
                 _setAuthMethods(
               user,
@@ -324,6 +329,7 @@ class _UserTile extends StatelessWidget {
     required this.onDelete,
     required this.onResendInvite,
     required this.onSetAuthMethods,
+    required this.onRequestSettings,
   });
 
   final UserSummary user;
@@ -333,6 +339,7 @@ class _UserTile extends StatelessWidget {
   final VoidCallback onResendInvite;
   final void Function({bool? passwordEnabled, bool? passkeyEnabled})
       onSetAuthMethods;
+  final VoidCallback onRequestSettings;
 
   /// A user who has never connected a device is stuck in "invited limbo":
   /// either their invite is still pending or the link was lost/expired.
@@ -416,6 +423,9 @@ class _UserTile extends StatelessWidget {
           case 'resend_invite':
             onResendInvite();
             break;
+          case 'request_settings':
+            onRequestSettings();
+            break;
           case 'enable_password':
             onSetAuthMethods(passwordEnabled: true);
             break;
@@ -434,6 +444,15 @@ class _UserTile extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
+        if (!isSelf)
+          const PopupMenuItem(
+            value: 'request_settings',
+            child: ListTile(
+              leading: Icon(Icons.tune),
+              title: Text('Request settings…'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
         if (_needsInvite)
           PopupMenuItem(
             value: 'resend_invite',

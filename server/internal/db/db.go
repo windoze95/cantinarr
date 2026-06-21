@@ -24,11 +24,30 @@ CREATE TABLE IF NOT EXISTS request_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER REFERENCES users(id),
     tmdb_id INTEGER NOT NULL,
+    tvdb_id INTEGER,
     media_type TEXT NOT NULL,
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'requested',
+    season_scope TEXT,
+    quality_profile_id INTEGER,
+    approved_by INTEGER REFERENCES users(id),
+    decided_at DATETIME,
+    deny_reason TEXT,
     requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME
+);
+
+-- Per-user request policy overrides. Any NULL column means "inherit the
+-- global default" (stored in the settings table under 'request_settings').
+-- Out of the box a user has no row here, so every option inherits.
+CREATE TABLE IF NOT EXISTS user_request_settings (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    require_approval BOOLEAN,
+    allow_season_choice BOOLEAN,
+    season_scope_override TEXT,
+    allow_quality_choice BOOLEAN,
+    quality_profile_radarr INTEGER,
+    quality_profile_sonarr INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tmdb_tvdb_cache (
@@ -178,6 +197,14 @@ func Open(dbPath string) (*sql.DB, error) {
 			},
 		},
 		{alter: "ALTER TABLE refresh_tokens ADD COLUMN superseded_at DATETIME"},
+		// Media-request approval queue + per-request option capture. All
+		// nullable so existing rows (already fulfilled) keep their meaning.
+		{alter: "ALTER TABLE request_log ADD COLUMN tvdb_id INTEGER"},
+		{alter: "ALTER TABLE request_log ADD COLUMN season_scope TEXT"},
+		{alter: "ALTER TABLE request_log ADD COLUMN quality_profile_id INTEGER"},
+		{alter: "ALTER TABLE request_log ADD COLUMN approved_by INTEGER REFERENCES users(id)"},
+		{alter: "ALTER TABLE request_log ADD COLUMN decided_at DATETIME"},
+		{alter: "ALTER TABLE request_log ADD COLUMN deny_reason TEXT"},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {

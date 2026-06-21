@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
 import 'about_sheet.dart';
@@ -177,6 +178,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/ai-tools'),
             ),
             _SettingsTile(
+              icon: Icons.playlist_add_check_circle_outlined,
+              title: 'Pending Requests',
+              subtitle: 'Approve or deny requests awaiting review',
+              onTap: () => context.push('/settings/requests'),
+            ),
+            _SettingsTile(
+              icon: Icons.tune,
+              title: 'Request Settings',
+              subtitle: 'Approval, season, and quality defaults',
+              onTap: () => context.push('/settings/request-settings'),
+            ),
+            _SettingsTile(
               icon: Icons.people_outline,
               title: 'Users',
               subtitle: 'Manage accounts, roles, and invites',
@@ -195,6 +208,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/devices'),
             ),
           ],
+
+          const SizedBox(height: 16),
+
+          // Notifications
+          _SectionHeader(title: 'Notifications'),
+          SwitchListTile(
+            value: ref.watch(requestNotificationsEnabledProvider),
+            onChanged: (v) => ref
+                .read(requestNotificationsEnabledProvider.notifier)
+                .set(v),
+            activeThumbColor: AppTheme.accent,
+            secondary: const Icon(Icons.notifications_active_outlined,
+                color: AppTheme.textSecondary),
+            title: const Text('Request updates',
+                style: TextStyle(
+                    color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
+            subtitle: const Text(
+                'Notify me when a request is approved or denied',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+          ),
 
           const SizedBox(height: 16),
 
