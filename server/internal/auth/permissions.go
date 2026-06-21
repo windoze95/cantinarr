@@ -22,6 +22,7 @@ const (
 	PermissionInstancesManage   Permission = "instances:manage"
 	PermissionArrRead           Permission = "arr:read"
 	PermissionArrSearch         Permission = "arr:search"
+	PermissionArrBrowse         Permission = "arr:browse"
 	PermissionDownloadsRead     Permission = "downloads:read"
 	PermissionDownloadsManage   Permission = "downloads:manage"
 	PermissionMonitoringRead    Permission = "monitoring:read"
@@ -37,6 +38,12 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermissionMediaRequest:  true,
 		PermissionAIChat:        true,
 		PermissionMCPAccess:     true,
+		// Read-only Radarr/Sonarr browsing through the app's REST instance
+		// proxy: library, calendar, queue, history, and wanted lists. Enforced
+		// by RequireArrProxyAccess. Intentionally distinct from arr:read, which
+		// gates the admin-only MCP AI tools; writes, interactive search, and
+		// config stay admin-only (instances:manage / arr:search).
+		PermissionArrBrowse: true,
 	},
 }
 
@@ -86,6 +93,7 @@ func allPermissions() map[Permission]bool {
 		PermissionInstancesManage:   true,
 		PermissionArrRead:           true,
 		PermissionArrSearch:         true,
+		PermissionArrBrowse:         true,
 		PermissionDownloadsRead:     true,
 		PermissionDownloadsManage:   true,
 		PermissionMonitoringRead:    true,
