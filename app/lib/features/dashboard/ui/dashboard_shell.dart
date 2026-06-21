@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 
-/// Dashboard module shell with bottom nav: Movies | TV Shows.
+/// Dashboard module shell with bottom nav: Movies | TV Shows | Releases.
 class DashboardShell extends StatefulWidget {
   final int currentIndex;
   final ValueChanged<int> onTabChanged;
@@ -41,6 +41,11 @@ class _DashboardShellState extends State<DashboardShell> {
               icon: Icon(Icons.tv_outlined),
               activeIcon: Icon(Icons.tv),
               label: 'TV Shows',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.event_outlined),
+              activeIcon: Icon(Icons.event),
+              label: 'Releases',
             ),
           ],
         ),
