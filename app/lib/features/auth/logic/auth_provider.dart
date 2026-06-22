@@ -71,7 +71,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
   @override
   Future<AuthState> build() async {
-    _authService = AuthService();
+    _authService = ref.read(authServiceProvider);
     _storage = ref.read(storageServiceProvider);
 
     ref.onDispose(() {
@@ -880,6 +880,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     return 'Connection failed. The link may be invalid or expired.';
   }
 }
+
+/// The auth service used by [AuthNotifier]. Exposed as a provider so tests can
+/// inject a fake (subclass [AuthService]) without hitting the network.
+final authServiceProvider = Provider<AuthService>((ref) => AuthService());
 
 /// The main auth state provider used throughout the app.
 final authProvider =
