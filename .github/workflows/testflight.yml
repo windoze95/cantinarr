@@ -5,8 +5,21 @@ on:
     branches: [main]
     paths:
       - "app/**"
+      - "!app/web/**"
+      - "!app/macos/**"
+      - "!app/android/**"
+      - "!app/windows/**"
+      - "!app/linux/**"
       - ".github/workflows/testflight.yml"
   workflow_dispatch:
+
+# Serialize TestFlight runs. The build number is latest_testflight_build_number + 1,
+# so two concurrent runs compute the SAME number and the second upload is rejected
+# as a duplicate (ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE). Queue instead of racing,
+# and never cancel an in-flight upload.
+concurrency:
+  group: testflight-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
