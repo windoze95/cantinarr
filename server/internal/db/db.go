@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS devices (
     revoked_at DATETIME
 );
 
+CREATE TABLE IF NOT EXISTS push_tokens (
+    id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'ios',
+    token TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(device_id)
+);
+
 CREATE TABLE IF NOT EXISTS connect_tokens (
     token TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
