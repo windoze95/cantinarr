@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
 import '../../../core/storage/secure_storage.dart';
+import '../../notifications/push_service.dart';
 import '../data/auth_service.dart';
 import '../data/passkey_service.dart';
 import '../data/server_status.dart';
@@ -94,6 +95,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
       );
 
+      _registerForPush();
       return AuthState(connection: connection, user: authResp.user);
     } catch (e) {
       debugPrint('Session restore failed: $e');
@@ -140,6 +142,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         user: authResp.user,
         pendingPasskeyOffer: await _shouldOfferPasskey(normalizedUrl),
       ));
+      _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parseSetupError(e)));
     }
@@ -188,6 +191,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         user: authResp.user,
         pendingPasskeyOffer: offerPasskey,
       ));
+      _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parseError(e)));
     }
@@ -222,6 +226,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       );
 
       state = AsyncData(AuthState(connection: connection, user: authResp.user));
+      _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parseConnectError(e)));
     }
@@ -432,6 +437,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       );
 
       state = AsyncData(AuthState(connection: connection, user: authResp.user));
+      _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parsePasskeyLoginError(e)));
     }
@@ -468,8 +474,11 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = AsyncData(current.copyWith(connection: updated));
   }
 
-  /// Called when auth has expired (refresh rejected). Clears state.
+  /// Called when auth has expired (refresh rejected) or on logout. Clears
+  /// state. Best-effort unregisters push first, while the device id and tokens
+  /// are still available.
   Future<void> onAuthExpired() async {
+    await ref.read(pushServiceProvider).unregister();
     await _clearStorage();
     state = const AsyncData(AuthState());
   }
@@ -514,6 +523,16 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     await _storage.delete(key: StorageKeys.jwt);
     await _storage.delete(key: StorageKeys.refreshToken);
     await _storage.delete(key: StorageKeys.deviceId);
+  }
+
+  /// Fire-and-forget push registration. Must never block or throw into the
+  /// auth flow (the service swallows its own errors; this guards the rest).
+  void _registerForPush() {
+    try {
+      ref.read(pushServiceProvider).registerForPush();
+    } catch (e) {
+      debugPrint('Push registration kickoff failed: $e');
+    }
   }
 
   String _normalizeUrl(String url) {

@@ -18,6 +18,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
+	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/web"
@@ -40,6 +41,7 @@ func NewRouter(
 	creds *credentials.Registry,
 	credHandler *credentials.Handler,
 	toolServer *mcp.ToolServer,
+	pushHandler *push.Handler,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -156,6 +158,17 @@ func NewRouter(
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Get("/config", configHandler(cfg, instanceStore, creds))
+		})
+
+		// Device push-token + notification preference routes (authenticated).
+		// Any signed-in user may register/clear the APNs token for one of their
+		// own devices and read/update their own notification preferences.
+		r.Group(func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.Post("/devices/push-token", pushHandler.Register)
+			r.Delete("/devices/push-token/{deviceID}", pushHandler.Delete)
+			r.Get("/notifications/preferences", pushHandler.GetPreferences)
+			r.Put("/notifications/preferences", pushHandler.UpdatePreferences)
 		})
 
 		// Request routes (authenticated)

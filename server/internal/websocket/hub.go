@@ -38,6 +38,14 @@ type Event struct {
 	Data map[string]interface{} `json:"data"`
 }
 
+// ContentNotifier pushes new-content alerts to opted-in users. *push.Notifier
+// satisfies it. Declared here (rather than importing push) so the hub stays
+// decoupled from the push package and easy to test with a fake.
+type ContentNotifier interface {
+	NotifyNewMovie(title string, tmdbID int)
+	NotifyNewEpisode(seriesTitle string, tmdbID int)
+}
+
 // Client represents a connected WebSocket client.
 type Client struct {
 	hub     *Hub
@@ -60,6 +68,10 @@ type Hub struct {
 	registry    *instance.Registry
 	store       *instance.Store
 
+	// content pushes new-movie/new-episode notifications to opted-in users
+	// when a download completes. nil when push is not configured.
+	content ContentNotifier
+
 	// Previous polling state for detecting transitions
 	prevRadarrQueue map[string]map[int]float64 // instanceID -> movieId -> progress
 	prevSonarrQueue map[string]map[int]float64 // instanceID -> seriesId -> progress
@@ -81,8 +93,9 @@ type Hub struct {
 	pollMu sync.Mutex
 }
 
-// NewHub creates a new WebSocket hub.
-func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store) *Hub {
+// NewHub creates a new WebSocket hub. content pushes new-content alerts when a
+// download completes; pass nil (or a nil *push.Notifier) when push is disabled.
+func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store, content ContentNotifier) *Hub {
 	return &Hub{
 		clients:            make(map[*Client]bool),
 		broadcast:          make(chan outboundMessage, 256),
@@ -91,6 +104,7 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		authService:        authService,
 		registry:           registry,
 		store:              store,
+		content:            content,
 		prevRadarrQueue:    make(map[string]map[int]float64),
 		prevSonarrQueue:    make(map[string]map[int]float64),
 		prevArrQueueHash:   make(map[string]string),
@@ -480,6 +494,9 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 							"instance_id": instanceID,
 						},
 					})
+					if h.content != nil {
+						h.content.NotifyNewMovie(movie.Title, movie.TmdbID)
+					}
 				}
 			}
 		}
@@ -547,6 +564,9 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 						"instance_id": instanceID,
 					},
 				})
+				if h.content != nil {
+					h.content.NotifyNewEpisode(series.Title, series.TmdbID)
+				}
 			}
 		}
 	}

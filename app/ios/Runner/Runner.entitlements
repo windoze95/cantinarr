@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- APNs environment. Set to "production" for TestFlight + App Store (current).
+	     For debug/local device builds, switch to "development" AND set the gateway's
+	     APNS_ENV=sandbox so the token environment matches. -->
+	<key>aps-environment</key>
+	<string>production</string>
+</dict>
+</plist>

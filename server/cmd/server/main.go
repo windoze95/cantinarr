@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
+	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
@@ -104,13 +106,49 @@ func main() {
 	// Tautulli handler (Plex monitoring)
 	tautulliHandler := tautulli.NewHandler(instanceStore, registry)
 
-	// WebSocket hub (built before the request service so request approvals
-	// and denials can push realtime events to the requester).
-	wsHub := ws.NewHub(authService, registry, instanceStore)
+	// Push notifications via the self-hosted gateway. Disabled (client nil) when
+	// either the gateway URL or API key is unset; the handler and notifier are
+	// still built (nil-safe) so wiring stays uniform. Built before the hub and
+	// request service so both can dispatch pushes.
+	var pushClient *push.Client
+	if cfg.PushGatewayURL != "" && cfg.PushAPIKey != "" {
+		pushClient = push.NewClient(cfg.PushGatewayURL, cfg.PushAPIKey)
+		log.Printf("Push notifications enabled via %s", cfg.PushGatewayURL)
+	} else {
+		log.Println("Push notifications disabled (CANTINARR_PUSH_GATEWAY_URL/CANTINARR_PUSH_API_KEY unset)")
+	}
+	logger := slog.Default()
+	pushHandler := push.NewHandler(database, pushClient, logger)
+
+	// One push notifier drives both the request-decision/pending fan-out and the
+	// new-content (movie/episode available) pushes. nil when push is disabled so
+	// the hub's content notifier and the request composite both no-op.
+	var pushNotifier *push.Notifier
+	if pushClient != nil {
+		pushNotifier = push.NewNotifier(database, pushClient, logger)
+	}
+
+	// WebSocket hub (built before the request service so request approvals and
+	// denials can push realtime events to the requester). The push notifier is
+	// passed so download completions also fan out to opted-in devices; passing
+	// an untyped nil keeps new-content pushes off when push is disabled.
+	var contentNotifier ws.ContentNotifier
+	if pushNotifier != nil {
+		contentNotifier = pushNotifier
+	}
+	wsHub := ws.NewHub(authService, registry, instanceStore, contentNotifier)
 	go wsHub.Run(context.Background())
 
-	// Request service
-	requestService := request.NewService(database, registry, bridge, wsHub)
+	// Request service. Request decisions fan out to both the WebSocket hub
+	// (live clients) and the push gateway (offline devices). The push notifier
+	// is only added to the fan-out when push is configured.
+	var notifier request.Notifier
+	if pushNotifier != nil {
+		notifier = push.NewComposite(wsHub, pushNotifier)
+	} else {
+		notifier = push.NewComposite(wsHub)
+	}
+	requestService := request.NewService(database, registry, bridge, notifier)
 	requestHandler := request.NewHandler(requestService)
 
 	// Proxy handler
@@ -126,7 +164,7 @@ func main() {
 	discoverHandler := discover.NewHandler(creds, apiCache)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
