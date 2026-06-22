@@ -108,14 +108,37 @@ type SendOptions struct {
 	CollapseID string
 }
 
+// SendResponse is the gateway's reply to POST /v1/notifications: per-send
+// counts plus a per-device result list. The results let Cantinarr learn which
+// of its stored tokens the gateway pruned (token rejected by APNs) so it can
+// drop the matching local rows.
+type SendResponse struct {
+	Sent    int          `json:"sent"`
+	Failed  int          `json:"failed"`
+	Results []SendResult `json:"results"`
+}
+
+// SendResult is one device's delivery outcome within a SendResponse. Pruned is
+// true when the gateway dropped the token (e.g. APNs reported it unregistered);
+// callers should delete the matching local push_tokens row to match.
+type SendResult struct {
+	DeviceID string `json:"device_id"`
+	Token    string `json:"token"`
+	Platform string `json:"platform"`
+	OK       bool   `json:"ok"`
+	Pruned   bool   `json:"pruned"`
+	Error    string `json:"error"`
+}
+
 // Send fans a high-priority notification out to the given users' devices. data
-// is delivered as the APNs payload's custom data.
-func (c *Client) Send(ctx context.Context, userIDs []int64, title, body string, data map[string]any) error {
+// is delivered as the APNs payload's custom data. The parsed gateway response
+// is returned so callers can react to per-device results (e.g. pruned tokens).
+func (c *Client) Send(ctx context.Context, userIDs []int64, title, body string, data map[string]any) (*SendResponse, error) {
 	return c.SendWithOptions(ctx, userIDs, title, body, data, SendOptions{})
 }
 
 // SendWithOptions is Send with explicit per-send options (e.g. a collapse id).
-func (c *Client) SendWithOptions(ctx context.Context, userIDs []int64, title, body string, data map[string]any, opts SendOptions) error {
+func (c *Client) SendWithOptions(ctx context.Context, userIDs []int64, title, body string, data map[string]any, opts SendOptions) (*SendResponse, error) {
 	ids := make([]string, len(userIDs))
 	for i, id := range userIDs {
 		ids[i] = strconv.FormatInt(id, 10)
@@ -133,7 +156,11 @@ func (c *Client) SendWithOptions(ctx context.Context, userIDs []int64, title, bo
 		"data":    data,
 		"options": options,
 	}
-	return c.do(ctx, http.MethodPost, "/v1/notifications", payload, nil)
+	var out SendResponse
+	if err := c.do(ctx, http.MethodPost, "/v1/notifications", payload, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // do executes a request with an optional JSON body, fails on non-2xx status

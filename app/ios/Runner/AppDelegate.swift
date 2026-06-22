@@ -53,8 +53,54 @@ import UserNotifications
     case "getApnsToken":
       // Returns the cached token (or nil if not yet registered).
       result(apnsToken)
+    case "getAuthorizationStatus":
+      fetchAuthorizationStatus { status in result(status) }
+    case "openNotificationSettings":
+      openNotificationSettings { opened in result(opened) }
     default:
       result(FlutterMethodNotImplemented)
+    }
+  }
+
+  /// Reports the current notification authorization status as a string the
+  /// Dart side can interpret: `authorized`, `denied`, `notDetermined`,
+  /// `provisional`, or `ephemeral`.
+  private func fetchAuthorizationStatus(completion: @escaping (String) -> Void) {
+    UNUserNotificationCenter.current().getNotificationSettings { settings in
+      let status: String
+      switch settings.authorizationStatus {
+      case .authorized:
+        status = "authorized"
+      case .denied:
+        status = "denied"
+      case .notDetermined:
+        status = "notDetermined"
+      case .provisional:
+        status = "provisional"
+      case .ephemeral:
+        status = "ephemeral"
+      @unknown default:
+        status = "notDetermined"
+      }
+      completion(status)
+    }
+  }
+
+  /// Opens this app's page in the system Settings so the user can toggle
+  /// notification permissions. `completion` reports whether the URL opened.
+  private func openNotificationSettings(completion: @escaping (Bool) -> Void) {
+    guard let url = URL(string: UIApplication.openSettingsURLString) else {
+      completion(false)
+      return
+    }
+    DispatchQueue.main.async {
+      if UIApplication.shared.canOpenURL(url) {
+        UIApplication.shared.open(url, options: [:]) { success in
+          completion(success)
+        }
+      } else {
+        completion(false)
+      }
     }
   }
 

@@ -14,22 +14,27 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 )
 
-// Handler serves the device push-token endpoints and the per-user notification
-// preferences endpoints. A nil client disables gateway registration (the local
-// row is still stored), so the handler works even when push is not configured.
+// Handler serves the device push-token endpoints, the per-user notification
+// preferences endpoints, and the test-push endpoint. It holds the push Manager
+// rather than a static client: a registration kicks gateway enrollment if
+// needed (self-healing after a gateway that was down at boot), and gateway work
+// no-ops cleanly while push is unconfigured — the local token row is still
+// stored, so the handler works even when push is not configured. A nil manager
+// means push is disabled.
 type Handler struct {
 	db     *sql.DB
-	client *Client
+	mgr    *Manager
 	prefs  *PrefsStore
 	logger *slog.Logger
 }
 
-// NewHandler builds the push-token endpoint handler.
-func NewHandler(db *sql.DB, client *Client, logger *slog.Logger) *Handler {
+// NewHandler builds the push-token endpoint handler. A nil manager disables all
+// gateway interaction (local rows are still stored).
+func NewHandler(db *sql.DB, mgr *Manager, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{db: db, client: client, prefs: NewPrefsStore(db), logger: logger}
+	return &Handler{db: db, mgr: mgr, prefs: NewPrefsStore(db), logger: logger}
 }
 
 // RegisterTokenRequest is the POST /api/devices/push-token body.
@@ -76,13 +81,18 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Register with the gateway. Failures here are non-fatal: the token is
-	// stored locally and will be retried on the next registration.
-	if h.client != nil {
+	// Register with the gateway. A registration also kicks enrollment when push
+	// is configured but the gateway was unreachable at boot — Ensure resolves
+	// the key, builds the client, and reconciles already-stored tokens on its
+	// first success. Failures here are non-fatal: the token is stored locally
+	// and the gateway picks it up on the next Ensure (reconciliation or retry).
+	if h.mgr != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		if err := h.client.RegisterDevice(ctx, claims.UserID, req.DeviceID, platform, req.APNSToken); err != nil {
-			h.logger.Error("push: register device with gateway", "err", err, "device_id", req.DeviceID)
+		if client := h.mgr.Ensure(ctx); client != nil {
+			if err := client.RegisterDevice(ctx, claims.UserID, req.DeviceID, platform, req.APNSToken); err != nil {
+				h.logger.Error("push: register device with gateway", "err", err, "device_id", req.DeviceID)
+			}
 		}
 	}
 
@@ -119,10 +129,10 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.client != nil {
+	if client := h.client(); client != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		if err := h.client.DeleteDevice(ctx, deviceID); err != nil {
+		if err := client.DeleteDevice(ctx, deviceID); err != nil {
 			h.logger.Error("push: delete device from gateway", "err", err, "device_id", deviceID)
 		}
 	}
@@ -168,6 +178,50 @@ func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, prefs)
+}
+
+// TestPush sends a test notification to the calling user's own devices so the
+// app's "Send test" button can confirm push works end to end. It bypasses the
+// per-category preferences on purpose (the user explicitly asked for it).
+// Returns 503 when push is unconfigured or the gateway is unreachable.
+func (h *Handler) TestPush(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	// Ensure (not just Client) so a first-ever test from a freshly-booted server
+	// that couldn't reach the gateway at startup still kicks enrollment.
+	var client *Client
+	if h.mgr != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		client = h.mgr.Ensure(ctx)
+	}
+	if client == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "push not configured"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	resp, err := client.Send(ctx, []int64{claims.UserID}, "Cantinarr", "Push notifications are working", map[string]any{"type": "test"})
+	if err != nil {
+		h.logger.Error("push: send test notification", "err", err, "user_id", claims.UserID)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to send test notification"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"sent": resp.Sent, "failed": resp.Failed})
+}
+
+// client returns the cached gateway client, or nil when push is unconfigured or
+// the gateway has not yet enrolled. It never triggers enrollment.
+func (h *Handler) client() *Client {
+	if h.mgr == nil {
+		return nil
+	}
+	return h.mgr.Client()
 }
 
 // deviceBelongsToUser reports whether device_id names a (non-revoked) device

@@ -67,6 +67,44 @@ class PushService {
     }
   }
 
+  /// Returns the current notification authorization status as reported by the
+  /// OS: one of `authorized`, `denied`, `notDetermined`, `provisional`, or
+  /// `ephemeral`. Off-iOS (or on any failure) reports `notDetermined`.
+  Future<String> authorizationStatus() async {
+    if (!_isSupported) return 'notDetermined';
+    try {
+      return await _channel.invokeMethod<String>('getAuthorizationStatus') ??
+          'notDetermined';
+    } catch (e) {
+      debugPrint('Push: authorizationStatus failed: $e');
+      return 'notDetermined';
+    }
+  }
+
+  /// Opens this app's page in the system Settings so the user can change
+  /// notification permissions. A no-op on unsupported platforms.
+  Future<void> openSystemSettings() async {
+    if (!_isSupported) return;
+    try {
+      await _channel.invokeMethod<bool>('openNotificationSettings');
+    } catch (e) {
+      debugPrint('Push: openSystemSettings failed: $e');
+    }
+  }
+
+  /// Asks the backend to send a test push notification to this account's
+  /// registered devices. Returns how many were delivered or failed. Throws on
+  /// any error (including a 503 when push isn't configured) so the caller can
+  /// surface the failure.
+  Future<({int sent, int failed})> sendTest() async {
+    final dio = _ref.read(backendClientProvider);
+    final resp = await dio.post('/api/notifications/test');
+    final data = resp.data as Map<String, dynamic>? ?? const {};
+    final sent = (data['sent'] as num?)?.toInt() ?? 0;
+    final failed = (data['failed'] as num?)?.toInt() ?? 0;
+    return (sent: sent, failed: failed);
+  }
+
   /// Removes this device's push token from the backend. Best-effort; call
   /// before clearing auth state on logout.
   Future<void> unregister() async {
