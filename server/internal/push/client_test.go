@@ -95,9 +95,12 @@ func TestClientSend(t *testing.T) {
 	srv := newMockGateway(t, http.StatusOK, `{"sent":1,"failed":0}`, &got)
 
 	c := NewClient(srv.URL, "pgk_test")
-	err := c.Send(context.Background(), []int64{7, 9}, "Title", "Body", map[string]any{"type": "request_decision"})
+	resp, err := c.Send(context.Background(), []int64{7, 9}, "Title", "Body", map[string]any{"type": "request_decision"})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
+	}
+	if resp == nil || resp.Sent != 1 || resp.Failed != 0 {
+		t.Errorf("response = %+v, want sent=1 failed=0", resp)
 	}
 
 	if got.method != http.MethodPost || got.path != "/v1/notifications" {
@@ -123,8 +126,11 @@ func TestClientSendNon2xxIsError(t *testing.T) {
 	srv := newMockGateway(t, http.StatusUnauthorized, `{"error":{"code":"unauthorized"}}`, &got)
 
 	c := NewClient(srv.URL, "pgk_bad")
-	err := c.Send(context.Background(), []int64{1}, "t", "b", nil)
+	resp, err := c.Send(context.Background(), []int64{1}, "t", "b", nil)
 	if err == nil {
 		t.Fatal("expected error for non-2xx response, got nil")
+	}
+	if resp != nil {
+		t.Errorf("response = %+v, want nil on error", resp)
 	}
 }

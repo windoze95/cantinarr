@@ -1,6 +1,7 @@
 package push
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -38,7 +39,12 @@ type notificationCapture struct {
 	ch chan map[string]any
 }
 
-func newNotifierTestGateway(t *testing.T) (*Client, *notificationCapture) {
+// newNotifierTestGateway stands up a mock gateway and returns an already-
+// enrolled push.Manager wired to it (explicit key, so resolveAPIKey never
+// touches the cipher or settings) plus a capture of POST /v1/notifications
+// bodies. The manager shares the test's database so the notifier's token
+// pruning hits the same rows.
+func newNotifierTestGateway(t *testing.T, database *sql.DB) (*Manager, *notificationCapture) {
 	t.Helper()
 	cap := &notificationCapture{ch: make(chan map[string]any, 4)}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,7 +58,11 @@ func newNotifierTestGateway(t *testing.T) (*Client, *notificationCapture) {
 		_, _ = io.WriteString(w, `{"sent":1,"failed":0}`)
 	}))
 	t.Cleanup(srv.Close)
-	return NewClient(srv.URL, "pgk_test"), cap
+	mgr := NewManager(database, nil, srv.URL, "pgk_test", "", "Cantinarr", nil)
+	if mgr.Ensure(context.Background()) == nil {
+		t.Fatal("Ensure returned nil client for an explicit-key manager")
+	}
+	return mgr, cap
 }
 
 // waitForNotification returns the next captured notification body, failing if
@@ -90,8 +100,8 @@ func TestNotifyUserRequestDecision(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (42, 'req', '', 'user')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_decision) VALUES (42, 1)")
 
-	client, cap := newNotifierTestGateway(t)
-	n := NewNotifier(database, client, nil)
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_decision", map[string]interface{}{
 		"decision":   "approved",
@@ -125,8 +135,8 @@ func TestNotifyUserRequestDecisionSuppressedByDefault(t *testing.T) {
 	// No prefs row: request_decision defaults to off, so nothing is sent.
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (42, 'req', '', 'user')")
 
-	client, cap := newNotifierTestGateway(t)
-	n := NewNotifier(database, client, nil)
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_decision", map[string]interface{}{
 		"decision": "approved",
@@ -150,8 +160,8 @@ func TestNotifyUserRequestDecisionSuppressedWhenOff(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (42, 'req', '', 'user')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_decision) VALUES (42, 0)")
 
-	client, cap := newNotifierTestGateway(t)
-	n := NewNotifier(database, client, nil)
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_decision", map[string]interface{}{
 		"decision": "approved",
@@ -171,8 +181,8 @@ func TestNotifyUserIgnoresOtherEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	client, cap := newNotifierTestGateway(t)
-	n := NewNotifier(database, client, nil)
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_status_changed", map[string]interface{}{"title": "X"})
 
@@ -195,8 +205,8 @@ func TestNotifyAdminsResolvesAdminIDs(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'admin2', '', 'admin')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'bob', '', 'user')")
 
-	client, cap := newNotifierTestGateway(t)
-	n := NewNotifier(database, client, nil)
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("request_pending", map[string]interface{}{
 		"tmdb_id":    603,
@@ -231,8 +241,8 @@ func TestNotifyAdminsHonorsOptOutAndRole(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_pending) VALUES (1, 0)")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_pending) VALUES (3, 1)")
 
-	client, cap := newNotifierTestGateway(t)
-	n := NewNotifier(database, client, nil)
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyAdmins("request_pending", map[string]interface{}{"title": "The Matrix"})
 
@@ -268,8 +278,8 @@ func TestNotifyNewMovieReachesOptedInUsers(t *testing.T) {
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (2, 0)")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (3, 1)")
 
-	client, cap := newNotifierTestGateway(t)
-	n := NewNotifier(database, client, nil)
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyNewMovie("The Matrix", 603)
 
@@ -313,8 +323,8 @@ func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'bob', '', 'user')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_episode) VALUES (2, 0)")
 
-	client, cap := newNotifierTestGateway(t)
-	n := NewNotifier(database, client, nil)
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyNewEpisode("Severance", 95396)
 
@@ -340,6 +350,48 @@ func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
 	}
 }
 
+func TestNotifierPrunesDeadTokenOnPrunedResult(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// One opted-in user with a stored token the gateway will report as pruned.
+	seedDeviceToken(t, database, 1, "dev-dead", "tok-dead")
+
+	// A mock gateway that reports the token as pruned on send.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"sent":0,"failed":1,"results":[{"device_id":"dev-dead","token":"tok-dead","platform":"ios","ok":false,"pruned":true,"error":"unregistered"}]}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	mgr := NewManager(database, nil, srv.URL, "pgk_test", "", "Cantinarr", nil)
+	if mgr.Ensure(context.Background()) == nil {
+		t.Fatal("Ensure returned nil")
+	}
+	n := NewNotifier(database, mgr, nil)
+
+	// new_movie is on by default, so user 1 is targeted and a send happens.
+	n.NotifyNewMovie("The Matrix", 603)
+
+	// The pruned token's local row must be deleted (fire-and-forget, so poll).
+	deadline := time.After(2 * time.Second)
+	for {
+		var count int
+		if err := database.QueryRow("SELECT COUNT(*) FROM push_tokens WHERE token = 'tok-dead'").Scan(&count); err != nil {
+			t.Fatalf("count tokens: %v", err)
+		}
+		if count == 0 {
+			return // pruned as expected
+		}
+		select {
+		case <-deadline:
+			t.Fatal("dead token was not pruned from push_tokens")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func TestNotifyNewContentNoRecipientsIsNoop(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
@@ -349,8 +401,8 @@ func TestNotifyNewContentNoRecipientsIsNoop(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (1, 0)")
 
-	client, cap := newNotifierTestGateway(t)
-	n := NewNotifier(database, client, nil)
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyNewMovie("The Matrix", 603)
 

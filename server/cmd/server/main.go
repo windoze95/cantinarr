@@ -106,34 +106,39 @@ func main() {
 	// Tautulli handler (Plex monitoring)
 	tautulliHandler := tautulli.NewHandler(instanceStore, registry)
 
-	// Push notifications via the self-hosted gateway. Disabled (client nil) when
-	// either the gateway URL or API key is unset; the handler and notifier are
-	// still built (nil-safe) so wiring stays uniform. Built before the hub and
-	// request service so both can dispatch pushes.
-	var pushClient *push.Client
+	// Server-lifetime context: drives the WebSocket hub and the push manager's
+	// background enrollment retry.
+	ctx := context.Background()
+	logger := slog.Default()
+
+	// Push notifications via the self-hosted gateway. A single push.Manager owns
+	// the lazily-built gateway client: the key is resolved (explicit env key > a
+	// key auto-enrolled on a previous start > self-enroll) on first use, and a
+	// gateway that was down at boot — or tokens registered while push was off —
+	// self-heal without a restart. The manager is nil (and push disabled) only
+	// when no gateway URL is set; this keeps the hub's content notifier and the
+	// request composite off exactly as before.
+	var pushManager *push.Manager
 	if cfg.PushGatewayURL != "" {
-		// Resolve the gateway key: explicit env key, else a key auto-enrolled on a
-		// previous start, else self-enroll now. Failure is non-fatal — push stays
-		// off this run and is retried on the next start.
-		apiKey, err := ensurePushAPIKey(database, cipher, cfg)
-		if err != nil {
-			log.Printf("Push notifications disabled: %v", err)
-		} else {
-			pushClient = push.NewClient(cfg.PushGatewayURL, apiKey)
-			log.Printf("Push notifications enabled via %s", cfg.PushGatewayURL)
-		}
+		pushManager = push.NewManager(database, cipher, cfg.PushGatewayURL, cfg.PushAPIKey, cfg.PushEnrollToken, cfg.ServerName, logger)
+		// Try once now (non-blocking) and keep retrying in the background until
+		// the gateway is reachable; both are no-ops once enrolled.
+		go pushManager.Ensure(ctx)
+		pushManager.StartRetry(ctx)
+		log.Printf("Push notifications enabled via %s", cfg.PushGatewayURL)
 	} else {
 		log.Println("Push notifications disabled (CANTINARR_PUSH_GATEWAY_URL unset)")
 	}
-	logger := slog.Default()
-	pushHandler := push.NewHandler(database, pushClient, logger)
+	pushHandler := push.NewHandler(database, pushManager, logger)
 
 	// One push notifier drives both the request-decision/pending fan-out and the
-	// new-content (movie/episode available) pushes. nil when push is disabled so
-	// the hub's content notifier and the request composite both no-op.
+	// new-content (movie/episode available) pushes. It is built only when push is
+	// configured (gateway URL set) so the hub's content notifier and the request
+	// composite stay off otherwise; it no-ops on its own while the gateway is
+	// unreachable (manager.Client() == nil).
 	var pushNotifier *push.Notifier
-	if pushClient != nil {
-		pushNotifier = push.NewNotifier(database, pushClient, logger)
+	if pushManager != nil {
+		pushNotifier = push.NewNotifier(database, pushManager, logger)
 	}
 
 	// WebSocket hub (built before the request service so request approvals and
@@ -145,7 +150,7 @@ func main() {
 		contentNotifier = pushNotifier
 	}
 	wsHub := ws.NewHub(authService, registry, instanceStore, contentNotifier)
-	go wsHub.Run(context.Background())
+	go wsHub.Run(ctx)
 
 	// Request service. Request decisions fan out to both the WebSocket hub
 	// (live clients) and the push gateway (offline devices). The push notifier
@@ -208,40 +213,4 @@ func ensureJWTSecret(database *sql.DB, cipher *secrets.Cipher) (string, error) {
 
 	log.Println("Generated and persisted JWT secret")
 	return secret, nil
-}
-
-// ensurePushAPIKey resolves the push-gateway API key when a gateway URL is set:
-// an explicit CANTINARR_PUSH_API_KEY wins; otherwise a key auto-enrolled on a
-// previous start is loaded from the settings table; otherwise the server self-
-// enrolls with the gateway once and persists the issued key (encrypted at rest,
-// like the JWT secret). This gives self-hosters push with zero manual key
-// handling. To force re-enrollment, delete the 'push_api_key' settings row.
-func ensurePushAPIKey(database *sql.DB, cipher *secrets.Cipher, cfg *config.Config) (string, error) {
-	if cfg.PushAPIKey != "" {
-		return cfg.PushAPIKey, nil // explicit operator override; not persisted
-	}
-
-	var stored string
-	if err := database.QueryRow("SELECT value FROM settings WHERE key = 'push_api_key'").Scan(&stored); err == nil {
-		return cipher.Decrypt(stored)
-	}
-
-	// No key yet: self-enroll with the gateway and persist the issued key.
-	name := cfg.ServerName
-	if name == "" {
-		name = "Cantinarr"
-	}
-	res, err := push.Enroll(cfg.PushGatewayURL, name, cfg.PushEnrollToken)
-	if err != nil {
-		return "", fmt.Errorf("auto-enroll with push gateway: %w", err)
-	}
-	enc, err := cipher.Encrypt(res.APIKey)
-	if err != nil {
-		return "", fmt.Errorf("encrypt push key: %w", err)
-	}
-	if _, err := database.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('push_api_key', ?)", enc); err != nil {
-		return "", fmt.Errorf("persist push key: %w", err)
-	}
-	log.Printf("Auto-enrolled with push gateway %s (tenant %s); key persisted", cfg.PushGatewayURL, res.TenantID)
-	return res.APIKey, nil
 }
