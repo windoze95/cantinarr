@@ -18,7 +18,8 @@ class CantinarrApp extends ConsumerStatefulWidget {
   ConsumerState<CantinarrApp> createState() => _CantinarrAppState();
 }
 
-class _CantinarrAppState extends ConsumerState<CantinarrApp> {
+class _CantinarrAppState extends ConsumerState<CantinarrApp>
+    with WidgetsBindingObserver {
   late final AppLinks _appLinks;
   StreamSubscription<Uri>? _linkSubscription;
   final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -26,8 +27,18 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _appLinks = AppLinks();
     _initDeepLinks();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Returning to the foreground is a good moment to retry a reconnecting
+    // session immediately instead of waiting for the periodic retry.
+    if (state == AppLifecycleState.resumed) {
+      ref.read(authProvider.notifier).reconnectNow();
+    }
   }
 
   Future<void> _initDeepLinks() async {
@@ -98,6 +109,7 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _linkSubscription?.cancel();
     super.dispose();
   }
@@ -156,6 +168,111 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp> {
       debugShowCheckedModeBanner: false,
       scaffoldMessengerKey: _scaffoldMessengerKey,
       routerConfig: router,
+      builder: (context, child) =>
+          _ReconnectingBanner(child: child ?? const SizedBox.shrink()),
+    );
+  }
+}
+
+/// A thin, non-interactive "Reconnecting…" bar shown at the top of the app
+/// while a session is held optimistically and the server is unreachable. It
+/// waits briefly before appearing so a normal (fast) reconnect never flashes
+/// it, keeping launches seamless.
+class _ReconnectingBanner extends ConsumerStatefulWidget {
+  const _ReconnectingBanner({required this.child});
+
+  final Widget child;
+
+  @override
+  ConsumerState<_ReconnectingBanner> createState() =>
+      _ReconnectingBannerState();
+}
+
+class _ReconnectingBannerState extends ConsumerState<_ReconnectingBanner> {
+  Timer? _delay;
+  bool _visible = false;
+  bool? _lastReconnecting;
+
+  @override
+  void dispose() {
+    _delay?.cancel();
+    super.dispose();
+  }
+
+  void _onChanged(bool reconnecting) {
+    if (reconnecting) {
+      // Defer showing so quick reconnects don't flash the bar.
+      _delay ??= Timer(const Duration(milliseconds: 1200), () {
+        if (mounted) setState(() => _visible = true);
+      });
+    } else {
+      _delay?.cancel();
+      _delay = null;
+      if (_visible && mounted) setState(() => _visible = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reconnecting = ref.watch(
+      authProvider.select((s) => s.valueOrNull?.isReconnecting ?? false),
+    );
+    // React to transitions after the frame so we never call setState mid-build.
+    if (reconnecting != _lastReconnecting) {
+      _lastReconnecting = reconnecting;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _onChanged(reconnecting);
+      });
+    }
+
+    return Stack(
+      textDirection: TextDirection.ltr,
+      fit: StackFit.expand,
+      children: [
+        widget.child,
+        if (_visible)
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: SafeArea(
+                bottom: false,
+                child: _ReconnectingBar(),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// The bar's visual content, factored out so the whole overlay can be const.
+class _ReconnectingBar extends StatelessWidget {
+  const _ReconnectingBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 26,
+      color: AppTheme.surfaceVariant,
+      alignment: Alignment.center,
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: AppTheme.accent),
+          ),
+          SizedBox(width: 8),
+          Text(
+            'Reconnecting…',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+          ),
+        ],
+      ),
     );
   }
 }

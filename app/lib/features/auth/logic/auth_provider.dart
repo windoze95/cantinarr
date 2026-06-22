@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -19,12 +21,18 @@ class AuthState {
   final String? error;
   final bool pendingPasskeyOffer;
 
+  /// True when the session was restored optimistically from cache and has not
+  /// yet been (re)validated with the server — i.e. we're "reconnecting". The
+  /// user stays in the app; the UI shows a subtle reconnecting indicator.
+  final bool isReconnecting;
+
   const AuthState({
     this.connection,
     this.user,
     this.isLoading = false,
     this.error,
     this.pendingPasskeyOffer = false,
+    this.isReconnecting = false,
   });
 
   bool get isAuthenticated => connection != null && user != null;
@@ -35,6 +43,7 @@ class AuthState {
     bool? isLoading,
     String? error,
     bool? pendingPasskeyOffer,
+    bool? isReconnecting,
     bool clearConnection = false,
     bool clearUser = false,
     bool clearError = false,
@@ -45,6 +54,7 @@ class AuthState {
         isLoading: isLoading ?? this.isLoading,
         error: clearError ? null : (error ?? this.error),
         pendingPasskeyOffer: pendingPasskeyOffer ?? this.pendingPasskeyOffer,
+        isReconnecting: isReconnecting ?? this.isReconnecting,
       );
 }
 
@@ -53,10 +63,21 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   late final AuthService _authService;
   late final StorageService _storage;
 
+  /// Periodic retry while holding an optimistic (reconnecting) session.
+  Timer? _reconnectTimer;
+
+  /// Guards against overlapping background validations.
+  bool _validating = false;
+
   @override
   Future<AuthState> build() async {
     _authService = AuthService();
     _storage = ref.read(storageServiceProvider);
+
+    ref.onDispose(() {
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+    });
 
     // Try to restore session from secure storage
     return _tryRestoreSession();
@@ -66,27 +87,82 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final serverUrl = await _storage.read(key: StorageKeys.serverUrl);
     final accessToken = await _storage.read(key: StorageKeys.jwt);
     final refreshToken = await _storage.read(key: StorageKeys.refreshToken);
-    final deviceId = await _storage.read(key: StorageKeys.deviceId);
 
     if (serverUrl == null || accessToken == null || refreshToken == null) {
       return const AuthState();
     }
 
-    try {
-      // Refresh first, then persist the rotated tokens immediately. The refresh
-      // token is single-use, so saving before the config fetch ensures a later
-      // failure can't strand the session on an already-spent token.
-      final authResp = await _authService.refreshToken(serverUrl, refreshToken);
-      await _saveTokens(
-        serverUrl,
-        authResp.accessToken,
-        authResp.refreshToken,
-        authResp.deviceId ?? deviceId,
-      );
+    // If a session snapshot is cached, open straight into an optimistic,
+    // authenticated session and validate it in the background — the app never
+    // flashes the login screen on a slow or offline launch. The seamless path.
+    final cached = await _cachedSession(serverUrl, accessToken, refreshToken);
+    if (cached != null) {
+      unawaited(_validateSession());
+      return cached;
+    }
 
+    // No snapshot yet (first launch after install, or a pre-feature session):
+    // validate inline, which also writes the snapshot for next time.
+    return _restoreInline(serverUrl, accessToken, refreshToken);
+  }
+
+  /// Builds an optimistic [AuthState] from the cached session snapshot plus the
+  /// stored tokens, or null when no snapshot is cached. The access token may be
+  /// stale; [_validateSession] refreshes it. Marked reconnecting until then.
+  Future<AuthState?> _cachedSession(
+    String serverUrl,
+    String accessToken,
+    String refreshToken,
+  ) async {
+    final userJson = await _storage.read(key: StorageKeys.sessionUser);
+    final connJson = await _storage.read(key: StorageKeys.sessionConnection);
+    if (userJson == null || connJson == null) return null;
+    try {
+      final user =
+          UserProfile.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
+      final meta = jsonDecode(connJson) as Map<String, dynamic>;
+      final services = meta['services'];
+      final connection = BackendConnection(
+        serverUrl: serverUrl,
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        serverName: meta['server_name'] as String?,
+        services: services is Map<String, dynamic>
+            ? AvailableServices.fromJson(services)
+            : const AvailableServices(),
+        instances: (meta['instances'] as List<dynamic>?)
+                ?.map((e) =>
+                    ServiceInstance.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
+      return AuthState(
+          connection: connection, user: user, isReconnecting: true);
+    } catch (e) {
+      debugPrint('Cached session decode failed: $e');
+      return null;
+    }
+  }
+
+  /// Validates the restored session against the server and reconciles state:
+  /// fresh data on success, login on a genuine 401, or a "reconnecting" hold
+  /// (with a retry scheduled) on a transport failure. Safe to call repeatedly.
+  Future<void> _validateSession() async {
+    if (_validating) return;
+    _validating = true;
+    try {
+      final serverUrl = await _storage.read(key: StorageKeys.serverUrl);
+      final refreshToken = await _storage.read(key: StorageKeys.refreshToken);
+      final deviceId = await _storage.read(key: StorageKeys.deviceId);
+      if (serverUrl == null || refreshToken == null) return;
+
+      // Refresh first, persist immediately (the refresh token is single-use),
+      // then fetch config.
+      final authResp = await _authService.refreshToken(serverUrl, refreshToken);
+      await _saveTokens(serverUrl, authResp.accessToken, authResp.refreshToken,
+          authResp.deviceId ?? deviceId);
       final config =
           await _authService.fetchConfig(serverUrl, authResp.accessToken);
-
       final connection = BackendConnection(
         serverUrl: serverUrl,
         accessToken: authResp.accessToken,
@@ -95,16 +171,60 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         services: config.services,
         instances: config.instances,
       );
+      await _persistSession(connection, authResp.user);
+      _stopReconnect();
+      state = AsyncData(AuthState(connection: connection, user: authResp.user));
+      _registerForPush();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        // The server rejected the refresh token: the session is truly dead.
+        _stopReconnect();
+        await _clearStorage();
+        state = const AsyncData(AuthState());
+      } else {
+        // Server unreachable: keep the user in the app and keep retrying.
+        debugPrint('Session validation deferred (server unreachable): $e');
+        _markReconnecting();
+      }
+    } catch (e) {
+      debugPrint('Session validation error (staying optimistic): $e');
+      _markReconnecting();
+    } finally {
+      _validating = false;
+    }
+  }
 
+  /// No-snapshot fallback: validate the stored tokens inline and return the
+  /// resulting state. Keeps tokens on a transport failure (only a real 401
+  /// clears them) and writes a session snapshot on success.
+  Future<AuthState> _restoreInline(
+    String serverUrl,
+    String accessToken,
+    String refreshToken,
+  ) async {
+    final deviceId = await _storage.read(key: StorageKeys.deviceId);
+    try {
+      final authResp = await _authService.refreshToken(serverUrl, refreshToken);
+      await _saveTokens(serverUrl, authResp.accessToken, authResp.refreshToken,
+          authResp.deviceId ?? deviceId);
+      final config =
+          await _authService.fetchConfig(serverUrl, authResp.accessToken);
+      final connection = BackendConnection(
+        serverUrl: serverUrl,
+        accessToken: authResp.accessToken,
+        refreshToken: authResp.refreshToken,
+        serverName: config.serverName,
+        services: config.services,
+        instances: config.instances,
+      );
+      await _persistSession(connection, authResp.user);
       _registerForPush();
       return AuthState(connection: connection, user: authResp.user);
     } on DioException catch (e) {
-      // Only clear the stored session when the server actually rejected the
-      // credential (a 401 — refresh token invalid/expired/replaced). A transport
-      // failure (VPN down, server unreachable, timeout) must NOT delete the
-      // tokens: keeping them lets the session restore automatically on the next
-      // launch once connectivity returns. Wiping them here is exactly what made
-      // an offline cold-launch a permanent, new-link-only logout.
+      // Only a genuine 401 clears the session; a transport failure keeps the
+      // tokens so the next launch can restore. (Without a snapshot we can't show
+      // an optimistic session yet, so this lands on login until connectivity
+      // returns — the snapshot written on the first success fixes that.)
       if (e.response?.statusCode == 401) {
         debugPrint('Session restore rejected by server (401); clearing.');
         await _clearStorage();
@@ -113,10 +233,41 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       }
       return const AuthState();
     } catch (e) {
-      // Unexpected non-network error: keep the tokens (fail safe — never log the
-      // user out over an unexpected client-side error) and retry next launch.
       debugPrint('Session restore error (tokens kept): $e');
       return const AuthState();
+    }
+  }
+
+  /// Flags the current (optimistic) session as reconnecting and starts the
+  /// retry loop. No-op once the session is gone.
+  void _markReconnecting() {
+    final current = state.valueOrNull;
+    if (current == null || !current.isAuthenticated) return;
+    if (!current.isReconnecting) {
+      state = AsyncData(current.copyWith(isReconnecting: true));
+    }
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_reconnectTimer != null) return;
+    _reconnectTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      unawaited(_validateSession());
+    });
+  }
+
+  void _stopReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+  }
+
+  /// Retry validation now (e.g. when the app returns to the foreground) instead
+  /// of waiting for the periodic timer. No-op unless we're holding a
+  /// reconnecting session.
+  void reconnectNow() {
+    final current = state.valueOrNull;
+    if (current != null && current.isAuthenticated && current.isReconnecting) {
+      unawaited(_validateSession());
     }
   }
 
@@ -153,6 +304,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
       );
 
+      await _persistSession(connection, authResp.user);
       state = AsyncData(AuthState(
         connection: connection,
         user: authResp.user,
@@ -202,6 +354,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       final offerPasskey =
           authResp.user.isAdmin && await _shouldOfferPasskey(normalizedUrl);
 
+      await _persistSession(connection, authResp.user);
       state = AsyncData(AuthState(
         connection: connection,
         user: authResp.user,
@@ -241,6 +394,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
       );
 
+      await _persistSession(connection, authResp.user);
       state = AsyncData(AuthState(connection: connection, user: authResp.user));
       _registerForPush();
     } catch (e) {
@@ -271,13 +425,14 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final conn = current!.connection!;
     final config =
         await _authService.fetchConfig(conn.serverUrl, conn.accessToken);
-    state = AsyncData(current.copyWith(
-      connection: conn.copyWith(
-        serverName: config.serverName,
-        services: config.services,
-        instances: config.instances,
-      ),
-    ));
+    final updatedConn = conn.copyWith(
+      serverName: config.serverName,
+      services: config.services,
+      instances: config.instances,
+    );
+    final user = current.user;
+    if (user != null) await _persistSession(updatedConn, user);
+    state = AsyncData(current.copyWith(connection: updatedConn));
   }
 
   /// Re-fetch the current user's profile (e.g. to learn whether a password is
@@ -288,6 +443,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     if (current == null || conn == null) return;
     try {
       final user = await _authService.fetchMe(conn.serverUrl, conn.accessToken);
+      await _persistSession(conn, user);
       state = AsyncData(current.copyWith(user: user));
     } catch (e) {
       debugPrint('refreshUser failed: $e');
@@ -452,6 +608,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
       );
 
+      await _persistSession(connection, authResp.user);
       state = AsyncData(AuthState(connection: connection, user: authResp.user));
       _registerForPush();
     } catch (e) {
@@ -487,7 +644,11 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     await _storage.write(key: StorageKeys.jwt, value: accessToken);
     await _storage.write(key: StorageKeys.refreshToken, value: refreshToken);
 
-    state = AsyncData(current.copyWith(connection: updated));
+    // A successful refresh means we reached the server — clear any reconnecting
+    // hold and stop the retry loop.
+    _stopReconnect();
+    state = AsyncData(
+        current.copyWith(connection: updated, isReconnecting: false));
   }
 
   /// Called when the server has *rejected* our refresh token (a genuine 401):
@@ -541,10 +702,30 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   Future<void> _clearStorage() async {
+    _stopReconnect();
     await _storage.delete(key: StorageKeys.serverUrl);
     await _storage.delete(key: StorageKeys.jwt);
     await _storage.delete(key: StorageKeys.refreshToken);
     await _storage.delete(key: StorageKeys.deviceId);
+    await _storage.delete(key: StorageKeys.sessionUser);
+    await _storage.delete(key: StorageKeys.sessionConnection);
+  }
+
+  /// Cache the non-secret parts of an authenticated session (user profile +
+  /// server config) so a later cold start can restore an optimistic, usable
+  /// session before the server is reachable. Tokens are stored separately.
+  Future<void> _persistSession(
+      BackendConnection conn, UserProfile user) async {
+    await _storage.write(
+        key: StorageKeys.sessionUser, value: jsonEncode(user.toJson()));
+    await _storage.write(
+      key: StorageKeys.sessionConnection,
+      value: jsonEncode({
+        'server_name': conn.serverName,
+        'services': conn.services.toJson(),
+        'instances': conn.instances.map((i) => i.toJson()).toList(),
+      }),
+    );
   }
 
   /// Fire-and-forget push registration. Must never block or throw into the
