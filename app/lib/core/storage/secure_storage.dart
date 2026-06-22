@@ -70,4 +70,10 @@ class StorageKeys {
   static const String refreshToken = 'jwt_refresh_token';
   static const String serverUrl = 'server_url';
   static const String deviceId = 'device_id';
+
+  // Cached session snapshot (user profile + server config, no secrets) so a
+  // cold launch can restore an optimistic, usable session and validate it in
+  // the background instead of flashing the login screen while offline.
+  static const String sessionUser = 'session_user';
+  static const String sessionConnection = 'session_connection';
 }

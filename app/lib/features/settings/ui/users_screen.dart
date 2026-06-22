@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../notifications/push_service.dart';
 
 /// Admin screen for managing user accounts: change roles, remove users, and
 /// see who still has an outstanding connect-link invite.
@@ -185,6 +186,28 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     );
   }
 
+  /// Send a test push to a user's devices and report the real outcome — how
+  /// many devices are registered and whether Apple accepted the push. The
+  /// self-only test on the notifications screen can't reach another account, so
+  /// this is how an admin verifies a specific user's delivery.
+  Future<void> _sendTestPush(UserSummary user) async {
+    try {
+      final result =
+          await ref.read(pushServiceProvider).sendTestToUser(user.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(describePushTest(result, username: user.username)),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_friendlyError(e, 'Failed to send test push'))),
+      );
+    }
+  }
+
   /// Enable or disable a user's password / passkey sign-in. Disabling is a real
   /// revoke (clears the password / deletes passkeys), so confirm it first.
   Future<void> _setAuthMethods(
@@ -304,6 +327,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             onChangeRole: (role) => _changeRole(user, role),
             onDelete: () => _deleteUser(user),
             onResendInvite: () => _resendInvite(user),
+            onSendTestPush: () => _sendTestPush(user),
             onRequestSettings: () => context.push(
               '/settings/users/${user.id}/request-settings',
               extra: user.username,
@@ -328,6 +352,7 @@ class _UserTile extends StatelessWidget {
     required this.onChangeRole,
     required this.onDelete,
     required this.onResendInvite,
+    required this.onSendTestPush,
     required this.onSetAuthMethods,
     required this.onRequestSettings,
   });
@@ -337,6 +362,7 @@ class _UserTile extends StatelessWidget {
   final ValueChanged<String> onChangeRole;
   final VoidCallback onDelete;
   final VoidCallback onResendInvite;
+  final VoidCallback onSendTestPush;
   final void Function({bool? passwordEnabled, bool? passkeyEnabled})
       onSetAuthMethods;
   final VoidCallback onRequestSettings;
@@ -423,6 +449,9 @@ class _UserTile extends StatelessWidget {
           case 'resend_invite':
             onResendInvite();
             break;
+          case 'test_push':
+            onSendTestPush();
+            break;
           case 'request_settings':
             onRequestSettings();
             break;
@@ -453,14 +482,28 @@ class _UserTile extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
             ),
           ),
-        if (_needsInvite)
+        // A connect link works for any user: re-invite one stuck in invited
+        // limbo, re-auth one who lost their session, or authorize a new device
+        // for one who already has one (find-or-create reuses the account).
+        if (!isSelf)
           PopupMenuItem(
             value: 'resend_invite',
             child: ListTile(
               leading: const Icon(Icons.link),
               title: Text(
-                user.hasPendingInvite ? 'New invite link' : 'Re-invite',
+                user.hasPendingInvite
+                    ? 'New invite link'
+                    : (_needsInvite ? 'Re-invite' : 'Issue device link'),
               ),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        if (!isSelf)
+          const PopupMenuItem(
+            value: 'test_push',
+            child: ListTile(
+              leading: Icon(Icons.notifications_active_outlined),
+              title: Text('Send test push'),
               contentPadding: EdgeInsets.zero,
             ),
           ),

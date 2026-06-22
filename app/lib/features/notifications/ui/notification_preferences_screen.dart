@@ -108,7 +108,7 @@ class _NotificationPreferencesScreenState
       final result = await ref.read(pushServiceProvider).sendTest();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Test sent (${result.sent} delivered)')),
+        SnackBar(content: Text(describePushTest(result))),
       );
     } catch (e) {
       if (!mounted) return;

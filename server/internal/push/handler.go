@@ -6,13 +6,19 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 )
+
+// errPushNotConfigured is returned by the send helpers when push is disabled or
+// the gateway has not (yet) enrolled, so the handlers can map it to a 503.
+var errPushNotConfigured = errors.New("push not configured")
 
 // Handler serves the device push-token endpoints, the per-user notification
 // preferences endpoints, and the test-push endpoint. It holds the push Manager
@@ -183,36 +189,112 @@ func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
 // TestPush sends a test notification to the calling user's own devices so the
 // app's "Send test" button can confirm push works end to end. It bypasses the
 // per-category preferences on purpose (the user explicitly asked for it).
-// Returns 503 when push is unconfigured or the gateway is unreachable.
 func (h *Handler) TestPush(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
+	h.runTestPush(w, r, claims.UserID)
+}
 
-	// Ensure (not just Client) so a first-ever test from a freshly-booted server
-	// that couldn't reach the gateway at startup still kicks enrollment.
-	var client *Client
-	if h.mgr != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer cancel()
-		client = h.mgr.Ensure(ctx)
+// TestPushToUser sends a test notification to a chosen user's devices. It is the
+// admin-facing counterpart to TestPush (gated by users:manage on the router) so
+// an admin can verify push delivery for someone other than themselves — the
+// self-only test can't reach another account's devices.
+func (h *Handler) TestPushToUser(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil || userID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid user id"})
+		return
 	}
-	if client == nil {
+	h.runTestPush(w, r, userID)
+}
+
+// testPushResult is one device's delivery outcome, sanitised for the client
+// (the raw APNs token is deliberately never exposed).
+type testPushResult struct {
+	DeviceID string `json:"device_id"`
+	OK       bool   `json:"ok"`
+	Pruned   bool   `json:"pruned"`
+	Error    string `json:"error,omitempty"`
+}
+
+// testPushResponse is the body returned by the test-push endpoints. Tokens is
+// how many push tokens are registered for the target user — 0 is the most
+// common reason a "sent" test is never received (the device never registered),
+// so the client surfaces it directly. Sent/Failed/Results come from the gateway
+// so the UI reports real per-device delivery outcomes instead of a blind
+// "delivered".
+type testPushResponse struct {
+	Tokens  int              `json:"tokens"`
+	Sent    int              `json:"sent"`
+	Failed  int              `json:"failed"`
+	Results []testPushResult `json:"results,omitempty"`
+}
+
+// runTestPush sends the canned test notification to one user's devices and
+// writes a diagnostic result: how many tokens are registered, the gateway's
+// per-device outcomes, and (as a side effect) prunes any token APNs rejected.
+func (h *Handler) runTestPush(w http.ResponseWriter, r *http.Request, userID int64) {
+	tokens, err := h.countPushTokens(userID)
+	if err != nil {
+		h.logger.Error("push: count tokens", "err", err, "user_id", userID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read devices"})
+		return
+	}
+
+	resp, err := h.sendTestPush(r.Context(), userID)
+	if errors.Is(err, errPushNotConfigured) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "push not configured"})
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	resp, err := client.Send(ctx, []int64{claims.UserID}, "Cantinarr", "Push notifications are working", map[string]any{"type": "test"})
 	if err != nil {
-		h.logger.Error("push: send test notification", "err", err, "user_id", claims.UserID)
+		h.logger.Error("push: send test notification", "err", err, "user_id", userID)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to send test notification"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"sent": resp.Sent, "failed": resp.Failed})
+
+	out := testPushResponse{Tokens: tokens, Sent: resp.Sent, Failed: resp.Failed}
+	for _, dr := range resp.Results {
+		out.Results = append(out.Results, testPushResult{
+			DeviceID: dr.DeviceID,
+			OK:       dr.OK,
+			Pruned:   dr.Pruned,
+			Error:    dr.Error,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// sendTestPush ensures the gateway client, sends the canned test notification to
+// the user's devices, and prunes any token the gateway reported dead. Returns
+// errPushNotConfigured when push is disabled or the gateway is unreachable.
+func (h *Handler) sendTestPush(ctx context.Context, userID int64) (*SendResponse, error) {
+	if h.mgr == nil {
+		return nil, errPushNotConfigured
+	}
+	// Ensure (not just Client) so a first-ever test from a freshly-booted server
+	// that couldn't reach the gateway at startup still kicks enrollment.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	client := h.mgr.Ensure(ctx)
+	if client == nil {
+		return nil, errPushNotConfigured
+	}
+	resp, err := client.Send(ctx, []int64{userID}, "Cantinarr", "Push notifications are working", map[string]any{"type": "test"})
+	if err != nil {
+		return nil, err
+	}
+	pruneDeadTokens(h.db, h.logger, resp)
+	return resp, nil
+}
+
+// countPushTokens returns how many push tokens are registered for a user.
+func (h *Handler) countPushTokens(userID int64) (int, error) {
+	var n int
+	err := h.db.QueryRow("SELECT COUNT(*) FROM push_tokens WHERE user_id = ?", userID).Scan(&n)
+	return n, err
 }
 
 // client returns the cached gateway client, or nil when push is unconfigured or

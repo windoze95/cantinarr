@@ -153,15 +153,16 @@ func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body 
 			n.logger.Error("push: send notification", "err", err, "title", title)
 			return
 		}
-		n.pruneDeadTokens(resp)
+		pruneDeadTokens(n.db, n.logger, resp)
 	}()
 }
 
 // pruneDeadTokens deletes the local push_tokens row for every result the
 // gateway flagged as pruned (token rejected by APNs as unregistered). Matching
 // on token keeps it precise even if a device re-registered with a new token in
-// the meantime. Best-effort: delete failures are logged, not surfaced.
-func (n *Notifier) pruneDeadTokens(resp *SendResponse) {
+// the meantime. Best-effort: delete failures are logged, not surfaced. Shared
+// by the Notifier (after each send) and the test-push handler.
+func pruneDeadTokens(db *sql.DB, logger *slog.Logger, resp *SendResponse) {
 	if resp == nil {
 		return
 	}
@@ -170,14 +171,14 @@ func (n *Notifier) pruneDeadTokens(resp *SendResponse) {
 		if !r.Pruned || r.Token == "" {
 			continue
 		}
-		if _, err := n.db.Exec("DELETE FROM push_tokens WHERE token = ?", r.Token); err != nil {
-			n.logger.Error("push: prune dead token", "err", err, "device_id", r.DeviceID)
+		if _, err := db.Exec("DELETE FROM push_tokens WHERE token = ?", r.Token); err != nil {
+			logger.Error("push: prune dead token", "err", err, "device_id", r.DeviceID)
 			continue
 		}
 		pruned++
 	}
 	if pruned > 0 {
-		n.logger.Info("push: pruned dead device tokens", "count", pruned)
+		logger.Info("push: pruned dead device tokens", "count", pruned)
 	}
 }
 
