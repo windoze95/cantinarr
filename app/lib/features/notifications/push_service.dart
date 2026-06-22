@@ -92,17 +92,26 @@ class PushService {
     }
   }
 
-  /// Asks the backend to send a test push notification to this account's
-  /// registered devices. Returns how many were delivered or failed. Throws on
-  /// any error (including a 503 when push isn't configured) so the caller can
-  /// surface the failure.
-  Future<({int sent, int failed})> sendTest() async {
+  /// Asks the backend to send a test push to this account's own devices and
+  /// returns the diagnostic outcome (tokens registered + per-device results).
+  /// Throws on transport/HTTP errors (including a 503 when push isn't
+  /// configured) so the caller can surface the failure.
+  Future<PushTestResult> sendTest() async {
     final dio = _ref.read(backendClientProvider);
     final resp = await dio.post('/api/notifications/test');
-    final data = resp.data as Map<String, dynamic>? ?? const {};
-    final sent = (data['sent'] as num?)?.toInt() ?? 0;
-    final failed = (data['failed'] as num?)?.toInt() ?? 0;
-    return (sent: sent, failed: failed);
+    return PushTestResult.fromJson(
+        resp.data as Map<String, dynamic>? ?? const {});
+  }
+
+  /// Admin-only: send a test push to another user's devices. Mirrors [sendTest]
+  /// but targets [userId] via the admin endpoint, so an admin can verify a
+  /// specific account's delivery (the self-test can't reach another account).
+  /// Throws on error.
+  Future<PushTestResult> sendTestToUser(int userId) async {
+    final dio = _ref.read(backendClientProvider);
+    final resp = await dio.post('/api/admin/users/$userId/test-push');
+    return PushTestResult.fromJson(
+        resp.data as Map<String, dynamic>? ?? const {});
   }
 
   /// Removes this device's push token from the backend. Best-effort; call
@@ -147,3 +156,105 @@ class PushService {
 
 /// Provides the app-wide [PushService].
 final pushServiceProvider = Provider<PushService>(PushService.new);
+
+/// The outcome of a test-push request: how many tokens the target has
+/// registered, plus the gateway's per-device delivery results.
+class PushTestResult {
+  const PushTestResult({
+    required this.tokens,
+    required this.sent,
+    required this.failed,
+    required this.results,
+  });
+
+  /// Number of push tokens registered for the target user. Zero is the headline
+  /// diagnostic — the device never registered, so nothing could be delivered.
+  final int tokens;
+  final int sent;
+  final int failed;
+  final List<PushTestDeviceResult> results;
+
+  factory PushTestResult.fromJson(Map<String, dynamic> json) => PushTestResult(
+        tokens: (json['tokens'] as num?)?.toInt() ?? 0,
+        sent: (json['sent'] as num?)?.toInt() ?? 0,
+        failed: (json['failed'] as num?)?.toInt() ?? 0,
+        results: (json['results'] as List<dynamic>?)
+                ?.map((e) =>
+                    PushTestDeviceResult.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
+
+  /// The first non-empty per-device error reason, if any (e.g. a rejected
+  /// token's `BadDeviceToken`).
+  String? get firstError {
+    for (final r in results) {
+      if (r.error.isNotEmpty) return r.error;
+    }
+    return null;
+  }
+}
+
+/// One device's delivery outcome within a [PushTestResult].
+class PushTestDeviceResult {
+  const PushTestDeviceResult({
+    required this.ok,
+    required this.pruned,
+    required this.error,
+  });
+
+  final bool ok;
+  final bool pruned;
+  final String error;
+
+  factory PushTestDeviceResult.fromJson(Map<String, dynamic> json) =>
+      PushTestDeviceResult(
+        ok: json['ok'] as bool? ?? false,
+        pruned: json['pruned'] as bool? ?? false,
+        error: json['error'] as String? ?? '',
+      );
+}
+
+/// Builds a human-readable summary of a [PushTestResult] for a snackbar. Pass
+/// [username] for an admin test of another account; omit it for the caller's
+/// own self-test.
+String describePushTest(PushTestResult r, {String? username}) {
+  if (r.tokens == 0) {
+    final subject = username == null ? 'You have' : '$username has';
+    return '$subject no registered push devices yet. Open the app on the '
+        'device (while connected) and allow notifications so it can register.';
+  }
+  if (r.sent > 0 && r.failed == 0) {
+    final n = r.sent == 1 ? '1 device' : '${r.sent} devices';
+    return username == null ? 'Test sent to $n.' : 'Test sent to $username ($n).';
+  }
+  if (r.sent == 0 && r.failed == 0) {
+    // Tokens exist locally but the gateway accepted none — usually a desync
+    // where the gateway already pruned them.
+    return 'No devices were reached — the push gateway has no active token for '
+        '${username ?? 'this account'}. Have them reopen the app to re-register.';
+  }
+  final hint = _apnsHint(r.firstError);
+  if (r.sent > 0) {
+    return 'Sent to ${r.sent}, but ${r.failed} failed$hint.';
+  }
+  final n = r.failed == 1 ? '1 device' : '${r.failed} devices';
+  return username == null
+      ? 'Delivery failed for $n$hint.'
+      : '$username: delivery failed for $n$hint.';
+}
+
+/// Maps the common APNs rejection reasons to a short hint; otherwise echoes the
+/// raw reason in parentheses (or empty when there is none).
+String _apnsHint(String? error) {
+  if (error == null || error.isEmpty) return '';
+  if (error.contains('BadDeviceToken')) {
+    return ' (Apple rejected the token — usually a dev build’s sandbox '
+        'token sent to production APNs, or a stale token)';
+  }
+  if (error.contains('Unregistered')) {
+    return ' (Apple says the token is no longer valid — the app was removed or '
+        'reinstalled; it re-registers on next launch)';
+  }
+  return ' ($error)';
+}

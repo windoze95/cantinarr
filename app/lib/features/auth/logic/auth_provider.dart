@@ -73,18 +73,19 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
 
     try {
-      // Try refreshing the token
+      // Refresh first, then persist the rotated tokens immediately. The refresh
+      // token is single-use, so saving before the config fetch ensures a later
+      // failure can't strand the session on an already-spent token.
       final authResp = await _authService.refreshToken(serverUrl, refreshToken);
-      final config =
-          await _authService.fetchConfig(serverUrl, authResp.accessToken);
-
-      // Persist new tokens
       await _saveTokens(
         serverUrl,
         authResp.accessToken,
         authResp.refreshToken,
         authResp.deviceId ?? deviceId,
       );
+
+      final config =
+          await _authService.fetchConfig(serverUrl, authResp.accessToken);
 
       final connection = BackendConnection(
         serverUrl: serverUrl,
@@ -97,9 +98,24 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
       _registerForPush();
       return AuthState(connection: connection, user: authResp.user);
+    } on DioException catch (e) {
+      // Only clear the stored session when the server actually rejected the
+      // credential (a 401 — refresh token invalid/expired/replaced). A transport
+      // failure (VPN down, server unreachable, timeout) must NOT delete the
+      // tokens: keeping them lets the session restore automatically on the next
+      // launch once connectivity returns. Wiping them here is exactly what made
+      // an offline cold-launch a permanent, new-link-only logout.
+      if (e.response?.statusCode == 401) {
+        debugPrint('Session restore rejected by server (401); clearing.');
+        await _clearStorage();
+      } else {
+        debugPrint('Session restore deferred (server unreachable): $e');
+      }
+      return const AuthState();
     } catch (e) {
-      debugPrint('Session restore failed: $e');
-      await _clearStorage();
+      // Unexpected non-network error: keep the tokens (fail safe — never log the
+      // user out over an unexpected client-side error) and retry next launch.
+      debugPrint('Session restore error (tokens kept): $e');
       return const AuthState();
     }
   }
@@ -474,11 +490,17 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = AsyncData(current.copyWith(connection: updated));
   }
 
-  /// Called when auth has expired (refresh rejected) or on logout. Clears
-  /// state. Best-effort unregisters push first, while the device id and tokens
-  /// are still available.
+  /// Called when the server has *rejected* our refresh token (a genuine 401):
+  /// the session is truly dead, so clear stored credentials and reset state.
+  ///
+  /// We deliberately do not unregister the push token here. By this point the
+  /// access token is already invalid, so the server-side delete couldn't
+  /// authenticate anyway; and transport failures never reach this path (the
+  /// interceptor only expires on a real 401), so a dropped VPN can't wipe the
+  /// device's push registration. A stale gateway token is pruned server-side the
+  /// next time APNs reports it unregistered. Push deregistration belongs to an
+  /// explicit, deliberate logout (token still valid) — not to session expiry.
   Future<void> onAuthExpired() async {
-    await ref.read(pushServiceProvider).unregister();
     await _clearStorage();
     state = const AsyncData(AuthState());
   }
