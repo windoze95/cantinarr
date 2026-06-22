@@ -14,12 +14,13 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 )
 
-// Handler serves the device push-token endpoints. A nil client disables
-// gateway registration (the local row is still stored), so the handler works
-// even when push is not configured.
+// Handler serves the device push-token endpoints and the per-user notification
+// preferences endpoints. A nil client disables gateway registration (the local
+// row is still stored), so the handler works even when push is not configured.
 type Handler struct {
 	db     *sql.DB
 	client *Client
+	prefs  *PrefsStore
 	logger *slog.Logger
 }
 
@@ -28,7 +29,7 @@ func NewHandler(db *sql.DB, client *Client, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{db: db, client: client, logger: logger}
+	return &Handler{db: db, client: client, prefs: NewPrefsStore(db), logger: logger}
 }
 
 // RegisterTokenRequest is the POST /api/devices/push-token body.
@@ -127,6 +128,46 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// GetPreferences returns the calling user's notification preferences, applying
+// the defaults for a user who has never changed them.
+func (h *Handler) GetPreferences(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	prefs, err := h.prefs.Get(claims.UserID)
+	if err != nil {
+		h.logger.Error("push: get notification prefs", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load preferences"})
+		return
+	}
+	writeJSON(w, http.StatusOK, prefs)
+}
+
+// UpdatePreferences replaces the calling user's notification preferences. The
+// body is the same four-boolean shape returned by GetPreferences; the stored
+// preferences are echoed back. Unknown fields are ignored and missing fields
+// default to false (a PUT replaces the full set).
+func (h *Handler) UpdatePreferences(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var prefs Prefs
+	if err := json.NewDecoder(r.Body).Decode(&prefs); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := h.prefs.Set(claims.UserID, prefs); err != nil {
+		h.logger.Error("push: set notification prefs", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save preferences"})
+		return
+	}
+	writeJSON(w, http.StatusOK, prefs)
 }
 
 // deviceBelongsToUser reports whether device_id names a (non-revoked) device

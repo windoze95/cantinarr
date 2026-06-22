@@ -90,6 +90,18 @@ CREATE TABLE IF NOT EXISTS push_tokens (
     UNIQUE(device_id)
 );
 
+-- Per-user push notification preferences. A missing row means "all defaults",
+-- so a user only gets a row once they change something. Defaults match the
+-- self-service API: request_decision off, request_pending/new_movie/new_episode
+-- on. Kept separate from user_request_settings (admin-managed request policy).
+CREATE TABLE IF NOT EXISTS notification_prefs (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    request_decision INTEGER NOT NULL DEFAULT 0,
+    request_pending  INTEGER NOT NULL DEFAULT 1,
+    new_movie        INTEGER NOT NULL DEFAULT 1,
+    new_episode      INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS connect_tokens (
     token TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),

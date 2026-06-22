@@ -160,12 +160,15 @@ func NewRouter(
 			r.Get("/config", configHandler(cfg, instanceStore, creds))
 		})
 
-		// Device push-token routes (authenticated). Any signed-in user may
-		// register/clear the APNs token for one of their own devices.
+		// Device push-token + notification preference routes (authenticated).
+		// Any signed-in user may register/clear the APNs token for one of their
+		// own devices and read/update their own notification preferences.
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Post("/devices/push-token", pushHandler.Register)
 			r.Delete("/devices/push-token/{deviceID}", pushHandler.Delete)
+			r.Get("/notifications/preferences", pushHandler.GetPreferences)
+			r.Put("/notifications/preferences", pushHandler.UpdatePreferences)
 		})
 
 		// Request routes (authenticated)

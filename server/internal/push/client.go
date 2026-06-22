@@ -54,12 +54,30 @@ func (c *Client) DeleteDevice(ctx context.Context, deviceID string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/devices", body, nil)
 }
 
+// SendOptions carries optional per-send tuning. The zero value is valid and
+// reproduces the default high-priority send.
+type SendOptions struct {
+	// CollapseID, when set, is passed to the gateway as the APNs collapse id so
+	// repeat notifications about the same subject coalesce on-device into a
+	// single alert. Empty means no collapsing.
+	CollapseID string
+}
+
 // Send fans a high-priority notification out to the given users' devices. data
 // is delivered as the APNs payload's custom data.
 func (c *Client) Send(ctx context.Context, userIDs []int64, title, body string, data map[string]any) error {
+	return c.SendWithOptions(ctx, userIDs, title, body, data, SendOptions{})
+}
+
+// SendWithOptions is Send with explicit per-send options (e.g. a collapse id).
+func (c *Client) SendWithOptions(ctx context.Context, userIDs []int64, title, body string, data map[string]any, opts SendOptions) error {
 	ids := make([]string, len(userIDs))
 	for i, id := range userIDs {
 		ids[i] = strconv.FormatInt(id, 10)
+	}
+	options := map[string]any{"priority": "high"}
+	if opts.CollapseID != "" {
+		options["collapse_id"] = opts.CollapseID
 	}
 	payload := map[string]any{
 		"to": map[string]any{"user_ids": ids},
@@ -68,7 +86,7 @@ func (c *Client) Send(ctx context.Context, userIDs []int64, title, body string, 
 			"body":  body,
 		},
 		"data":    data,
-		"options": map[string]any{"priority": "high"},
+		"options": options,
 	}
 	return c.do(ctx, http.MethodPost, "/v1/notifications", payload, nil)
 }

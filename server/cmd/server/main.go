@@ -106,14 +106,10 @@ func main() {
 	// Tautulli handler (Plex monitoring)
 	tautulliHandler := tautulli.NewHandler(instanceStore, registry)
 
-	// WebSocket hub (built before the request service so request approvals
-	// and denials can push realtime events to the requester).
-	wsHub := ws.NewHub(authService, registry, instanceStore)
-	go wsHub.Run(context.Background())
-
 	// Push notifications via the self-hosted gateway. Disabled (client nil) when
 	// either the gateway URL or API key is unset; the handler and notifier are
-	// still built (nil-safe) so wiring stays uniform.
+	// still built (nil-safe) so wiring stays uniform. Built before the hub and
+	// request service so both can dispatch pushes.
 	var pushClient *push.Client
 	if cfg.PushGatewayURL != "" && cfg.PushAPIKey != "" {
 		pushClient = push.NewClient(cfg.PushGatewayURL, cfg.PushAPIKey)
@@ -124,12 +120,31 @@ func main() {
 	logger := slog.Default()
 	pushHandler := push.NewHandler(database, pushClient, logger)
 
+	// One push notifier drives both the request-decision/pending fan-out and the
+	// new-content (movie/episode available) pushes. nil when push is disabled so
+	// the hub's content notifier and the request composite both no-op.
+	var pushNotifier *push.Notifier
+	if pushClient != nil {
+		pushNotifier = push.NewNotifier(database, pushClient, logger)
+	}
+
+	// WebSocket hub (built before the request service so request approvals and
+	// denials can push realtime events to the requester). The push notifier is
+	// passed so download completions also fan out to opted-in devices; passing
+	// an untyped nil keeps new-content pushes off when push is disabled.
+	var contentNotifier ws.ContentNotifier
+	if pushNotifier != nil {
+		contentNotifier = pushNotifier
+	}
+	wsHub := ws.NewHub(authService, registry, instanceStore, contentNotifier)
+	go wsHub.Run(context.Background())
+
 	// Request service. Request decisions fan out to both the WebSocket hub
 	// (live clients) and the push gateway (offline devices). The push notifier
 	// is only added to the fan-out when push is configured.
 	var notifier request.Notifier
-	if pushClient != nil {
-		notifier = push.NewComposite(wsHub, push.NewNotifier(database, pushClient, logger))
+	if pushNotifier != nil {
+		notifier = push.NewComposite(wsHub, pushNotifier)
 	} else {
 		notifier = push.NewComposite(wsHub)
 	}

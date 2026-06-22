@@ -213,11 +213,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           // Notifications
           _SectionHeader(title: 'Notifications'),
+          _SettingsTile(
+            icon: Icons.notifications_outlined,
+            title: 'Notification Preferences',
+            subtitle: 'Choose which push notifications you receive',
+            onTap: () => context.push('/settings/notifications'),
+          ),
           SwitchListTile(
             value: ref.watch(requestNotificationsEnabledProvider),
-            onChanged: (v) => ref
-                .read(requestNotificationsEnabledProvider.notifier)
-                .set(v),
+            onChanged: (v) =>
+                ref.read(requestNotificationsEnabledProvider.notifier).set(v),
             activeThumbColor: AppTheme.accent,
             secondary: const Icon(Icons.notifications_active_outlined,
                 color: AppTheme.textSecondary),
@@ -225,7 +230,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 style: TextStyle(
                     color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
             subtitle: const Text(
-                'Notify me when a request is approved or denied',
+                'Show an in-app banner when a request is approved or denied',
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
           ),
 

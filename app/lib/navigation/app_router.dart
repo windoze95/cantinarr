@@ -16,6 +16,7 @@ import '../features/downloads/ui/downloads_history_screen.dart';
 import '../features/downloads/ui/downloads_module_shell.dart';
 import '../features/downloads/ui/downloads_queue_screen.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
+import '../features/notifications/ui/notification_preferences_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
 import '../features/radarr/ui/radarr_history_screen.dart';
 import '../features/radarr/ui/radarr_home_screen.dart';
@@ -368,6 +369,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/devices',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const DevicesScreen(),
+      ),
+      GoRoute(
+        path: '/settings/notifications',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const NotificationPreferencesScreen(),
       ),
       GoRoute(
         path: '/settings/passkeys',

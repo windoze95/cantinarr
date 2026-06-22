@@ -10,10 +10,11 @@ import (
 
 // Notifier turns request events into push notifications via the gateway. It
 // implements request.Notifier. Sends are fire-and-forget so a slow or failing
-// gateway never blocks an approval/denial.
+// gateway never blocks an approval/denial. Every notification is filtered by
+// the recipient's per-category preferences before dispatch.
 type Notifier struct {
-	db     *sql.DB
 	client *Client
+	prefs  *PrefsStore
 	logger *slog.Logger
 }
 
@@ -23,13 +24,17 @@ func NewNotifier(db *sql.DB, client *Client, logger *slog.Logger) *Notifier {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Notifier{db: db, client: client, logger: logger}
+	return &Notifier{client: client, prefs: NewPrefsStore(db), logger: logger}
 }
 
 // NotifyUser pushes the outcome of a request decision to the requesting user.
-// Only "request_decision" events produce a notification.
+// Only "request_decision" events produce a notification, and only when the
+// requester has opted into that category (off by default).
 func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]interface{}) {
-	if n == nil || n.client == nil || eventType != "request_decision" {
+	if n == nil || n.client == nil || eventType != CategoryRequestDecision {
+		return
+	}
+	if !n.prefs.optedIn(userID, CategoryRequestDecision) {
 		return
 	}
 
@@ -38,13 +43,14 @@ func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]in
 		return
 	}
 
-	n.send([]int64{userID}, title, body, passthrough("request_decision", data))
+	n.send([]int64{userID}, title, body, passthrough(CategoryRequestDecision, data))
 }
 
-// NotifyAdmins pushes a new pending request to every admin. Only
-// "request_pending" events produce a notification.
+// NotifyAdmins pushes a new pending request to every admin who has opted into
+// the request_pending category (on by default). Only "request_pending" events
+// produce a notification.
 func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
-	if n == nil || n.client == nil || eventType != "request_pending" {
+	if n == nil || n.client == nil || eventType != CategoryRequestPending {
 		return
 	}
 
@@ -53,21 +59,64 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		title = "a title"
 	}
 
-	adminIDs, err := n.adminIDs()
+	recipients, err := n.prefs.usersOptedInto(CategoryRequestPending)
 	if err != nil {
-		n.logger.Error("push: resolve admin ids", "err", err)
+		n.logger.Error("push: resolve request_pending recipients", "err", err)
 		return
 	}
-	if len(adminIDs) == 0 {
+	if len(recipients) == 0 {
 		return
 	}
 
-	n.send(adminIDs, "New request", title, passthrough("request_pending", data))
+	n.send(recipients, "New request", title, passthrough(CategoryRequestPending, data))
+}
+
+// NotifyNewMovie pushes a "movie became available" alert to every user opted
+// into the new_movie category (on by default). A collapse id keeps repeat
+// availability pings for the same movie from stacking on-device.
+func (n *Notifier) NotifyNewMovie(title string, tmdbID int) {
+	n.notifyNewContent(CategoryNewMovie, "movie", "New movie available", title+" is ready to watch", title, tmdbID)
+}
+
+// NotifyNewEpisode pushes a "new episode available" alert to every user opted
+// into the new_episode category (on by default).
+func (n *Notifier) NotifyNewEpisode(seriesTitle string, tmdbID int) {
+	n.notifyNewContent(CategoryNewEpisode, "tv", "New episode available", "New on "+seriesTitle, seriesTitle, tmdbID)
+}
+
+// notifyNewContent is the shared body for the new-content notifications: it
+// resolves the opted-in audience for the category and dispatches one collapsed
+// push carrying the media identity for tap routing.
+func (n *Notifier) notifyNewContent(category, mediaType, title, body, mediaTitle string, tmdbID int) {
+	if n == nil || n.client == nil || mediaTitle == "" {
+		return
+	}
+	recipients, err := n.prefs.usersOptedInto(category)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", category)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	data := map[string]any{
+		"type":       category,
+		"tmdb_id":    tmdbID,
+		"media_type": mediaType,
+	}
+	n.sendWithOptions(recipients, title, body, data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%d", category, tmdbID),
+	})
 }
 
 // send dispatches a notification in the background with panic recovery, so a
 // failed delivery (or a marshalling bug) can never take down the caller.
 func (n *Notifier) send(userIDs []int64, title, body string, data map[string]any) {
+	n.sendWithOptions(userIDs, title, body, data, SendOptions{})
+}
+
+// sendWithOptions is send with explicit gateway options (e.g. a collapse id).
+func (n *Notifier) sendWithOptions(userIDs []int64, title, body string, data map[string]any, opts SendOptions) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -76,29 +125,10 @@ func (n *Notifier) send(userIDs []int64, title, body string, data map[string]any
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := n.client.Send(ctx, userIDs, title, body, data); err != nil {
+		if err := n.client.SendWithOptions(ctx, userIDs, title, body, data, opts); err != nil {
 			n.logger.Error("push: send notification", "err", err, "title", title)
 		}
 	}()
-}
-
-// adminIDs returns the ids of all admin users.
-func (n *Notifier) adminIDs() ([]int64, error) {
-	rows, err := n.db.Query("SELECT id FROM users WHERE role = 'admin'")
-	if err != nil {
-		return nil, fmt.Errorf("query admin ids: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan admin id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
 }
 
 // decisionMessage derives the alert title/body from a request_decision payload.

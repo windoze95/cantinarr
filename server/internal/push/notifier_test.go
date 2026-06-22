@@ -85,6 +85,10 @@ func TestNotifyUserRequestDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	// request_decision is off by default, so the requester must opt in to be
+	// notified about their own decision.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (42, 'req', '', 'user')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_decision) VALUES (42, 1)")
 
 	client, cap := newNotifierTestGateway(t)
 	n := NewNotifier(database, client, nil)
@@ -113,6 +117,55 @@ func TestNotifyUserRequestDecision(t *testing.T) {
 	}
 }
 
+func TestNotifyUserRequestDecisionSuppressedByDefault(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// No prefs row: request_decision defaults to off, so nothing is sent.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (42, 'req', '', 'user')")
+
+	client, cap := newNotifierTestGateway(t)
+	n := NewNotifier(database, client, nil)
+
+	n.NotifyUser(42, "request_decision", map[string]interface{}{
+		"decision": "approved",
+		"title":    "The Matrix",
+	})
+
+	select {
+	case <-cap.ch:
+		t.Fatal("unexpected notification: request_decision is off by default")
+	case <-time.After(200 * time.Millisecond):
+		// expected: suppressed
+	}
+}
+
+func TestNotifyUserRequestDecisionSuppressedWhenOff(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// Explicitly opted out.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (42, 'req', '', 'user')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_decision) VALUES (42, 0)")
+
+	client, cap := newNotifierTestGateway(t)
+	n := NewNotifier(database, client, nil)
+
+	n.NotifyUser(42, "request_decision", map[string]interface{}{
+		"decision": "approved",
+		"title":    "The Matrix",
+	})
+
+	select {
+	case <-cap.ch:
+		t.Fatal("unexpected notification: request_decision pref is off")
+	case <-time.After(200 * time.Millisecond):
+		// expected: suppressed
+	}
+}
+
 func TestNotifyUserIgnoresOtherEvents(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
@@ -136,7 +189,8 @@ func TestNotifyAdminsResolvesAdminIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	// Two admins and one regular user; only admins should be targeted.
+	// Two admins and one regular user, none with a prefs row. request_pending
+	// defaults on for admins, so both admins (and only admins) are targeted.
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'admin2', '', 'admin')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'bob', '', 'user')")
@@ -163,6 +217,32 @@ func TestNotifyAdminsResolvesAdminIDs(t *testing.T) {
 	}
 }
 
+func TestNotifyAdminsHonorsOptOutAndRole(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// admin1 opts out of request_pending; admin2 keeps the default (on). A
+	// non-admin who opts in must still be excluded (request_pending is
+	// admin-only). Only admin2 should be targeted.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'admin2', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'bob', '', 'user')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_pending) VALUES (1, 0)")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_pending) VALUES (3, 1)")
+
+	client, cap := newNotifierTestGateway(t)
+	n := NewNotifier(database, client, nil)
+
+	n.NotifyAdmins("request_pending", map[string]interface{}{"title": "The Matrix"})
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "2" {
+		t.Errorf("request_pending recipients = %v, want [\"2\"]", ids)
+	}
+}
+
 func TestNotifierDisabledClientIsNoop(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
@@ -172,4 +252,112 @@ func TestNotifierDisabledClientIsNoop(t *testing.T) {
 	n := NewNotifier(database, nil, nil)
 	n.NotifyUser(1, "request_decision", map[string]interface{}{"decision": "approved", "title": "X"})
 	n.NotifyAdmins("request_pending", map[string]interface{}{"title": "X"})
+	n.NotifyNewMovie("The Matrix", 603)
+	n.NotifyNewEpisode("Severance", 95396)
+}
+
+func TestNotifyNewMovieReachesOptedInUsers(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// alice keeps the default (new_movie on), bob opts out, carol opts in.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'bob', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'carol', '', 'user')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (2, 0)")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (3, 1)")
+
+	client, cap := newNotifierTestGateway(t)
+	n := NewNotifier(database, client, nil)
+
+	n.NotifyNewMovie("The Matrix", 603)
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id] = true
+	}
+	if len(ids) != 2 || !got["1"] || !got["3"] {
+		t.Errorf("new_movie recipients = %v, want alice(1) and carol(3)", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "New movie available" {
+		t.Errorf("title = %v, want \"New movie available\"", notif["title"])
+	}
+	if notif["body"] != "The Matrix is ready to watch" {
+		t.Errorf("body = %v, want \"The Matrix is ready to watch\"", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "new_movie" || data["media_type"] != "movie" {
+		t.Errorf("data = %v, want type/media_type new_movie/movie", data)
+	}
+	// tmdb_id arrives as a JSON number.
+	if num, ok := data["tmdb_id"].(float64); !ok || int(num) != 603 {
+		t.Errorf("data.tmdb_id = %v, want 603", data["tmdb_id"])
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "new_movie:603" {
+		t.Errorf("collapse_id = %v, want new_movie:603", opts["collapse_id"])
+	}
+}
+
+func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// Default (no row) means new_episode on for a regular user.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'bob', '', 'user')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_episode) VALUES (2, 0)")
+
+	client, cap := newNotifierTestGateway(t)
+	n := NewNotifier(database, client, nil)
+
+	n.NotifyNewEpisode("Severance", 95396)
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "1" {
+		t.Errorf("new_episode recipients = %v, want [\"1\"]", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "New episode available" {
+		t.Errorf("title = %v, want \"New episode available\"", notif["title"])
+	}
+	if notif["body"] != "New on Severance" {
+		t.Errorf("body = %v, want \"New on Severance\"", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "new_episode" || data["media_type"] != "tv" {
+		t.Errorf("data = %v, want type/media_type new_episode/tv", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "new_episode:95396" {
+		t.Errorf("collapse_id = %v, want new_episode:95396", opts["collapse_id"])
+	}
+}
+
+func TestNotifyNewContentNoRecipientsIsNoop(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// The only user has opted out, so no push is sent.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (1, 0)")
+
+	client, cap := newNotifierTestGateway(t)
+	n := NewNotifier(database, client, nil)
+
+	n.NotifyNewMovie("The Matrix", 603)
+
+	select {
+	case <-cap.ch:
+		t.Fatal("unexpected notification: no users opted into new_movie")
+	case <-time.After(200 * time.Millisecond):
+		// expected: nothing sent
+	}
 }
