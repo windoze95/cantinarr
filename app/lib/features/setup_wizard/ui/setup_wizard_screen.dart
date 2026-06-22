@@ -17,7 +17,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
       title: 'Welcome to Cantinarr',
       icon: Icons.movie_filter,
       description:
-          'Your personal media companion. Discover movies and TV shows, request them with one tap, and manage your media server — all in one beautiful app.',
+          'Discover movies and TV shows, request them with a tap, and your media server handles the rest — adding them to Radarr or Sonarr automatically.',
     ),
     _SetupStep(
       title: 'Connect TMDB',

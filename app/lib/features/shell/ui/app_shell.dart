@@ -735,15 +735,14 @@ class _AppShellState extends ConsumerState<AppShell>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: AppTheme.accent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 48,
+                    height: 48,
+                    fit: BoxFit.cover,
                   ),
-                  child: const Icon(Icons.movie_filter,
-                      color: AppTheme.accent, size: 28),
                 ),
                 const SizedBox(height: 12),
                 const Text(
@@ -755,7 +754,7 @@ class _AppShellState extends ConsumerState<AppShell>
                   ),
                 ),
                 const Text(
-                  'Your media companion',
+                  'How you doing, you old pirate?',
                   style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
                 ),
               ],
