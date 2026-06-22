@@ -8,11 +8,13 @@ services:
     volumes:
       - ./config:/config
     environment:
-      # Self-hosted push gateway (https://push.julian.codes). Push notifications
-      # are enabled only when BOTH the URL and the API key are set. The API key
-      # is a secret — put it in a .env file next to this compose file:
-      #     CANTINARR_PUSH_API_KEY=pgk_...
-      # .env is gitignored; see .env.example. Leave the key unset to disable push.
+      # Self-hosted push gateway (https://push.julian.codes). Setting the URL
+      # ENABLES push: with no API key, the server auto-enrolls on first start and
+      # persists its own key in the DB (./config volume) — zero manual setup.
+      # Set CANTINARR_PUSH_API_KEY (in a gitignored .env) only to override; set
+      # CANTINARR_PUSH_ENROLL_TOKEN only if the gateway uses gated enrollment.
+      # Blank the URL to disable push entirely.
       - CANTINARR_PUSH_GATEWAY_URL=https://push.julian.codes
       - CANTINARR_PUSH_API_KEY=${CANTINARR_PUSH_API_KEY:-}
+      - CANTINARR_PUSH_ENROLL_TOKEN=${CANTINARR_PUSH_ENROLL_TOKEN:-}
     restart: unless-stopped

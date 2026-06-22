@@ -36,6 +36,51 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
+// EnrollResponse is the gateway's reply to POST /v1/enroll.
+type EnrollResponse struct {
+	TenantID string `json:"tenant_id"`
+	APIKey   string `json:"api_key"`
+}
+
+// Enroll self-registers a new tenant with the gateway and returns its tenant id
+// and per-app API key. It uses no bearer auth (enrollment is unauthenticated);
+// when the gateway runs in gated mode, pass the shared enrollToken (sent as the
+// X-Enroll-Token header). Used for zero-config auto-enrollment on first start.
+func Enroll(baseURL, name, enrollToken string) (EnrollResponse, error) {
+	var out EnrollResponse
+	body, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		return out, fmt.Errorf("marshal enroll body: %w", err)
+	}
+	url := strings.TrimRight(baseURL, "/") + "/v1/enroll"
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if enrollToken != "" {
+		req.Header.Set("X-Enroll-Token", enrollToken)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return out, fmt.Errorf("enroll: gateway returned status %d: %s",
+			resp.StatusCode, strings.TrimSpace(string(snippet)))
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return out, fmt.Errorf("decode enroll response: %w", err)
+	}
+	if out.APIKey == "" {
+		return out, fmt.Errorf("enroll: gateway returned an empty api_key")
+	}
+	return out, nil
+}
+
 // RegisterDevice upserts a device token with the gateway. The gateway defaults
 // the APNs topic from the tenant, so no topic is sent.
 func (c *Client) RegisterDevice(ctx context.Context, userID int64, deviceID, platform, token string) error {

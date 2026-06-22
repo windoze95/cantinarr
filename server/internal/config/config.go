@@ -28,10 +28,15 @@ type Config struct {
 	// AndroidPackageName and AndroidCertFingerprints are served in assetlinks.json.
 	AndroidPackageName      string
 	AndroidCertFingerprints []string
-	// PushGatewayURL and PushAPIKey configure the self-hosted push gateway. When
-	// either is empty, push notifications are disabled.
-	PushGatewayURL string
-	PushAPIKey     string
+	// PushGatewayURL enables the self-hosted push gateway when set (empty =
+	// disabled). PushAPIKey is an explicit per-app key and is optional: if it is
+	// empty while the gateway URL is set, the server auto-enrolls with the gateway
+	// on first start and persists the issued key (see ensurePushAPIKey). An
+	// explicit key always wins. PushEnrollToken is sent as X-Enroll-Token during
+	// auto-enroll, needed only when the gateway uses gated enrollment.
+	PushGatewayURL  string
+	PushAPIKey      string
+	PushEnrollToken string
 }
 
 func Load() (*Config, error) {
@@ -52,6 +57,7 @@ func Load() (*Config, error) {
 		AndroidPackageName: os.Getenv("CANTINARR_ANDROID_PACKAGE_NAME"),
 		PushGatewayURL:     strings.TrimRight(os.Getenv("CANTINARR_PUSH_GATEWAY_URL"), "/"),
 		PushAPIKey:         os.Getenv("CANTINARR_PUSH_API_KEY"),
+		PushEnrollToken:    os.Getenv("CANTINARR_PUSH_ENROLL_TOKEN"),
 	}
 
 	if cfg.ServerName == "" {
