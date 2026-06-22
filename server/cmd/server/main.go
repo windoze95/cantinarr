@@ -62,7 +62,7 @@ func main() {
 	if err := secrets.VerifyKeyIdentity(database, cipher); err != nil {
 		log.Fatalf("Encryption key check failed: %v", err)
 	}
-	secretSettings := append([]string{"jwt_secret"}, credentials.AllKeys...)
+	secretSettings := append([]string{"jwt_secret", "push_api_key"}, credentials.AllKeys...)
 	if n, err := secrets.EncryptExisting(database, cipher, secretSettings); err != nil {
 		log.Fatalf("Failed to encrypt existing secrets: %v", err)
 	} else if n > 0 {
@@ -111,11 +111,19 @@ func main() {
 	// still built (nil-safe) so wiring stays uniform. Built before the hub and
 	// request service so both can dispatch pushes.
 	var pushClient *push.Client
-	if cfg.PushGatewayURL != "" && cfg.PushAPIKey != "" {
-		pushClient = push.NewClient(cfg.PushGatewayURL, cfg.PushAPIKey)
-		log.Printf("Push notifications enabled via %s", cfg.PushGatewayURL)
+	if cfg.PushGatewayURL != "" {
+		// Resolve the gateway key: explicit env key, else a key auto-enrolled on a
+		// previous start, else self-enroll now. Failure is non-fatal — push stays
+		// off this run and is retried on the next start.
+		apiKey, err := ensurePushAPIKey(database, cipher, cfg)
+		if err != nil {
+			log.Printf("Push notifications disabled: %v", err)
+		} else {
+			pushClient = push.NewClient(cfg.PushGatewayURL, apiKey)
+			log.Printf("Push notifications enabled via %s", cfg.PushGatewayURL)
+		}
 	} else {
-		log.Println("Push notifications disabled (CANTINARR_PUSH_GATEWAY_URL/CANTINARR_PUSH_API_KEY unset)")
+		log.Println("Push notifications disabled (CANTINARR_PUSH_GATEWAY_URL unset)")
 	}
 	logger := slog.Default()
 	pushHandler := push.NewHandler(database, pushClient, logger)
@@ -200,4 +208,40 @@ func ensureJWTSecret(database *sql.DB, cipher *secrets.Cipher) (string, error) {
 
 	log.Println("Generated and persisted JWT secret")
 	return secret, nil
+}
+
+// ensurePushAPIKey resolves the push-gateway API key when a gateway URL is set:
+// an explicit CANTINARR_PUSH_API_KEY wins; otherwise a key auto-enrolled on a
+// previous start is loaded from the settings table; otherwise the server self-
+// enrolls with the gateway once and persists the issued key (encrypted at rest,
+// like the JWT secret). This gives self-hosters push with zero manual key
+// handling. To force re-enrollment, delete the 'push_api_key' settings row.
+func ensurePushAPIKey(database *sql.DB, cipher *secrets.Cipher, cfg *config.Config) (string, error) {
+	if cfg.PushAPIKey != "" {
+		return cfg.PushAPIKey, nil // explicit operator override; not persisted
+	}
+
+	var stored string
+	if err := database.QueryRow("SELECT value FROM settings WHERE key = 'push_api_key'").Scan(&stored); err == nil {
+		return cipher.Decrypt(stored)
+	}
+
+	// No key yet: self-enroll with the gateway and persist the issued key.
+	name := cfg.ServerName
+	if name == "" {
+		name = "Cantinarr"
+	}
+	res, err := push.Enroll(cfg.PushGatewayURL, name, cfg.PushEnrollToken)
+	if err != nil {
+		return "", fmt.Errorf("auto-enroll with push gateway: %w", err)
+	}
+	enc, err := cipher.Encrypt(res.APIKey)
+	if err != nil {
+		return "", fmt.Errorf("encrypt push key: %w", err)
+	}
+	if _, err := database.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES ('push_api_key', ?)", enc); err != nil {
+		return "", fmt.Errorf("persist push key: %w", err)
+	}
+	log.Printf("Auto-enrolled with push gateway %s (tenant %s); key persisted", cfg.PushGatewayURL, res.TenantID)
+	return res.APIKey, nil
 }
