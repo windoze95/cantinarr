@@ -3,6 +3,7 @@ package remediation
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"sync"
 	"testing"
@@ -33,6 +34,7 @@ type fakeToolHost struct {
 	mu               sync.Mutex
 	executeToolNames []string // every name passed to ExecuteTool, in order
 	concludeCalled   bool
+	proposeCalled    bool
 }
 
 func (f *fakeToolHost) ToolsByName(names []string) []mcp.Tool {
@@ -50,7 +52,7 @@ func (f *fakeToolHost) ExecuteTool(ctx context.Context, name string, input json.
 	return &mcp.ToolResult{Text: "ok: " + name}, nil
 }
 
-func (f *fakeToolHost) ExecuteAgentTool(ctx context.Context, name string, input json.RawMessage, issueID int64) (*mcp.AgentToolResult, error) {
+func (f *fakeToolHost) ExecuteAgentTool(ctx context.Context, name string, input json.RawMessage, issueID int64, toolUseID string) (*mcp.AgentToolResult, error) {
 	switch name {
 	case mcp.ToolPostIssueMessage:
 		return &mcp.AgentToolResult{Text: "posted"}, nil
@@ -62,6 +64,14 @@ func (f *fakeToolHost) ExecuteAgentTool(ctx context.Context, name string, input 
 		// IssueStore. The Runner injects the real Service for that side effect, so
 		// here we only signal Concluded.
 		return &mcp.AgentToolResult{Text: "concluded", Concluded: true, Status: mcp.ConcludeResolved}, nil
+	case mcp.ToolProposeAction:
+		f.mu.Lock()
+		f.proposeCalled = true
+		f.mu.Unlock()
+		// Mirror the real tool's park signal so the Runner exits the loop. The real
+		// proposal row is written by the Service's ProposeAction in integration
+		// tests; this fake only drives the Runner's park behavior.
+		return &mcp.AgentToolResult{Text: "Proposal #1 recorded; awaiting admin approval.", Parked: true}, nil
 	}
 	return &mcp.AgentToolResult{Text: "noop"}, nil
 }
@@ -130,14 +140,7 @@ func newTestRunner(t *testing.T, host toolHost, script *scriptedTurn) (*Runner, 
 		t.Fatalf("set settings: %v", err)
 	}
 
-	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x42}, 32))
-	if err != nil {
-		t.Fatalf("cipher: %v", err)
-	}
-	creds := credentials.NewRegistry(database, cipher)
-	if err := creds.SetCredential(credentials.AIKeyCredentialKey(credentials.AIProviderAnthropic), "fake-key"); err != nil {
-		t.Fatalf("set credential: %v", err)
-	}
+	creds := newFakeCreds(t, database)
 
 	// Seed a user issue to investigate.
 	res, err := database.Exec(
@@ -290,6 +293,21 @@ func TestRunnerMaxStepsGivesUp(t *testing.T) {
 }
 
 // --- test helpers ---
+
+// newFakeCreds builds a credentials registry over the given DB with a fake
+// Anthropic key set, so the Runner's resolveTurn succeeds without real secrets.
+func newFakeCreds(t *testing.T, database *sql.DB) *credentials.Registry {
+	t.Helper()
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x42}, 32))
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	creds := credentials.NewRegistry(database, cipher)
+	if err := creds.SetCredential(credentials.AIKeyCredentialKey(credentials.AIProviderAnthropic), "fake-key"); err != nil {
+		t.Fatalf("set credential: %v", err)
+	}
+	return creds
+}
 
 func isMutating(name string) bool {
 	for _, m := range mutatingTools {

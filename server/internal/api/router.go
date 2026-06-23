@@ -158,12 +158,19 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/users/{userID}/request-settings", requestHandler.GetUserSettings)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/users/{userID}/request-settings", requestHandler.UpdateUserSettings)
 
-			// AI remediation: issue queue + dismissal + global settings (Wave 1;
-			// the agent itself lands in later waves).
+			// AI remediation: issue queue + dismissal + global settings (Wave 1).
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/issues", remediationHandler.ListAdmin)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/dismiss", remediationHandler.Dismiss)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/remediation-settings", remediationHandler.GetSettings)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Put("/remediation-settings", remediationHandler.UpdateSettings)
+
+			// AI remediation: agent-action approval queue + run audit (Wave 3 —
+			// propose→approve→execute). Approve replays a stored proposal exactly
+			// once; deny resumes the investigation.
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-actions", remediationHandler.ListActions)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-actions/{id}/approve", remediationHandler.ApproveAction)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-actions/{id}/deny", remediationHandler.DenyAction)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-runs/{id}", remediationHandler.GetRun)
 		})
 
 		// Config route (authenticated)

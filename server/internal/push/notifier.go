@@ -84,6 +84,8 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		n.notifyRequestPending(client, data)
 	case CategoryIssueCreated:
 		n.notifyIssueCreated(client, data)
+	case CategoryAgentActionPending:
+		n.notifyAgentActionPending(client, data)
 	}
 }
 
@@ -133,6 +135,30 @@ func (n *Notifier) notifyIssueCreated(client *Client, data map[string]interface{
 		opts.Badge = &count
 	}
 	n.sendWithOptions(client, recipients, "New problem reported", "Someone reported a problem with their media", out, opts)
+}
+
+// notifyAgentActionPending pushes "the AI proposed a fix, approve it" to opted-in
+// admins. The body is a FIXED template — the agent's rationale and any release
+// name are UNTRUSTED and never placed on the lock screen; issue_id (for tap deep-
+// linking) and the pending-count badge ride along as structured fields only.
+func (n *Notifier) notifyAgentActionPending(client *Client, data map[string]interface{}) {
+	recipients, err := n.prefs.usersOptedInto(CategoryAgentActionPending)
+	if err != nil {
+		n.logger.Error("push: resolve agent_action_pending recipients", "err", err)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	out := map[string]any{"type": CategoryAgentActionPending}
+	if v, ok := data["issue_id"]; ok {
+		out["issue_id"] = v
+	}
+	var opts SendOptions
+	if count, ok := intval(data["pending_count"]); ok {
+		opts.Badge = &count
+	}
+	n.sendWithOptions(client, recipients, "A fix needs your approval", "The assistant proposed a fix for a problem and needs you to approve it", out, opts)
 }
 
 // NotifyNewMovie pushes a "movie became available" alert to every user opted

@@ -101,7 +101,8 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     request_pending  INTEGER NOT NULL DEFAULT 1,
     new_movie        INTEGER NOT NULL DEFAULT 1,
     new_episode      INTEGER NOT NULL DEFAULT 1,
-    issue_created    INTEGER NOT NULL DEFAULT 1
+    issue_created    INTEGER NOT NULL DEFAULT 1,
+    agent_action_pending INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS connect_tokens (
@@ -355,6 +356,9 @@ func Open(dbPath string) (*sql.DB, error) {
 		// AI remediation: admins are notified of new issues by default (on),
 		// matching request_pending. New on existing databases.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN issue_created INTEGER NOT NULL DEFAULT 1"},
+		// AI remediation (Wave 3): admins are notified when the agent proposes a
+		// fix that needs approval, on by default. New on existing databases.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN agent_action_pending INTEGER NOT NULL DEFAULT 1"},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {
