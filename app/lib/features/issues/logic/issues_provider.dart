@@ -96,3 +96,87 @@ class OpenIssuesNotifier extends StateNotifier<int> {
 /// Open-issue count for the signed-in admin (0 for non-admins).
 final openIssuesProvider =
     StateNotifierProvider<OpenIssuesNotifier, int>(OpenIssuesNotifier.new);
+
+/// Tracks the number of agent-proposed actions awaiting an admin decision, for
+/// admins only.
+///
+/// Drives the drawer "Agent fixes" entry badge. It is seeded from REST, kept
+/// live by `agent_action_pending` (which carries the authoritative
+/// `pending_count`) and `agent_action_decided` (which doesn't, so we refetch),
+/// and refreshed after an approve/deny. Non-admin accounts always report 0 and
+/// never call the admin-only endpoint. Mirrors `PendingApprovalsNotifier`.
+class PendingAgentActionsNotifier extends StateNotifier<int> {
+  PendingAgentActionsNotifier(this._ref) : super(0) {
+    _service = _ref.read(issuesServiceProvider);
+    _bind();
+    _ref.listen(authProvider, (_, __) => _bind());
+  }
+
+  final Ref _ref;
+  late final IssuesService _service;
+  StreamSubscription<WsEvent>? _sub;
+  bool _isAdmin = false;
+
+  void _bind() {
+    final admin = _ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    if (admin == _isAdmin) return;
+    _isAdmin = admin;
+    _sub?.cancel();
+    _sub = null;
+    if (!admin) {
+      _set(0);
+      return;
+    }
+    refresh();
+    _sub = _ref
+        .read(realtimeEventsProvider)
+        .where((e) =>
+            e.type == 'agent_action_pending' ||
+            e.type == 'agent_action_decided')
+        .listen(_onPing);
+  }
+
+  /// Applies the authoritative `pending_count` an `agent_action_pending` event
+  /// carries; otherwise (a decided event, or a ping without the count) refetch.
+  void _onPing(WsEvent event) {
+    final raw = event.data['pending_count'];
+    if (raw is num) {
+      _set(raw.toInt());
+    } else {
+      refresh();
+    }
+  }
+
+  /// Re-reads the proposed-action queue depth. Call after an approve/deny so
+  /// the badge reflects the resolved queue immediately.
+  Future<void> refresh() async {
+    if (!_isAdmin) return;
+    try {
+      final actions = await _service.listPendingActions();
+      _set(actions.length);
+    } catch (_) {
+      // Best-effort: keep the last known count on a transient failure (covers
+      // the pre-merge 404 too).
+    }
+  }
+
+  /// Sets the count directly from a caller that already holds the authoritative
+  /// queue (the agent-actions screen), avoiding a redundant fetch.
+  void setCount(int value) => _set(value);
+
+  void _set(int value) {
+    state = value < 0 ? 0 : value;
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+}
+
+/// Proposed-action queue depth for the signed-in admin (0 for non-admins).
+final pendingAgentActionsProvider =
+    StateNotifierProvider<PendingAgentActionsNotifier, int>(
+  PendingAgentActionsNotifier.new,
+);
