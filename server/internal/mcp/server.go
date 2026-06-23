@@ -195,6 +195,16 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.removeQueueItem(input)
 	case "get_disk_space":
 		return s.getDiskSpace()
+	case "diagnose_queue":
+		return s.diagnoseQueue(input)
+	case "get_manual_import_candidates":
+		return s.getManualImportCandidates(input)
+	case "execute_manual_import":
+		return s.executeManualImport(input)
+	case "remediate_queue_item":
+		return s.remediateQueueItem(input)
+	case "rescan_media":
+		return s.rescanMedia(input)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}

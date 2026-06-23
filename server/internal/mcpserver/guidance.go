@@ -113,10 +113,11 @@ Workflow:
 
 Workflow:
 1. Use get_queue for current downloads, get_history for recent activity, get_calendar for upcoming releases, and get_library for library state.
-2. For missing media or failed downloads, trigger_search can start an automatic search.
-3. Use search_releases before grab_release when the user wants a particular quality, release group, or manual selection.
-4. Only call destructive tools such as grab_release or remove_queue_item when the user explicitly asks for that action. Summarize consequences before or after the call.
-5. If a tool says it is disabled or not permitted for this role, say so plainly and do not retry the same action.`, issue)
+2. For stuck, failed, or stuck-importing downloads, run diagnose_queue first (the Import Doctor). It explains each problem and lists the fix to apply by queue_id: get_manual_import_candidates then execute_manual_import (force a correct file in), remediate_queue_item (remove / blocklist_search / change_category), or rescan_media (after fixing disk/path/permissions).
+3. For missing media or failed downloads, trigger_search can start an automatic search.
+4. Use search_releases before grab_release when the user wants a particular quality, release group, or manual selection.
+5. Only call destructive tools such as grab_release, remove_queue_item, execute_manual_import, or remediate_queue_item when the user explicitly asks for that action. Summarize consequences before or after the call.
+6. If a tool says it is disabled or not permitted for this role, say so plainly and do not retry the same action.`, issue)
 			return promptResult("Admin download triage", text), nil
 		},
 	)
@@ -203,7 +204,8 @@ Tools may be hidden or disabled by RBAC and administrator settings. If a tool re
 - Use get_library for library state, missing, or unmonitored items.
 - Use get_history for recent grabs, imports, and failures.
 - If a library item is missing or a download failed, trigger_search can start a new automatic search.
+- For downloads that are stuck, failed, or stuck importing, run diagnose_queue (the Import Doctor) to explain the problem and the right fix, then use get_manual_import_candidates / execute_manual_import to force a correct file in, remediate_queue_item to remove / blocklist+search / change category, or rescan_media after fixing a disk, path, or permissions issue.
 - For manual control, call search_releases before grab_release so the user can choose quality, release group, or a specific release.
-- Only call destructive or state-changing tools such as grab_release and remove_queue_item when the user explicitly asks for that action.
+- Only call destructive or state-changing tools such as grab_release, remove_queue_item, execute_manual_import, and remediate_queue_item when the user explicitly asks for that action.
 `, role, toolList)
 }

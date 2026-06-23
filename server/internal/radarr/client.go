@@ -265,6 +265,7 @@ type DetailedQueueItem struct {
 	Size                  float64 `json:"size"`
 	Sizeleft              float64 `json:"sizeleft"`
 	DownloadClient        string  `json:"downloadClient"`
+	DownloadID            string  `json:"downloadId"`
 	Indexer               string  `json:"indexer"`
 	Protocol              string  `json:"protocol"`
 	ErrorMessage          string  `json:"errorMessage"`
@@ -306,9 +307,14 @@ func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
 	return all, nil
 }
 
-// RemoveQueueItem removes an item from the download queue.
-func (c *Client) RemoveQueueItem(id int, removeFromClient, blocklist bool) error {
-	path := fmt.Sprintf("/api/v3/queue/%d?removeFromClient=%t&blocklist=%t", id, removeFromClient, blocklist)
+// RemoveQueueItem removes an item from the download queue. removeFromClient
+// also deletes the download from the client; blocklist prevents the release
+// from being grabbed again; skipRedownload suppresses the automatic re-search
+// that a blocklist would otherwise trigger; changeCategory hands the download
+// to the client's post-import category instead of removing it.
+func (c *Client) RemoveQueueItem(id int, removeFromClient, blocklist, skipRedownload, changeCategory bool) error {
+	path := fmt.Sprintf("/api/v3/queue/%d?removeFromClient=%t&blocklist=%t&skipRedownload=%t&changeCategory=%t",
+		id, removeFromClient, blocklist, skipRedownload, changeCategory)
 	if err := c.do("DELETE", path, nil, nil); err != nil {
 		return fmt.Errorf("radarr remove queue item: %w", err)
 	}
@@ -453,4 +459,97 @@ func (c *Client) GetDiskSpace() ([]DiskSpace, error) {
 		return nil, fmt.Errorf("radarr diskspace: %w", err)
 	}
 	return disks, nil
+}
+
+// ManualImportRejection is a single reason Radarr would not auto-import a file,
+// plus whether the rejection is permanent (a force import will likely still
+// fail) or temporary.
+type ManualImportRejection struct {
+	Reason string `json:"reason"`
+	Type   string `json:"type"`
+}
+
+// ManualImportCandidate is a file Radarr found for a download, as returned by
+// GET /manualimport. Quality and Languages are kept as raw JSON so they can be
+// round-tripped verbatim back into the ManualImport command (modeling and
+// re-serializing them risks losing fields Radarr requires).
+type ManualImportCandidate struct {
+	ID           int                     `json:"id"`
+	Path         string                  `json:"path"`
+	FolderName   string                  `json:"folderName"`
+	Name         string                  `json:"name"`
+	Size         int64                   `json:"size"`
+	MovieID      int                     `json:"-"`
+	Quality      json.RawMessage         `json:"quality"`
+	Languages    json.RawMessage         `json:"languages"`
+	ReleaseGroup string                  `json:"releaseGroup"`
+	DownloadID   string                  `json:"downloadId"`
+	IndexerFlags int                     `json:"indexerFlags"`
+	Rejections   []ManualImportRejection `json:"rejections"`
+}
+
+// UnmarshalJSON decodes a manual-import candidate, lifting the nested movie id
+// (Radarr nests it under "movie": {"id": ...}) into MovieID.
+func (m *ManualImportCandidate) UnmarshalJSON(data []byte) error {
+	type alias ManualImportCandidate
+	aux := struct {
+		*alias
+		Movie *struct {
+			ID int `json:"id"`
+		} `json:"movie"`
+	}{alias: (*alias)(m)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Movie != nil {
+		m.MovieID = aux.Movie.ID
+	}
+	return nil
+}
+
+// GetManualImportCandidates lists the files Radarr found for a download,
+// including any rejection reasons, without importing existing files.
+func (c *Client) GetManualImportCandidates(downloadID string) ([]ManualImportCandidate, error) {
+	var candidates []ManualImportCandidate
+	path := fmt.Sprintf("/api/v3/manualimport?downloadId=%s&filterExistingFiles=false", url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &candidates); err != nil {
+		return nil, fmt.Errorf("radarr manual import candidates: %w", err)
+	}
+	return candidates, nil
+}
+
+// ManualImportFile is one file to import via the ManualImport command. Quality
+// and Languages are passed back verbatim from the candidate.
+type ManualImportFile struct {
+	Path         string          `json:"path"`
+	FolderName   string          `json:"folderName,omitempty"`
+	MovieID      int             `json:"movieId"`
+	Quality      json.RawMessage `json:"quality,omitempty"`
+	Languages    json.RawMessage `json:"languages,omitempty"`
+	ReleaseGroup string          `json:"releaseGroup,omitempty"`
+	DownloadID   string          `json:"downloadId,omitempty"`
+	IndexerFlags int             `json:"indexerFlags,omitempty"`
+}
+
+// ExecuteManualImport tells Radarr to import the given files. importMode must be
+// lowercase (move/copy/auto); the PascalCase form is silently ignored by the
+// ManualImport command.
+func (c *Client) ExecuteManualImport(files []ManualImportFile, importMode string) error {
+	payload := map[string]any{
+		"name":       "ManualImport",
+		"importMode": importMode,
+		"files":      files,
+	}
+	return c.triggerCommand(payload)
+}
+
+// ProcessMonitoredDownloads asks Radarr to run its import pass over the
+// download client now (the pass that normally runs on a timer).
+func (c *Client) ProcessMonitoredDownloads() error {
+	return c.triggerCommand(map[string]any{"name": "ProcessMonitoredDownloads"})
+}
+
+// RescanMovie rescans the files on disk for a movie.
+func (c *Client) RescanMovie(movieID int) error {
+	return c.triggerCommand(map[string]any{"name": "RescanMovie", "movieIds": []int{movieID}})
 }

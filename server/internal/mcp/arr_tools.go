@@ -205,6 +205,114 @@ var arrToolDefinitions = []Tool{
 			"properties": map[string]interface{}{},
 		},
 	},
+	{
+		Name:        "diagnose_queue",
+		Permission:  auth.PermissionArrRead,
+		Description: "Import Doctor: scan the Radarr/Sonarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, change_category, rescan). Use this before the fix tools. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"movie", "tv", "all"},
+					"description": "Which queue to diagnose (default: all)",
+				},
+			},
+		},
+	},
+	{
+		Name:        "get_manual_import_candidates",
+		AdminOnly:   true,
+		Permission:  auth.PermissionDownloadsManage,
+		Description: "List the files Radarr/Sonarr found for a stuck download (from its queue_id), including each file's mapped movie/series/episodes and any rejection reasons that blocked an automatic import. Use this to understand why an item won't import before calling execute_manual_import. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"queue_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The queue item id, from get_queue or diagnose_queue",
+				},
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"movie", "tv"},
+					"description": "Whether the queue item is a movie or TV download",
+				},
+			},
+			"required": []string{"queue_id", "media_type"},
+		},
+	},
+	{
+		Name:        "execute_manual_import",
+		AdminOnly:   true,
+		Permission:  auth.PermissionDownloadsManage,
+		Description: "Force the files of a stuck download (from its queue_id) into the library via a manual import. By default skips candidates with permanent rejections; set force=true to import them anyway. Choose this when an item is blocked but the file is actually correct. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"queue_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The queue item id, from get_queue or diagnose_queue",
+				},
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"movie", "tv"},
+					"description": "Whether the queue item is a movie or TV download",
+				},
+				"force": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Import even candidates with permanent rejections (default: false)",
+				},
+			},
+			"required": []string{"queue_id", "media_type"},
+		},
+	},
+	{
+		Name:        "remediate_queue_item",
+		AdminOnly:   true,
+		Permission:  auth.PermissionDownloadsManage,
+		Description: "Apply a one-click fix to a stuck queue item: remove (delete it and the download), blocklist_search (remove, blocklist the release, and start a fresh search for a different one), or change_category (hand the download to the client's post-import category for tools like Unpackerr). Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"queue_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The queue item id, from get_queue or diagnose_queue",
+				},
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"movie", "tv"},
+					"description": "Whether the queue item is a movie or TV download",
+				},
+				"action": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"remove", "blocklist_search", "change_category"},
+					"description": "The remediation to apply",
+				},
+			},
+			"required": []string{"queue_id", "media_type", "action"},
+		},
+	},
+	{
+		Name:        "rescan_media",
+		AdminOnly:   true,
+		Permission:  auth.PermissionArrSearch,
+		Description: "Rescan the files on disk for a library movie or series, then run the import pass. Use this after fixing a disk-space, path, or permissions problem so Radarr/Sonarr picks up files that are already there. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"tmdb_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The TMDB ID of the movie or TV show",
+				},
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"movie", "tv"},
+					"description": "Whether this is a movie or TV show",
+				},
+			},
+			"required": []string{"tmdb_id", "media_type"},
+		},
+	},
 }
 
 func init() {
@@ -990,7 +1098,7 @@ func (s *ToolServer) removeQueueItem(input json.RawMessage) (*ToolResult, error)
 		if radarrClient == nil {
 			return &ToolResult{Text: "Radarr is not configured."}, nil
 		}
-		if err := radarrClient.RemoveQueueItem(params.QueueID, true, params.Blocklist); err != nil {
+		if err := radarrClient.RemoveQueueItem(params.QueueID, true, params.Blocklist, false, false); err != nil {
 			return nil, err
 		}
 	case "tv":
@@ -998,7 +1106,7 @@ func (s *ToolServer) removeQueueItem(input json.RawMessage) (*ToolResult, error)
 		if sonarrClient == nil {
 			return &ToolResult{Text: "Sonarr is not configured."}, nil
 		}
-		if err := sonarrClient.RemoveQueueItem(params.QueueID, true, params.Blocklist); err != nil {
+		if err := sonarrClient.RemoveQueueItem(params.QueueID, true, params.Blocklist, false, false); err != nil {
 			return nil, err
 		}
 	default:
