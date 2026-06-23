@@ -6,6 +6,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
+import 'import_doctor_sheet.dart';
 import 'widgets/queue_item_card.dart';
 
 /// Bottom sheet for a single episode: status, overview, the active download (if
@@ -63,6 +64,23 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
       if (!mounted) return;
       setState(() => _loadingHistory = false);
     }
+  }
+
+  void _openDoctor() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => ImportDoctorSheet(
+        instanceId: widget.instanceId,
+        item: widget.queueItem!,
+        // The Doctor closes itself; close this episode sheet too (returning
+        // true) so the season list refreshes with the result.
+        onChanged: () {
+          if (mounted) Navigator.of(context).pop(true);
+        },
+      ),
+    );
   }
 
   ({String label, Color color}) get _shortStatus {
@@ -146,6 +164,8 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
                   child: QueueItemCard(
                     item: widget.queueItem!,
                     primaryTitle: widget.queueItem!.title,
+                    onShowIssues:
+                        widget.queueItem!.hasIssues ? _openDoctor : null,
                   ),
                 ),
               ],
