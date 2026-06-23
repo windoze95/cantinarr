@@ -37,6 +37,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   late final MediaDetailNotifier _detailNotifier;
   late final RequestNotifier _requestNotifier;
 
+  /// Anchors the "Seasons" section so "Request More" can scroll the user to the
+  /// per-season picker.
+  final GlobalKey _seasonsKey = GlobalKey();
+
   @override
   void initState() {
     super.initState();
@@ -260,9 +264,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                     // fed by live availability from the request notifier.
                     if (state.seasons.isNotEmpty) ...[
                       const SizedBox(height: 24),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text('Seasons',
+                      Padding(
+                        key: _seasonsKey,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: const Text('Seasons',
                             style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
@@ -306,6 +311,17 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     );
   }
 
+  void _scrollToSeasons() {
+    final ctx = _seasonsKey.currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeInOut,
+      alignment: 0.05,
+    );
+  }
+
   void _openTrailer(String key) {
     final url = Uri.parse('https://www.youtube.com/watch?v=$key');
     launchUrl(url, mode: LaunchMode.externalApplication);
@@ -316,6 +332,17 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// the one-tap experience.
   Future<void> _onRequest() async {
     final s = _detailNotifier.state;
+
+    // A partially-available show: "Request More" drops the user into the
+    // per-season picker below rather than the coarse season-scope sheet, so
+    // they can choose exactly which missing seasons to add.
+    if (widget.mediaType == MediaType.tv &&
+        _requestNotifier.state.status == RequestStatus.partial &&
+        s.seasons.isNotEmpty) {
+      _scrollToSeasons();
+      return;
+    }
+
     final title = s.title;
     final tvdbId = s.tvDetail?.externalIds?.tvdbId;
 

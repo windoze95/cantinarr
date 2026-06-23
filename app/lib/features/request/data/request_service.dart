@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import '../../discover/data/tmdb_models.dart';
 
@@ -47,6 +49,28 @@ class SeasonScope {
 
   static String labelFor(String value) =>
       choices.firstWhere((c) => c.value == value, orElse: () => choices.last).label;
+
+  /// True when [value] holds an explicit JSON season list (e.g. "[3,5]")
+  /// rather than a coarse scope keyword. The backend stores per-season requests
+  /// this way in the season_scope column.
+  static bool isExplicitList(String value) => value.startsWith('[');
+
+  /// A human label for any stored season_scope value: coarse scopes map to
+  /// their choice label; an explicit list renders as "Season 3" / "Seasons 3, 5".
+  static String describe(String value) {
+    if (isExplicitList(value)) {
+      try {
+        final list = (jsonDecode(value) as List).map((e) => e as int).toList()
+          ..sort();
+        if (list.isEmpty) return labelFor(value);
+        if (list.length == 1) return 'Season ${list.first}';
+        return 'Seasons ${list.join(', ')}';
+      } catch (_) {
+        return value;
+      }
+    }
+    return labelFor(value);
+  }
 }
 
 /// One season's availability, mirroring the backend `SeasonStatus` payload
