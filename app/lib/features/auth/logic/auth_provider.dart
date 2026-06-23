@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/device/device_identity.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
 import '../../../core/storage/secure_storage.dart';
@@ -283,8 +283,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
     try {
       final normalizedUrl = _normalizeUrl(serverUrl);
-      final authResp =
-          await _authService.setup(normalizedUrl, username, password);
+      final identity = await ref.read(deviceIdentityProvider).resolve();
+      final authResp = await _authService.setup(normalizedUrl, username,
+          password, identity.displayName, identity.hardwareId);
       final config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
 
@@ -330,8 +331,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
     try {
       final normalizedUrl = _normalizeUrl(serverUrl);
-      final authResp =
-          await _authService.login(normalizedUrl, username, password);
+      final identity = await ref.read(deviceIdentityProvider).resolve();
+      final authResp = await _authService.login(normalizedUrl, username,
+          password, identity.displayName, identity.hardwareId);
       final config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
 
@@ -372,9 +374,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
     try {
       final normalizedUrl = _normalizeUrl(serverUrl);
-      final deviceName = _getDeviceName();
+      final identity = await ref.read(deviceIdentityProvider).resolve();
       final authResp = await _authService.redeemConnectToken(
-          normalizedUrl, token, deviceName);
+          normalizedUrl, token, identity.displayName, identity.hardwareId);
       final config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
 
@@ -583,10 +585,13 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       final assertionResponse = await PasskeyService.get(beginResp.options);
 
       // Step 3: Complete login on server
+      final identity = await ref.read(deviceIdentityProvider).resolve();
       final authResp = await _authService.finishPasskeyLogin(
         normalizedUrl,
         beginResp.sessionId,
         assertionResponse,
+        identity.displayName,
+        identity.hardwareId,
       );
 
       final config =
@@ -748,17 +753,6 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       normalized = normalized.substring(0, normalized.length - 1);
     }
     return normalized;
-  }
-
-  String _getDeviceName() {
-    try {
-      if (Platform.isIOS) return 'iPhone';
-      if (Platform.isAndroid) return 'Android';
-      if (Platform.isMacOS) return 'Mac';
-      if (Platform.isWindows) return 'Windows';
-      if (Platform.isLinux) return 'Linux';
-    } catch (_) {}
-    return 'Unknown Device';
   }
 
   String _parseError(Object e) {

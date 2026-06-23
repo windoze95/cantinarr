@@ -67,7 +67,7 @@ func TestListUsers_ReportsDeviceAndInviteState(t *testing.T) {
 	svc := setupTestService(t)
 
 	// admin logs in -> gets an active device
-	if _, err := svc.Login("admin", "testpass123"); err != nil {
+	if _, err := svc.Login("admin", "testpass123", "", ""); err != nil {
 		t.Fatalf("login: %v", err)
 	}
 
@@ -174,7 +174,7 @@ func TestDeleteUser_RemovesUserAndDevices(t *testing.T) {
 		t.Fatalf("create connect token: %v", err)
 	}
 	token := tok.Link[strings.Index(tok.Link, "token=")+len("token=") : strings.Index(tok.Link, "&server=")]
-	resp, err := svc.RedeemConnectToken(token, "Guest Phone")
+	resp, err := svc.RedeemConnectToken(token, "Guest Phone", "")
 	if err != nil {
 		t.Fatalf("redeem token: %v", err)
 	}
@@ -195,6 +195,117 @@ func TestDeleteUser_RemovesUserAndDevices(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatal("devices were not cleaned up")
+	}
+}
+
+func TestRedeemConnectToken_DedupesByHardwareID(t *testing.T) {
+	svc := setupTestService(t)
+
+	// Redeems a fresh connect link for "guest" and returns the device id. Each
+	// connect token is single-use, so a reconnect needs a brand-new link.
+	redeem := func(name, hardwareID string) string {
+		t.Helper()
+		tok, err := svc.CreateConnectToken(1, "guest", "http://example.com")
+		if err != nil {
+			t.Fatalf("create connect token: %v", err)
+		}
+		token := tok.Link[strings.Index(tok.Link, "token=")+len("token=") : strings.Index(tok.Link, "&server=")]
+		resp, err := svc.RedeemConnectToken(token, name, hardwareID)
+		if err != nil {
+			t.Fatalf("redeem token: %v", err)
+		}
+		return resp.DeviceID
+	}
+
+	guestDeviceCount := func() int {
+		t.Helper()
+		devices, err := svc.ListDevices()
+		if err != nil {
+			t.Fatalf("list devices: %v", err)
+		}
+		n := 0
+		for _, d := range devices {
+			if d.Username == "guest" {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Same physical device reconnects (new link, same hardware id): the row is
+	// reused and its name refreshed to the newest — not duplicated.
+	first := redeem("iPhone 15", "HW-AAA")
+	second := redeem("Apple iPhone 16 Pro Max", "HW-AAA")
+	if first != second {
+		t.Fatalf("reconnect should reuse device id %q, got %q", first, second)
+	}
+	if n := guestDeviceCount(); n != 1 {
+		t.Fatalf("expected 1 deduped device, got %d", n)
+	}
+
+	devices, _ := svc.ListDevices()
+	for _, d := range devices {
+		if d.ID == first && d.DeviceName != "Apple iPhone 16 Pro Max" {
+			t.Fatalf("device name should refresh to newest, got %q", d.DeviceName)
+		}
+	}
+
+	// A different physical device (distinct hardware id) is its own row.
+	redeem("Apple iPad Pro 11", "HW-BBB")
+	if n := guestDeviceCount(); n != 2 {
+		t.Fatalf("expected 2 devices after a distinct hardware id, got %d", n)
+	}
+
+	// No hardware id (e.g. web) never dedupes: each redeem is its own row.
+	redeem("Chrome on macOS", "")
+	redeem("Chrome on macOS", "")
+	if n := guestDeviceCount(); n != 4 {
+		t.Fatalf("expected 4 devices (2 deduped + 2 web), got %d", n)
+	}
+}
+
+func TestLogin_DedupesDeviceByHardwareID(t *testing.T) {
+	svc := setupTestService(t)
+
+	adminDeviceCount := func() int {
+		t.Helper()
+		devices, err := svc.ListDevices()
+		if err != nil {
+			t.Fatalf("list devices: %v", err)
+		}
+		n := 0
+		for _, d := range devices {
+			if d.Username == "admin" {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Password login routes through the same shared upsert as connect links, so
+	// re-logging in on the same physical device reuses its row (newest name)
+	// instead of stacking duplicates.
+	first, err := svc.Login("admin", "testpass123", "Yana's Mac", "HW-MAC")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	second, err := svc.Login("admin", "testpass123", "Apple MacBook Pro", "HW-MAC")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if first.DeviceID != second.DeviceID {
+		t.Fatalf("same-hardware login should reuse device %q, got %q", first.DeviceID, second.DeviceID)
+	}
+	if n := adminDeviceCount(); n != 1 {
+		t.Fatalf("expected 1 deduped admin device, got %d", n)
+	}
+
+	// A login with no hardware id (older client) never dedupes.
+	if _, err := svc.Login("admin", "testpass123", "Admin", ""); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if n := adminDeviceCount(); n != 2 {
+		t.Fatalf("expected 2 admin devices after a no-hardware login, got %d", n)
 	}
 }
 
@@ -241,7 +352,7 @@ func TestSetPassword_EnablesLoginForInviteUser(t *testing.T) {
 	enableMethod(t, svc, guestID, &enabled, nil)
 
 	// Before setting a password, neither password login path should work.
-	if _, err := svc.Login("guest", "hunter2!"); err == nil {
+	if _, err := svc.Login("guest", "hunter2!", "", ""); err == nil {
 		t.Fatal("login should fail before a password is set")
 	}
 	if _, err := svc.AuthenticatePassword("guest", "hunter2!"); err == nil {
@@ -253,7 +364,7 @@ func TestSetPassword_EnablesLoginForInviteUser(t *testing.T) {
 	}
 
 	// Both the app login and the MCP/OAuth password path should now succeed.
-	if _, err := svc.Login("guest", "hunter2!"); err != nil {
+	if _, err := svc.Login("guest", "hunter2!", "", ""); err != nil {
 		t.Fatalf("login after set password: %v", err)
 	}
 	if _, err := svc.AuthenticatePassword("guest", "hunter2!"); err != nil {
@@ -314,10 +425,10 @@ func TestSetPassword_ReplacesExisting(t *testing.T) {
 	}
 
 	// The old password must stop working, the new one must work.
-	if _, err := svc.Login("admin", "testpass123"); err == nil {
+	if _, err := svc.Login("admin", "testpass123", "", ""); err == nil {
 		t.Fatal("old password should no longer authenticate")
 	}
-	if _, err := svc.Login("admin", "rotated-secret"); err != nil {
+	if _, err := svc.Login("admin", "rotated-secret", "", ""); err != nil {
 		t.Fatalf("login with rotated password: %v", err)
 	}
 }
@@ -349,13 +460,13 @@ func TestSetUserAuthMethods_EnableAndRevokePassword(t *testing.T) {
 	if err := svc.SetPassword(guestID, "hunter2!"); err != nil {
 		t.Fatalf("set password after enable: %v", err)
 	}
-	if _, err := svc.Login("guest", "hunter2!"); err != nil {
+	if _, err := svc.Login("guest", "hunter2!", "", ""); err != nil {
 		t.Fatalf("login after enable+set: %v", err)
 	}
 
 	// Disabling is a real revoke: it clears the password and blocks login.
 	enableMethod(t, svc, guestID, &disabled, nil)
-	if _, err := svc.Login("guest", "hunter2!"); err == nil {
+	if _, err := svc.Login("guest", "hunter2!", "", ""); err == nil {
 		t.Fatal("login should fail after password disabled")
 	}
 	var hash string
@@ -458,7 +569,7 @@ func TestHashToken_Deterministic(t *testing.T) {
 func TestRefreshRotation_FirstUseSucceeds(t *testing.T) {
 	svc := setupTestService(t)
 
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -475,7 +586,7 @@ func TestRefreshRotation_FirstUseSucceeds(t *testing.T) {
 func TestRefreshRotation_ReplayFails(t *testing.T) {
 	svc := setupTestService(t)
 
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -513,7 +624,7 @@ func TestRefreshRotation_ReplayFails(t *testing.T) {
 func TestRefreshRotation_GraceAllowsRetry(t *testing.T) {
 	svc := setupTestService(t)
 
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -532,7 +643,7 @@ func TestRefreshRotation_GraceAllowsRetry(t *testing.T) {
 func TestDeviceRevocation_InvalidatesRefreshTokens(t *testing.T) {
 	svc := setupTestService(t)
 
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}

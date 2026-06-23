@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
     device_name TEXT NOT NULL,
+    hardware_id TEXT NOT NULL DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     revoked_at DATETIME
@@ -228,6 +229,11 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE request_log ADD COLUMN approved_by INTEGER REFERENCES users(id)"},
 		{alter: "ALTER TABLE request_log ADD COLUMN decided_at DATETIME"},
 		{alter: "ALTER TABLE request_log ADD COLUMN deny_reason TEXT"},
+		// Stable per-device hardware id (e.g. iOS identifierForVendor) so a
+		// reconnect from the same physical device updates its existing row
+		// instead of creating a duplicate. Empty for rows created before this
+		// column or by clients that can't provide one (e.g. web).
+		{alter: "ALTER TABLE devices ADD COLUMN hardware_id TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {
