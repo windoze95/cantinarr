@@ -4,6 +4,8 @@ import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/status_pill.dart';
+import '../../auth/logic/auth_provider.dart';
+import '../../issues/ui/report_problem_sheet.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import 'import_doctor_sheet.dart';
@@ -219,11 +221,39 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
                   ),
                 ],
               ),
+              if (_canReport) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ReportProblemButton(
+                    scope: ReportScope.episode(
+                      tmdbId: widget.series.tmdbId ?? 0,
+                      tvdbId: widget.series.tvdbId,
+                      seasonNumber: e.seasonNumber,
+                      episodeNumber: e.episodeNumber,
+                      title: widget.series.title,
+                    ),
+                    // The sheet refreshes the season list by popping true.
+                    onSubmitted: () {
+                      if (mounted) Navigator.of(context).pop(true);
+                    },
+                  ),
+                ),
+              ],
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// Show "Report a problem" only when the server allows it and we have a
+  /// TMDB id to scope the report to.
+  bool get _canReport {
+    final allow = ref.watch(authProvider).valueOrNull?.connection
+            ?.allowReporting ??
+        false;
+    return allow && (widget.series.tmdbId ?? 0) > 0;
   }
 
   Widget _buildHistory() {

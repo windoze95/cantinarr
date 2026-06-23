@@ -15,6 +15,9 @@ import '../features/discover/data/tmdb_models.dart';
 import '../features/downloads/ui/downloads_history_screen.dart';
 import '../features/downloads/ui/downloads_module_shell.dart';
 import '../features/downloads/ui/downloads_queue_screen.dart';
+import '../features/issues/ui/ai_remediation_settings_screen.dart';
+import '../features/issues/ui/issue_thread_screen.dart';
+import '../features/issues/ui/issues_list_screen.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
 import '../features/notifications/ui/notification_preferences_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
@@ -359,6 +362,24 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/approvals',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const PendingRequestsScreen(),
+      ),
+      GoRoute(
+        path: '/issues',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const IssuesListScreen(),
+      ),
+      GoRoute(
+        path: '/issues/:id',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) {
+          final id = int.tryParse(state.pathParameters['id'] ?? '') ?? 0;
+          return IssueThreadScreen(issueId: id);
+        },
+      ),
+      GoRoute(
+        path: '/settings/ai-remediation',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const AiRemediationSettingsScreen(),
       ),
       GoRoute(
         path: '/settings/request-settings',

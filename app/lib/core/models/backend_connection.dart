@@ -37,6 +37,12 @@ class BackendConnection {
   final AvailableServices services;
   final List<ServiceInstance> instances;
 
+  /// Whether the AI-remediation feature is enabled server-side.
+  final bool issuesEnabled;
+
+  /// Whether the user-facing "Report a problem" affordance should be shown.
+  final bool allowReporting;
+
   const BackendConnection({
     required this.serverUrl,
     required this.accessToken,
@@ -44,6 +50,8 @@ class BackendConnection {
     this.serverName,
     this.services = const AvailableServices(),
     this.instances = const [],
+    this.issuesEnabled = false,
+    this.allowReporting = false,
   });
 
   BackendConnection copyWith({
@@ -53,6 +61,8 @@ class BackendConnection {
     String? serverName,
     AvailableServices? services,
     List<ServiceInstance>? instances,
+    bool? issuesEnabled,
+    bool? allowReporting,
   }) =>
       BackendConnection(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -61,6 +71,8 @@ class BackendConnection {
         serverName: serverName ?? this.serverName,
         services: services ?? this.services,
         instances: instances ?? this.instances,
+        issuesEnabled: issuesEnabled ?? this.issuesEnabled,
+        allowReporting: allowReporting ?? this.allowReporting,
       );
 
   /// Get all Radarr instances.

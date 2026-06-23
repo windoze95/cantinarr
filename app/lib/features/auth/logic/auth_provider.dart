@@ -135,6 +135,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
                     ServiceInstance.fromJson(e as Map<String, dynamic>))
                 .toList() ??
             const [],
+        issuesEnabled: meta['issues_enabled'] as bool? ?? false,
+        allowReporting: meta['allow_reporting'] as bool? ?? false,
       );
       return AuthState(
           connection: connection, user: user, isReconnecting: true);
@@ -170,6 +172,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         serverName: config.serverName,
         services: config.services,
         instances: config.instances,
+        issuesEnabled: config.issuesEnabled,
+        allowReporting: config.allowReporting,
       );
       await _persistSession(connection, authResp.user);
       _stopReconnect();
@@ -216,6 +220,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         serverName: config.serverName,
         services: config.services,
         instances: config.instances,
+        issuesEnabled: config.issuesEnabled,
+        allowReporting: config.allowReporting,
       );
       await _persistSession(connection, authResp.user);
       _registerForPush();
@@ -303,6 +309,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         serverName: config.serverName,
         services: config.services,
         instances: config.instances,
+        issuesEnabled: config.issuesEnabled,
+        allowReporting: config.allowReporting,
       );
 
       await _persistSession(connection, authResp.user);
@@ -351,6 +359,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         serverName: config.serverName,
         services: config.services,
         instances: config.instances,
+        issuesEnabled: config.issuesEnabled,
+        allowReporting: config.allowReporting,
       );
 
       final offerPasskey =
@@ -394,6 +404,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         serverName: config.serverName,
         services: config.services,
         instances: config.instances,
+        issuesEnabled: config.issuesEnabled,
+        allowReporting: config.allowReporting,
       );
 
       await _persistSession(connection, authResp.user);
@@ -431,6 +443,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       serverName: config.serverName,
       services: config.services,
       instances: config.instances,
+      issuesEnabled: config.issuesEnabled,
+      allowReporting: config.allowReporting,
     );
     final user = current.user;
     if (user != null) await _persistSession(updatedConn, user);
@@ -611,6 +625,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         serverName: config.serverName,
         services: config.services,
         instances: config.instances,
+        issuesEnabled: config.issuesEnabled,
+        allowReporting: config.allowReporting,
       );
 
       await _persistSession(connection, authResp.user);
@@ -729,6 +745,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         'server_name': conn.serverName,
         'services': conn.services.toJson(),
         'instances': conn.instances.map((i) => i.toJson()).toList(),
+        'issues_enabled': conn.issuesEnabled,
+        'allow_reporting': conn.allowReporting,
       }),
     );
   }

@@ -184,6 +184,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/request-settings'),
             ),
             _SettingsTile(
+              icon: Icons.auto_fix_high_outlined,
+              title: 'AI Remediation',
+              subtitle: 'Problem reporting and auto-fix assistant',
+              onTap: () => context.push('/settings/ai-remediation'),
+            ),
+            _SettingsTile(
               icon: Icons.people_outline,
               title: 'Users',
               subtitle: 'Manage accounts, roles, and invites',
