@@ -179,6 +179,17 @@ func main() {
 	toolServer := mcp.NewToolServer(creds, requestService, registry, bridge)
 	aiHandler := ai.NewHandler(creds, toolServer)
 
+	// Remediation read-only agent (Wave 2). The agent investigates one issue
+	// read-only and posts a diagnosis; it has NO path to mutate the *arr (the
+	// Runner's hardcoded read-tool allow-list is the enforcement boundary). Inject
+	// the remediation write surface into the tool server so the agent-only tools
+	// (post_issue_message / conclude_issue) can record findings, then start a
+	// small bounded worker pool that drains enqueued investigation jobs.
+	toolServer.SetIssueStore(remediationService)
+	remediationProcToken := newProcToken()
+	remediationRunner := remediation.NewRunner(database, remediationService, toolServer, creds, remediationProcToken)
+	remediationService.StartWorkers(ctx, remediationRunner, 2)
+
 	// Discover handler (always created — checks credentials at request time)
 	apiCache := cache.New()
 	defer apiCache.Close()
@@ -192,6 +203,19 @@ func main() {
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+// newProcToken returns a random per-process token stamped on each agent_runs row
+// so a future watchdog can distinguish a run crashed mid-investigation (its token
+// != the current process token) from one parked by design. Best-effort: a random
+// failure falls back to a constant, which only weakens crash detection, not
+// correctness.
+func newProcToken() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "proc"
+	}
+	return hex.EncodeToString(b)
 }
 
 // ensureJWTSecret loads the JWT secret from the settings table, or generates
