@@ -461,6 +461,27 @@ func (c *Client) GetDiskSpace() ([]DiskSpace, error) {
 	return disks, nil
 }
 
+// HealthCheck is one entry from Radarr's system health report: a config-level
+// problem (download client unreachable, remote path mapping, indexers down, no
+// root folder, low disk, etc.). Type is one of ok/notice/warning/error.
+type HealthCheck struct {
+	Source  string `json:"source"`
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	WikiURL string `json:"wikiUrl"`
+}
+
+// GetHealth returns Radarr's current system health checks. These surface
+// config-level root causes (download client down, remote path mapping wrong,
+// indexers unavailable) that per-item queue diagnosis can only guess at.
+func (c *Client) GetHealth() ([]HealthCheck, error) {
+	var checks []HealthCheck
+	if err := c.do("GET", "/api/v3/health", nil, &checks); err != nil {
+		return nil, fmt.Errorf("radarr health: %w", err)
+	}
+	return checks, nil
+}
+
 // ManualImportRejection is a single reason Radarr would not auto-import a file,
 // plus whether the rejection is permanent (a force import will likely still
 // fail) or temporary.

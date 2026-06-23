@@ -81,6 +81,20 @@ void main() {
     expect(d.actions, contains(DoctorAction.blocklistSearch));
   });
 
+  test('errorMessage is classified even when status is still ok', () {
+    // Real Sonarr 4.0.16: a qBittorrent magnet error surfaced on an item whose
+    // trackedDownloadStatus was "ok", not "error". It must not fall through to
+    // the generic "Import blocked" fallback.
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'ok',
+      state: 'downloading',
+      error: 'qBittorrent cannot resolve magnet link with DHT disabled',
+    ));
+    expect(d.severity, DoctorSeverity.error);
+    expect(d.problem, "Download client can't fetch the magnet");
+    expect(d.actions, contains(DoctorAction.blocklistSearch));
+  });
+
   test('not-an-upgrade is info with remove option', () {
     final d = diagnoseSonarrQueueItem(_item(
       status: 'warning',
@@ -101,5 +115,147 @@ void main() {
     expect(d.severity, DoctorSeverity.warning);
     expect(d.problem, 'Import blocked');
     expect(d.actions, contains(DoctorAction.manualImport));
+  });
+
+  // --- Import Doctor v2: deepened catalog (verified Servarr strings) ---
+
+  test('not a Custom Format upgrade is info with remove', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [
+        _msg('Not a Custom Format upgrade for existing episode file(s). '
+            'New: [WEB] (0) do not improve on Existing: [WEB] (5)'),
+      ],
+    ));
+    expect(d.severity, DoctorSeverity.info);
+    expect(d.problem, 'Not a Custom Format upgrade');
+    expect(d.actions, contains(DoctorAction.remove));
+  });
+
+  test('unable to parse file → manual import / blocklist', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [_msg('Unable to parse file')],
+    ));
+    expect(d.problem, "Couldn't parse the file");
+    expect(d.actions, contains(DoctorAction.manualImport));
+    expect(d.actions, contains(DoctorAction.blocklistSearch));
+  });
+
+  test('invalid video file (AppleDouble) → manual import', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [_msg("Invalid video file, filename starts with '._'")],
+    ));
+    expect(d.problem, 'Invalid video file');
+    expect(d.actions.first, DoctorAction.manualImport);
+  });
+
+  test('unsupported extension beats invalid-video rule', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [_msg("Invalid video file, unsupported extension: '.mkv.exe'")],
+    ));
+    expect(d.problem, 'Unsupported file type');
+    expect(d.actions.first, DoctorAction.blocklistSearch);
+  });
+
+  test('one or more episodes not imported → manual import / blocklist', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [
+        _msg('One or more episodes expected in this release were not '
+            'imported or missing from the release'),
+      ],
+    ));
+    expect(d.problem, "Release contents don't match");
+    expect(d.actions, contains(DoctorAction.manualImport));
+    expect(d.actions, contains(DoctorAction.blocklistSearch));
+  });
+
+  test('episode not found in the grabbed release → manual import', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [_msg('Episode 5 was not found in the grabbed release')],
+    ));
+    expect(d.problem, "Release contents don't match");
+    expect(d.actions, contains(DoctorAction.manualImport));
+  });
+
+  test('invalid season or episode → manual import', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [_msg('Invalid season or episode')],
+    ));
+    expect(d.problem, 'Episode mapping problem');
+    expect(d.actions, contains(DoctorAction.manualImport));
+  });
+
+  test('episode file already imported is covered by already-imported rule', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [_msg('Episode file already imported at 1/2/2024 3:04 PM')],
+    ));
+    expect(d.problem, 'Already imported');
+    expect(d.actions, contains(DoctorAction.remove));
+  });
+
+  test('matched to series by ID is a warning needing manual import', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [
+        _msg('Found matching series via grab history, but release was matched '
+            'to series by ID. Automatic import is not possible. See the FAQ '
+            'for details.'),
+      ],
+    ));
+    expect(d.severity, DoctorSeverity.warning);
+    expect(d.problem, 'Matched by ID — needs manual import');
+    expect(d.actions, contains(DoctorAction.manualImport));
+  });
+
+  test('unmonitored series is info with no fix', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [_msg('Series is not monitored')],
+    ));
+    expect(d.severity, DoctorSeverity.info);
+    expect(d.problem, 'Unmonitored');
+    expect(d.actions, isEmpty);
+  });
+
+  test('remote path mapping beats generic path rules', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'warning',
+      state: 'importBlocked',
+      messages: [
+        _msg('[/data/incomplete/Some.Release] is not a valid local path. '
+            'You may need a Remote Path Mapping.'),
+      ],
+    ));
+    expect(d.severity, DoctorSeverity.error);
+    expect(d.problem, 'Remote path mapping');
+    expect(d.actions, contains(DoctorAction.rescan));
+  });
+
+  test('download client unreachable is a config error with no per-item fix', () {
+    final d = diagnoseSonarrQueueItem(_item(
+      status: 'error',
+      state: 'downloading',
+      error: 'Unable to communicate with qBittorrent.',
+    ));
+    expect(d.severity, DoctorSeverity.error);
+    expect(d.problem, 'Download client unreachable');
+    expect(d.actions, isEmpty);
   });
 }

@@ -10,7 +10,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 │                                                         │
 │  ┌──────────┐  ┌──────────┐  ┌───────────────────────┐  │
 │  │ Auth/JWT │  │ Request  │  │ AI Chat               │  │
-│  │          │  │ Service  │  │ + 25 MCP Tools        │  │
+│  │          │  │ Service  │  │ + 26 MCP Tools        │  │
 │  └──────────┘  └────┬─────┘  └───────────────────────┘  │
 │                     │                                    │
 │  ┌──────────────────┼──────────────────────┐             │
@@ -44,9 +44,9 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **TMDB + Trakt for discovery** -- The best metadata, images, and trending data. Sonarr's TVDB dependency is invisible.
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
 - **AI assistant** -- "What should I watch tonight?" Bring Anthropic, OpenAI, or Gemini; the assistant searches your library, checks availability, and can request for you. Admins can also manage the server conversationally: check the queue, kick off searches, grab a specific release from the indexers, or diagnose and fix stuck imports.
-- **MCP server** -- The same 25 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, with MCP OAuth discovery, browser login, dynamic client registration, and persistent rotating refresh tokens. Every tool can be toggled on/off per server from Settings > AI Tools.
+- **MCP server** -- The same 26 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, with MCP OAuth discovery, browser login, dynamic client registration, and persistent rotating refresh tokens. Every tool can be toggled on/off per server from Settings > AI Tools.
 - **Deep *arr control** -- SABnzbd, qBittorrent, NZBGet, and Transmission modules with live queue management (pause, resume, remove, speeds, real-time push updates), plus drill-down Radarr/Sonarr control: open a series into its **seasons and individual episodes** (or a movie's detail) for per-item download progress, quality/size, history, and messages, with per-episode/-movie **interactive release search** -- alongside the queue, history, wanted/missing, and calendar.
-- **Import Doctor** -- when a download is stuck, Cantinarr explains *why* in plain English (sample file, un-extracted archive, unconfirmed TheXEM mapping, "not an upgrade", stalled torrent, permissions...) and offers **one-click fixes** with full transparency: manual/force import (with the candidate files shown), remove + blocklist + re-search, hand-off to a tool like Unpackerr, or rescan. The same diagnosis backs the AI assistant and an MCP tool.
+- **Import Doctor** -- when a download is stuck, Cantinarr explains *why* in plain English (sample file, un-extracted archive, unconfirmed TheXEM mapping, "not an upgrade", not a Custom Format upgrade, unparseable/invalid file, remote-path-mapping or download-client problems, stalled torrent, permissions...) and offers **one-click fixes** with full transparency: manual/force import (with the candidate files shown), remove + blocklist + re-search, hand-off to a tool like Unpackerr, or rescan. Over MCP it also prints the exact next tool call per item and exposes a `get_arr_health` tool to confirm config-level root causes. The same diagnosis backs the AI assistant and the MCP tools.
 - **Flexible requests** -- request a whole title in one tap, or pick exactly which **seasons** you want; partially-available shows surface per-season availability and a one-tap path to request the rest.
 - **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
 - **Secrets encrypted at rest** -- arr API keys, download-client passwords, and external credentials are AES-256-GCM encrypted in the database.
@@ -89,7 +89,7 @@ cantinarr/
 │   │   ├── config/         # Server configuration (port, name)
 │   │   ├── credentials/   # API credential management + client registry
 │   │   ├── db/             # SQLite with WAL mode
-│   │   ├── mcp/            # 25 AI tools + per-tool toggles
+│   │   ├── mcp/            # 26 AI tools + per-tool toggles
 │   │   ├── downloads/      # Unified SABnzbd/qBittorrent queue API
 │   │   ├── mcpserver/      # MCP Streamable HTTP endpoint
 │   │   ├── proxy/          # Arr admin reverse proxy

@@ -87,6 +87,205 @@ func TestDiagnose(t *testing.T) {
 			wantActions: []string{ActionRemove, ActionForceImport},
 		},
 		{
+			// Verified Sonarr UpgradeSpecification.cs string.
+			name: "not a custom format upgrade",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages: msg("Not a Custom Format upgrade for existing episode file(s). " +
+					"New: [WEB] (0) do not improve on Existing: [WEB] (5)"),
+			},
+			wantProblem: "Not a Custom Format upgrade",
+			wantSev:     SeverityInfo,
+			wantActions: []string{ActionRemove, ActionForceImport},
+		},
+		{
+			// Verified Radarr UpgradeSpecification.cs string (movie variant).
+			name: "not a custom format upgrade (movie)",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages: msg("Not a Custom Format upgrade for existing movie file(s). " +
+					"New: [WEB] (0) do not improve on Existing: [WEB] (5)"),
+			},
+			wantProblem: "Not a Custom Format upgrade",
+			wantSev:     SeverityInfo,
+			wantActions: []string{ActionRemove, ActionForceImport},
+		},
+		{
+			// Verified ImportDecisionMaker.cs string (both services).
+			name: "unable to parse file",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Unable to parse file"),
+			},
+			wantProblem: "Couldn't parse the file",
+			wantSev:     SeverityWarning,
+			wantActions: []string{ActionManualImport, ActionBlocklistSearch},
+		},
+		{
+			// Verified DownloadedEpisodesImportService.cs / DownloadedMovieImportService.cs.
+			name: "invalid video file applefork",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Invalid video file, filename starts with '._'"),
+			},
+			wantProblem: "Invalid video file",
+			wantSev:     SeverityWarning,
+			wantActions: []string{ActionManualImport, ActionBlocklistSearch},
+		},
+		{
+			// Verified unsupported-extension string; must beat the broader
+			// "invalid video file" rule (both share that prefix).
+			name: "unsupported extension beats invalid video file",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Invalid video file, unsupported extension: '.mkv.exe'"),
+			},
+			wantProblem: "Unsupported file type",
+			wantSev:     SeverityWarning,
+			wantActions: []string{ActionBlocklistSearch, ActionManualImport},
+		},
+		{
+			// Verified against a real Sonarr 4.0.16 instance.
+			name: "one or more episodes not imported",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("One or more episodes expected in this release were not imported or missing from the release"),
+			},
+			wantProblem: "Release contents don't match",
+			wantSev:     SeverityWarning,
+			wantActions: []string{ActionManualImport, ActionBlocklistSearch},
+		},
+		{
+			// Verified Radarr CompletedDownloadService.cs status message; the
+			// "expected in this release were not imported" substring matches it.
+			name: "one or more movies not imported",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("One or more movies expected in this release were not imported or missing"),
+			},
+			wantProblem: "Release contents don't match",
+			wantSev:     SeverityWarning,
+			wantActions: []string{ActionManualImport, ActionBlocklistSearch},
+		},
+		{
+			// Real Sonarr 4.0.16 line that co-occurs with the partial-import
+			// message above.
+			name: "episode was not found in the grabbed release",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Episode 5 was not found in the grabbed release"),
+			},
+			wantProblem: "Release contents don't match",
+			wantSev:     SeverityWarning,
+			wantActions: []string{ActionManualImport, ActionBlocklistSearch},
+		},
+		{
+			name: "invalid season or episode mapping",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Invalid season or episode"),
+			},
+			wantProblem: "Episode mapping problem",
+			wantSev:     SeverityWarning,
+			wantActions: []string{ActionManualImport},
+		},
+		{
+			// Verified AlreadyImportedSpecification.cs (Sonarr) — covered by the
+			// existing "already imported" rule.
+			name: "episode file already imported at",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Episode file already imported at 1/2/2024 3:04 PM"),
+			},
+			wantProblem: "Already imported",
+			wantSev:     SeverityInfo,
+			wantActions: []string{ActionRemove},
+		},
+		{
+			// Verified Radarr AlreadyImportedSpecification.cs.
+			name: "movie file already imported at",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Movie file already imported at 1/2/2024 3:04 PM"),
+			},
+			wantProblem: "Already imported",
+			wantSev:     SeverityInfo,
+			wantActions: []string{ActionRemove},
+		},
+		{
+			// Verified Sonarr CompletedDownloadService.cs warn message.
+			name: "matched to series by id",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible. See the FAQ for details."),
+			},
+			wantProblem: "Matched by ID — needs manual import",
+			wantSev:     SeverityWarning,
+			wantActions: []string{ActionManualImport},
+		},
+		{
+			// Verified Radarr CompletedDownloadService.cs warn message.
+			name: "matched to movie by id",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Found matching movie via grab history, but release was matched to movie by ID. Manual Import required."),
+			},
+			wantProblem: "Matched by ID — needs manual import",
+			wantSev:     SeverityWarning,
+			wantActions: []string{ActionManualImport},
+		},
+		{
+			// Verified MonitoredEpisodeSpecification.cs (Sonarr).
+			name: "series is not monitored",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("Series is not monitored"),
+			},
+			wantProblem: "Unmonitored",
+			wantSev:     SeverityInfo,
+			wantActions: []string{ActionNone},
+		},
+		{
+			// Verified CompletedDownloadService.cs remote-path-mapping string.
+			// Must beat the broad "does not exist"/"permission" path rules.
+			name: "remote path mapping not a valid local path",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "warning",
+				TrackedDownloadState:  "importBlocked",
+				StatusMessages:        msg("[/data/incomplete/Some.Release] is not a valid local path. You may need a Remote Path Mapping."),
+			},
+			wantProblem: "Remote path mapping",
+			wantSev:     SeverityError,
+			wantActions: []string{ActionRescan},
+		},
+		{
+			// Verified DownloadClientCheck en.json string. Surfaces on an error
+			// status; nothing to fix per item (config-level).
+			name: "download client unreachable",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "error",
+				TrackedDownloadState:  "downloading",
+				ErrorMessage:          "Unable to communicate with qBittorrent.",
+			},
+			wantProblem: "Download client unreachable",
+			wantSev:     SeverityError,
+			wantActions: []string{ActionNone},
+		},
+		{
 			name: "dangerous executable wins over everything",
 			sig: QueueSignal{
 				TrackedDownloadStatus: "warning",
@@ -121,6 +320,22 @@ func TestDiagnose(t *testing.T) {
 				Protocol:              "torrent",
 			},
 			wantProblem: "Download client error",
+			wantSev:     SeverityError,
+			wantActions: []string{ActionBlocklistSearch},
+		},
+		{
+			// Real Sonarr 4.0.16: the client error surfaced on an item whose
+			// trackedDownloadStatus was still "ok" (not "error"). The classifier
+			// must inspect errorMessage regardless of status so this is not
+			// misclassified to the generic "Import blocked" fallback.
+			name: "magnet cannot resolve with status still ok",
+			sig: QueueSignal{
+				TrackedDownloadStatus: "ok",
+				TrackedDownloadState:  "downloading",
+				ErrorMessage:          "qBittorrent cannot resolve magnet link with DHT disabled",
+				Protocol:              "torrent",
+			},
+			wantProblem: "Download client can't fetch the magnet",
 			wantSev:     SeverityError,
 			wantActions: []string{ActionBlocklistSearch},
 		},

@@ -206,9 +206,24 @@ var arrToolDefinitions = []Tool{
 		},
 	},
 	{
+		Name:        "get_arr_health",
+		Permission:  auth.PermissionArrRead,
+		Description: "Check Radarr/Sonarr system health for config-level problems (download client unreachable, remote path mapping, indexers down, disk, no root folder). Use this when diagnose_queue shows path/permission/client errors to confirm the root cause that per-item queue diagnosis can only guess at. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"movie", "tv", "all"},
+					"description": "Which service's health to fetch (default: all)",
+				},
+			},
+		},
+	},
+	{
 		Name:        "diagnose_queue",
 		Permission:  auth.PermissionArrRead,
-		Description: "Import Doctor: scan the Radarr/Sonarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, change_category, rescan). Use this before the fix tools. Admin only",
+		Description: "Import Doctor: scan the Radarr/Sonarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

@@ -203,7 +203,7 @@ Movies skip bridging entirely -- Radarr natively supports `term=tmdb:{id}`.
 
 ### MCP Tools
 
-The same 25 tools power both the in-app AI assistant and the external MCP endpoint. Tools marked admin require an admin account; every tool can be disabled from Settings > AI Tools:
+The same 26 tools power both the in-app AI assistant and the external MCP endpoint. Tools marked admin require an admin account; every tool can be disabled from Settings > AI Tools:
 
 | Tool | Description |
 |---|---|
@@ -227,7 +227,8 @@ The same 25 tools power both the in-app AI assistant and the external MCP endpoi
 | `grab_release` | Download a specific release (admin) |
 | `remove_queue_item` | Remove/blocklist a queue item (admin) |
 | `get_disk_space` | Disk space across instances (admin) |
-| `diagnose_queue` | Import Doctor: explain stuck/failed/blocked queue items and the fix to apply (admin) |
+| `get_arr_health` | Radarr/Sonarr system health: download client, remote path mapping, indexers, disk, root folder (admin) |
+| `diagnose_queue` | Import Doctor: explain stuck/failed/blocked queue items, print the exact next tool call, and the fix to apply (admin) |
 | `get_manual_import_candidates` | List a stuck download's files, mappings, and rejection reasons (admin) |
 | `execute_manual_import` | Force a download's files into the library via manual import (admin) |
 | `remediate_queue_item` | One-click queue fix: remove, blocklist+search, or change category (admin) |
