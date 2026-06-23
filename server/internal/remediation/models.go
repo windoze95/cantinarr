@@ -50,6 +50,11 @@ const (
 	AuthorSystem = "system"
 )
 
+// ResolutionUserUnresponsive is the closing note set on an awaiting_user issue
+// that the reply-TTL sweep closes because the reporter never answered the
+// agent's clarifying question within the window (W4).
+const ResolutionUserUnresponsive = "user_unresponsive"
+
 // Action lifecycle status values (agent_actions.status). Used by later waves;
 // defined now so the table vocabulary is stable.
 const (

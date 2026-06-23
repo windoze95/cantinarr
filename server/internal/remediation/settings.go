@@ -45,6 +45,7 @@ type Settings struct {
 	DailyRunCap            int    `json:"daily_run_cap"`             // max runs/day
 	DailyCostCeilingMicros int    `json:"daily_cost_ceiling_micros"` // global cost ceiling/day (millionths USD)
 	CircuitBreakerGiveups  int    `json:"circuit_breaker_giveups"`   // consecutive auto give-ups -> auto-dispatch off
+	MaxUserWaitHours       int    `json:"max_user_wait_hours"`       // W4: reply-TTL — close an awaiting_user issue with no reply within this window
 }
 
 // Defaults returns the built-in remediation settings. Provider and Model are
@@ -66,6 +67,7 @@ func Defaults() Settings {
 		DailyRunCap:            50,
 		DailyCostCeilingMicros: 5000000, // ~$5/day, global
 		CircuitBreakerGiveups:  5,
+		MaxUserWaitHours:       72, // W4: 3 days for a reporter to answer before wont_fix(user_unresponsive)
 	}
 }
 
@@ -109,6 +111,9 @@ func (g *Settings) normalize() {
 	}
 	if g.CircuitBreakerGiveups <= 0 {
 		g.CircuitBreakerGiveups = d.CircuitBreakerGiveups
+	}
+	if g.MaxUserWaitHours <= 0 {
+		g.MaxUserWaitHours = d.MaxUserWaitHours
 	}
 }
 

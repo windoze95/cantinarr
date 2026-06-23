@@ -221,6 +221,104 @@ func replaceToolResult(history ai.Transcript, toolUseID, outcome string) bool {
 	return false
 }
 
+// askReporterToolName is the agent-only tool whose result a reporter reply
+// answers. Kept as a literal (mirroring this file's "propose_action" usage) so
+// the resume helpers don't pull internal/mcp into the resume path.
+const askReporterToolName = "ask_reporter"
+
+// resumeOnReporterReply is the W4 counterpart to appendResumeResult: it feeds a
+// reporter/admin reply back into a run parked on ask_reporter as that tool's
+// tool_result and enqueues a resume. It REPLACES the placeholder ask_reporter
+// tool_result in place (keyed to the ask_reporter tool_use_id recovered from the
+// parked transcript) so the transcript stays well-formed — exactly one
+// tool_result per tool_use, no two consecutive user turns (which a real provider
+// rejects). Best-effort: if no parked run or ask tool_use can be found it only
+// logs (the message is still threaded) rather than crashing. Called from
+// PostReply when an awaiting_user issue receives a reporter/admin reply.
+func (s *Service) resumeOnReporterReply(issueID int64, reply string) {
+	runID, history, ok := s.loadAwaitingUserTranscript(issueID)
+	if !ok {
+		return
+	}
+	askToolUseID, found := findAskReporterToolUse(history)
+	if !found {
+		log.Printf("remediation: no ask_reporter tool_use to resume on issue %d (run %d)", issueID, runID)
+		return
+	}
+
+	// The reporter's reply is UNTRUSTED data fenced into the tool_result the model
+	// reads; it is never interpreted as an instruction. Prefix it so the agent
+	// treats it as the reporter's answer to its question.
+	outcome := "The reporter replied: " + reply
+	if !replaceToolResult(history, askToolUseID, outcome) {
+		// Defensive: the placeholder should exist (the Runner persisted it on park),
+		// but if not, append one so the resume still has a result to react to.
+		history = append(history, ai.TranscriptMessage{
+			Role: ai.RoleUser,
+			Content: []ai.TranscriptBlock{{
+				Type:      ai.BlockToolResult,
+				ToolUseID: askToolUseID,
+				Name:      askReporterToolName,
+				Content:   outcome,
+			}},
+		})
+	}
+	if data, err := json.Marshal(history); err == nil {
+		s.db.Exec("UPDATE agent_runs SET transcript_json = ? WHERE id = ?", string(data), runID)
+	}
+
+	// Mirror to the audit ledger (append-only; not used to rehydrate the transcript).
+	var nextSeq int
+	s.db.QueryRow("SELECT COALESCE(MAX(seq),0)+1 FROM agent_steps WHERE run_id = ?", runID).Scan(&nextSeq)
+	s.db.Exec(
+		`INSERT INTO agent_steps (run_id, issue_id, seq, kind, tool_name, tool_use_id, tool_output)
+		 VALUES (?, ?, ?, 'tool_result', ?, ?, ?)`,
+		runID, issueID, nextSeq, askReporterToolName, askToolUseID, outcome,
+	)
+
+	s.EnqueueResume(issueID)
+}
+
+// loadAwaitingUserTranscript loads the most recent run for an issue parked
+// waiting for a reporter reply (waiting_user) and decodes its transcript.
+func (s *Service) loadAwaitingUserTranscript(issueID int64) (runID int64, history ai.Transcript, ok bool) {
+	var transcriptJSON string
+	err := s.db.QueryRow(
+		"SELECT id, transcript_json FROM agent_runs WHERE issue_id = ? AND status = ? ORDER BY id DESC LIMIT 1",
+		issueID, runStatusWaitingUser,
+	).Scan(&runID, &transcriptJSON)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			log.Printf("remediation: load awaiting_user run for issue %d: %v", issueID, err)
+		}
+		return 0, nil, false
+	}
+	if transcriptJSON != "" {
+		if err := json.Unmarshal([]byte(transcriptJSON), &history); err != nil {
+			log.Printf("remediation: decode awaiting_user transcript (run %d): %v", runID, err)
+			return 0, nil, false
+		}
+	}
+	return runID, history, true
+}
+
+// findAskReporterToolUse returns the tool_use_id of the LAST ask_reporter
+// tool_result block in the transcript (the freshly-parked placeholder). The last
+// one is the currently-awaited question: any earlier ask_reporter result already
+// carries a prior reply, so scanning newest-first keeps the right one even across
+// multiple ask/reply cycles in one run.
+func findAskReporterToolUse(history ai.Transcript) (string, bool) {
+	for i := len(history) - 1; i >= 0; i-- {
+		for j := range history[i].Content {
+			b := history[i].Content[j]
+			if b.Type == ai.BlockToolResult && b.Name == askReporterToolName && b.ToolUseID != "" {
+				return b.ToolUseID, true
+			}
+		}
+	}
+	return "", false
+}
+
 // loadActionForDecision loads the fields ApproveAction/DenyAction need, including
 // tool_use_id and run_id (for the resume) which the list/get DTO also carries.
 func (s *Service) loadActionForDecision(actionID int64) (*AgentAction, error) {

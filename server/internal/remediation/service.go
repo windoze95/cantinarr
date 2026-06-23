@@ -290,10 +290,19 @@ func (s *Service) IssueThread(issueID int64) ([]IssueMessage, error) {
 // authorKind (the handler passes "admin" or "user"); body is UNTRUSTED and
 // stored verbatim. Touching updated_at keeps the issue sorted as recently
 // active. On a reporter/admin reply the other party is notified via the WS hub.
+//
+// W4 resume: when the issue is parked awaiting_user (the agent asked the reporter
+// a clarifying question via ask_reporter) and the reply comes from the reporter
+// or an admin, the reply is fed back into the parked run as the ask_reporter
+// tool_result and a resume is enqueued so the agent continues. A reply from
+// anyone else, or on a non-parked issue, only threads the message.
 func (s *Service) PostReply(issueID int64, authorKind string, authorID int64, body string) error {
-	// Confirm the issue exists (and read its reporter for notification routing).
-	var reporterID sql.NullInt64
-	err := s.db.QueryRow("SELECT reporter_id FROM issues WHERE id = ?", issueID).Scan(&reporterID)
+	// Confirm the issue exists (and read its reporter + status for routing).
+	var (
+		reporterID sql.NullInt64
+		status     string
+	)
+	err := s.db.QueryRow("SELECT reporter_id, status FROM issues WHERE id = ?", issueID).Scan(&reporterID, &status)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("issue not found")
 	}
@@ -318,7 +327,76 @@ func (s *Service) PostReply(issueID int64, authorKind string, authorID int64, bo
 			s.notifier.NotifyAdmins("issue_updated", map[string]interface{}{"issue_id": issueID})
 		}
 	}
+
+	// Resume a parked investigation: a reporter (or admin) reply to an
+	// awaiting_user issue answers the agent's ask_reporter question. Feed the reply
+	// to the run keyed to the ask tool_use, then enqueue the resume. (Defined in
+	// approvals.go alongside the W3 approval-resume helper, which it mirrors.)
+	if status == IssueAwaitingUser && (authorKind == AuthorUser || authorKind == AuthorAdmin) {
+		s.resumeOnReporterReply(issueID, body)
+	}
 	return nil
+}
+
+// SweepStaleAwaitingUser is the W4 reply-TTL: it closes every issue parked
+// awaiting_user whose last activity is older than maxWaitHours (the reporter
+// never answered the agent's clarifying question within the window). Each is
+// moved to wont_fix(user_unresponsive) with a plain-language thread message; the
+// parked run is finalized and the admins are notified (via ConcludeIssue's
+// resolution ping). It runs from a cheap periodic ticker (StartReplyTTLSweeper)
+// and is idempotent — an already-closed issue no longer matches. Returns the
+// number of issues closed (for logging/tests). maxWaitHours<=0 disables the sweep.
+func (s *Service) SweepStaleAwaitingUser(ctx context.Context, maxWaitHours int) (int, error) {
+	if maxWaitHours <= 0 {
+		return 0, nil
+	}
+	// Find awaiting_user issues whose updated_at is older than the window. The ask
+	// message touched updated_at when the question was posted, so the clock starts
+	// from "asked"; a reply would have moved the issue out of awaiting_user.
+	cutoff := fmt.Sprintf("-%d hours", maxWaitHours)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id FROM issues
+		 WHERE status = ? AND closed_at IS NULL
+		   AND updated_at <= datetime('now', ?)`,
+		IssueAwaitingUser, cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("query stale awaiting_user issues: %w", err)
+	}
+	var stale []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan stale issue: %w", err)
+		}
+		stale = append(stale, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	closed := 0
+	for _, id := range stale {
+		// Finalize any run still parked waiting on this reporter so it doesn't sit in
+		// waiting_user forever (best-effort; the run is no longer resumable once the
+		// issue is terminal).
+		s.db.ExecContext(ctx,
+			"UPDATE agent_runs SET status = ?, stop_reason = ?, finished_at = CURRENT_TIMESTAMP WHERE issue_id = ? AND status = ?",
+			runStatusGaveUp, stopUserUnresponsive, id, runStatusWaitingUser,
+		)
+		// Plain-language closing message, then move the issue terminal. ConcludeIssue
+		// stamps closed_at, releases the claim, and notifies the reporter + admins.
+		_ = s.PostIssueMessage(ctx, id, "I didn't hear back, so I'm closing this for now. If it's still a problem, please report it again and I'll take another look.")
+		if err := s.ConcludeIssue(ctx, id, IssueWontFix, ResolutionUserUnresponsive); err != nil {
+			// Already closed (raced with a reply) or gone: skip without failing the
+			// whole sweep.
+			continue
+		}
+		closed++
+	}
+	return closed, nil
 }
 
 // ListIssues returns issues for the admin queue (newest first), optionally

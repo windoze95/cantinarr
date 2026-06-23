@@ -74,6 +74,52 @@ func (s *Service) RemediationEnabled(ctx context.Context) bool {
 	return s.Settings().Enabled
 }
 
+// AskReporter posts a clarifying question to the issue's reporter (an agent-
+// authored thread message) and signals the Runner to PARK the run as
+// awaiting_user until the reporter replies. It is intent/preference ONLY: it can
+// only record a string and never mutates anything (the rule is "the user answers
+// a question; the admin authorizes an action").
+//
+// When the issue has NO reporter (an auto-detected issue), it returns
+// hasReporter=false WITHOUT posting or notifying, so the caller does not park —
+// the agent then decides itself or proposes a fix to the admin.
+//
+// The question body is the model's plain-language text; it is stored verbatim
+// and never interpreted as an instruction. toolUseID is the ask_reporter
+// tool_use.id: the Runner persists a placeholder tool_result keyed to it on park,
+// and PostReply replaces that placeholder with the reply on resume — so the
+// transcript stays well-formed (exactly one tool_result per tool_use).
+func (s *Service) AskReporter(ctx context.Context, issueID int64, question, toolUseID string) (hasReporter bool, err error) {
+	var reporterID sql.NullInt64
+	if qerr := s.db.QueryRowContext(ctx, "SELECT reporter_id FROM issues WHERE id = ?", issueID).Scan(&reporterID); qerr != nil {
+		if qerr == sql.ErrNoRows {
+			return false, fmt.Errorf("issue not found")
+		}
+		return false, fmt.Errorf("load issue: %w", qerr)
+	}
+	if !reporterID.Valid {
+		// Auto-detected / reporter-less issue: do NOT park. The caller returns a
+		// benign "no reporter to ask" result and the agent decides or proposes.
+		return false, nil
+	}
+
+	// Post the question to the thread as an agent message (so the reporter sees it
+	// and can reply), then notify just the reporter. The body is stored verbatim
+	// but is never put on the notification (only the issue id travels).
+	if _, err := s.db.ExecContext(ctx,
+		"INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, ?, NULL, ?)",
+		issueID, AuthorAgent, question,
+	); err != nil {
+		return false, fmt.Errorf("post reporter question: %w", err)
+	}
+	s.db.ExecContext(ctx, "UPDATE issues SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", issueID)
+
+	if s.notifier != nil {
+		s.notifier.NotifyUser(reporterID.Int64, "issue_updated", map[string]interface{}{"issue_id": issueID})
+	}
+	return true, nil
+}
+
 // ProposeAction records a proposed (admin-approvable) arr mutation. It validates
 // params against the kind's schema (rejecting unknown fields / bad values),
 // computes the canonical fingerprint, and conditionally inserts an agent_actions

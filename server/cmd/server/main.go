@@ -189,6 +189,9 @@ func main() {
 	remediationProcToken := newProcToken()
 	remediationRunner := remediation.NewRunner(database, remediationService, toolServer, creds, remediationProcToken)
 	remediationService.StartWorkers(ctx, remediationRunner, 2)
+	// Reply-TTL sweep (Wave 4): periodically close awaiting_user issues whose
+	// reporter never answered the agent's clarifying question within the window.
+	remediationService.StartReplyTTLSweeper(ctx)
 
 	// Discover handler (always created — checks credentials at request time)
 	apiCache := cache.New()
