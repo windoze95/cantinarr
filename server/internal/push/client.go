@@ -106,6 +106,10 @@ type SendOptions struct {
 	// repeat notifications about the same subject coalesce on-device into a
 	// single alert. Empty means no collapsing.
 	CollapseID string
+	// Badge, when non-nil, sets the APNs badge (aps.badge) so the app's
+	// home-screen icon shows the count even while the app is closed. A nil badge
+	// leaves the device's current badge untouched; a pointer to 0 clears it.
+	Badge *int
 }
 
 // SendResponse is the gateway's reply to POST /v1/notifications: per-send
@@ -147,14 +151,18 @@ func (c *Client) SendWithOptions(ctx context.Context, userIDs []int64, title, bo
 	if opts.CollapseID != "" {
 		options["collapse_id"] = opts.CollapseID
 	}
+	notification := map[string]any{
+		"title": title,
+		"body":  body,
+	}
+	if opts.Badge != nil {
+		notification["badge"] = *opts.Badge
+	}
 	payload := map[string]any{
-		"to": map[string]any{"user_ids": ids},
-		"notification": map[string]any{
-			"title": title,
-			"body":  body,
-		},
-		"data":    data,
-		"options": options,
+		"to":           map[string]any{"user_ids": ids},
+		"notification": notification,
+		"data":         data,
+		"options":      options,
 	}
 	var out SendResponse
 	if err := c.do(ctx, http.MethodPost, "/v1/notifications", payload, &out); err != nil {

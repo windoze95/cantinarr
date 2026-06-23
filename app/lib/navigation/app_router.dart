@@ -356,7 +356,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         },
       ),
       GoRoute(
-        path: '/settings/requests',
+        path: '/approvals',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const PendingRequestsScreen(),
       ),

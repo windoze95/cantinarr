@@ -9,6 +9,8 @@ import 'core/providers/realtime_provider.dart';
 import 'core/storage/preferences.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/logic/auth_provider.dart';
+import 'features/notifications/push_service.dart';
+import 'features/request/logic/pending_approvals_provider.dart';
 import 'navigation/app_router.dart';
 
 class CantinarrApp extends ConsumerStatefulWidget {
@@ -30,6 +32,11 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     WidgetsBinding.instance.addObserver(this);
     _appLinks = AppLinks();
     _initDeepLinks();
+    // Reading the push service wires its native tap handler (for warm taps);
+    // once the first frame is up (router exists) route any cold-start tap.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(pushServiceProvider).handleInitialNotification();
+    });
   }
 
   @override
@@ -38,6 +45,9 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     // session immediately instead of waiting for the periodic retry.
     if (state == AppLifecycleState.resumed) {
       ref.read(authProvider.notifier).reconnectNow();
+      // Re-sync the approvals badges in case the queue changed (or another
+      // admin acted) while we were backgrounded. No-op for non-admins.
+      ref.read(pendingApprovalsProvider.notifier).refresh();
     }
   }
 

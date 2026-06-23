@@ -88,7 +88,13 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		return
 	}
 
-	n.send(client, recipients, "New request", title, passthrough(CategoryRequestPending, data))
+	// Set the home-screen icon badge to the live queue depth so admins see the
+	// count even while the app is closed (the gateway maps this to aps.badge).
+	var opts SendOptions
+	if count, ok := intval(data["pending_count"]); ok {
+		opts.Badge = &count
+	}
+	n.sendWithOptions(client, recipients, "New request", title, passthrough(CategoryRequestPending, data), opts)
 }
 
 // NotifyNewMovie pushes a "movie became available" alert to every user opted
@@ -221,4 +227,19 @@ func passthrough(eventType string, data map[string]interface{}) map[string]any {
 func str(v interface{}) string {
 	s, _ := v.(string)
 	return s
+}
+
+// intval reads an int from a map value, tolerating the int/int64/float64 forms a
+// value may take whether it arrived in-process or via a JSON round-trip.
+func intval(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }

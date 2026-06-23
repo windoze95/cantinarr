@@ -227,6 +227,31 @@ func TestNotifyAdminsResolvesAdminIDs(t *testing.T) {
 	}
 }
 
+func TestNotifyAdminsSetsBadgeFromPendingCount(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("request_pending", map[string]interface{}{
+		"tmdb_id":       603,
+		"media_type":    "movie",
+		"title":         "The Matrix",
+		"pending_count": 3,
+	})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	// JSON numbers decode as float64.
+	if got, _ := notif["badge"].(float64); got != 3 {
+		t.Errorf("notification.badge = %v, want 3", notif["badge"])
+	}
+}
+
 func TestNotifyAdminsHonorsOptOutAndRole(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {

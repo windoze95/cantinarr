@@ -4,6 +4,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/request_settings_service.dart';
 import '../../request/data/request_service.dart';
+import '../../request/logic/pending_approvals_provider.dart';
 
 /// Admin approval queue: approve (optionally modifying options) or deny
 /// pending media requests.
@@ -53,6 +54,9 @@ class _PendingRequestsScreenState
         _admin = admin;
         _isLoading = false;
       });
+      // Keep the drawer + app-icon badges in sync with the queue we just loaded
+      // (covers opening the screen and the reload after an approve/deny).
+      ref.read(pendingApprovalsProvider.notifier).setCount(pending.length);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -247,7 +251,7 @@ class _PendingRequestsScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Pending Requests')),
+      appBar: AppBar(title: const Text('Approvals')),
       body: _isLoading
           ? const Center(
               child: CircularProgressIndicator(color: AppTheme.accent))
