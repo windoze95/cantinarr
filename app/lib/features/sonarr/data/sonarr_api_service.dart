@@ -38,9 +38,19 @@ class SonarrApiService {
         .toList();
   }
 
-  Future<List<SonarrEpisode>> getEpisodes(int seriesId) async {
-    final resp = await _dio
-        .get('$_basePath/episode', queryParameters: {'seriesId': seriesId});
+  /// Lists episodes for a series, optionally narrowed to one season. When
+  /// [includeEpisodeFile] is set, each downloaded episode carries its file
+  /// (quality + size) inline — drives the per-episode status line.
+  Future<List<SonarrEpisode>> getEpisodes(
+    int seriesId, {
+    int? seasonNumber,
+    bool includeEpisodeFile = false,
+  }) async {
+    final resp = await _dio.get('$_basePath/episode', queryParameters: {
+      'seriesId': seriesId,
+      if (seasonNumber != null) 'seasonNumber': seasonNumber,
+      if (includeEpisodeFile) 'includeEpisodeFile': true,
+    });
     return (resp.data as List<dynamic>)
         .map((e) => SonarrEpisode.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -218,5 +228,56 @@ class SonarrApiService {
       data: {'guid': guid, 'indexerId': indexerId},
       options: Options(receiveTimeout: const Duration(seconds: 60)),
     );
+  }
+
+  /// Interactive release search for a single episode (per-episode picker).
+  /// Slow (10-60s): indexers are queried live.
+  Future<List<SonarrRelease>> getEpisodeReleases(int episodeId) async {
+    final resp = await _dio.get(
+      '$_basePath/release',
+      queryParameters: {'episodeId': episodeId},
+      options: Options(receiveTimeout: const Duration(seconds: 120)),
+    );
+    return (resp.data as List<dynamic>)
+        .map((r) => SonarrRelease.fromJson(r as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// History for a series (optionally one season), newest first. Uses the
+  /// non-paged /history/series endpoint and includes episode context.
+  Future<List<SonarrHistoryRecord>> getSeriesHistory(
+    int seriesId, {
+    int? seasonNumber,
+  }) async {
+    final resp = await _dio.get('$_basePath/history/series', queryParameters: {
+      'seriesId': seriesId,
+      if (seasonNumber != null) 'seasonNumber': seasonNumber,
+      'includeEpisode': true,
+    });
+    final records = (resp.data as List<dynamic>)
+        .map((r) => SonarrHistoryRecord.fromJson(r as Map<String, dynamic>))
+        .toList();
+    records.sort(
+        (a, b) => (b.date ?? DateTime(0)).compareTo(a.date ?? DateTime(0)));
+    return records;
+  }
+
+  /// Toggles monitoring for a single season. Sonarr requires the whole series
+  /// resource on PUT, so we fetch it raw, flip the one season's flag, and send
+  /// it back unchanged otherwise. Admin only (proxy requires instances:manage).
+  Future<void> setSeasonMonitored(
+    int seriesId,
+    int seasonNumber, {
+    required bool monitored,
+  }) async {
+    final resp = await _dio.get('$_basePath/series/$seriesId');
+    final series = Map<String, dynamic>.from(resp.data as Map);
+    for (final s in (series['seasons'] as List<dynamic>? ?? [])) {
+      final season = s as Map<String, dynamic>;
+      if (season['seasonNumber'] == seasonNumber) {
+        season['monitored'] = monitored;
+      }
+    }
+    await _dio.put('$_basePath/series/$seriesId', data: series);
   }
 }

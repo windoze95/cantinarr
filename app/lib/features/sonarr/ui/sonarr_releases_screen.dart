@@ -17,12 +17,19 @@ class SonarrReleasesScreen extends ConsumerStatefulWidget {
   final int seasonNumber;
   final String seriesTitle;
 
+  /// When set, searches releases for this single episode rather than the whole
+  /// season. [episodeLabel] (e.g. "S22E11") is shown in the header.
+  final int? episodeId;
+  final String? episodeLabel;
+
   const SonarrReleasesScreen({
     super.key,
     required this.instanceId,
     required this.seriesId,
     required this.seasonNumber,
     required this.seriesTitle,
+    this.episodeId,
+    this.episodeLabel,
   });
 
   @override
@@ -59,10 +66,12 @@ class _SonarrReleasesScreenState extends ConsumerState<SonarrReleasesScreen> {
       _error = null;
     });
     try {
-      final releases = await _service.getReleases(
-        seriesId: widget.seriesId,
-        seasonNumber: widget.seasonNumber,
-      );
+      final releases = widget.episodeId != null
+          ? await _service.getEpisodeReleases(widget.episodeId!)
+          : await _service.getReleases(
+              seriesId: widget.seriesId,
+              seasonNumber: widget.seasonNumber,
+            );
       if (!mounted) return;
       setState(() {
         _releases = releases;
@@ -193,7 +202,9 @@ class _SonarrReleasesScreenState extends ConsumerState<SonarrReleasesScreen> {
           children: [
             const Text('Interactive Search'),
             Text(
-              '${widget.seriesTitle} • $_seasonLabel',
+              widget.episodeLabel != null
+                  ? '${widget.seriesTitle} • ${widget.episodeLabel}'
+                  : '${widget.seriesTitle} • $_seasonLabel',
               style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 12,

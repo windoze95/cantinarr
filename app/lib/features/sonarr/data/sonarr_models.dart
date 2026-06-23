@@ -172,27 +172,76 @@ class SonarrSeason {
       };
 }
 
+/// A downloaded episode file: drives the "WEBDL-1080p — 564.60 MB" status line.
+class SonarrEpisodeFile {
+  final int id;
+  final int seriesId;
+  final int seasonNumber;
+  final int size;
+  final String? relativePath;
+  final String? path;
+  final String? releaseGroup;
+  final String? quality;
+  final bool qualityCutoffNotMet;
+
+  const SonarrEpisodeFile({
+    required this.id,
+    this.seriesId = 0,
+    this.seasonNumber = 0,
+    this.size = 0,
+    this.relativePath,
+    this.path,
+    this.releaseGroup,
+    this.quality,
+    this.qualityCutoffNotMet = false,
+  });
+
+  factory SonarrEpisodeFile.fromJson(Map<String, dynamic> json) =>
+      SonarrEpisodeFile(
+        id: json['id'] as int? ?? 0,
+        seriesId: json['seriesId'] as int? ?? 0,
+        seasonNumber: json['seasonNumber'] as int? ?? 0,
+        size: (json['size'] as num?)?.toInt() ?? 0,
+        relativePath: json['relativePath'] as String?,
+        path: json['path'] as String?,
+        releaseGroup: json['releaseGroup'] as String?,
+        quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
+            as String?,
+        qualityCutoffNotMet: json['qualityCutoffNotMet'] as bool? ?? false,
+      );
+
+  String get sizeFormatted => _formatBytes(size);
+}
+
 class SonarrEpisode {
   final int id;
   final int seriesId;
   final int seasonNumber;
   final int episodeNumber;
+  final int? absoluteEpisodeNumber;
   final String? title;
   final String? overview;
   final bool hasFile;
   final bool monitored;
+  final int episodeFileId;
   final String? airDate;
+  final DateTime? airDateUtc;
+  final SonarrEpisodeFile? episodeFile;
 
   const SonarrEpisode({
     required this.id,
     required this.seriesId,
     required this.seasonNumber,
     required this.episodeNumber,
+    this.absoluteEpisodeNumber,
     this.title,
     this.overview,
     this.hasFile = false,
     this.monitored = true,
+    this.episodeFileId = 0,
     this.airDate,
+    this.airDateUtc,
+    this.episodeFile,
   });
 
   factory SonarrEpisode.fromJson(Map<String, dynamic> json) => SonarrEpisode(
@@ -200,12 +249,28 @@ class SonarrEpisode {
         seriesId: json['seriesId'] as int,
         seasonNumber: json['seasonNumber'] as int,
         episodeNumber: json['episodeNumber'] as int,
+        absoluteEpisodeNumber: json['absoluteEpisodeNumber'] as int?,
         title: json['title'] as String?,
         overview: json['overview'] as String?,
         hasFile: json['hasFile'] as bool? ?? false,
         monitored: json['monitored'] as bool? ?? true,
+        episodeFileId: json['episodeFileId'] as int? ?? 0,
         airDate: json['airDate'] as String?,
+        airDateUtc: DateTime.tryParse(json['airDateUtc'] as String? ?? ''),
+        episodeFile: json['episodeFile'] != null
+            ? SonarrEpisodeFile.fromJson(
+                json['episodeFile'] as Map<String, dynamic>)
+            : null,
       );
+
+  /// e.g. "S01E05".
+  String get seasonEpisodeLabel =>
+      'S${seasonNumber.toString().padLeft(2, '0')}'
+      'E${episodeNumber.toString().padLeft(2, '0')}';
+
+  /// True once the episode has aired (air date is in the past).
+  bool get hasAired =>
+      airDateUtc != null && airDateUtc!.isBefore(DateTime.now().toUtc());
 }
 
 class SonarrQualityProfile {
@@ -259,11 +324,30 @@ String _formatBytes(num bytes) {
   return '${value.toStringAsFixed(decimals)} ${units[unit]}';
 }
 
+/// One grouped status message on a queue item (a title plus its messages) —
+/// the data behind LunaSea's "Messages" surface and our Import Doctor.
+class SonarrStatusMessage {
+  final String title;
+  final List<String> messages;
+
+  const SonarrStatusMessage({this.title = '', this.messages = const []});
+
+  factory SonarrStatusMessage.fromJson(Map<String, dynamic> json) =>
+      SonarrStatusMessage(
+        title: json['title'] as String? ?? '',
+        messages: ((json['messages'] as List<dynamic>?) ?? [])
+            .map((m) => m.toString())
+            .where((m) => m.isNotEmpty)
+            .toList(),
+      );
+}
+
 /// One item in the Sonarr download queue (fetched with series + episode
 /// details).
 class SonarrQueueItem {
   final int id;
   final int? seriesId;
+  final int? episodeId;
   final String title;
   final String? seriesTitle;
   final int? seasonNumber;
@@ -280,11 +364,15 @@ class SonarrQueueItem {
   final String? timeleft;
   final String? errorMessage;
   final List<String> statusMessages;
+  final List<SonarrStatusMessage> statusMessageGroups;
+  final String? outputPath;
+  final String? downloadId;
   final String? quality;
 
   const SonarrQueueItem({
     required this.id,
     this.seriesId,
+    this.episodeId,
     required this.title,
     this.seriesTitle,
     this.seasonNumber,
@@ -301,13 +389,18 @@ class SonarrQueueItem {
     this.timeleft,
     this.errorMessage,
     this.statusMessages = const [],
+    this.statusMessageGroups = const [],
+    this.outputPath,
+    this.downloadId,
     this.quality,
   });
 
   factory SonarrQueueItem.fromJson(Map<String, dynamic> json) {
     final messages = <String>[];
+    final groups = <SonarrStatusMessage>[];
     for (final entry in (json['statusMessages'] as List<dynamic>? ?? [])) {
       final map = entry as Map<String, dynamic>;
+      groups.add(SonarrStatusMessage.fromJson(map));
       for (final msg in (map['messages'] as List<dynamic>? ?? [])) {
         final text = msg.toString();
         if (text.isNotEmpty) messages.add(text);
@@ -321,6 +414,7 @@ class SonarrQueueItem {
     return SonarrQueueItem(
       id: json['id'] as int? ?? 0,
       seriesId: json['seriesId'] as int?,
+      episodeId: episode?['id'] as int? ?? json['episodeId'] as int?,
       title: json['title'] as String? ?? 'Unknown',
       seriesTitle:
           (json['series'] as Map<String, dynamic>?)?['title'] as String?,
@@ -339,6 +433,9 @@ class SonarrQueueItem {
       timeleft: json['timeleft'] as String?,
       errorMessage: json['errorMessage'] as String?,
       statusMessages: messages,
+      statusMessageGroups: groups,
+      outputPath: json['outputPath'] as String?,
+      downloadId: json['downloadId'] as String?,
       quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
           as String?,
     );
@@ -374,6 +471,8 @@ class SonarrHistoryRecord {
   final String? quality;
   final int? seriesId;
   final int? episodeId;
+  final Map<String, String> data;
+  final String? downloadId;
 
   const SonarrHistoryRecord({
     required this.id,
@@ -383,6 +482,8 @@ class SonarrHistoryRecord {
     this.quality,
     this.seriesId,
     this.episodeId,
+    this.data = const {},
+    this.downloadId,
   });
 
   factory SonarrHistoryRecord.fromJson(Map<String, dynamic> json) =>
@@ -395,7 +496,16 @@ class SonarrHistoryRecord {
             as String?,
         seriesId: json['seriesId'] as int?,
         episodeId: json['episodeId'] as int?,
+        data: ((json['data'] as Map<String, dynamic>?) ?? {})
+            .map((k, v) => MapEntry(k, v?.toString() ?? '')),
+        downloadId: json['downloadId'] as String?,
       );
+
+  /// Indexer the release was grabbed from, e.g. "NZBgeek (Prowlarr)".
+  String? get indexer => data['indexer'];
+
+  /// Release group parsed from the grab, when present.
+  String? get releaseGroup => data['releaseGroup'];
 }
 
 /// Paged envelope for Sonarr history.
