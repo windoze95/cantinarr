@@ -9,6 +9,7 @@ class SonarrSeriesList extends StatelessWidget {
   final void Function(int id) onDelete;
   final void Function(int id) onSearch;
   final void Function(SonarrSeries show)? onInteractiveSearch;
+  final void Function(SonarrSeries show)? onOpen;
   final bool embedded;
 
   const SonarrSeriesList({
@@ -17,6 +18,7 @@ class SonarrSeriesList extends StatelessWidget {
     required this.onDelete,
     required this.onSearch,
     this.onInteractiveSearch,
+    this.onOpen,
     this.embedded = false,
   });
 
@@ -54,6 +56,7 @@ class SonarrSeriesList extends StatelessWidget {
             onInteractiveSearch: onInteractiveSearch != null
                 ? () => onInteractiveSearch!(show)
                 : null,
+            onOpen: onOpen != null ? () => onOpen!(show) : null,
           ),
         );
       },
@@ -86,11 +89,13 @@ class _SeriesTile extends StatelessWidget {
   final SonarrSeries show;
   final VoidCallback onSearch;
   final VoidCallback? onInteractiveSearch;
+  final VoidCallback? onOpen;
 
   const _SeriesTile({
     required this.show,
     required this.onSearch,
     this.onInteractiveSearch,
+    this.onOpen,
   });
 
   @override
@@ -99,6 +104,7 @@ class _SeriesTile extends StatelessWidget {
     final percent = show.percentComplete;
 
     return ListTile(
+      onTap: onOpen,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(6),

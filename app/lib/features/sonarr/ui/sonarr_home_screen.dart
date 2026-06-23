@@ -8,6 +8,7 @@ import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/sonarr_series_provider.dart';
 import 'sonarr_releases_screen.dart';
+import 'sonarr_series_detail_screen.dart';
 import 'sonarr_series_list.dart';
 
 /// Sonarr library management screen (used in the Sonarr module).
@@ -61,6 +62,19 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
     }
+  }
+
+  void _openSeries(SonarrSeries show) {
+    final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
+    if (instanceId == null) return;
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (_) => SonarrSeriesDetailScreen(
+          instanceId: instanceId,
+          series: show,
+        ),
+      ),
+    );
   }
 
   /// Sonarr's interactive search is per-season, so pick a season first.
@@ -224,6 +238,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                             _notifier!.deleteSeries(id, deleteFiles: false),
                         onSearch: _triggerAutomaticSearch,
                         onInteractiveSearch: _openInteractiveSearch,
+                        onOpen: _openSeries,
                       ),
                     ),
             ),
