@@ -62,6 +62,7 @@ const (
 	runStatusSucceeded       = "succeeded"
 	runStatusGaveUp          = "gave_up"
 	runStatusWaitingApproval = "waiting_approval"
+	runStatusWaitingUser     = "waiting_user" // parked on ask_reporter, awaiting a reporter reply
 
 	stopResolved         = "resolved"
 	stopMaxSteps         = "max_steps"
@@ -70,6 +71,8 @@ const (
 	stopModelError       = "model_error"
 	stopNoDiagnosis      = "no_diagnosis"
 	stopAwaitingApproval = "awaiting_approval"
+	stopAwaitingUser     = "awaiting_user"     // parked on ask_reporter
+	stopUserUnresponsive = "user_unresponsive" // reply-TTL elapsed with no reporter reply
 	stepTruncateBytes    = 4000
 )
 
@@ -308,15 +311,19 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 	return r.loop(runCtx, turn, issue, st, model, settings)
 }
 
-// loadParkedRun returns the most recent run for an issue that is parked waiting
-// for an approval, along with the bounds spent so far and its stored transcript.
+// loadParkedRun returns the most recent run for an issue that is parked at a
+// human gate — either waiting for an admin approval (waiting_approval, after
+// propose_action) OR waiting for a reporter reply (waiting_user, after
+// ask_reporter) — along with the bounds spent so far and its stored transcript.
+// One resume path serves both: the decision/reply has already been appended to
+// the transcript (keyed to whichever tool_use was awaiting) before Resume runs.
 func (r *Runner) loadParkedRun(issueID int64) (runID int64, stepCount int, costMicros int64, transcriptJSON string, ok bool, err error) {
 	row := r.db.QueryRow(
 		`SELECT id, step_count, cost_micros, transcript_json
 		 FROM agent_runs
-		 WHERE issue_id = ? AND status = ?
+		 WHERE issue_id = ? AND status IN (?, ?)
 		 ORDER BY id DESC LIMIT 1`,
-		issueID, runStatusWaitingApproval,
+		issueID, runStatusWaitingApproval, runStatusWaitingUser,
 	)
 	err = row.Scan(&runID, &stepCount, &costMicros, &transcriptJSON)
 	if err == sql.ErrNoRows {
@@ -453,6 +460,7 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 		concluded := false
 		concludeStatus := ""
 		parked := false
+		awaitingUser := false
 		for _, tu := range toolUses {
 			st.stepCount++
 			st.seq++
@@ -467,6 +475,9 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			}
 			if ctrl.parked {
 				parked = true
+			}
+			if ctrl.awaitingUser {
+				awaitingUser = true
 			}
 			r.persistStep(st.runID, issue.ID, st.seq, stepToolResult, tu.Name, tu.ID, string(tu.Input), out, isErr)
 			resultBlocks = append(resultBlocks, ai.TranscriptBlock{
@@ -497,10 +508,16 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 		}
 
 		if parked {
-			// A NEW proposal was recorded. Park: finalize the run as waiting for an
-			// approval, set the issue awaiting_approval, release the run claim, and
-			// EXIT the loop (no goroutine held during the human wait). The bounds
-			// spent so far are already persisted on the run and carry over on resume.
+			// A human gate was reached. Park: finalize the run as waiting, set the
+			// matching issue state, release the run claim, and EXIT the loop (no
+			// goroutine held during the human wait). The bounds spent so far are
+			// already persisted on the run and carry over on resume.
+			//
+			// ask_reporter parks awaiting the REPORTER's reply (awaiting_user);
+			// propose_action parks awaiting an ADMIN's approval (awaiting_approval).
+			if awaitingUser {
+				return r.parkAwaitingUser(issue.ID, st.runID)
+			}
 			return r.park(issue.ID, st.runID)
 		}
 	}
@@ -511,19 +528,35 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 // claim so the worker goroutine is free during the (possibly long) human wait.
 // The Runner re-enters via Resume once an admin decides.
 func (r *Runner) park(issueID, runID int64) error {
+	return r.parkWith(issueID, runID, runStatusWaitingApproval, stopAwaitingApproval, IssueAwaitingApproval)
+}
+
+// parkAwaitingUser finalizes a run that asked the reporter a clarifying question
+// (ask_reporter): it marks the run waiting_user, moves the issue to
+// awaiting_user, and releases the issue claim so the worker is free during the
+// (possibly long) wait for a reply. The Runner re-enters via Resume once the
+// reporter replies (PostReply appends the reply as the ask_reporter tool_result).
+func (r *Runner) parkAwaitingUser(issueID, runID int64) error {
+	return r.parkWith(issueID, runID, runStatusWaitingUser, stopAwaitingUser, IssueAwaitingUser)
+}
+
+// parkWith is the shared park transition for both human gates: it finalizes the
+// run (status + stop_reason, deadline cleared so the paused clock can't trip the
+// watchdog) and moves the issue to the parked state, releasing the active_run_id
+// claim so a resume can re-claim it. Guarded on the issue not already being
+// closed (an admin may have dismissed it mid-turn).
+func (r *Runner) parkWith(issueID, runID int64, runStatus, stopReason, issueStatus string) error {
 	if _, err := r.db.Exec(
 		"UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL WHERE id = ?",
-		runStatusWaitingApproval, stopAwaitingApproval, runID,
+		runStatus, stopReason, runID,
 	); err != nil {
-		log.Printf("remediation: park run %d: %v", runID, err)
+		log.Printf("remediation: park run %d (%s): %v", runID, runStatus, err)
 	}
-	// Move the issue to awaiting_approval and release the active_run_id claim so a
-	// resume can re-claim it. Guard on the issue not already being closed.
 	if _, err := r.db.Exec(
 		"UPDATE issues SET status = ?, active_run_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND closed_at IS NULL",
-		IssueAwaitingApproval, issueID,
+		issueStatus, issueID,
 	); err != nil {
-		log.Printf("remediation: park issue %d: %v", issueID, err)
+		log.Printf("remediation: park issue %d (%s): %v", issueID, issueStatus, err)
 	}
 	return nil
 }
@@ -534,7 +567,8 @@ type dispatchControl struct {
 	postedMessage  bool
 	concluded      bool
 	concludeStatus string
-	parked         bool // propose_action recorded a NEW proposal: pause for admin approval
+	parked         bool // propose_action OR ask_reporter signalled a pause for a human
+	awaitingUser   bool // ask_reporter: pause as awaiting_user (reporter reply), not awaiting_approval
 }
 
 // dispatchTool is the central enforcement check. For a read tool that cleared the
@@ -559,6 +593,9 @@ func (r *Runner) dispatchTool(ctx context.Context, issueID int64, tu ai.Transcri
 		}
 		if res.Parked {
 			ctrl.parked = true
+		}
+		if res.AwaitingUser {
+			ctrl.awaitingUser = true
 		}
 		return res.Text, false, ctrl
 

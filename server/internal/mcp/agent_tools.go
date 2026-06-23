@@ -19,13 +19,17 @@ import (
 // Wave 2 shipped report a finding (post_issue_message) and finish
 // (conclude_issue). Wave 3 adds propose_action: the agent's ONLY way to effect a
 // change. It records an admin-approvable proposal; the server replays it on
-// approval. The agent still has no mutation tool of its own.
+// approval. Wave 4 adds ask_reporter: the agent asks the issue's reporter a
+// clarifying question (intent/preference only) and the run parks as
+// awaiting_user until they reply. The agent still has no mutation tool of its
+// own — ask_reporter can only record a string.
 
 // Agent-only tool names. Exported so the Runner's allow-list can name them.
 const (
 	ToolPostIssueMessage = "post_issue_message"
 	ToolConcludeIssue    = "conclude_issue"
 	ToolProposeAction    = "propose_action"
+	ToolAskReporter      = "ask_reporter"
 )
 
 // Proposable action kinds accepted by propose_action. These mirror
@@ -155,16 +159,50 @@ var AgentToolProposeAction = Tool{
 	},
 }
 
+// AgentToolAskReporter lets the agent ask the issue's reporter a clarifying
+// question about their INTENT or PREFERENCE and pause until they reply. It is
+// NOT a mutation and NOT an authorization request: it can only record a string.
+// The rule is "the user answers a question; the admin authorizes an action" — a
+// clarifying question can never be a backdoor to mutate. Use it only for facts
+// the reporter alone knows (e.g. "this release is dual-audio English+Russian —
+// do you want English specifically?"). It is unavailable for auto-detected
+// issues with no reporter (the dispatch returns a benign no-op there).
+var AgentToolAskReporter = Tool{
+	Name:       ToolAskReporter,
+	Permission: auth.PermissionRemediationManage,
+	Description: "Ask the person who reported this issue a single clarifying question about what they want, then " +
+		"pause until they reply. Use this ONLY to learn the reporter's intent or preference — facts only they know " +
+		"(for example: a release is multi-language and you need to know which language they actually want). This is " +
+		"NOT a way to change anything and NOT how you get approval: it can only record a question. To change " +
+		"something you must use propose_action (an admin approves that). After you ask, the investigation pauses " +
+		"until the reporter answers, then resumes with their reply so you can act on it. If the issue was " +
+		"auto-detected and has no reporter, this does nothing — decide yourself or propose a fix to the admin.",
+	InputSchema: map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"issue_id": map[string]interface{}{
+				"type":        "integer",
+				"description": "The id of the issue being investigated.",
+			},
+			"question": map[string]interface{}{
+				"type":        "string",
+				"description": "The clarifying question to ask the reporter (plain language; about their intent/preference only).",
+			},
+		},
+		"required": []string{"issue_id", "question"},
+	},
+}
+
 // AgentTools returns the agent-only tool definitions, for the Runner to add to
 // its allow-list and hand to a model turn.
 func AgentTools() []Tool {
-	return []Tool{AgentToolPostIssueMessage, AgentToolConcludeIssue, AgentToolProposeAction}
+	return []Tool{AgentToolPostIssueMessage, AgentToolConcludeIssue, AgentToolProposeAction, AgentToolAskReporter}
 }
 
 // IsAgentTool reports whether a name is one of the agent-only tools.
 func IsAgentTool(name string) bool {
 	switch name {
-	case ToolPostIssueMessage, ToolConcludeIssue, ToolProposeAction:
+	case ToolPostIssueMessage, ToolConcludeIssue, ToolProposeAction, ToolAskReporter:
 		return true
 	}
 	return false
@@ -187,12 +225,17 @@ func (s *ToolServer) ToolsByName(names []string) []Tool {
 
 // AgentToolResult is the structured outcome of an agent-only tool call the Runner
 // needs to drive its loop: Concluded signals the investigation should terminate;
-// Parked signals it should pause for a human (an admin approval) after this turn.
+// Parked signals it should pause for a human after this turn. Parked covers both
+// a propose_action (pause for an ADMIN to approve) and an ask_reporter (pause for
+// the REPORTER to reply); AwaitingUser distinguishes the latter so the Runner
+// parks the issue as awaiting_user / the run as waiting_user rather than the
+// approval states.
 type AgentToolResult struct {
-	Text      string
-	Concluded bool
-	Status    string // terminal issue status when Concluded
-	Parked    bool   // true after a propose_action: the run pauses for admin approval
+	Text         string
+	Concluded    bool
+	Status       string // terminal issue status when Concluded
+	Parked       bool   // true after propose_action OR ask_reporter: the run pauses for a human
+	AwaitingUser bool   // true only after ask_reporter: park as awaiting_user (reporter reply), not awaiting_approval
 }
 
 // ExecuteAgentTool dispatches an agent-only tool. The Runner passes the
@@ -276,6 +319,38 @@ func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input js
 		return &AgentToolResult{
 			Text:   fmt.Sprintf("Proposal #%d recorded; awaiting admin approval — the investigation resumes with the outcome.", proposalID),
 			Parked: true,
+		}, nil
+
+	case ToolAskReporter:
+		var args struct {
+			Question string `json:"question"`
+		}
+		if err := json.Unmarshal(nonEmptyJSON(input), &args); err != nil {
+			return nil, fmt.Errorf("invalid %s input: %w", name, err)
+		}
+		if args.Question == "" {
+			return &AgentToolResult{Text: "No question provided; nothing asked."}, nil
+		}
+		// Record the question + ask-token on the issue/run. hasReporter is false for
+		// an auto-detected (reporter-less) issue: in that case AskReporter does NOT
+		// post anything or park — the agent must decide or propose to the admin.
+		hasReporter, err := s.issueStore.AskReporter(ctx, issueID, args.Question, toolUseID)
+		if err != nil {
+			// A storage error is data for the model, not an infrastructure crash:
+			// return it benignly so the agent can continue within its budget.
+			return &AgentToolResult{Text: "Could not post that question: " + err.Error()}, nil
+		}
+		if !hasReporter {
+			return &AgentToolResult{
+				Text: "This issue was auto-detected and has no reporter to ask. Decide based on what you found, or propose a fix for an admin.",
+			}, nil
+		}
+		// The reporter was asked: the run parks until they reply. The resume will
+		// append this tool_use's result with the reply text.
+		return &AgentToolResult{
+			Text:         "Question posted to the reporter; the investigation will resume with their reply.",
+			Parked:       true,
+			AwaitingUser: true,
 		}, nil
 
 	default:

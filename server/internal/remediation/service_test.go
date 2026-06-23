@@ -244,6 +244,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if d.MaxCostMicros != 500000 || d.DailyCostCeilingMicros != 5000000 {
 		t.Fatalf("default cost ceilings = %d/%d, want 500000/5000000", d.MaxCostMicros, d.DailyCostCeilingMicros)
 	}
+	if d.MaxUserWaitHours != 72 {
+		t.Fatalf("default max_user_wait_hours = %d, want 72", d.MaxUserWaitHours)
+	}
 
 	// Round-trip a populated settings value.
 	in := Settings{
@@ -260,6 +263,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 		DailyRunCap:            10,
 		DailyCostCeilingMicros: 999999,
 		CircuitBreakerGiveups:  3,
+		MaxUserWaitHours:       48,
 	}
 	saved, err := svc.SetSettings(in)
 	if err != nil {

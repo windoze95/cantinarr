@@ -3,12 +3,18 @@ package remediation
 import (
 	"context"
 	"log"
+	"time"
 )
 
 // jobQueueSize bounds the buffered channel of pending investigation jobs. When
 // full, Enqueue drops the job (the issue is still recorded; an admin can act on
 // it) rather than blocking the request path.
 const jobQueueSize = 128
+
+// replyTTLSweepPeriod is how often the reply-TTL sweeper wakes to close stale
+// awaiting_user issues. The window itself (Settings.MaxUserWaitHours, default
+// 72h) is far longer, so an hourly tick is plenty responsive while staying cheap.
+const replyTTLSweepPeriod = time.Hour
 
 // job is one unit of work for the worker pool: investigate a fresh issue, or
 // resume a parked one after an admin decision. Carrying the kind lets a single
@@ -75,4 +81,34 @@ func (s *Service) StartWorkers(ctx context.Context, runner *Runner, n int) {
 			}
 		}(i)
 	}
+}
+
+// StartReplyTTLSweeper launches a cheap periodic sweep (W4 reply-TTL) that closes
+// awaiting_user issues whose reporter never answered within Settings
+// .MaxUserWaitHours, moving each to wont_fix(user_unresponsive). It returns
+// immediately and stops when ctx is cancelled. The window is read fresh from
+// settings each tick (so an admin change takes effect without a restart) and the
+// sweep is skipped entirely while the feature is off. Wire this in main.go next
+// to StartWorkers. Best-effort: a sweep error is logged, not fatal.
+func (s *Service) StartReplyTTLSweeper(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(replyTTLSweepPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				settings := s.Settings()
+				if !settings.Enabled {
+					continue // feature off: leave parked issues for an admin.
+				}
+				if n, err := s.SweepStaleAwaitingUser(ctx, settings.MaxUserWaitHours); err != nil {
+					log.Printf("remediation: reply-TTL sweep: %v", err)
+				} else if n > 0 {
+					log.Printf("remediation: reply-TTL sweep closed %d unanswered issue(s)", n)
+				}
+			}
+		}
+	}()
 }

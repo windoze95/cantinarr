@@ -495,6 +495,23 @@ func (h *serviceBackedHost) ExecuteAgentTool(ctx context.Context, name string, i
 		}
 		_ = id
 		return &mcp.AgentToolResult{Text: "proposal recorded", Parked: true}, nil
+	case mcp.ToolAskReporter:
+		// Mirror the real ExecuteAgentTool ask_reporter case: post the question +
+		// signal an awaiting_user park ONLY when the issue has a reporter; otherwise
+		// a benign no-op with NO park (the agent continues). The placeholder text
+		// matches the real tool's so the reply can find/replace it on resume.
+		var a struct {
+			Question string `json:"question"`
+		}
+		json.Unmarshal(input, &a)
+		hasReporter, err := h.svc.AskReporter(ctx, issueID, a.Question, toolUseID)
+		if err != nil {
+			return &mcp.AgentToolResult{Text: "could not ask: " + err.Error()}, nil
+		}
+		if !hasReporter {
+			return &mcp.AgentToolResult{Text: "no reporter to ask"}, nil
+		}
+		return &mcp.AgentToolResult{Text: "Question posted to the reporter; the investigation will resume with their reply.", Parked: true, AwaitingUser: true}, nil
 	}
 	return &mcp.AgentToolResult{Text: "noop"}, nil
 }

@@ -13,7 +13,10 @@ import (
 // implements this interface; mcp depends only on the interface.
 //
 // Wave 3 adds ProposeAction (the agent proposes a mutation; an admin approves
-// it; the server replays it — the model never executes anything itself).
+// it; the server replays it — the model never executes anything itself). Wave 4
+// adds AskReporter (the agent asks the reporter a clarifying question and the
+// run parks as awaiting_user until they reply — intent/preference only, never a
+// mutation).
 type IssueStore interface {
 	// PostIssueMessage appends an agent-authored message to an issue's thread.
 	PostIssueMessage(ctx context.Context, issueID int64, body string) error
@@ -23,6 +26,16 @@ type IssueStore interface {
 	// RemediationEnabled reports whether the remediation feature is switched on.
 	// Every agent-only tool early-returns a benign result when this is false.
 	RemediationEnabled(ctx context.Context) bool
+	// AskReporter posts a clarifying question (an agent-authored thread message)
+	// to the issue's reporter and records the ask so the Runner PARKS the run as
+	// awaiting_user until the reporter replies. It is intent/preference ONLY — it
+	// can only record a string and NEVER mutates anything. hasReporter is false
+	// when the issue has no reporter (an auto-detected issue): the caller must NOT
+	// park in that case and instead return a benign "no reporter to ask" result so
+	// the agent decides or proposes to the admin. toolUseID is the ask_reporter
+	// tool_use.id, stored on the run so the resume tool_result pairs back to the
+	// exact call when the reporter replies.
+	AskReporter(ctx context.Context, issueID int64, question, toolUseID string) (hasReporter bool, err error)
 	// ProposeAction records a proposed (admin-approvable) arr mutation against an
 	// issue. It validates params against the kind's schema, computes a stable
 	// fingerprint, and conditionally inserts an agent_actions row keyed by that

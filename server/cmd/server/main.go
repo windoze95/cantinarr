@@ -192,6 +192,9 @@ func main() {
 	remediationProcToken := newProcToken()
 	remediationRunner := remediation.NewRunner(database, remediationService, toolServer, creds, remediationProcToken)
 	remediationService.StartWorkers(ctx, remediationRunner, 2)
+	// Reply-TTL sweep (Wave 4): periodically close awaiting_user issues whose
+	// reporter never answered the agent's clarifying question within the window.
+	remediationService.StartReplyTTLSweeper(ctx)
 
 	// Auto-dispatch (Wave 5, highest-risk trigger, ships OFF). The hub's poller
 	// hands stuck/blocked downloads to this opener, which re-checks the live
