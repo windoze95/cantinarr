@@ -75,3 +75,21 @@ final issuesChangedProvider = StreamProvider.autoDispose<WsEvent>((ref) {
   return events.where(
       (e) => e.type == 'issue_created' || e.type == 'agent_action_pending');
 });
+
+/// Agent approval-queue pings (`agent_action_pending`,
+/// `agent_action_decided`). The agent-actions approval screen reloads its
+/// queue on either, so a proposal raised or decided elsewhere stays in sync.
+final agentActionsChangedProvider = StreamProvider.autoDispose<WsEvent>((ref) {
+  final events = ref.watch(realtimeEventsProvider);
+  return events.where((e) =>
+      e.type == 'agent_action_pending' || e.type == 'agent_action_decided');
+});
+
+/// Admin notice that the remediation auto-dispatch circuit breaker tripped and
+/// disabled auto-dispatch (`remediation_autodispatch_disabled`). Surfaced as a
+/// one-off in-app toast so an admin learns the agent stopped opening new auto
+/// issues. The event carries `reason`/`giveups`/`threshold` (no issue id).
+final autodispatchDisabledProvider = StreamProvider.autoDispose<WsEvent>((ref) {
+  final events = ref.watch(realtimeEventsProvider);
+  return events.where((e) => e.type == 'remediation_autodispatch_disabled');
+});

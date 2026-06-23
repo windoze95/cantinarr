@@ -122,7 +122,9 @@ class PushService {
 
   /// Routes a tapped notification to the right screen from its custom payload:
   /// the approvals queue for `request_pending`; the media detail page for an
-  /// approval decision or a new-content alert.
+  /// approval decision or a new-content alert; the agent approval queue for a
+  /// pending fix; the issue thread for an issue/decision update; and the
+  /// remediation settings for the auto-dispatch circuit-breaker notice.
   void _routeNotification(Object? arguments) {
     final data = _asStringMap(arguments);
     final type = data['type'] as String?;
@@ -131,6 +133,13 @@ class PushService {
     switch (type) {
       case 'request_pending':
         router.push('/approvals');
+      case 'agent_action_pending':
+        // A fix needs approval — go straight to the agent approval queue.
+        router.push('/agent-actions');
+      case 'remediation_autodispatch_disabled':
+        // The circuit breaker turned auto-dispatch off — open the settings the
+        // admin uses to re-enable it.
+        router.push('/settings/ai-remediation');
       case 'request_decision':
       case 'new_movie':
       case 'new_episode':
@@ -141,7 +150,7 @@ class PushService {
       case 'issue_created':
       case 'issue_updated':
       case 'issue_resolved':
-      case 'agent_action_pending':
+      case 'agent_action_decided':
         final issueId = _asInt(data['issue_id']);
         if (issueId == null || issueId <= 0) return;
         router.push('/issues/$issueId');

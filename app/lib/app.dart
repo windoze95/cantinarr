@@ -150,6 +150,32 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       ));
   }
 
+  /// Shows an admin notice (with a "Settings" action) when the remediation
+  /// circuit breaker disables auto-dispatch. The event text is server-authored
+  /// (a fixed template + structured counts); no untrusted model text is shown.
+  void _showAutodispatchDisabledSnack() {
+    final messenger = _scaffoldMessengerKey.currentState;
+    if (messenger == null) return;
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppTheme.error,
+        duration: const Duration(seconds: 8),
+        content: const Text(
+          'Auto-fix paused: too many failed attempts. Re-enable it in AI '
+          'remediation settings.',
+          style: TextStyle(color: Colors.white),
+        ),
+        action: SnackBarAction(
+          label: 'Settings',
+          textColor: Colors.white,
+          onPressed: () =>
+              ref.read(appRouterProvider).push('/settings/ai-remediation'),
+        ),
+      ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
@@ -162,6 +188,15 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       if (event == null) return;
       if (!ref.read(requestNotificationsEnabledProvider)) return;
       _showDecisionSnack(event);
+    });
+
+    // Surface the auto-dispatch circuit-breaker notice to admins.
+    ref.listen(autodispatchDisabledProvider, (_, next) {
+      if (next.valueOrNull == null) return;
+      final isAdmin =
+          ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
+      if (!isAdmin) return;
+      _showAutodispatchDisabledSnack();
     });
 
     // Show blank screen while restoring session to prevent login flash

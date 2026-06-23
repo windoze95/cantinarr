@@ -4,10 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import 'package:go_router/go_router.dart';
+
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../auth/logic/auth_provider.dart';
+import '../data/agent_action_models.dart';
 import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
+import 'proposed_action_card.dart';
 
 /// The issue conversation: a read-mostly transcript rendered with the AI-chat
 /// bubble grammar, plus a reply field.
@@ -32,6 +37,11 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
   IssueThread? _thread;
   bool _isLoading = true;
   String? _error;
+
+  /// Proposed actions for this issue, fetched alongside the thread for admins
+  /// so an admin can approve/deny from the conversation. Empty for non-admins
+  /// (the queue endpoint is admin-only) and when nothing is pending.
+  List<AgentAction> _actions = const [];
 
   final _replyController = TextEditingController();
   final _scrollController = ScrollController();
@@ -63,11 +73,28 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
   Future<void> _load({bool initial = false}) async {
     if (initial) setState(() => _isLoading = _thread == null);
     try {
-      final thread =
-          await ref.read(issuesServiceProvider).getThread(widget.issueId);
+      final service = ref.read(issuesServiceProvider);
+      final thread = await service.getThread(widget.issueId);
       if (!mounted) return;
+
+      // For an admin, also pull any proposed actions for this issue so the
+      // ProposedActionCard can be surfaced inline. Best-effort and admin-only
+      // (the endpoint is admin-gated); failures leave the actions empty.
+      final isAdmin =
+          ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
+      List<AgentAction> actions = const [];
+      if (isAdmin) {
+        try {
+          actions = await service.pendingActionsForIssue(widget.issueId);
+        } catch (_) {
+          // Leave actions empty; the thread still renders.
+        }
+        if (!mounted) return;
+      }
+
       setState(() {
         _thread = thread;
+        _actions = actions;
         _isLoading = false;
         _error = null;
       });
@@ -164,6 +191,12 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
 
   Widget _buildBody(IssueThread thread) {
     final issue = thread.issue;
+    // The most recent run linked to a proposal on this issue, used for the
+    // "View agent activity" affordance (the issue payload itself carries no
+    // run id). Null when no proposal carries one.
+    final runId = _actions
+        .map((a) => a.runId)
+        .firstWhere((id) => id != null, orElse: () => null);
     return Column(
       children: [
         Expanded(
@@ -176,8 +209,33 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
               padding: const EdgeInsets.all(16),
               children: [
                 _IssueSummaryCard(issue: issue),
+                if (runId != null) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => context.push('/agent-runs/$runId'),
+                      icon: const Icon(Icons.timeline, size: 16),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppTheme.textSecondary,
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      label: const Text('View agent activity'),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 for (final msg in thread.messages) _MessageRow(message: msg),
+                // Proposed-action cards surfaced inline so an admin can act from
+                // the conversation. Each freezes on decide; the list reloads.
+                for (final action in _actions)
+                  ProposedActionCard(
+                    key: ValueKey(action.id),
+                    action: action,
+                    onDecided: (_) => _load(),
+                  ),
                 if (issue.status.isActive) const _WorkingIndicator(),
               ],
             ),

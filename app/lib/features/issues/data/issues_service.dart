@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import 'agent_action_models.dart';
 import 'issue_models.dart';
 
 /// REST client for the issue-reporting / AI-remediation feature.
@@ -96,5 +97,65 @@ class IssuesService {
       data: settings.toJson(),
     );
     return RemediationSettings.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  // ---- Agent actions (admin approval queue) --------------------------------
+
+  /// List proposed agent actions awaiting an admin decision — the approval
+  /// queue. Defaults to `proposed`; pass another [status] to inspect a
+  /// different bucket (e.g. `executed`). The server has no `issue_id` filter,
+  /// so a per-issue view fetches `proposed` and filters client-side
+  /// ([pendingActionsForIssue]).
+  Future<List<AgentAction>> listPendingActions({String status = 'proposed'}) async {
+    final resp = await _dio.get(
+      '/api/admin/agent-actions',
+      queryParameters: {if (status.isNotEmpty) 'status': status},
+    );
+    final data = resp.data as Map<String, dynamic>?;
+    return ((data?['actions'] as List?) ?? const [])
+        .map((e) => AgentAction.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// The proposed actions for one issue, filtered client-side from the queue
+  /// (there is no server-side `issue_id` filter). Used to surface the
+  /// ProposedActionCard inline in the issue thread.
+  Future<List<AgentAction>> pendingActionsForIssue(int issueId) async {
+    final all = await listPendingActions();
+    return all.where((a) => a.issueId == issueId).toList();
+  }
+
+  /// Approve a proposed action, optionally replacing its params with an admin
+  /// [override] (a JSON object for the action's kind). Returns the updated
+  /// action (now `executing`/`executed`/`failed`) so the UI can freeze the card
+  /// from the authoritative server state.
+  ///
+  /// The server tolerates an empty body, so when there's no override we send
+  /// none rather than an empty object.
+  Future<AgentAction> approveAction(int id, {Object? override}) async {
+    final resp = await _dio.post(
+      '/api/admin/agent-actions/$id/approve',
+      data: override == null ? null : {'override': override},
+    );
+    return AgentAction.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Deny a proposed action with an optional [note]. A denial returns the
+  /// investigation to `investigating` server-side (not a terminal failure).
+  /// Returns the updated (now `denied`) action.
+  Future<AgentAction> denyAction(int id, {String? note}) async {
+    final trimmed = note?.trim();
+    final resp = await _dio.post(
+      '/api/admin/agent-actions/$id/deny',
+      data: {'note': trimmed ?? ''},
+    );
+    return AgentAction.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Fetch one agent run plus its ordered audit steps, for the read-only
+  /// "agent activity" timeline.
+  Future<AgentRunDetail> getRun(int id) async {
+    final resp = await _dio.get('/api/admin/agent-runs/$id');
+    return AgentRunDetail.fromJson(resp.data as Map<String, dynamic>);
   }
 }

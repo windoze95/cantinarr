@@ -343,7 +343,10 @@ class _AppShellState extends ConsumerState<AppShell>
     // the hamburger dot. Always 0 for non-admins. Watched here (not just in
     // the drawer) so the badge stays live app-wide.
     final openIssues = ref.watch(openIssuesProvider);
-    final menuBadgeCount = pendingApprovals + openIssues;
+    // Agent-proposed fixes awaiting approval — drives the drawer "Agent fixes"
+    // entry and the hamburger dot. Always 0 for non-admins.
+    final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
+    final menuBadgeCount = pendingApprovals + openIssues + pendingAgentActions;
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
     final libraryStatus = searchState.isSearching && showSearchResults
@@ -746,6 +749,7 @@ class _AppShellState extends ConsumerState<AppShell>
         ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
     final openIssues = ref.watch(openIssuesProvider);
+    final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
 
     return SafeArea(
       child: Column(
@@ -803,6 +807,15 @@ class _AppShellState extends ConsumerState<AppShell>
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
                 context.push('/issues');
+              },
+            ),
+            _DrawerItem(
+              icon: Icons.build_circle_outlined,
+              title: 'Agent fixes',
+              badgeCount: pendingAgentActions,
+              onTap: () {
+                if (isOverlay) Navigator.pop(context);
+                context.push('/agent-actions');
               },
             ),
             const Divider(color: AppTheme.border),
