@@ -42,6 +42,12 @@ type ToolServer struct {
 	registry *instance.Registry
 	bridge   *tmdb.Bridge
 
+	// issueStore is the remediation write surface used ONLY by the agent-only
+	// tools (post_issue_message / conclude_issue). It is injected after
+	// construction via SetIssueStore (see issuestore.go) to avoid an import cycle.
+	// nil until remediation is wired; the agent-only tools handle nil gracefully.
+	issueStore IssueStore
+
 	toggleMu      sync.RWMutex
 	disabledTools map[string]bool
 	togglesLoaded bool

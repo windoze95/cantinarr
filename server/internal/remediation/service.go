@@ -28,6 +28,12 @@ type Service struct {
 	registry *instance.Registry
 	bridge   *tmdb.Bridge
 	notifier Notifier
+
+	// jobs is the buffered queue of issue ids awaiting a read-only investigation.
+	// The Runner drains it via StartWorkers; Enqueue (called by the handler when
+	// the feature is enabled) pushes onto it. Buffered so the request path never
+	// blocks on the agent.
+	jobs chan int64
 }
 
 // NewService constructs the remediation service, mirroring request.NewService.
@@ -37,6 +43,7 @@ func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, no
 		registry: registry,
 		bridge:   bridge,
 		notifier: notifier,
+		jobs:     make(chan int64, jobQueueSize),
 	}
 }
 
@@ -124,6 +131,12 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	}
 
 	s.notifyIssueCreated(id, req.Title)
+	// Kick off the read-only investigation for a GENUINELY NEW issue (not a
+	// duplicate that only bumped occurrences) when the feature is enabled. NO
+	// auto-dispatch and NO propose/approve happen here — just the read-only loop.
+	if s.Settings().Enabled {
+		s.Enqueue(id)
+	}
 	return &CreateIssueResponse{IssueID: id, Status: IssueOpen}, nil
 }
 
