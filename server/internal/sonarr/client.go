@@ -300,6 +300,7 @@ type DetailedQueueItem struct {
 	Size                  float64 `json:"size"`
 	Sizeleft              float64 `json:"sizeleft"`
 	DownloadClient        string  `json:"downloadClient"`
+	DownloadID            string  `json:"downloadId"`
 	Indexer               string  `json:"indexer"`
 	Protocol              string  `json:"protocol"`
 	ErrorMessage          string  `json:"errorMessage"`
@@ -342,9 +343,14 @@ func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
 	return all, nil
 }
 
-// RemoveQueueItem removes an item from the download queue.
-func (c *Client) RemoveQueueItem(id int, removeFromClient, blocklist bool) error {
-	path := fmt.Sprintf("/api/v3/queue/%d?removeFromClient=%t&blocklist=%t", id, removeFromClient, blocklist)
+// RemoveQueueItem removes an item from the download queue. removeFromClient
+// also deletes the download from the client; blocklist prevents the release
+// from being grabbed again; skipRedownload suppresses the automatic re-search
+// that a blocklist would otherwise trigger; changeCategory hands the download
+// to the client's post-import category instead of removing it.
+func (c *Client) RemoveQueueItem(id int, removeFromClient, blocklist, skipRedownload, changeCategory bool) error {
+	path := fmt.Sprintf("/api/v3/queue/%d?removeFromClient=%t&blocklist=%t&skipRedownload=%t&changeCategory=%t",
+		id, removeFromClient, blocklist, skipRedownload, changeCategory)
 	if err := c.do("DELETE", path, nil, nil); err != nil {
 		return fmt.Errorf("sonarr remove queue item: %w", err)
 	}
@@ -535,4 +541,103 @@ func (c *Client) GetEpisodes(seriesID, seasonNumber int) ([]Episode, error) {
 		return nil, fmt.Errorf("sonarr episodes: %w", err)
 	}
 	return episodes, nil
+}
+
+// ManualImportRejection is a single reason Sonarr would not auto-import a file,
+// plus whether the rejection is permanent (a force import will likely still
+// fail) or temporary.
+type ManualImportRejection struct {
+	Reason string `json:"reason"`
+	Type   string `json:"type"`
+}
+
+// ManualImportCandidate is a file Sonarr found for a download, as returned by
+// GET /manualimport. Quality and Languages are kept as raw JSON so they can be
+// round-tripped verbatim back into the ManualImport command (modeling and
+// re-serializing them risks losing fields Sonarr requires).
+type ManualImportCandidate struct {
+	ID           int                     `json:"id"`
+	Path         string                  `json:"path"`
+	FolderName   string                  `json:"folderName"`
+	Name         string                  `json:"name"`
+	Size         int64                   `json:"size"`
+	SeriesID     int                     `json:"-"`
+	SeasonNumber int                     `json:"seasonNumber"`
+	Episodes     []EpisodeContext        `json:"episodes"`
+	Quality      json.RawMessage         `json:"quality"`
+	Languages    json.RawMessage         `json:"languages"`
+	ReleaseGroup string                  `json:"releaseGroup"`
+	DownloadID   string                  `json:"downloadId"`
+	IndexerFlags int                     `json:"indexerFlags"`
+	ReleaseType  string                  `json:"releaseType"`
+	Rejections   []ManualImportRejection `json:"rejections"`
+}
+
+// UnmarshalJSON decodes a manual-import candidate, lifting the nested series id
+// (Sonarr nests it under "series": {"id": ...}) into SeriesID.
+func (m *ManualImportCandidate) UnmarshalJSON(data []byte) error {
+	type alias ManualImportCandidate
+	aux := struct {
+		*alias
+		Series *struct {
+			ID int `json:"id"`
+		} `json:"series"`
+	}{alias: (*alias)(m)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Series != nil {
+		m.SeriesID = aux.Series.ID
+	}
+	return nil
+}
+
+// GetManualImportCandidates lists the files Sonarr found for a download,
+// including any rejection reasons, without importing existing files.
+func (c *Client) GetManualImportCandidates(downloadID string) ([]ManualImportCandidate, error) {
+	var candidates []ManualImportCandidate
+	path := fmt.Sprintf("/api/v3/manualimport?downloadId=%s&filterExistingFiles=false", url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &candidates); err != nil {
+		return nil, fmt.Errorf("sonarr manual import candidates: %w", err)
+	}
+	return candidates, nil
+}
+
+// ManualImportFile is one file to import via the ManualImport command. Quality
+// and Languages are passed back verbatim from the candidate. EpisodeIDs must be
+// non-empty for Sonarr or the file is silently skipped.
+type ManualImportFile struct {
+	Path         string          `json:"path"`
+	FolderName   string          `json:"folderName,omitempty"`
+	SeriesID     int             `json:"seriesId"`
+	EpisodeIDs   []int           `json:"episodeIds"`
+	Quality      json.RawMessage `json:"quality,omitempty"`
+	Languages    json.RawMessage `json:"languages,omitempty"`
+	ReleaseGroup string          `json:"releaseGroup,omitempty"`
+	DownloadID   string          `json:"downloadId,omitempty"`
+	IndexerFlags int             `json:"indexerFlags,omitempty"`
+	ReleaseType  string          `json:"releaseType,omitempty"`
+}
+
+// ExecuteManualImport tells Sonarr to import the given files. importMode must be
+// lowercase (move/copy/auto); the PascalCase form is silently ignored by the
+// ManualImport command.
+func (c *Client) ExecuteManualImport(files []ManualImportFile, importMode string) error {
+	payload := map[string]any{
+		"name":       "ManualImport",
+		"importMode": importMode,
+		"files":      files,
+	}
+	return c.triggerCommand(payload)
+}
+
+// ProcessMonitoredDownloads asks Sonarr to run its import pass over the
+// download client now (the pass that normally runs on a timer).
+func (c *Client) ProcessMonitoredDownloads() error {
+	return c.triggerCommand(map[string]any{"name": "ProcessMonitoredDownloads"})
+}
+
+// RescanSeries rescans the files on disk for a series.
+func (c *Client) RescanSeries(seriesID int) error {
+	return c.triggerCommand(map[string]any{"name": "RescanSeries", "seriesId": seriesID})
 }

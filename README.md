@@ -10,7 +10,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 │                                                         │
 │  ┌──────────┐  ┌──────────┐  ┌───────────────────────┐  │
 │  │ Auth/JWT │  │ Request  │  │ AI Chat               │  │
-│  │          │  │ Service  │  │ + 19 MCP Tools        │  │
+│  │          │  │ Service  │  │ + 25 MCP Tools        │  │
 │  └──────────┘  └────┬─────┘  └───────────────────────┘  │
 │                     │                                    │
 │  ┌──────────────────┼──────────────────────┐             │

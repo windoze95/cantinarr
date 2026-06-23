@@ -203,11 +203,12 @@ Movies skip bridging entirely -- Radarr natively supports `term=tmdb:{id}`.
 
 ### MCP Tools
 
-The same 19 tools power both the in-app AI assistant and the external MCP endpoint. Tools marked admin require an admin account; every tool can be disabled from Settings > AI Tools:
+The same 25 tools power both the in-app AI assistant and the external MCP endpoint. Tools marked admin require an admin account; every tool can be disabled from Settings > AI Tools:
 
 | Tool | Description |
 |---|---|
 | `search_movies` | Search TMDB for movies |
+| `search_movie_collections` | Search TMDB for movie franchises/collections |
 | `search_tv_shows` | Search TMDB for TV shows |
 | `get_trending` | Trending movies/shows by day or week |
 | `get_movie_details` | Full movie metadata |
@@ -226,6 +227,11 @@ The same 19 tools power both the in-app AI assistant and the external MCP endpoi
 | `grab_release` | Download a specific release (admin) |
 | `remove_queue_item` | Remove/blocklist a queue item (admin) |
 | `get_disk_space` | Disk space across instances (admin) |
+| `diagnose_queue` | Import Doctor: explain stuck/failed/blocked queue items and the fix to apply (admin) |
+| `get_manual_import_candidates` | List a stuck download's files, mappings, and rejection reasons (admin) |
+| `execute_manual_import` | Force a download's files into the library via manual import (admin) |
+| `remediate_queue_item` | One-click queue fix: remove, blocklist+search, or change category (admin) |
+| `rescan_media` | Rescan a movie/series on disk and run the import pass (admin) |
 
 ### MCP Server Endpoint
 
