@@ -54,7 +54,9 @@ func (s *Service) ConcludeIssue(ctx context.Context, issueID int64, status, reso
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		// Already closed (or no such issue): treat as idempotent success when the
-		// row exists, so a resumed/duplicated conclude does not error.
+		// row exists, so a resumed/duplicated conclude does not error. No circuit-
+		// breaker update here: the row did not transition, so this is not a fresh
+		// terminal outcome (a double-conclude must never double-count a give-up).
 		var exists int
 		if qerr := s.db.QueryRowContext(ctx, "SELECT 1 FROM issues WHERE id = ?", issueID).Scan(&exists); qerr == sql.ErrNoRows {
 			return fmt.Errorf("issue not found")
@@ -64,6 +66,10 @@ func (s *Service) ConcludeIssue(ctx context.Context, issueID int64, status, reso
 
 	// Release any run claim now that the issue is terminal.
 	s.db.ExecContext(ctx, "UPDATE issues SET active_run_id = NULL WHERE id = ?", issueID)
+	// Feed the auto-dispatch circuit breaker exactly once per real terminal
+	// transition: resolved resets the give-up streak, a non-resolved close bumps
+	// it (and may disarm auto-dispatch). A no-op for user-reported issues.
+	s.noteAutoTerminal(issueID, status)
 	s.notifyIssueResolved(issueID, status)
 	return nil
 }

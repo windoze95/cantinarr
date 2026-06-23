@@ -150,8 +150,10 @@ func main() {
 	if pushNotifier != nil {
 		contentNotifier = pushNotifier
 	}
-	wsHub := ws.NewHub(authService, registry, instanceStore, contentNotifier)
-	go wsHub.Run(ctx)
+	// The auto-dispatch opener is wired after the remediation service exists (it
+	// depends on the notifier composite, which depends on this hub). The hub's
+	// poll loop is therefore started LATER, once SetIssueOpener has run.
+	wsHub := ws.NewHub(authService, registry, instanceStore, contentNotifier, nil)
 
 	// Notifier composite. Request decisions and issue events fan out to both the
 	// WebSocket hub (live clients) and the push gateway (offline devices). The
@@ -167,8 +169,9 @@ func main() {
 	requestService := request.NewService(database, registry, bridge, notifier)
 	requestHandler := request.NewHandler(requestService)
 
-	// Remediation (issue reporting) service + handler. Wave 1 records and threads
-	// issues only; no AI agent is wired yet.
+	// Remediation (issue reporting) service + handler. Records/threads issues, runs
+	// the read-only agent, and (Wave 5) accepts auto-dispatched issues from the
+	// poller. AutoDispatch ships OFF; the opener re-checks the live toggle per call.
 	remediationService := remediation.NewService(database, registry, bridge, notifier)
 	remediationHandler := remediation.NewHandler(remediationService)
 
@@ -189,6 +192,16 @@ func main() {
 	remediationProcToken := newProcToken()
 	remediationRunner := remediation.NewRunner(database, remediationService, toolServer, creds, remediationProcToken)
 	remediationService.StartWorkers(ctx, remediationRunner, 2)
+
+	// Auto-dispatch (Wave 5, highest-risk trigger, ships OFF). The hub's poller
+	// hands stuck/blocked downloads to this opener, which re-checks the live
+	// Enabled && AutoDispatch toggles, opens a deduped issue, and enqueues the
+	// Runner off the poll goroutine. Wire it before starting the hub's poll loop
+	// (SetIssueOpener is not safe to call once Run is polling). Passing the opener
+	// only here keeps a server with the feature unwired from ever fetching the
+	// detailed queue.
+	wsHub.SetIssueOpener(remediation.NewAutoDispatcher(remediationService))
+	go wsHub.Run(ctx)
 
 	// Discover handler (always created — checks credentials at request time)
 	apiCache := cache.New()
