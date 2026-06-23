@@ -28,11 +28,15 @@ class AuthService {
     String serverUrl,
     String username,
     String password,
+    String deviceName,
+    String hardwareId,
   ) async {
     final dio = _createDio(serverUrl);
     final resp = await dio.post('/api/auth/setup', data: {
       'username': username,
       'password': password,
+      'device_name': deviceName,
+      if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
     });
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
@@ -42,11 +46,15 @@ class AuthService {
     String serverUrl,
     String username,
     String password,
+    String deviceName,
+    String hardwareId,
   ) async {
     final dio = _createDio(serverUrl);
     final resp = await dio.post('/api/auth/login', data: {
       'username': username,
       'password': password,
+      'device_name': deviceName,
+      if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
     });
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
@@ -68,11 +76,13 @@ class AuthService {
     String serverUrl,
     String token,
     String deviceName,
+    String hardwareId,
   ) async {
     final dio = _createDio(serverUrl);
     final resp = await dio.post('/api/auth/connect', data: {
       'token': token,
       'device_name': deviceName,
+      if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
     });
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
@@ -289,11 +299,17 @@ class AuthService {
     String serverUrl,
     String sessionId,
     Map<String, dynamic> assertionResponse,
+    String deviceName,
+    String hardwareId,
   ) async {
     final dio = _createDio(serverUrl);
     final resp = await dio.post(
       '/api/auth/passkey/login/finish',
-      queryParameters: {'session_id': sessionId},
+      queryParameters: {
+        'session_id': sessionId,
+        'device_name': deviceName,
+        if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
+      },
       data: assertionResponse,
     );
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);

@@ -71,6 +71,11 @@ class StorageKeys {
   static const String serverUrl = 'server_url';
   static const String deviceId = 'device_id';
 
+  // Stable per-device id (persisted; deliberately NOT cleared on logout) used
+  // to dedupe reconnects of the same physical device when the platform exposes
+  // no native hardware identifier (e.g. web, Android).
+  static const String hardwareId = 'hardware_id';
+
   // Cached session snapshot (user profile + server config, no secrets) so a
   // cold launch can restore an optimistic, usable session and validate it in
   // the background instead of flashing the login screen while offline.

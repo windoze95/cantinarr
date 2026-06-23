@@ -29,7 +29,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.service.Login(req.Username, req.Password)
+	resp, err := h.service.Login(req.Username, req.Password, req.DeviceName, req.HardwareID)
 	if err != nil {
 		if errors.Is(err, ErrInvalidCredentials) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
@@ -106,7 +106,7 @@ func (h *Handler) HandleRedeemConnectToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	resp, err := h.service.RedeemConnectToken(req.Token, req.DeviceName)
+	resp, err := h.service.RedeemConnectToken(req.Token, req.DeviceName, req.HardwareID)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrTokenNotFound):
@@ -285,7 +285,7 @@ func (h *Handler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.service.Setup(req.Username, req.Password)
+	resp, err := h.service.Setup(req.Username, req.Password, req.DeviceName, req.HardwareID)
 	if err != nil {
 		if errors.Is(err, ErrSetupAlreadyComplete) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "setup has already been completed"})

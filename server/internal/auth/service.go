@@ -152,7 +152,7 @@ func (s *Service) IsSetupComplete() bool {
 // Setup creates the initial admin account during first-run setup.
 // Returns JWT tokens so the user is automatically logged in.
 // The entire operation is wrapped in a transaction to prevent race conditions.
-func (s *Service) Setup(username, password string) (*TokenResponse, error) {
+func (s *Service) Setup(username, password, deviceName, hardwareID string) (*TokenResponse, error) {
 	if s.IsSetupComplete() {
 		return nil, ErrSetupAlreadyComplete
 	}
@@ -189,10 +189,13 @@ func (s *Service) Setup(username, password string) (*TokenResponse, error) {
 	}
 	userID, _ := result.LastInsertId()
 
+	if deviceName == "" {
+		deviceName = "Unknown Device"
+	}
 	deviceID := uuid.New().String()
 	_, err = tx.Exec(
-		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
-		deviceID, userID, "Setup",
+		"INSERT INTO devices (id, user_id, device_name, hardware_id) VALUES (?, ?, ?, ?)",
+		deviceID, userID, deviceName, hardwareID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create device: %w", err)
@@ -235,7 +238,7 @@ func (s *Service) MigrateSetupState() error {
 	return nil
 }
 
-func (s *Service) Login(username, password string) (*TokenResponse, error) {
+func (s *Service) Login(username, password, deviceName, hardwareID string) (*TokenResponse, error) {
 	user, err := s.getUserByUsername(username)
 	if err != nil {
 		return nil, ErrInvalidCredentials
@@ -247,14 +250,9 @@ func (s *Service) Login(username, password string) (*TokenResponse, error) {
 		return nil, ErrInvalidCredentials
 	}
 
-	// Auto-create a device record for admin login
-	deviceID := uuid.New().String()
-	_, err = s.db.Exec(
-		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
-		deviceID, user.ID, "Admin",
-	)
+	deviceID, err := s.upsertDevice(user.ID, deviceName, hardwareID)
 	if err != nil {
-		return nil, fmt.Errorf("create device: %w", err)
+		return nil, err
 	}
 
 	resp, err := s.generateTokens(user, deviceID)
@@ -417,7 +415,49 @@ func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*
 	return &CreateConnectTokenResponse{Link: link, ExpiresAt: expiresAt}, nil
 }
 
-func (s *Service) RedeemConnectToken(token, deviceName string) (*TokenResponse, error) {
+// upsertDevice binds a session to a device row for userID. When hardwareID is
+// non-empty it reuses the user's existing non-revoked row for the same physical
+// device (refreshing its name and last_seen) so reconnects don't accumulate
+// duplicate entries; otherwise it always inserts. deviceName falls back to a
+// generic label so every row is non-empty. Returns the device id. Shared by all
+// app auth paths (connect link, password login, setup, passkey) so a device is
+// named and deduped identically no matter how the session was established.
+func (s *Service) upsertDevice(userID int64, deviceName, hardwareID string) (string, error) {
+	if deviceName == "" {
+		deviceName = "Unknown Device"
+	}
+	if hardwareID != "" {
+		var existingID string
+		err := s.db.QueryRow(
+			`SELECT id FROM devices
+			 WHERE user_id = ? AND hardware_id = ? AND revoked_at IS NULL
+			 ORDER BY last_seen_at DESC LIMIT 1`,
+			userID, hardwareID,
+		).Scan(&existingID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("lookup device: %w", err)
+		}
+		if existingID != "" {
+			if _, err := s.db.Exec(
+				"UPDATE devices SET device_name = ?, last_seen_at = ? WHERE id = ?",
+				deviceName, time.Now(), existingID,
+			); err != nil {
+				return "", fmt.Errorf("update device: %w", err)
+			}
+			return existingID, nil
+		}
+	}
+	deviceID := uuid.New().String()
+	if _, err := s.db.Exec(
+		"INSERT INTO devices (id, user_id, device_name, hardware_id) VALUES (?, ?, ?, ?)",
+		deviceID, userID, deviceName, hardwareID,
+	); err != nil {
+		return "", fmt.Errorf("create device: %w", err)
+	}
+	return deviceID, nil
+}
+
+func (s *Service) RedeemConnectToken(token, deviceName, hardwareID string) (*TokenResponse, error) {
 	var ct ConnectToken
 	err := s.db.QueryRow(
 		"SELECT token, user_id, created_by, expires_at, redeemed_at FROM connect_tokens WHERE token = ?", token,
@@ -439,14 +479,9 @@ func (s *Service) RedeemConnectToken(token, deviceName string) (*TokenResponse, 
 		return nil, fmt.Errorf("mark token redeemed: %w", err)
 	}
 
-	// Create device record
-	deviceID := uuid.New().String()
-	_, err = s.db.Exec(
-		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
-		deviceID, ct.UserID, deviceName,
-	)
+	deviceID, err := s.upsertDevice(ct.UserID, deviceName, hardwareID)
 	if err != nil {
-		return nil, fmt.Errorf("create device: %w", err)
+		return nil, err
 	}
 
 	user, err := s.getUserByID(ct.UserID)

@@ -483,14 +483,15 @@ func (s *Service) FinishPasskeyLogin(sessionID string, r *http.Request) (*TokenR
 		return nil, err
 	}
 
-	// Create device and generate tokens
-	deviceID := uuid.New().String()
-	_, err = s.db.Exec(
-		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
-		deviceID, waUser.user.ID, "Passkey",
+	// Bind the session to a device, sourced from the same query params the app
+	// sends on every other auth path (model name + stable hardware id).
+	deviceID, err := s.upsertDevice(
+		waUser.user.ID,
+		r.URL.Query().Get("device_name"),
+		r.URL.Query().Get("hardware_id"),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create device: %w", err)
+		return nil, err
 	}
 
 	resp, err := s.generateTokens(waUser.user, deviceID)

@@ -24,7 +24,7 @@ func TestHasPermission_UserAndAdmin(t *testing.T) {
 func TestAuthMiddleware_RehydratesCurrentUserRole(t *testing.T) {
 	svc := setupTestService(t)
 
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestAuthMiddleware_RehydratesCurrentUserRole(t *testing.T) {
 func TestAuthMiddleware_RejectsRevokedDeviceAccessToken(t *testing.T) {
 	svc := setupTestService(t)
 
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestAuthMiddleware_RejectsRevokedDeviceAccessToken(t *testing.T) {
 
 func TestOAuthTokensAreAudienceBoundAndRefreshable(t *testing.T) {
 	svc := setupTestService(t)
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestOAuthTokensAreAudienceBoundAndRefreshable(t *testing.T) {
 
 func TestOAuthRefreshWrongResourceDoesNotConsumeToken(t *testing.T) {
 	svc := setupTestService(t)
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestOAuthRefreshWrongResourceDoesNotConsumeToken(t *testing.T) {
 
 func TestOAuthRefreshTokenRespectsDeviceRevocation(t *testing.T) {
 	svc := setupTestService(t)
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestOAuthRefreshTokenRespectsDeviceRevocation(t *testing.T) {
 func TestPasskeySetupTokenRespectsDeviceRevocation(t *testing.T) {
 	svc := setupTestService(t)
 
-	loginResp, err := svc.Login("admin", "testpass123")
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}

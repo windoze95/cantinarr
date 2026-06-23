@@ -62,8 +62,10 @@ type ConnectToken struct {
 }
 
 type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	DeviceName string `json:"device_name"`
+	HardwareID string `json:"hardware_id"`
 }
 
 type RefreshRequest struct {
@@ -90,6 +92,10 @@ type CreateConnectTokenResponse struct {
 type RedeemConnectTokenRequest struct {
 	Token      string `json:"token"`
 	DeviceName string `json:"device_name"`
+	// HardwareID is a stable per-device identifier (e.g. iOS
+	// identifierForVendor) used to dedupe reconnects of the same physical
+	// device. Optional: empty when the client can't provide one (e.g. web).
+	HardwareID string `json:"hardware_id"`
 }
 
 type DeviceInfo struct {
@@ -102,8 +108,10 @@ type DeviceInfo struct {
 }
 
 type SetupRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	DeviceName string `json:"device_name"`
+	HardwareID string `json:"hardware_id"`
 }
 
 // SetPasswordRequest sets or replaces the authenticated user's password.
