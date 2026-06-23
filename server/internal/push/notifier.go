@@ -65,20 +65,35 @@ func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]in
 	n.send(client, []int64{userID}, title, body, passthrough(CategoryRequestDecision, data))
 }
 
-// NotifyAdmins pushes a new pending request to every admin who has opted into
-// the request_pending category (on by default). Only "request_pending" events
-// produce a notification.
+// NotifyAdmins pushes an admin-scoped event to every admin opted into the
+// matching category. Two events produce a notification today: "request_pending"
+// (a new media request) and "issue_created" (a new AI-remediation issue, on by
+// default). Any other event type is a no-op here (WS-only).
+//
+// Untrusted-text invariant (M5): the alert body is a FIXED server-authored
+// template, never an interpolated title/reason; the media title travels only as
+// a structured passthrough field (and as the request alert's body, which is
+// arr/user-sourced and unchanged from existing behavior).
 func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 	client := n.client()
-	if client == nil || eventType != CategoryRequestPending {
+	if client == nil {
 		return
 	}
+	switch eventType {
+	case CategoryRequestPending:
+		n.notifyRequestPending(client, data)
+	case CategoryIssueCreated:
+		n.notifyIssueCreated(client, data)
+	}
+}
 
+// notifyRequestPending pushes a new pending request to opted-in admins, badging
+// the home-screen icon with the live queue depth.
+func (n *Notifier) notifyRequestPending(client *Client, data map[string]interface{}) {
 	title := str(data["title"])
 	if title == "" {
 		title = "a title"
 	}
-
 	recipients, err := n.prefs.usersOptedInto(CategoryRequestPending)
 	if err != nil {
 		n.logger.Error("push: resolve request_pending recipients", "err", err)
@@ -87,7 +102,6 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 	if len(recipients) == 0 {
 		return
 	}
-
 	// Set the home-screen icon badge to the live queue depth so admins see the
 	// count even while the app is closed (the gateway maps this to aps.badge).
 	var opts SendOptions
@@ -95,6 +109,30 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		opts.Badge = &count
 	}
 	n.sendWithOptions(client, recipients, "New request", title, passthrough(CategoryRequestPending, data), opts)
+}
+
+// notifyIssueCreated pushes a new AI-remediation issue to opted-in admins. The
+// body is a fixed template (the untrusted issue title is NOT placed on the
+// lock screen); issue_id rides along for tap deep-linking and open_count badges
+// the icon.
+func (n *Notifier) notifyIssueCreated(client *Client, data map[string]interface{}) {
+	recipients, err := n.prefs.usersOptedInto(CategoryIssueCreated)
+	if err != nil {
+		n.logger.Error("push: resolve issue_created recipients", "err", err)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	out := map[string]any{"type": CategoryIssueCreated}
+	if v, ok := data["issue_id"]; ok {
+		out["issue_id"] = v
+	}
+	var opts SendOptions
+	if count, ok := intval(data["open_count"]); ok {
+		opts.Badge = &count
+	}
+	n.sendWithOptions(client, recipients, "New problem reported", "Someone reported a problem with their media", out, opts)
 }
 
 // NotifyNewMovie pushes a "movie became available" alert to every user opted

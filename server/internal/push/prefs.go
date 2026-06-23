@@ -12,6 +12,7 @@ type Prefs struct {
 	RequestPending  bool `json:"request_pending"`
 	NewMovie        bool `json:"new_movie"`
 	NewEpisode      bool `json:"new_episode"`
+	IssueCreated    bool `json:"issue_created"`
 }
 
 // Notification categories. These are the wire values used by the preferences
@@ -21,6 +22,9 @@ const (
 	CategoryRequestPending  = "request_pending"
 	CategoryNewMovie        = "new_movie"
 	CategoryNewEpisode      = "new_episode"
+	// CategoryIssueCreated notifies admins of a new AI-remediation issue
+	// (user-reported or auto-detected). Admin-scoped, on by default.
+	CategoryIssueCreated = "issue_created"
 )
 
 // defaultPrefs is the preference set applied when a user has no row. It must
@@ -31,6 +35,7 @@ var defaultPrefs = Prefs{
 	RequestPending:  true,
 	NewMovie:        true,
 	NewEpisode:      true,
+	IssueCreated:    true,
 }
 
 // categoryColumn maps a category to its notification_prefs column and the
@@ -44,6 +49,7 @@ var categoryColumn = map[string]struct {
 	CategoryRequestPending:  {"request_pending", defaultPrefs.RequestPending},
 	CategoryNewMovie:        {"new_movie", defaultPrefs.NewMovie},
 	CategoryNewEpisode:      {"new_episode", defaultPrefs.NewEpisode},
+	CategoryIssueCreated:    {"issue_created", defaultPrefs.IssueCreated},
 }
 
 // PrefsStore reads and writes per-user notification preferences. It is safe to
@@ -62,10 +68,10 @@ func NewPrefsStore(db *sql.DB) *PrefsStore {
 func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 	p := defaultPrefs
 	err := s.db.QueryRow(
-		`SELECT request_decision, request_pending, new_movie, new_episode
+		`SELECT request_decision, request_pending, new_movie, new_episode, issue_created
 		 FROM notification_prefs WHERE user_id = ?`,
 		userID,
-	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode)
+	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.IssueCreated)
 	if err == sql.ErrNoRows {
 		return defaultPrefs, nil
 	}
@@ -79,14 +85,15 @@ func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 func (s *PrefsStore) Set(userID int64, p Prefs) error {
 	_, err := s.db.Exec(
 		`INSERT INTO notification_prefs
-		   (user_id, request_decision, request_pending, new_movie, new_episode)
-		 VALUES (?, ?, ?, ?, ?)
+		   (user_id, request_decision, request_pending, new_movie, new_episode, issue_created)
+		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   request_decision = excluded.request_decision,
 		   request_pending  = excluded.request_pending,
 		   new_movie        = excluded.new_movie,
-		   new_episode      = excluded.new_episode`,
-		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode,
+		   new_episode      = excluded.new_episode,
+		   issue_created    = excluded.issue_created`,
+		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.IssueCreated,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert notification prefs: %w", err)
@@ -114,7 +121,8 @@ func (s *PrefsStore) usersOptedInto(category string) ([]int64, error) {
 		 WHERE COALESCE(p.%s, %d) = 1`,
 		col.column, def,
 	)
-	if category == CategoryRequestPending {
+	// Admin-scoped categories: only admins act on pending requests or issues.
+	if category == CategoryRequestPending || category == CategoryIssueCreated {
 		query += " AND u.role = 'admin'"
 	}
 
