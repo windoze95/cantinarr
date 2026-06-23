@@ -54,3 +54,24 @@ final requestDecisionEventsProvider = StreamProvider.autoDispose<WsEvent>((ref) 
   final events = ref.watch(realtimeEventsProvider);
   return events.where((e) => e.type == 'request_decision');
 });
+
+/// Per-issue update pings (`issue_updated` events) for one issue id. On a
+/// ping the thread screen refetches that issue over REST (the server emits a
+/// thin ping per persisted agent step, not full bodies). Mirrors
+/// [arrQueueChangedProvider].
+final issueEventsProvider =
+    StreamProvider.autoDispose.family<WsEvent, int>((ref, issueId) {
+  final events = ref.watch(realtimeEventsProvider);
+  return events.where((e) =>
+      e.type == 'issue_updated' &&
+      (e.data['issue_id'] as num?)?.toInt() == issueId);
+});
+
+/// New-issue / pending-approval pings (`issue_created`,
+/// `agent_action_pending`). The admin issues list refreshes its contents on
+/// any of these.
+final issuesChangedProvider = StreamProvider.autoDispose<WsEvent>((ref) {
+  final events = ref.watch(realtimeEventsProvider);
+  return events.where(
+      (e) => e.type == 'issue_created' || e.type == 'agent_action_pending');
+});

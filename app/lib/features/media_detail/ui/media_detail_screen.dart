@@ -8,8 +8,10 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/media_header.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
+import '../../issues/ui/report_problem_sheet.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/request_provider.dart';
 import '../../request/ui/request_button.dart';
@@ -157,6 +159,29 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           ),
                         ),
                       ),
+                    ),
+
+                    // Quiet "Report a problem" affordance — only once the
+                    // title is at least partially in the library and the
+                    // server allows reporting.
+                    ListenableBuilder(
+                      listenable: _requestNotifier,
+                      builder: (_, __) {
+                        if (!_canReport(_requestNotifier.state.status)) {
+                          return const SizedBox.shrink();
+                        }
+                        return Center(
+                          child: TextButton.icon(
+                            onPressed: () => _onReportProblem(state),
+                            icon: const Icon(Icons.flag_outlined, size: 14),
+                            label: const Text('Report a problem'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppTheme.textSecondary,
+                              textStyle: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(height: 16),
 
@@ -367,6 +392,110 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       tvdbId: tvdbId,
       seasonScope: seasonScope,
       qualityProfileId: qualityProfileId,
+    );
+  }
+
+  /// Reporting is offered only once the title is at least partially in the
+  /// library (so there's a download to complain about) and the server allows
+  /// it.
+  bool _canReport(RequestStatus status) {
+    final allow =
+        ref.watch(authProvider).valueOrNull?.connection?.allowReporting ??
+            false;
+    if (!allow) return false;
+    return status == RequestStatus.available ||
+        status == RequestStatus.partial ||
+        status == RequestStatus.downloading;
+  }
+
+  /// Opens the report flow. For a movie, scopes directly to the movie. For TV,
+  /// lets the reporter narrow to a season/episode (reusing the loaded seasons)
+  /// or report the whole series.
+  Future<void> _onReportProblem(MediaDetailState state) async {
+    final title = state.title;
+    if (widget.mediaType == MediaType.movie) {
+      await showReportProblemSheet(
+        context,
+        scope: ReportScope.movie(tmdbId: widget.id, title: title),
+      );
+      return;
+    }
+
+    final tvdbId = state.tvDetail?.externalIds?.tvdbId;
+    final scope = await _pickTvScope(state, title, tvdbId);
+    if (scope == null) return; // cancelled
+    if (!mounted) return;
+    await showReportProblemSheet(context, scope: scope);
+  }
+
+  /// Presents a small picker for which part of a show the report is about.
+  /// Returns null if cancelled.
+  Future<ReportScope?> _pickTvScope(
+      MediaDetailState state, String title, int? tvdbId) {
+    // Real seasons only (drop a season 0 / specials placeholder when empty).
+    final seasons =
+        state.seasons.where((s) => s.seasonNumber > 0).toList();
+    return showModalBottomSheet<ReportScope>(
+      context: context,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Text(
+                  "What's the problem with?",
+                  style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
+                ),
+              ),
+              ListTile(
+                leading:
+                    const Icon(Icons.tv_outlined, color: AppTheme.textSecondary),
+                title: const Text('The whole series',
+                    style: TextStyle(color: AppTheme.textPrimary)),
+                onTap: () => Navigator.of(sheetContext).pop(
+                  ReportScope.series(
+                      tmdbId: widget.id, tvdbId: tvdbId, title: title),
+                ),
+              ),
+              if (seasons.isNotEmpty)
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final s in seasons)
+                        ListTile(
+                          leading: const Icon(Icons.video_library_outlined,
+                              color: AppTheme.textSecondary),
+                          title: Text('Season ${s.seasonNumber}',
+                              style:
+                                  const TextStyle(color: AppTheme.textPrimary)),
+                          onTap: () => Navigator.of(sheetContext).pop(
+                            ReportScope.series(
+                              tmdbId: widget.id,
+                              tvdbId: tvdbId,
+                              seasonNumber: s.seasonNumber,
+                              title: title,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 

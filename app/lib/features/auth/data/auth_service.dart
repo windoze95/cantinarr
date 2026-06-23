@@ -459,10 +459,18 @@ class ServerConfig {
   final AvailableServices services;
   final List<ServiceInstance> instances;
 
+  /// Whether the AI-remediation feature is enabled server-side.
+  final bool issuesEnabled;
+
+  /// Whether users may see the "Report a problem" affordance.
+  final bool allowReporting;
+
   const ServerConfig({
     required this.serverName,
     required this.services,
     this.instances = const [],
+    this.issuesEnabled = false,
+    this.allowReporting = false,
   });
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) {
@@ -476,6 +484,8 @@ class ServerConfig {
       services: AvailableServices.fromJson(
           json['services'] as Map<String, dynamic>? ?? {}),
       instances: instancesList,
+      issuesEnabled: json['issues_enabled'] as bool? ?? false,
+      allowReporting: json['allow_reporting'] as bool? ?? false,
     );
   }
 }

@@ -138,6 +138,13 @@ class PushService {
         if (tmdbId == null || tmdbId <= 0) return;
         final mediaType = data['media_type'] == 'tv' ? 'tv' : 'movie';
         router.push('/detail/$mediaType/$tmdbId');
+      case 'issue_created':
+      case 'issue_updated':
+      case 'issue_resolved':
+      case 'agent_action_pending':
+        final issueId = _asInt(data['issue_id']);
+        if (issueId == null || issueId <= 0) return;
+        router.push('/issues/$issueId');
     }
   }
 

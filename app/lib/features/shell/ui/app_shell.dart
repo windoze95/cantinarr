@@ -14,6 +14,7 @@ import '../../ai_assistant/ui/chat_bubble.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/ui/search_results_view.dart';
+import '../../issues/logic/issues_provider.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/logic/radarr_movies_provider.dart';
 import '../../request/logic/pending_approvals_provider.dart';
@@ -338,6 +339,11 @@ class _AppShellState extends ConsumerState<AppShell>
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
+    // Open-issue count — drives the drawer "Issues" entry and contributes to
+    // the hamburger dot. Always 0 for non-admins. Watched here (not just in
+    // the drawer) so the badge stays live app-wide.
+    final openIssues = ref.watch(openIssuesProvider);
+    final menuBadgeCount = pendingApprovals + openIssues;
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
     final libraryStatus = searchState.isSearching && showSearchResults
@@ -404,7 +410,7 @@ class _AppShellState extends ConsumerState<AppShell>
             padding: const EdgeInsets.only(left: 4, top: 8, bottom: 8),
             child: IconButton(
               icon: Badge(
-                isLabelVisible: pendingApprovals > 0,
+                isLabelVisible: menuBadgeCount > 0,
                 backgroundColor: AppTheme.accent,
                 smallSize: 9,
                 child: const Icon(Icons.menu, color: AppTheme.textPrimary),
@@ -739,6 +745,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final isAdmin =
         ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
+    final openIssues = ref.watch(openIssuesProvider);
 
     return SafeArea(
       child: Column(
@@ -787,6 +794,15 @@ class _AppShellState extends ConsumerState<AppShell>
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
                 context.push('/approvals');
+              },
+            ),
+            _DrawerItem(
+              icon: Icons.flag_outlined,
+              title: 'Issues',
+              badgeCount: openIssues,
+              onTap: () {
+                if (isOverlay) Navigator.pop(context);
+                context.push('/issues');
               },
             ),
             const Divider(color: AppTheme.border),

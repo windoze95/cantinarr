@@ -6,6 +6,8 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/status_pill.dart';
+import '../../auth/logic/auth_provider.dart';
+import '../../issues/ui/report_problem_sheet.dart';
 import '../data/radarr_api_service.dart';
 import '../data/radarr_models.dart';
 import 'radarr_import_doctor_sheet.dart';
@@ -183,6 +185,19 @@ class _RadarrMovieDetailScreenState
               onShowIssues: _queueItem!.hasIssues ? _openDoctor : null,
             ),
           ],
+          if (_canReport) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ReportProblemButton(
+                scope: ReportScope.movie(
+                  tmdbId: _movie.tmdbId ?? 0,
+                  title: _movie.title,
+                ),
+                onSubmitted: _load,
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           const Text('History',
               style: TextStyle(
@@ -233,6 +248,15 @@ class _RadarrMovieDetailScreenState
     }
     if (!_movie.monitored) return AppTheme.unavailable;
     return _movie.isAvailable ? AppTheme.error : AppTheme.downloading;
+  }
+
+  /// Show "Report a problem" only when the server allows it and we have a
+  /// TMDB id to scope the report to.
+  bool get _canReport {
+    final allow =
+        ref.watch(authProvider).valueOrNull?.connection?.allowReporting ??
+            false;
+    return allow && (_movie.tmdbId ?? 0) > 0;
   }
 }
 

@@ -9,6 +9,7 @@ import 'core/providers/realtime_provider.dart';
 import 'core/storage/preferences.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/logic/auth_provider.dart';
+import 'features/issues/logic/issues_provider.dart';
 import 'features/notifications/push_service.dart';
 import 'features/request/logic/pending_approvals_provider.dart';
 import 'navigation/app_router.dart';
@@ -48,6 +49,8 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       // Re-sync the approvals badges in case the queue changed (or another
       // admin acted) while we were backgrounded. No-op for non-admins.
       ref.read(pendingApprovalsProvider.notifier).refresh();
+      // Same for the open-issues badge.
+      ref.read(openIssuesProvider.notifier).refresh();
     }
   }
 
