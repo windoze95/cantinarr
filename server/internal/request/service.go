@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -87,6 +88,11 @@ type CreateRequest struct {
 	TvdbID           int    `json:"tvdb_id"`
 	SeasonScope      string `json:"season_scope"`
 	QualityProfileID int    `json:"quality_profile_id"`
+	// Seasons is an optional explicit list of season numbers (TV only). When
+	// present & non-empty it takes the seasonpass code path (monitor exactly
+	// these seasons), overriding the coarse SeasonScope. Empty/absent keeps the
+	// existing season_scope behavior.
+	Seasons []int `json:"seasons,omitempty"`
 }
 
 type CreateResponse struct {
@@ -98,6 +104,20 @@ type CreateResponse struct {
 type StatusResponse struct {
 	Status   string  `json:"status"`
 	Progress float64 `json:"progress"`
+	// Seasons carries per-season availability for TV titles (omitted for
+	// movies and for series not yet in the library). Season 0 / Specials are
+	// excluded, matching the rest of the app's season handling.
+	Seasons []SeasonStatus `json:"seasons,omitempty"`
+}
+
+// SeasonStatus is one season's availability, mirroring the title-level status
+// vocabulary (available / partial / downloading / requested / unavailable).
+type SeasonStatus struct {
+	SeasonNumber     int     `json:"season_number"`
+	EpisodeFileCount int     `json:"episode_file_count"`
+	EpisodeCount     int     `json:"episode_count"`
+	Status           string  `json:"status"`
+	Progress         float64 `json:"progress"`
 }
 
 type RequestLog struct {
@@ -201,6 +221,10 @@ type resolvedRequest struct {
 	title            string
 	seasonScope      string
 	qualityProfileID int
+	// seasonNumbers, when non-empty, is an explicit set of seasons to monitor
+	// via the seasonpass path (overrides seasonScope). It round-trips through
+	// the approval flow by being JSON-encoded into the season_scope column.
+	seasonNumbers []int
 }
 
 // GetGlobalSettings returns the stored global request defaults, falling back
@@ -377,10 +401,22 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	// Season scope (TV only). Honor the client's choice only when allowed;
 	// otherwise the resolved default stands. Movies keep an empty scope so the
 	// stored row / admin queue don't show a meaningless value.
+	//
+	// An explicit season list (req.Seasons) takes precedence over the coarse
+	// scope when season choice is allowed: it's normalized, captured on the
+	// resolved request, and JSON-encoded into seasonScope so it persists through
+	// the (pending -> approve) flow in the existing season_scope column. The
+	// addSeries path then routes it to seasonpass instead of addOptions.Monitor.
 	if req.MediaType == "tv" {
 		resolved.seasonScope = eff.SeasonScope
 		if req.SeasonScope != "" && eff.AllowSeasonChoice && validSeasonScope(req.SeasonScope) {
 			resolved.seasonScope = req.SeasonScope
+		}
+		if eff.AllowSeasonChoice {
+			if nums := normalizeSeasonNumbers(req.Seasons); len(nums) > 0 {
+				resolved.seasonNumbers = nums
+				resolved.seasonScope = encodeSeasonNumbers(nums)
+			}
 		}
 	}
 
@@ -538,6 +574,16 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 	if tvdbID != 0 {
 		existing, err := sonarrClient.GetSeriesByTVDB(tvdbID)
 		if err == nil && existing != nil {
+			// Series is already in the library. With an explicit season list this
+			// is a "request more seasons" action: add the chosen seasons to the
+			// existing monitor set (without unmonitoring what's already there) and
+			// kick off a per-season search.
+			if len(r.seasonNumbers) > 0 {
+				if err := s.monitorAndSearchSeasons(sonarrClient, existing, r.seasonNumbers, false); err != nil {
+					return "", "", err
+				}
+				return StatusRequested, existing.Title, nil
+			}
 			status := StatusRequested
 			if existing.Statistics != nil && existing.Statistics.PercentOfEpisodes >= 100 {
 				status = StatusAvailable
@@ -589,6 +635,29 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 		Monitored:        true,
 		SeasonFolder:     true,
 	}
+
+	// Explicit season list: Sonarr's add-series API has no field for an
+	// arbitrary set of season numbers (addOptions.Monitor is a single enum), so
+	// a "seasons: [...]" DTO would be silently ignored. Add the series
+	// unmonitored with no search, then drive the exact selection via seasonpass
+	// + a per-season search. The coarse season_scope path below stays the
+	// default for everyone who doesn't pick specific seasons.
+	if len(r.seasonNumbers) > 0 {
+		addReq.AddOptions.SearchForMissingEpisodes = false
+		addReq.AddOptions.Monitor = "none"
+		if err := sonarrClient.AddSeries(addReq); err != nil {
+			return "", "", fmt.Errorf("add series failed: %w", err)
+		}
+		added, err := sonarrClient.GetSeriesByTVDB(tvdbID)
+		if err != nil || added == nil {
+			return "", "", fmt.Errorf("add series failed: could not re-read added series for seasonpass: %w", err)
+		}
+		if err := s.monitorAndSearchSeasons(sonarrClient, added, r.seasonNumbers, true); err != nil {
+			return "", "", err
+		}
+		return StatusRequested, lookup.Title, nil
+	}
+
 	addReq.AddOptions.SearchForMissingEpisodes = true
 	addReq.AddOptions.Monitor = sonarrMonitor(r.seasonScope)
 
@@ -596,6 +665,49 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("add series failed: %w", err)
 	}
 	return StatusRequested, lookup.Title, nil
+}
+
+// monitorAndSearchSeasons monitors exactly (or, when exclusive is false,
+// additionally) the chosen seasons on an existing Sonarr series via seasonpass,
+// then triggers a SeasonSearch for each chosen season. When exclusive is true
+// the chosen seasons are monitored and every other real season is unmonitored;
+// when false the chosen seasons are added to whatever is already monitored
+// (used for "request more seasons" on a series already in the library). Season
+// 0 / Specials is never touched unless explicitly chosen.
+func (s *Service) monitorAndSearchSeasons(client *sonarr.Client, series *sonarr.Series, seasons []int, exclusive bool) error {
+	chosen := make(map[int]bool, len(seasons))
+	for _, n := range seasons {
+		chosen[n] = true
+	}
+	monitored := make(map[int]bool, len(series.Seasons))
+	for _, s := range series.Seasons {
+		switch {
+		case chosen[s.SeasonNumber]:
+			monitored[s.SeasonNumber] = true
+		case exclusive && s.SeasonNumber > 0:
+			// Exclusive selection: unmonitor other real seasons (leave Specials).
+			monitored[s.SeasonNumber] = false
+		default:
+			// Non-exclusive: preserve the season's current monitored state.
+			monitored[s.SeasonNumber] = s.Monitored
+		}
+	}
+	// Include any chosen season Sonarr didn't list (defensive; normally all
+	// seasons are present once the series is added).
+	for n := range chosen {
+		if _, ok := monitored[n]; !ok {
+			monitored[n] = true
+		}
+	}
+	if err := client.SetSeasonsViaSeasonPass(series.ID, monitored); err != nil {
+		return fmt.Errorf("set seasons failed: %w", err)
+	}
+	for _, n := range seasons {
+		// Best-effort: a failed per-season search shouldn't undo the monitor
+		// change. Sonarr will still pick up monitored seasons on its next cycle.
+		_ = client.TriggerSeasonSearch(series.ID, n)
+	}
+	return nil
 }
 
 func (s *Service) GetStatus(tmdbID int, mediaType string) (*StatusResponse, error) {
@@ -690,21 +802,60 @@ func (s *Service) getTVStatus(tmdbID int) (*StatusResponse, error) {
 		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
 
+	seasons := seasonStatuses(series)
+
 	if series.Statistics != nil {
 		if series.Statistics.PercentOfEpisodes >= 100 {
-			return &StatusResponse{Status: StatusAvailable, Progress: 1.0}, nil
+			return &StatusResponse{Status: StatusAvailable, Progress: 1.0, Seasons: seasons}, nil
 		}
 		if series.Statistics.EpisodeFileCount > 0 {
 			progress := series.Statistics.PercentOfEpisodes / 100.0
-			return &StatusResponse{Status: StatusPartial, Progress: progress}, nil
+			return &StatusResponse{Status: StatusPartial, Progress: progress, Seasons: seasons}, nil
 		}
 	}
 
 	if series.Monitored {
-		return &StatusResponse{Status: StatusRequested, Progress: 0}, nil
+		return &StatusResponse{Status: StatusRequested, Progress: 0, Seasons: seasons}, nil
 	}
 
-	return &StatusResponse{Status: StatusUnavailable}, nil
+	return &StatusResponse{Status: StatusUnavailable, Seasons: seasons}, nil
+}
+
+// seasonStatuses builds the per-season availability breakdown for a series from
+// its seasons[].statistics. Season 0 / Specials is excluded to match the rest
+// of the app (the TMDB SeasonGrid filters it out too). Each season's status
+// mirrors the title vocabulary, derived from file counts + monitoring (queue
+// isn't consulted here, matching the title-level TV derivation, which keeps
+// status checks to a single Sonarr call).
+func seasonStatuses(series *sonarr.Series) []SeasonStatus {
+	if series == nil || len(series.Seasons) == 0 {
+		return nil
+	}
+	out := make([]SeasonStatus, 0, len(series.Seasons))
+	for _, s := range series.Seasons {
+		if s.SeasonNumber <= 0 {
+			continue // skip Specials
+		}
+		ss := SeasonStatus{SeasonNumber: s.SeasonNumber, Status: StatusUnavailable}
+		if s.Statistics != nil {
+			ss.EpisodeFileCount = s.Statistics.EpisodeFileCount
+			ss.EpisodeCount = s.Statistics.EpisodeCount
+			switch {
+			case s.Statistics.EpisodeCount > 0 && s.Statistics.EpisodeFileCount >= s.Statistics.EpisodeCount:
+				ss.Status = StatusAvailable
+				ss.Progress = 1.0
+			case s.Statistics.EpisodeFileCount > 0:
+				ss.Status = StatusPartial
+				ss.Progress = float64(s.Statistics.EpisodeFileCount) / float64(s.Statistics.EpisodeCount)
+			case s.Monitored:
+				ss.Status = StatusRequested
+			}
+		} else if s.Monitored {
+			ss.Status = StatusRequested
+		}
+		out = append(out, ss)
+	}
+	return out
 }
 
 func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
@@ -777,6 +928,9 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	if err != nil {
 		return nil, "", fmt.Errorf("load request: %w", err)
 	}
+	// An explicit season list was stored as JSON in season_scope; decode it so
+	// approval replays the seasonpass path the requester chose.
+	r.seasonNumbers = decodeSeasonNumbers(r.seasonScope)
 	return &r, status, nil
 }
 
@@ -791,8 +945,11 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 		return nil, fmt.Errorf("request is not pending")
 	}
 	if override != nil {
+		// An admin choosing a coarse scope replaces any explicit season list the
+		// requester had picked, so the coarse addOptions.Monitor path is used.
 		if override.SeasonScope != "" && validSeasonScope(override.SeasonScope) {
 			r.seasonScope = override.SeasonScope
+			r.seasonNumbers = nil
 		}
 		if override.QualityProfileID != 0 {
 			r.qualityProfileID = override.QualityProfileID
@@ -944,6 +1101,52 @@ func sqlNullStr(v string) interface{} {
 		return nil
 	}
 	return v
+}
+
+// encodeSeasonNumbers serializes an explicit season list for storage in the
+// season_scope column (e.g. "[3,5]"). It sorts + de-dups so the stored value is
+// stable and the admin queue shows a tidy list. Returns "" for an empty list.
+func encodeSeasonNumbers(seasons []int) string {
+	cleaned := normalizeSeasonNumbers(seasons)
+	if len(cleaned) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(cleaned)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// decodeSeasonNumbers parses a season_scope value that holds an explicit season
+// list (a JSON array like "[3,5]"). A coarse scope ("all"/"first"/...) or any
+// non-array value yields nil, so the caller falls back to the coarse path.
+func decodeSeasonNumbers(scope string) []int {
+	if len(scope) == 0 || scope[0] != '[' {
+		return nil
+	}
+	var seasons []int
+	if err := json.Unmarshal([]byte(scope), &seasons); err != nil {
+		return nil
+	}
+	return normalizeSeasonNumbers(seasons)
+}
+
+// normalizeSeasonNumbers sorts ascending, de-dups, and drops negative season
+// numbers. Season 0 (Specials) is allowed through if the caller explicitly
+// selected it.
+func normalizeSeasonNumbers(seasons []int) []int {
+	seen := make(map[int]bool, len(seasons))
+	out := make([]int, 0, len(seasons))
+	for _, n := range seasons {
+		if n < 0 || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	sort.Ints(out)
+	return out
 }
 
 func validSeasonScope(scope string) bool {

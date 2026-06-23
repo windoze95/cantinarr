@@ -49,6 +49,69 @@ class SeasonScope {
       choices.firstWhere((c) => c.value == value, orElse: () => choices.last).label;
 }
 
+/// One season's availability, mirroring the backend `SeasonStatus` payload
+/// (`StatusResponse.seasons[]`). Drives the per-season request table.
+class RequestSeasonStatus {
+  final int seasonNumber;
+  final int episodeFileCount;
+  final int episodeCount;
+  final RequestStatus status;
+  final double progress;
+
+  const RequestSeasonStatus({
+    required this.seasonNumber,
+    this.episodeFileCount = 0,
+    this.episodeCount = 0,
+    this.status = RequestStatus.unavailable,
+    this.progress = 0,
+  });
+
+  factory RequestSeasonStatus.fromJson(Map<String, dynamic> json) {
+    final statusName = json['status'] as String? ?? 'unavailable';
+    return RequestSeasonStatus(
+      seasonNumber: json['season_number'] as int? ?? 0,
+      episodeFileCount: json['episode_file_count'] as int? ?? 0,
+      episodeCount: json['episode_count'] as int? ?? 0,
+      status: RequestStatus.values.firstWhere(
+        (s) => s.name == statusName,
+        orElse: () => RequestStatus.unavailable,
+      ),
+      progress: (json['progress'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  /// True once every episode of the season has a file.
+  bool get isAvailable => status == RequestStatus.available;
+
+  /// "x/y" episode-file availability, e.g. "7/10".
+  String get episodesLabel => '$episodeFileCount/$episodeCount';
+}
+
+/// The full request status for a title: the overall [status] plus, for TV, the
+/// per-season breakdown (empty for movies or series not in the library).
+class RequestStatusDetail {
+  final RequestStatus status;
+  final List<RequestSeasonStatus> seasons;
+
+  const RequestStatusDetail({
+    this.status = RequestStatus.unavailable,
+    this.seasons = const [],
+  });
+
+  factory RequestStatusDetail.fromJson(Map<String, dynamic> json) {
+    final statusName = json['status'] as String? ?? 'unavailable';
+    return RequestStatusDetail(
+      status: RequestStatus.values.firstWhere(
+        (s) => s.name == statusName,
+        orElse: () => RequestStatus.unavailable,
+      ),
+      seasons: ((json['seasons'] as List?) ?? const [])
+          .map((e) => RequestSeasonStatus.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
 /// An arr quality profile the user may pick for a request.
 class QualityProfileOption {
   final int id;
@@ -102,19 +165,21 @@ class RequestService {
   /// Check the current status of a media item for the current user (surfaces
   /// the user's own pending/denied state ahead of live availability).
   Future<RequestStatus> checkStatus(int tmdbId, MediaType mediaType) async {
+    return (await checkStatusDetail(tmdbId, mediaType)).status;
+  }
+
+  /// Like [checkStatus] but also returns the per-season availability breakdown
+  /// (TV only). Falls back to an unavailable detail with no seasons on error.
+  Future<RequestStatusDetail> checkStatusDetail(
+      int tmdbId, MediaType mediaType) async {
     try {
       final resp = await _backendDio.get(
         '/api/requests/$tmdbId/status',
         queryParameters: {'media_type': mediaType.name},
       );
-      final data = resp.data as Map<String, dynamic>;
-      final statusName = data['status'] as String? ?? 'unavailable';
-      return RequestStatus.values.firstWhere(
-        (s) => s.name == statusName,
-        orElse: () => RequestStatus.unavailable,
-      );
+      return RequestStatusDetail.fromJson(resp.data as Map<String, dynamic>);
     } catch (_) {
-      return RequestStatus.unavailable;
+      return const RequestStatusDetail();
     }
   }
 
@@ -141,6 +206,7 @@ class RequestService {
     String? title,
     int? tvdbId,
     String? seasonScope,
+    List<int>? seasons,
     int? qualityProfileId,
   }) async {
     try {
@@ -150,7 +216,14 @@ class RequestService {
       };
       if (title != null) body['title'] = title;
       if (tvdbId != null && tvdbId != 0) body['tvdb_id'] = tvdbId;
-      if (seasonScope != null) body['season_scope'] = seasonScope;
+      // An explicit season list routes the server to the seasonpass path
+      // (monitor exactly these seasons). It takes precedence over season_scope,
+      // so only send the coarse scope when no explicit list was chosen.
+      if (seasons != null && seasons.isNotEmpty) {
+        body['seasons'] = seasons;
+      } else if (seasonScope != null) {
+        body['season_scope'] = seasonScope;
+      }
       if (qualityProfileId != null && qualityProfileId != 0) {
         body['quality_profile_id'] = qualityProfileId;
       }

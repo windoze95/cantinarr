@@ -139,6 +139,14 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
     );
   }
 
+  /// All-seasons availability line for a TV card, e.g. "18/24 eps". Returns null
+  /// when Sonarr reported no episode statistics for the series.
+  String? _availabilityLine(SonarrSeries series) {
+    final stats = series.statistics;
+    if (stats == null || stats.episodeCount == 0) return null;
+    return '${stats.episodeFileCount}/${stats.episodeCount} eps';
+  }
+
   Widget _buildRow({
     required String title,
     required List<SonarrSeries> items,
@@ -171,6 +179,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
               posterPath: series.posterUrl,
               statusLabel: statusLabel,
               statusColor: statusColor,
+              subtitle: _availabilityLine(series),
               width: 100,
               onTap: series.tmdbId != null
                   ? () => context.push('/detail/tv/${series.tmdbId}')
