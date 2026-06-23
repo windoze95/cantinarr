@@ -20,6 +20,7 @@ const (
 	PermissionCredentialsManage Permission = "credentials:manage"
 	PermissionAIToolsManage     Permission = "ai_tools:manage"
 	PermissionInstancesManage   Permission = "instances:manage"
+	PermissionRemediationManage Permission = "remediation:manage"
 	PermissionArrRead           Permission = "arr:read"
 	PermissionArrSearch         Permission = "arr:search"
 	PermissionArrBrowse         Permission = "arr:browse"
@@ -91,6 +92,7 @@ func allPermissions() map[Permission]bool {
 		PermissionCredentialsManage: true,
 		PermissionAIToolsManage:     true,
 		PermissionInstancesManage:   true,
+		PermissionRemediationManage: true,
 		PermissionArrRead:           true,
 		PermissionArrSearch:         true,
 		PermissionArrBrowse:         true,

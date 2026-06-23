@@ -25,6 +25,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
+	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
@@ -152,10 +153,12 @@ func main() {
 	wsHub := ws.NewHub(authService, registry, instanceStore, contentNotifier)
 	go wsHub.Run(ctx)
 
-	// Request service. Request decisions fan out to both the WebSocket hub
-	// (live clients) and the push gateway (offline devices). The push notifier
-	// is only added to the fan-out when push is configured.
-	var notifier request.Notifier
+	// Notifier composite. Request decisions and issue events fan out to both the
+	// WebSocket hub (live clients) and the push gateway (offline devices). The
+	// push notifier is only added to the fan-out when push is configured. The
+	// concrete *push.Composite satisfies both request.Notifier and
+	// remediation.Notifier, so the same fan-out drives both.
+	var notifier *push.Composite
 	if pushNotifier != nil {
 		notifier = push.NewComposite(wsHub, pushNotifier)
 	} else {
@@ -163,6 +166,11 @@ func main() {
 	}
 	requestService := request.NewService(database, registry, bridge, notifier)
 	requestHandler := request.NewHandler(requestService)
+
+	// Remediation (issue reporting) service + handler. Wave 1 records and threads
+	// issues only; no AI agent is wired yet.
+	remediationService := remediation.NewService(database, registry, bridge, notifier)
+	remediationHandler := remediation.NewHandler(remediationService)
 
 	// Proxy handler
 	proxyHandler := proxy.NewHandler(instanceStore)
@@ -177,7 +185,7 @@ func main() {
 	discoverHandler := discover.NewHandler(creds, apiCache)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

@@ -19,6 +19,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
+	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/web"
@@ -30,6 +31,8 @@ func NewRouter(
 	authHandler *auth.Handler,
 	authService *auth.Service,
 	requestHandler *request.Handler,
+	remediationService *remediation.Service,
+	remediationHandler *remediation.Handler,
 	proxyHandler *proxy.Handler,
 	wsHub *ws.Hub,
 	aiHandler *ai.Handler,
@@ -154,12 +157,19 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/request-settings", requestHandler.UpdateSettings)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/users/{userID}/request-settings", requestHandler.GetUserSettings)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/users/{userID}/request-settings", requestHandler.UpdateUserSettings)
+
+			// AI remediation: issue queue + dismissal + global settings (Wave 1;
+			// the agent itself lands in later waves).
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/issues", remediationHandler.ListAdmin)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/dismiss", remediationHandler.Dismiss)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/remediation-settings", remediationHandler.GetSettings)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Put("/remediation-settings", remediationHandler.UpdateSettings)
 		})
 
 		// Config route (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Get("/config", configHandler(cfg, instanceStore, creds))
+			r.Get("/config", configHandler(cfg, instanceStore, creds, remediationService))
 		})
 
 		// Device push-token + notification preference routes (authenticated).
@@ -183,6 +193,16 @@ func NewRouter(
 			r.Get("/requests", requestHandler.List)
 			r.Get("/requests/options", requestHandler.Options)
 			r.Get("/requests/{tmdb_id}/status", requestHandler.GetStatus)
+		})
+
+		// Issue reporting (authenticated). Filing an issue needs the same
+		// permission as requesting media; viewing/replying to a single issue is
+		// gated in-handler to the issue's reporter or an admin.
+		r.Group(func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.With(auth.RequirePermission(auth.PermissionMediaRequest)).Post("/issues", remediationHandler.Create)
+			r.Get("/issues/{id}", remediationHandler.Get)
+			r.Post("/issues/{id}/reply", remediationHandler.Reply)
 		})
 
 		// Discover / media routes (authenticated)
@@ -341,7 +361,7 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 	}
 }
 
-func configHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry) http.HandlerFunc {
+func configHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, remediationService *remediation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Build instances list
 		type instanceInfo struct {
@@ -379,6 +399,11 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 			}
 		}
 
+		// Remediation toggles so non-admin clients know whether to surface the
+		// "Report a problem" affordance: issues_enabled is the master switch,
+		// allow_reporting the user-facing affordance toggle.
+		remSettings := remediationService.Settings()
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"server_name": cfg.ServerName,
@@ -389,7 +414,9 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 				"tmdb":   creds.IsConfigured(credentials.KeyTMDBAccessToken),
 				"trakt":  creds.IsConfigured(credentials.KeyTraktClientID),
 			},
-			"instances": instances,
+			"instances":       instances,
+			"issues_enabled":  remSettings.Enabled,
+			"allow_reporting": remSettings.AllowReporting,
 		})
 	}
 }

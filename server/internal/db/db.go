@@ -100,7 +100,8 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     request_decision INTEGER NOT NULL DEFAULT 0,
     request_pending  INTEGER NOT NULL DEFAULT 1,
     new_movie        INTEGER NOT NULL DEFAULT 1,
-    new_episode      INTEGER NOT NULL DEFAULT 1
+    new_episode      INTEGER NOT NULL DEFAULT 1,
+    issue_created    INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS connect_tokens (
@@ -173,6 +174,123 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- AI remediation / issue reporting (Wave 1 ships issues + issue_messages; the
+-- agent_* tables are created now so later waves need no migration). One row per
+-- problem to work (auto-detected or user-reported). Media-scoped like
+-- request_log (tmdb_id + media_type), optionally narrowed to a season/episode
+-- for TV (0 = whole series/season, Overseerr's sentinel convention). The detail
+-- column and any user reason are UNTRUSTED free text: stored verbatim, never
+-- interpreted.
+CREATE TABLE IF NOT EXISTS issues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,                       -- 'auto' | 'user'
+    status TEXT NOT NULL DEFAULT 'open',        -- open|investigating|awaiting_user|awaiting_approval|resolved|wont_fix|failed|dismissed
+    category TEXT,                              -- user pick: wrong_content|bad_copy|wrong_audio|other ; NULL for auto
+    reporter_id INTEGER REFERENCES users(id),  -- NULL for auto-detected
+    tmdb_id INTEGER NOT NULL,
+    tvdb_id INTEGER,
+    media_type TEXT NOT NULL,                   -- 'movie' | 'tv'
+    title TEXT NOT NULL DEFAULT '',
+    season_number INTEGER NOT NULL DEFAULT 0,   -- TV scope (0 = whole series / movie)
+    episode_number INTEGER NOT NULL DEFAULT 0,  -- TV scope (0 = whole season / movie)
+    instance_id TEXT,                          -- arr instance the fault came from (auto)
+    download_id TEXT,                          -- stable download-client hash (auto); keys dedupe + doctor tools
+    detail TEXT NOT NULL DEFAULT '',            -- user free-text reason OR doctor diagnosis summary (UNTRUSTED)
+    dedupe_key TEXT,                           -- stable idempotency key (auto); NULL allowed (user reports)
+    occurrences INTEGER NOT NULL DEFAULT 1,     -- bumped when a duplicate signal/report attaches
+    active_run_id INTEGER,                      -- CAS claim: at most one running run per issue
+    resolution TEXT,                           -- short closing note on a terminal state
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    closed_at DATETIME
+);
+-- At most one OPEN issue per dedupe_key, so the poller can INSERT ... WHERE NOT
+-- EXISTS exactly like createPending. This partial unique index is the SOLE
+-- idempotency guarantee for auto-dispatch.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_open_dedupe
+    ON issues(dedupe_key) WHERE dedupe_key IS NOT NULL AND closed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+
+-- The user <-> agent <-> admin thread. Append-only. author_kind tags provenance
+-- so agent code NEVER treats a 'user'/'system' message as an instruction. body
+-- is UNTRUSTED when author_kind='user'.
+CREATE TABLE IF NOT EXISTS issue_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    author_kind TEXT NOT NULL,                  -- 'user' | 'agent' | 'admin' | 'system'
+    author_id INTEGER REFERENCES users(id),     -- set for user/admin; NULL for agent/system
+    body TEXT NOT NULL DEFAULT '',              -- UNTRUSTED when author_kind='user'
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_issue_messages_issue ON issue_messages(issue_id, id);
+
+-- One bounded investigation of one issue (later waves). Bounds + disposition +
+-- the resumable transcript live here.
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    trigger TEXT NOT NULL,                       -- 'auto'|'user_report'|'user_reply'|'approval_granted'|'approval_denied'
+    status TEXT NOT NULL DEFAULT 'running',      -- running|waiting_user|waiting_approval|succeeded|gave_up|failed|aborted
+    model TEXT NOT NULL DEFAULT '',
+    proc_generation TEXT NOT NULL DEFAULT '',    -- process-start token; watchdog uses it to tell crashed-mid-run from parked
+    step_count INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_micros INTEGER NOT NULL DEFAULT 0,      -- accumulated cost in millionths of a USD
+    active_seconds INTEGER NOT NULL DEFAULT 0,   -- wall-clock excluding paused waits
+    deadline_at DATETIME,                        -- active-work deadline; NULL while parked
+    stop_reason TEXT,                            -- resolved|max_steps|max_cost|timeout|repeated_failure|awaiting_approval|awaiting_user|tool_error
+    transcript_json TEXT NOT NULL DEFAULT '',    -- UNTRUNCATED provider-neutral transcript for resume (NOT the audit ledger)
+    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    finished_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_issue ON agent_runs(issue_id);
+
+-- Per-step audit ledger (human-readable; truncated) for later waves. One row per
+-- model turn and per tool call. NOT used to rehydrate the transcript.
+CREATE TABLE IF NOT EXISTS agent_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL,                          -- 'assistant'|'tool_call'|'tool_result'|'system'|'giveup'
+    tool_name TEXT,
+    tool_use_id TEXT,                           -- links a tool_result row to its originating tool_use
+    tool_input TEXT,                            -- JSON verbatim, truncated for display (UNTRUSTED if it echoes arr data)
+    tool_output TEXT,                           -- JSON/text verbatim, truncated
+    text TEXT,
+    is_error BOOLEAN NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps(run_id, seq);
+
+-- Admin-approvable proposed mutations (later waves; the heart of
+-- propose->approve->execute). Idempotency: UNIQUE(fingerprint) + a CAS UPDATE
+-- guarantee an action runs at most once.
+CREATE TABLE IF NOT EXISTS agent_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    run_id INTEGER REFERENCES agent_runs(id),
+    tool_use_id TEXT,                           -- the propose_action tool_use.id, so the resume tool_result pairs correctly
+    kind TEXT NOT NULL,                          -- grab_release|remediate_queue|manual_import|trigger_search|rescan
+    params TEXT NOT NULL DEFAULT '{}',           -- JSON: the exact typed args to replay on approval
+    rationale TEXT NOT NULL DEFAULT '',          -- agent's plain-language justification (UNTRUSTED — render as text)
+    risk TEXT NOT NULL DEFAULT 'mutating',       -- 'mutating' (always gated) | 'safe' (auto-exec only if opted in)
+    status TEXT NOT NULL DEFAULT 'proposed',     -- proposed|approved|executing|executed|denied|failed|superseded
+    fingerprint TEXT NOT NULL,                   -- sha256(issue_id|kind|canonical(params)) — UNIQUE
+    decided_by INTEGER REFERENCES users(id),
+    decided_at DATETIME,
+    deny_reason TEXT,
+    executed_at DATETIME,
+    result_text TEXT,                            -- execution outcome, mirrored back into agent_steps + transcript
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_actions_fingerprint ON agent_actions(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_status ON agent_actions(status);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_issue ON agent_actions(issue_id);
 `
 
 func Open(dbPath string) (*sql.DB, error) {
@@ -234,6 +352,9 @@ func Open(dbPath string) (*sql.DB, error) {
 		// instead of creating a duplicate. Empty for rows created before this
 		// column or by clients that can't provide one (e.g. web).
 		{alter: "ALTER TABLE devices ADD COLUMN hardware_id TEXT NOT NULL DEFAULT ''"},
+		// AI remediation: admins are notified of new issues by default (on),
+		// matching request_pending. New on existing databases.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN issue_created INTEGER NOT NULL DEFAULT 1"},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {
