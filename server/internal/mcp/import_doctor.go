@@ -481,121 +481,11 @@ func (s *ToolServer) executeManualImport(input json.RawMessage) (*ToolResult, er
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-
-	switch params.MediaType {
-	case "movie":
-		client := s.GetRadarr()
-		if client == nil {
-			return &ToolResult{Text: "Radarr is not configured."}, nil
-		}
-		item, err := findRadarrQueueItem(client, params.QueueID)
-		if err != nil {
-			return nil, err
-		}
-		if item == nil {
-			return &ToolResult{Text: fmt.Sprintf("No movie queue item with id %d.", params.QueueID)}, nil
-		}
-		if item.DownloadID == "" {
-			return &ToolResult{Text: fmt.Sprintf("Queue item %d has no download-client id yet; nothing to import.", params.QueueID)}, nil
-		}
-		candidates, err := client.GetManualImportCandidates(item.DownloadID)
-		if err != nil {
-			return nil, err
-		}
-		var files []radarr.ManualImportFile
-		var skipped []string
-		for _, c := range candidates {
-			rejections := toRejectionViews(c.Rejections)
-			if !params.Force && hasPermanentRejection(rejections) {
-				skipped = append(skipped, fmt.Sprintf("%s (%s)", c.Name, formatRejections(rejections)))
-				continue
-			}
-			if c.MovieID == 0 {
-				skipped = append(skipped, fmt.Sprintf("%s (not matched to a movie)", c.Name))
-				continue
-			}
-			files = append(files, radarr.ManualImportFile{
-				Path:         c.Path,
-				FolderName:   c.FolderName,
-				MovieID:      c.MovieID,
-				Quality:      c.Quality,
-				Languages:    c.Languages,
-				ReleaseGroup: c.ReleaseGroup,
-				DownloadID:   c.DownloadID,
-				IndexerFlags: c.IndexerFlags,
-			})
-		}
-		if len(files) == 0 {
-			return &ToolResult{Text: importSkippedMessage(skipped, params.Force)}, nil
-		}
-		importMode := importModeFor(item.Protocol)
-		if err := client.ExecuteManualImport(files, importMode); err != nil {
-			return nil, err
-		}
-		return &ToolResult{Text: importResultMessage(len(files), importMode, skipped)}, nil
-
-	case "tv":
-		client := s.GetSonarr()
-		if client == nil {
-			return &ToolResult{Text: "Sonarr is not configured."}, nil
-		}
-		item, err := findSonarrQueueItem(client, params.QueueID)
-		if err != nil {
-			return nil, err
-		}
-		if item == nil {
-			return &ToolResult{Text: fmt.Sprintf("No TV queue item with id %d.", params.QueueID)}, nil
-		}
-		if item.DownloadID == "" {
-			return &ToolResult{Text: fmt.Sprintf("Queue item %d has no download-client id yet; nothing to import.", params.QueueID)}, nil
-		}
-		candidates, err := client.GetManualImportCandidates(item.DownloadID)
-		if err != nil {
-			return nil, err
-		}
-		var files []sonarr.ManualImportFile
-		var skipped []string
-		for _, c := range candidates {
-			rejections := toRejectionViews(c.Rejections)
-			if !params.Force && hasPermanentRejection(rejections) {
-				skipped = append(skipped, fmt.Sprintf("%s (%s)", c.Name, formatRejections(rejections)))
-				continue
-			}
-			episodeIDs := make([]int, 0, len(c.Episodes))
-			for _, e := range c.Episodes {
-				if e.ID != 0 {
-					episodeIDs = append(episodeIDs, e.ID)
-				}
-			}
-			if len(episodeIDs) == 0 {
-				skipped = append(skipped, fmt.Sprintf("%s (no episode mapping)", c.Name))
-				continue
-			}
-			files = append(files, sonarr.ManualImportFile{
-				Path:         c.Path,
-				FolderName:   c.FolderName,
-				SeriesID:     c.SeriesID,
-				EpisodeIDs:   episodeIDs,
-				Quality:      c.Quality,
-				Languages:    c.Languages,
-				ReleaseGroup: c.ReleaseGroup,
-				DownloadID:   c.DownloadID,
-				IndexerFlags: c.IndexerFlags,
-				ReleaseType:  c.ReleaseType,
-			})
-		}
-		if len(files) == 0 {
-			return &ToolResult{Text: importSkippedMessage(skipped, params.Force)}, nil
-		}
-		importMode := importModeFor(item.Protocol)
-		if err := client.ExecuteManualImport(files, importMode); err != nil {
-			return nil, err
-		}
-		return &ToolResult{Text: importResultMessage(len(files), importMode, skipped)}, nil
-
-	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
+	text, err := ExecuteManualImportHelper(s.GetRadarr(), s.GetSonarr(), params.MediaType, params.QueueID, params.Force)
+	if err != nil {
+		return nil, err
 	}
+	return &ToolResult{Text: text}, nil
 }
 
 // importModeFor picks the lowercase ManualImport importMode: copy for torrents
@@ -637,89 +527,11 @@ func (s *ToolServer) remediateQueueItem(input json.RawMessage) (*ToolResult, err
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	switch params.Action {
-	case "remove", "blocklist_search", "change_category":
-	default:
-		return &ToolResult{Text: "action must be \"remove\", \"blocklist_search\", or \"change_category\"."}, nil
+	text, err := RemediateQueueItemHelper(s.GetRadarr(), s.GetSonarr(), params.MediaType, params.QueueID, params.Action)
+	if err != nil {
+		return nil, err
 	}
-
-	switch params.MediaType {
-	case "movie":
-		client := s.GetRadarr()
-		if client == nil {
-			return &ToolResult{Text: "Radarr is not configured."}, nil
-		}
-		item, err := findRadarrQueueItem(client, params.QueueID)
-		if err != nil {
-			return nil, err
-		}
-		if item == nil {
-			return &ToolResult{Text: fmt.Sprintf("No movie queue item with id %d.", params.QueueID)}, nil
-		}
-		switch params.Action {
-		case "remove":
-			if err := client.RemoveQueueItem(params.QueueID, true, false, false, false); err != nil {
-				return nil, err
-			}
-			return &ToolResult{Text: fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", params.QueueID, radarrQueueTitle(*item))}, nil
-		case "blocklist_search":
-			if err := client.RemoveQueueItem(params.QueueID, true, true, false, false); err != nil {
-				return nil, err
-			}
-			if item.MovieID != 0 {
-				if err := client.TriggerMoviesSearch([]int{item.MovieID}); err != nil {
-					return nil, err
-				}
-				return &ToolResult{Text: fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", params.QueueID, radarrQueueTitle(*item))}, nil
-			}
-			return &ToolResult{Text: fmt.Sprintf("Removed and blocklisted queue item %d (%s). Could not start a search: no movie id on the item.", params.QueueID, radarrQueueTitle(*item))}, nil
-		case "change_category":
-			if err := client.RemoveQueueItem(params.QueueID, false, false, false, true); err != nil {
-				return nil, err
-			}
-			return &ToolResult{Text: fmt.Sprintf("Handed queue item %d (%s) to the download client's post-import category. It stays in the client for tools like Unpackerr.", params.QueueID, radarrQueueTitle(*item))}, nil
-		}
-
-	case "tv":
-		client := s.GetSonarr()
-		if client == nil {
-			return &ToolResult{Text: "Sonarr is not configured."}, nil
-		}
-		item, err := findSonarrQueueItem(client, params.QueueID)
-		if err != nil {
-			return nil, err
-		}
-		if item == nil {
-			return &ToolResult{Text: fmt.Sprintf("No TV queue item with id %d.", params.QueueID)}, nil
-		}
-		switch params.Action {
-		case "remove":
-			if err := client.RemoveQueueItem(params.QueueID, true, false, false, false); err != nil {
-				return nil, err
-			}
-			return &ToolResult{Text: fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", params.QueueID, sonarrQueueTitle(*item))}, nil
-		case "blocklist_search":
-			if err := client.RemoveQueueItem(params.QueueID, true, true, false, false); err != nil {
-				return nil, err
-			}
-			if item.EpisodeID != 0 {
-				if err := client.TriggerEpisodeSearch([]int{item.EpisodeID}); err != nil {
-					return nil, err
-				}
-				return &ToolResult{Text: fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", params.QueueID, sonarrQueueTitle(*item))}, nil
-			}
-			return &ToolResult{Text: fmt.Sprintf("Removed and blocklisted queue item %d (%s). Could not start a search: no episode id on the item.", params.QueueID, sonarrQueueTitle(*item))}, nil
-		case "change_category":
-			if err := client.RemoveQueueItem(params.QueueID, false, false, false, true); err != nil {
-				return nil, err
-			}
-			return &ToolResult{Text: fmt.Sprintf("Handed queue item %d (%s) to the download client's post-import category. It stays in the client for tools like Unpackerr.", params.QueueID, sonarrQueueTitle(*item))}, nil
-		}
-
-	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
-	}
-	return &ToolResult{Text: "No remediation was applied."}, nil
+	return &ToolResult{Text: text}, nil
 }
 
 // --- rescan_media ---
@@ -732,49 +544,9 @@ func (s *ToolServer) rescanMedia(input json.RawMessage) (*ToolResult, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-
-	switch params.MediaType {
-	case "movie":
-		client := s.GetRadarr()
-		if client == nil {
-			return &ToolResult{Text: "Radarr is not configured."}, nil
-		}
-		movie, err := client.GetMovieByTMDB(params.TmdbID)
-		if err != nil {
-			return nil, err
-		}
-		if movie == nil {
-			return &ToolResult{Text: "This movie is not in the library."}, nil
-		}
-		if err := client.RescanMovie(movie.ID); err != nil {
-			return nil, err
-		}
-		if err := client.ProcessMonitoredDownloads(); err != nil {
-			return nil, err
-		}
-		return &ToolResult{Text: fmt.Sprintf("Rescanning %s (%d) and running the import pass. Check diagnose_queue shortly.", movie.Title, movie.Year)}, nil
-
-	case "tv":
-		client := s.GetSonarr()
-		if client == nil {
-			return &ToolResult{Text: "Sonarr is not configured."}, nil
-		}
-		series, err := s.findSeriesByTMDB(client, params.TmdbID)
-		if err != nil {
-			return nil, err
-		}
-		if series == nil {
-			return &ToolResult{Text: "This show is not in the library."}, nil
-		}
-		if err := client.RescanSeries(series.ID); err != nil {
-			return nil, err
-		}
-		if err := client.ProcessMonitoredDownloads(); err != nil {
-			return nil, err
-		}
-		return &ToolResult{Text: fmt.Sprintf("Rescanning %s and running the import pass. Check diagnose_queue shortly.", series.Title)}, nil
-
-	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
+	text, err := RescanMediaHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), params.MediaType, params.TmdbID)
+	if err != nil {
+		return nil, err
 	}
+	return &ToolResult{Text: text}, nil
 }

@@ -7,7 +7,10 @@
 // UNTRUSTED: it is stored verbatim and never interpreted as an instruction.
 package remediation
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Issue status values stored in issues.status and returned to clients. The
 // state machine spans the whole feature; Wave 1 only ever sets IssueOpen (on
@@ -129,4 +132,88 @@ type CreateIssueResponse struct {
 // ListIssuesResponse is the GET /api/admin/issues result.
 type ListIssuesResponse struct {
 	Issues []Issue `json:"issues"`
+}
+
+// AgentAction is one row of the agent_actions table as returned to the admin
+// approval queue. params/rationale are the agent's UNTRUSTED proposal text/JSON
+// and are rendered as data (never executed by the client). Nullable decision
+// fields are pointers so the JSON carries null until a decision is made.
+type AgentAction struct {
+	ID         int64           `json:"id"`
+	IssueID    int64           `json:"issue_id"`
+	RunID      *int64          `json:"run_id"`
+	Kind       string          `json:"kind"`
+	Params     json.RawMessage `json:"params"`    // typed args for the kind (UNTRUSTED)
+	Rationale  string          `json:"rationale"` // agent's justification (UNTRUSTED)
+	Risk       string          `json:"risk"`      // mutating | safe
+	Status     string          `json:"status"`    // see Action* consts
+	DecidedBy  *int64          `json:"decided_by"`
+	DecidedAt  *time.Time      `json:"decided_at"`
+	DenyReason *string         `json:"deny_reason"`
+	ExecutedAt *time.Time      `json:"executed_at"`
+	ResultText *string         `json:"result_text"`
+	CreatedAt  time.Time       `json:"created_at"`
+
+	// ToolUseID is the propose_action tool_use.id; internal only (used to key the
+	// resume tool_result back to the originating call), not exposed on the wire.
+	ToolUseID string `json:"-"`
+
+	// Joined from the issue for the approval-queue list view.
+	IssueTitle     string  `json:"issue_title"`
+	IssueMediaType string  `json:"issue_media_type"`
+	IssueCategory  *string `json:"issue_category"`
+}
+
+// ListActionsResponse is the GET /api/admin/agent-actions result.
+type ListActionsResponse struct {
+	Actions []AgentAction `json:"actions"`
+}
+
+// ActionDecision is the POST .../approve body: an optional params override an
+// admin may supply to edit the proposal before it executes.
+type ActionDecision struct {
+	Override *json.RawMessage `json:"override"`
+}
+
+// ActionDenyRequest is the POST .../deny body.
+type ActionDenyRequest struct {
+	Note string `json:"note"`
+}
+
+// AgentRunDetail is the GET /api/admin/agent-runs/{id} audit payload: the run row
+// plus its ordered steps.
+type AgentRunDetail struct {
+	Run   AgentRun    `json:"run"`
+	Steps []AgentStep `json:"steps"`
+}
+
+// AgentRun is one row of the agent_runs table for the audit view.
+type AgentRun struct {
+	ID                  int64      `json:"id"`
+	IssueID             int64      `json:"issue_id"`
+	Trigger             string     `json:"trigger"`
+	Status              string     `json:"status"`
+	Model               string     `json:"model"`
+	StepCount           int        `json:"step_count"`
+	InputTokens         int64      `json:"input_tokens"`
+	OutputTokens        int64      `json:"output_tokens"`
+	CacheCreationTokens int64      `json:"cache_creation_tokens"`
+	CacheReadTokens     int64      `json:"cache_read_tokens"`
+	CostMicros          int64      `json:"cost_micros"`
+	StopReason          *string    `json:"stop_reason"`
+	StartedAt           time.Time  `json:"started_at"`
+	FinishedAt          *time.Time `json:"finished_at"`
+}
+
+// AgentStep is one row of the agent_steps audit ledger for the audit view.
+type AgentStep struct {
+	ID         int64     `json:"id"`
+	Seq        int       `json:"seq"`
+	Kind       string    `json:"kind"`
+	ToolName   *string   `json:"tool_name"`
+	ToolInput  *string   `json:"tool_input"`
+	ToolOutput *string   `json:"tool_output"`
+	Text       *string   `json:"text"`
+	IsError    bool      `json:"is_error"`
+	CreatedAt  time.Time `json:"created_at"`
 }

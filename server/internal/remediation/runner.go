@@ -58,17 +58,19 @@ const (
 
 // agent_runs.status / stop_reason vocab used by the Runner.
 const (
-	runStatusRunning   = "running"
-	runStatusSucceeded = "succeeded"
-	runStatusGaveUp    = "gave_up"
+	runStatusRunning         = "running"
+	runStatusSucceeded       = "succeeded"
+	runStatusGaveUp          = "gave_up"
+	runStatusWaitingApproval = "waiting_approval"
 
-	stopResolved      = "resolved"
-	stopMaxSteps      = "max_steps"
-	stopTimeout       = "timeout"
-	stopMaxCost       = "max_cost"
-	stopModelError    = "model_error"
-	stopNoDiagnosis   = "no_diagnosis"
-	stepTruncateBytes = 4000
+	stopResolved         = "resolved"
+	stopMaxSteps         = "max_steps"
+	stopTimeout          = "timeout"
+	stopMaxCost          = "max_cost"
+	stopModelError       = "model_error"
+	stopNoDiagnosis      = "no_diagnosis"
+	stopAwaitingApproval = "awaiting_approval"
+	stepTruncateBytes    = 4000
 )
 
 // turnRunnerFactory builds an ai.TurnRunner for a provider/model/key. It is a
@@ -86,8 +88,10 @@ type toolHost interface {
 	ToolsByName(names []string) []mcp.Tool
 	// ExecuteTool runs a read tool (called ONLY after the name clears the allow-list).
 	ExecuteTool(ctx context.Context, name string, input json.RawMessage, callCtx mcp.CallContext) (*mcp.ToolResult, error)
-	// ExecuteAgentTool runs an agent-only tool (writes issue rows, never arr).
-	ExecuteAgentTool(ctx context.Context, name string, input json.RawMessage, issueID int64) (*mcp.AgentToolResult, error)
+	// ExecuteAgentTool runs an agent-only tool (writes issue rows, never arr). The
+	// toolUseID is the model's tool_use.id, stored on a proposal so the resume
+	// tool_result pairs back correctly.
+	ExecuteAgentTool(ctx context.Context, name string, input json.RawMessage, issueID int64, toolUseID string) (*mcp.AgentToolResult, error)
 }
 
 // Runner drives the READ-ONLY investigation of a single issue and is the
@@ -154,35 +158,19 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	if isTerminalStatus(issue.Status) {
 		return nil // already closed.
 	}
+	// A parked issue (a proposal awaiting approval, or a reporter question) is
+	// owned by the resume path, not a fresh investigation: Run must never start a
+	// second run over a pending proposal. Resume re-enters those.
+	if issue.Status == IssueAwaitingApproval || issue.Status == IssueAwaitingUser {
+		return nil
+	}
 
-	// Resolve provider/model/key. Remediation settings override; empty inherits
-	// the server's configured AI (mirroring ai/handler.go).
-	cfg := r.creds.GetAIConfig()
-	provider := settings.Provider
-	if provider == "" {
-		provider = cfg.Provider
-	}
-	model := settings.Model
-	if model == "" {
-		// If the admin overrode only the provider, fall back to that provider's
-		// default model; otherwise inherit the configured model.
-		if settings.Provider != "" {
-			model = credentials.DefaultAIModel(provider)
-		} else {
-			model = cfg.Model
-		}
-	}
-	apiKey := r.creds.GetCredential(credentials.AIKeyCredentialKey(provider))
-	if apiKey == "" {
-		// No key: cannot run. Park the issue with a clear admin-facing note.
+	turn, model, err := r.resolveTurn(settings)
+	if err != nil {
+		// No key / provider setup failed: cannot run. Park the issue with a clear
+		// admin-facing note.
 		return r.giveUp(ctx, issueID, 0, model, stopModelError,
 			"I couldn't investigate this automatically because the AI provider isn't configured. Flagging for an admin.")
-	}
-
-	turn, err := r.newTurn(provider, apiKey, model)
-	if err != nil {
-		return r.giveUp(ctx, issueID, 0, model, stopModelError,
-			"I couldn't start the AI investigation (provider setup failed). Flagging for an admin.")
 	}
 
 	// CAS-claim the issue and create the run row.
@@ -199,116 +187,288 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	runCtx, cancel := context.WithTimeout(ctx, wall)
 	defer cancel()
 
-	if err := r.loop(runCtx, turn, issue, runID, model, settings); err != nil {
+	st := &loopState{
+		runID:     runID,
+		costKnown: true,
+		history: ai.Transcript{ai.TranscriptMessage{
+			Role:    ai.RoleUser,
+			Content: []ai.TranscriptBlock{{Type: ai.BlockText, Text: initialUserTurn(issue)}},
+		}},
+	}
+	if err := r.loop(runCtx, turn, issue, st, model, settings); err != nil {
 		return err
 	}
 	return nil
 }
 
-// loop is the bounded outer turn loop. It seeds the transcript, repeatedly calls
-// one model turn, dispatches every tool_use through the read-tool allow-list,
-// persists audit + transcript, checks the Go-enforced bounds, and terminates on
-// conclude_issue, a tool-less reply, or a tripped bound.
-func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, runID int64, model string, settings Settings) error {
+// resolveTurn resolves the provider/model/key from remediation settings (empty
+// inherits the server's configured AI, mirroring ai/handler.go) and builds the
+// single-turn runner. It returns the model id alongside so callers can record it
+// on a give-up even when no run row was created. An error means the AI is
+// unconfigured or the provider failed to construct.
+func (r *Runner) resolveTurn(settings Settings) (ai.TurnRunner, string, error) {
+	cfg := r.creds.GetAIConfig()
+	provider := settings.Provider
+	if provider == "" {
+		provider = cfg.Provider
+	}
+	model := settings.Model
+	if model == "" {
+		if settings.Provider != "" {
+			model = credentials.DefaultAIModel(provider)
+		} else {
+			model = cfg.Model
+		}
+	}
+	apiKey := r.creds.GetCredential(credentials.AIKeyCredentialKey(provider))
+	if apiKey == "" {
+		return nil, model, fmt.Errorf("AI provider not configured")
+	}
+	turn, err := r.newTurn(provider, apiKey, model)
+	if err != nil {
+		return nil, model, fmt.Errorf("build turn runner: %w", err)
+	}
+	return turn, model, nil
+}
+
+// Resume re-enters the SAME parked run after an admin decision (approve/deny) has
+// appended the decision tool_result to the run's transcript. It re-claims the
+// issue, rehydrates the untruncated transcript and the bounds spent so far
+// (step_count/cost_micros are NOT reset), and re-enters the loop with the
+// remaining budget. Approval → the agent verifies (read-only) and concludes or
+// proposes again; denial → it tries another tack, still bounded. Safe to call
+// from a worker goroutine; the CAS re-claim guards against a double-resume.
+func (r *Runner) Resume(ctx context.Context, issueID int64) error {
+	settings := r.svc.Settings()
+	if !settings.Enabled {
+		return nil // feature off; leave the issue parked for an admin.
+	}
+
+	issue, err := r.svc.GetIssue(issueID)
+	if err != nil {
+		return fmt.Errorf("load issue %d: %w", issueID, err)
+	}
+	if isTerminalStatus(issue.Status) {
+		return nil // already closed (e.g. admin dismissed while parked).
+	}
+
+	// Find the parked run for this issue: the most recent run left waiting for an
+	// approval. If there is none, there is nothing to resume.
+	runID, prevSteps, prevCost, transcriptJSON, ok, err := r.loadParkedRun(issueID)
+	if err != nil {
+		return fmt.Errorf("load parked run for issue %d: %w", issueID, err)
+	}
+	if !ok {
+		return nil
+	}
+
+	turn, model, err := r.resolveTurn(settings)
+	if err != nil {
+		return r.giveUp(ctx, issueID, runID, model, stopModelError,
+			"I couldn't continue after the decision because the AI provider isn't configured. Flagging for an admin.")
+	}
+
+	// Re-claim the issue (status->investigating, active_run_id->this run) only if
+	// it isn't already claimed. Zero rows = another worker is already resuming, or
+	// the issue moved on; bail without disturbing it.
+	cas, err := r.db.Exec(
+		"UPDATE issues SET status = ?, active_run_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND active_run_id IS NULL AND closed_at IS NULL",
+		IssueInvestigating, runID, issueID,
+	)
+	if err != nil {
+		return fmt.Errorf("reclaim issue %d: %w", issueID, err)
+	}
+	if n, _ := cas.RowsAffected(); n == 0 {
+		return nil
+	}
+	// Flip the run back to running so the watchdog and audit reflect live work.
+	r.db.Exec("UPDATE agent_runs SET status = ?, stop_reason = NULL WHERE id = ?", runStatusRunning, runID)
+
+	history, err := rehydrateTranscript(transcriptJSON)
+	if err != nil || len(history) == 0 {
+		// A corrupt/empty transcript can't be safely continued; give up cleanly
+		// rather than re-seeding (which would lose the proposal context).
+		return r.giveUp(ctx, issueID, runID, model, stopModelError,
+			giveUpMessage(issue, true))
+	}
+
+	wall := time.Duration(settings.MaxWallClockSecs) * time.Second
+	runCtx, cancel := context.WithTimeout(ctx, wall)
+	defer cancel()
+
+	st := &loopState{
+		runID:        runID,
+		history:      history,
+		seq:          r.nextSeq(runID),
+		stepCount:    prevSteps,
+		costAccum:    prevCost,
+		costKnown:    true,
+		postedAnyMsg: r.hasAgentMessage(issueID),
+	}
+	return r.loop(runCtx, turn, issue, st, model, settings)
+}
+
+// loadParkedRun returns the most recent run for an issue that is parked waiting
+// for an approval, along with the bounds spent so far and its stored transcript.
+func (r *Runner) loadParkedRun(issueID int64) (runID int64, stepCount int, costMicros int64, transcriptJSON string, ok bool, err error) {
+	row := r.db.QueryRow(
+		`SELECT id, step_count, cost_micros, transcript_json
+		 FROM agent_runs
+		 WHERE issue_id = ? AND status = ?
+		 ORDER BY id DESC LIMIT 1`,
+		issueID, runStatusWaitingApproval,
+	)
+	err = row.Scan(&runID, &stepCount, &costMicros, &transcriptJSON)
+	if err == sql.ErrNoRows {
+		return 0, 0, 0, "", false, nil
+	}
+	if err != nil {
+		return 0, 0, 0, "", false, err
+	}
+	return runID, stepCount, costMicros, transcriptJSON, true, nil
+}
+
+// nextSeq returns the next audit-step sequence number for a run (continuing the
+// ledger across a resume).
+func (r *Runner) nextSeq(runID int64) int {
+	var n int
+	r.db.QueryRow("SELECT COALESCE(MAX(seq),0) FROM agent_steps WHERE run_id = ?", runID).Scan(&n)
+	return n
+}
+
+// hasAgentMessage reports whether any agent-authored message already exists on
+// the issue thread (so a resume doesn't re-post a fallback diagnosis).
+func (r *Runner) hasAgentMessage(issueID int64) bool {
+	var n int
+	r.db.QueryRow("SELECT COUNT(*) FROM issue_messages WHERE issue_id = ? AND author_kind = 'agent'", issueID).Scan(&n)
+	return n > 0
+}
+
+// rehydrateTranscript decodes the untruncated provider-neutral transcript stored
+// on a run.
+func rehydrateTranscript(transcriptJSON string) (ai.Transcript, error) {
+	if strings.TrimSpace(transcriptJSON) == "" {
+		return nil, nil
+	}
+	var history ai.Transcript
+	if err := json.Unmarshal([]byte(transcriptJSON), &history); err != nil {
+		return nil, err
+	}
+	return history, nil
+}
+
+// loopState is the mutable per-run state the turn loop carries. A fresh Run seeds
+// it; Resume rehydrates it from the persisted run so the SAME bounds (step count,
+// cost) continue across a human-gated pause — they are never reset.
+type loopState struct {
+	runID        int64
+	history      ai.Transcript
+	seq          int   // next audit-step sequence number
+	stepCount    int   // total TOOL calls so far (the MaxSteps bound)
+	costAccum    int64 // accumulated cost in micros
+	costKnown    bool  // false once an unknown-model turn disables the cost check
+	postedAnyMsg bool  // whether any agent message has been posted to the thread
+}
+
+// loop is the bounded outer turn loop. It repeatedly calls one model turn,
+// dispatches every tool_use through the read-tool allow-list, persists audit +
+// transcript, checks the Go-enforced bounds, and terminates on conclude_issue, a
+// tool-less reply, a tripped bound, or PARKS on propose_action (pausing for an
+// admin approval; the loop exits and no goroutine is held during the wait). It
+// operates on st so Run and Resume share one implementation.
+func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st *loopState, model string, settings Settings) error {
 	system := buildSystemPrompt(issue)
 	tools := append(r.toolServer.ToolsByName(readToolAllowList), mcp.AgentTools()...)
-
-	history := ai.Transcript{ai.TranscriptMessage{
-		Role:    ai.RoleUser,
-		Content: []ai.TranscriptBlock{{Type: ai.BlockText, Text: initialUserTurn(issue)}},
-	}}
-
-	var (
-		seq          int
-		stepCount    int // total TOOL calls across the run (the MaxSteps bound)
-		costAccum    int64
-		postedAnyMsg bool
-		costKnown    = true
-	)
 
 	for {
 		// Bound: max steps (tool calls). Checked before each turn so a run that has
 		// already spent its budget gives up instead of taking another turn.
-		if stepCount >= settings.MaxSteps {
-			return r.giveUp(ctx, issue.ID, runID, model, stopMaxSteps,
-				giveUpMessage(issue, postedAnyMsg))
+		if st.stepCount >= settings.MaxSteps {
+			return r.giveUp(ctx, issue.ID, st.runID, model, stopMaxSteps,
+				giveUpMessage(issue, st.postedAnyMsg))
 		}
 		// Bound: cost ceiling (soft, bounded by one turn of <= MaxTurnTokens).
-		if costKnown && costAccum >= int64(settings.MaxCostMicros) {
-			return r.giveUp(ctx, issue.ID, runID, model, stopMaxCost,
-				giveUpMessage(issue, postedAnyMsg))
+		if st.costKnown && st.costAccum >= int64(settings.MaxCostMicros) {
+			return r.giveUp(ctx, issue.ID, st.runID, model, stopMaxCost,
+				giveUpMessage(issue, st.postedAnyMsg))
 		}
 		// Context deadline (wall clock) — surface as a give-up, not a crash.
 		if ctx.Err() != nil {
-			return r.giveUp(context.Background(), issue.ID, runID, model, stopTimeout,
-				giveUpMessage(issue, postedAnyMsg))
+			return r.giveUp(context.Background(), issue.ID, st.runID, model, stopTimeout,
+				giveUpMessage(issue, st.postedAnyMsg))
 		}
 
 		res, err := turn.NextTurn(ctx, ai.TurnParams{
 			System:    system,
 			Tools:     tools,
-			History:   history,
+			History:   st.history,
 			MaxTokens: settings.MaxTurnTokens,
 		})
 		if err != nil {
 			if ctx.Err() != nil {
-				return r.giveUp(context.Background(), issue.ID, runID, model, stopTimeout,
-					giveUpMessage(issue, postedAnyMsg))
+				return r.giveUp(context.Background(), issue.ID, st.runID, model, stopTimeout,
+					giveUpMessage(issue, st.postedAnyMsg))
 			}
-			return r.giveUp(context.Background(), issue.ID, runID, model, stopModelError,
-				giveUpMessage(issue, postedAnyMsg))
+			return r.giveUp(context.Background(), issue.ID, st.runID, model, stopModelError,
+				giveUpMessage(issue, st.postedAnyMsg))
 		}
 
 		// Accumulate usage/cost onto the run (best-effort). An unknown model means
 		// the cost bound can't be enforced — skip the check, never crash.
 		turnCost, ok := costMicros(model, res.Usage)
 		if ok {
-			costAccum += turnCost
+			st.costAccum += turnCost
 		} else {
-			costKnown = false
+			st.costKnown = false
 		}
-		r.bumpRunUsage(runID, res.Usage, turnCost, stepCount)
+		r.bumpRunUsage(st.runID, res.Usage, turnCost, st.stepCount)
 
 		// Append the assistant turn to the transcript and persist it as an audit
 		// step. Text-only turns and tool-calling turns both land here.
-		history = append(history, res.Message)
-		seq++
+		st.history = append(st.history, res.Message)
+		st.seq++
 		assistantText := blocksText(res.Message)
-		r.persistStep(runID, issue.ID, seq, stepAssistant, "", "", "", assistantText, false)
+		r.persistStep(st.runID, issue.ID, st.seq, stepAssistant, "", "", "", assistantText, false)
 
 		toolUses := toolUseBlocks(res.Message)
 		if len(toolUses) == 0 {
 			// No tool calls: the model is done. Ensure a diagnosis was posted; if
 			// the model wrote a final message but never posted it to the thread,
 			// post the assistant text so the reporter sees something, then resolve.
-			if !postedAnyMsg {
+			if !st.postedAnyMsg {
 				body := assistantText
 				if strings.TrimSpace(body) == "" {
 					body = "I looked into this but didn't find anything conclusive."
 				}
 				_ = r.svc.PostIssueMessage(ctx, issue.ID, body)
 			}
-			return r.conclude(ctx, issue.ID, runID, IssueResolved, "Investigation complete.")
+			return r.conclude(ctx, issue.ID, st.runID, IssueResolved, "Investigation complete.")
 		}
 
 		// Dispatch every tool_use through the allow-list, building tool_result
-		// blocks for the next turn and persisting an audit step per call.
+		// blocks for the next turn and persisting an audit step per call. EVERY
+		// tool_use gets a result block even when we are about to park, so the
+		// persisted transcript stays valid for the resume.
 		var resultBlocks []ai.TranscriptBlock
 		concluded := false
 		concludeStatus := ""
+		parked := false
 		for _, tu := range toolUses {
-			stepCount++
-			seq++
+			st.stepCount++
+			st.seq++
 
 			out, isErr, ctrl := r.dispatchTool(ctx, issue.ID, tu)
 			if ctrl.postedMessage {
-				postedAnyMsg = true
+				st.postedAnyMsg = true
 			}
 			if ctrl.concluded {
 				concluded = true
 				concludeStatus = ctrl.concludeStatus
 			}
-			r.persistStep(runID, issue.ID, seq, stepToolResult, tu.Name, tu.ID, string(tu.Input), out, isErr)
+			if ctrl.parked {
+				parked = true
+			}
+			r.persistStep(st.runID, issue.ID, st.seq, stepToolResult, tu.Name, tu.ID, string(tu.Input), out, isErr)
 			resultBlocks = append(resultBlocks, ai.TranscriptBlock{
 				Type:      ai.BlockToolResult,
 				ToolUseID: tu.ID,
@@ -318,8 +478,8 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, run
 			})
 		}
 
-		history = append(history, ai.TranscriptMessage{Role: ai.RoleUser, Content: resultBlocks})
-		r.persistTranscript(runID, history)
+		st.history = append(st.history, ai.TranscriptMessage{Role: ai.RoleUser, Content: resultBlocks})
+		r.persistTranscript(st.runID, st.history)
 
 		if concluded {
 			// The conclude_issue tool sets the terminal issue state via IssueStore.
@@ -333,9 +493,39 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, run
 			if err := r.svc.ConcludeIssue(ctx, issue.ID, status, "Investigation complete."); err != nil {
 				log.Printf("remediation: finalize conclude issue %d: %v", issue.ID, err)
 			}
-			return r.finalizeRun(runID, runStatusSucceeded, stopResolved)
+			return r.finalizeRun(st.runID, runStatusSucceeded, stopResolved)
+		}
+
+		if parked {
+			// A NEW proposal was recorded. Park: finalize the run as waiting for an
+			// approval, set the issue awaiting_approval, release the run claim, and
+			// EXIT the loop (no goroutine held during the human wait). The bounds
+			// spent so far are already persisted on the run and carry over on resume.
+			return r.park(issue.ID, st.runID)
 		}
 	}
+}
+
+// park finalizes a run that proposed an action: it marks the run
+// waiting_approval, moves the issue to awaiting_approval, and releases the issue
+// claim so the worker goroutine is free during the (possibly long) human wait.
+// The Runner re-enters via Resume once an admin decides.
+func (r *Runner) park(issueID, runID int64) error {
+	if _, err := r.db.Exec(
+		"UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL WHERE id = ?",
+		runStatusWaitingApproval, stopAwaitingApproval, runID,
+	); err != nil {
+		log.Printf("remediation: park run %d: %v", runID, err)
+	}
+	// Move the issue to awaiting_approval and release the active_run_id claim so a
+	// resume can re-claim it. Guard on the issue not already being closed.
+	if _, err := r.db.Exec(
+		"UPDATE issues SET status = ?, active_run_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND closed_at IS NULL",
+		IssueAwaitingApproval, issueID,
+	); err != nil {
+		log.Printf("remediation: park issue %d: %v", issueID, err)
+	}
+	return nil
 }
 
 // dispatchControl carries side-effect signals from a single tool dispatch back
@@ -344,6 +534,7 @@ type dispatchControl struct {
 	postedMessage  bool
 	concluded      bool
 	concludeStatus string
+	parked         bool // propose_action recorded a NEW proposal: pause for admin approval
 }
 
 // dispatchTool is the central enforcement check. For a read tool that cleared the
@@ -355,7 +546,7 @@ type dispatchControl struct {
 func (r *Runner) dispatchTool(ctx context.Context, issueID int64, tu ai.TranscriptBlock) (out string, isErr bool, ctrl dispatchControl) {
 	switch {
 	case mcp.IsAgentTool(tu.Name):
-		res, err := r.toolServer.ExecuteAgentTool(ctx, tu.Name, tu.Input, issueID)
+		res, err := r.toolServer.ExecuteAgentTool(ctx, tu.Name, tu.Input, issueID, tu.ID)
 		if err != nil {
 			return "Error: " + err.Error(), true, ctrl
 		}
@@ -365,6 +556,9 @@ func (r *Runner) dispatchTool(ctx context.Context, issueID int64, tu ai.Transcri
 		if res.Concluded {
 			ctrl.concluded = true
 			ctrl.concludeStatus = res.Status
+		}
+		if res.Parked {
+			ctrl.parked = true
 		}
 		return res.Text, false, ctrl
 

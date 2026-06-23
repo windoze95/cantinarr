@@ -360,23 +360,7 @@ func normalizeMediaType(mediaType string) string {
 // TMDB->TVDB bridge, then by scanning the library for a tmdbId match.
 // Returns (nil, nil) when the series is not in the library.
 func (s *ToolServer) findSeriesByTMDB(client *sonarr.Client, tmdbID int) (*sonarr.Series, error) {
-	if s.bridge != nil {
-		if res, err := s.bridge.ResolveTVDBID(tmdbID); err == nil && res.TVDBID != 0 {
-			if series, err := client.GetSeriesByTVDB(res.TVDBID); err == nil && series != nil {
-				return series, nil
-			}
-		}
-	}
-	all, err := client.GetAllSeries()
-	if err != nil {
-		return nil, err
-	}
-	for i := range all {
-		if all[i].TmdbID != 0 && all[i].TmdbID == tmdbID {
-			return &all[i], nil
-		}
-	}
-	return nil, nil
+	return seriesByTMDB(s.bridge, client, tmdbID)
 }
 
 // --- get_queue ---
@@ -884,50 +868,11 @@ func (s *ToolServer) triggerSearch(input json.RawMessage) (*ToolResult, error) {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
 
-	switch params.MediaType {
-	case "movie":
-		radarrClient := s.GetRadarr()
-		if radarrClient == nil {
-			return &ToolResult{Text: "Radarr is not configured."}, nil
-		}
-		movie, err := radarrClient.GetMovieByTMDB(params.TmdbID)
-		if err != nil {
-			return nil, err
-		}
-		if movie == nil {
-			return &ToolResult{Text: "This movie is not in the library yet. Use request_media to add it first."}, nil
-		}
-		if err := radarrClient.TriggerMoviesSearch([]int{movie.ID}); err != nil {
-			return nil, err
-		}
-		return &ToolResult{Text: fmt.Sprintf("Search started for %s (%d). Check get_queue in a bit to see if a release was grabbed.", movie.Title, movie.Year)}, nil
-
-	case "tv":
-		sonarrClient := s.GetSonarr()
-		if sonarrClient == nil {
-			return &ToolResult{Text: "Sonarr is not configured."}, nil
-		}
-		series, err := s.findSeriesByTMDB(sonarrClient, params.TmdbID)
-		if err != nil {
-			return nil, err
-		}
-		if series == nil {
-			return &ToolResult{Text: "This show is not in the library yet. Use request_media to add it first."}, nil
-		}
-		if params.SeasonNumber != nil {
-			if err := sonarrClient.TriggerSeasonSearch(series.ID, *params.SeasonNumber); err != nil {
-				return nil, err
-			}
-			return &ToolResult{Text: fmt.Sprintf("Search started for %s season %d. Check get_queue in a bit to see if releases were grabbed.", series.Title, *params.SeasonNumber)}, nil
-		}
-		if err := sonarrClient.TriggerSeriesSearch(series.ID); err != nil {
-			return nil, err
-		}
-		return &ToolResult{Text: fmt.Sprintf("Search started for all monitored episodes of %s. Check get_queue in a bit to see if releases were grabbed.", series.Title)}, nil
-
-	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
+	text, err := TriggerSearchHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), params.MediaType, params.TmdbID, params.SeasonNumber)
+	if err != nil {
+		return nil, err
 	}
+	return &ToolResult{Text: text}, nil
 }
 
 // --- search_releases (admin) ---
@@ -1068,31 +1013,11 @@ func (s *ToolServer) grabRelease(input json.RawMessage) (*ToolResult, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	if params.GUID == "" {
-		return &ToolResult{Text: "guid is required (from search_releases)."}, nil
+	text, err := GrabReleaseHelper(s.GetRadarr(), s.GetSonarr(), params.MediaType, params.GUID, params.IndexerID, 0)
+	if err != nil {
+		return nil, err
 	}
-
-	switch params.MediaType {
-	case "movie":
-		radarrClient := s.GetRadarr()
-		if radarrClient == nil {
-			return &ToolResult{Text: "Radarr is not configured."}, nil
-		}
-		if err := radarrClient.GrabRelease(params.GUID, params.IndexerID); err != nil {
-			return nil, err
-		}
-	case "tv":
-		sonarrClient := s.GetSonarr()
-		if sonarrClient == nil {
-			return &ToolResult{Text: "Sonarr is not configured."}, nil
-		}
-		if err := sonarrClient.GrabRelease(params.GUID, params.IndexerID); err != nil {
-			return nil, err
-		}
-	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
-	}
-	return &ToolResult{Text: "Release sent to the download client. It should show up in get_queue shortly."}, nil
+	return &ToolResult{Text: text}, nil
 }
 
 // --- remove_queue_item (admin) ---
@@ -1106,31 +1031,9 @@ func (s *ToolServer) removeQueueItem(input json.RawMessage) (*ToolResult, error)
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-
-	switch params.MediaType {
-	case "movie":
-		radarrClient := s.GetRadarr()
-		if radarrClient == nil {
-			return &ToolResult{Text: "Radarr is not configured."}, nil
-		}
-		if err := radarrClient.RemoveQueueItem(params.QueueID, true, params.Blocklist, false, false); err != nil {
-			return nil, err
-		}
-	case "tv":
-		sonarrClient := s.GetSonarr()
-		if sonarrClient == nil {
-			return &ToolResult{Text: "Sonarr is not configured."}, nil
-		}
-		if err := sonarrClient.RemoveQueueItem(params.QueueID, true, params.Blocklist, false, false); err != nil {
-			return nil, err
-		}
-	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
-	}
-
-	text := fmt.Sprintf("Removed queue item %d and deleted the download from the client.", params.QueueID)
-	if params.Blocklist {
-		text += " The release was blocklisted so it will not be grabbed again."
+	text, err := RemoveQueueItemHelper(s.GetRadarr(), s.GetSonarr(), params.MediaType, params.QueueID, params.Blocklist)
+	if err != nil {
+		return nil, err
 	}
 	return &ToolResult{Text: text}, nil
 }

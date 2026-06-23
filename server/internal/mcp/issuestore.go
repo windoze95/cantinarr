@@ -1,6 +1,9 @@
 package mcp
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // IssueStore is the narrow write surface the remediation agent's agent-only
 // tools call. Defining it HERE (and injecting a value at ToolServer
@@ -9,9 +12,8 @@ import "context"
 // tools need to write issue rows owned by remediation. remediation.Service
 // implements this interface; mcp depends only on the interface.
 //
-// Wave 2 needs exactly these three methods. propose_action / ask_reporter (which
-// would add ProposeAction/AskReporter here) are later waves and are deliberately
-// omitted so the read-only core cannot record or hint at a mutation.
+// Wave 3 adds ProposeAction (the agent proposes a mutation; an admin approves
+// it; the server replays it — the model never executes anything itself).
 type IssueStore interface {
 	// PostIssueMessage appends an agent-authored message to an issue's thread.
 	PostIssueMessage(ctx context.Context, issueID int64, body string) error
@@ -21,6 +23,19 @@ type IssueStore interface {
 	// RemediationEnabled reports whether the remediation feature is switched on.
 	// Every agent-only tool early-returns a benign result when this is false.
 	RemediationEnabled(ctx context.Context) bool
+	// ProposeAction records a proposed (admin-approvable) arr mutation against an
+	// issue. It validates params against the kind's schema, computes a stable
+	// fingerprint, and conditionally inserts an agent_actions row keyed by that
+	// fingerprint. The model NEVER executes the mutation: the row sits in
+	// 'proposed' until an admin approves it, at which point the server replays the
+	// stored params verbatim.
+	//
+	// proposalID is the row id (existing or new). alreadyExisted is true when a
+	// row with the same fingerprint was already present (a re-proposed identical
+	// action), so the caller can return an idempotent message. toolUseID is the
+	// propose_action tool_use.id, stored so the resume tool_result pairs back to
+	// the exact call when the investigation continues after the decision.
+	ProposeAction(ctx context.Context, issueID int64, kind string, params json.RawMessage, rationale, toolUseID string) (proposalID int64, alreadyExisted bool, err error)
 }
 
 // SetIssueStore injects the remediation write surface after construction. It is

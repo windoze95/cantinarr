@@ -1,9 +1,11 @@
 package remediation
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
@@ -29,11 +31,24 @@ type Service struct {
 	bridge   *tmdb.Bridge
 	notifier Notifier
 
-	// jobs is the buffered queue of issue ids awaiting a read-only investigation.
-	// The Runner drains it via StartWorkers; Enqueue (called by the handler when
-	// the feature is enabled) pushes onto it. Buffered so the request path never
-	// blocks on the agent.
-	jobs chan int64
+	// executor replays an approved proposal against the arr. It is the ONLY code
+	// that mutates Radarr/Sonarr, reached solely from ApproveAction. It is an
+	// interface so a test can inject a fake seam (no network), satisfied in
+	// production by *Executor.
+	executor actionExecutor
+
+	// jobs is the buffered queue of investigation/resume jobs. The Runner drains
+	// it via StartWorkers; Enqueue/EnqueueResume push onto it. Buffered so the
+	// request and approval paths never block on the agent.
+	jobs chan job
+}
+
+// actionExecutor is the narrow seam ApproveAction calls to replay an approved
+// action against the arr. *Executor satisfies it in production; a fake satisfies
+// it in tests so the approve→execute→resume cycle can be asserted without a
+// network or a live arr.
+type actionExecutor interface {
+	Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage) (string, error)
 }
 
 // NewService constructs the remediation service, mirroring request.NewService.
@@ -43,7 +58,8 @@ func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, no
 		registry: registry,
 		bridge:   bridge,
 		notifier: notifier,
-		jobs:     make(chan int64, jobQueueSize),
+		executor: NewExecutor(registry, bridge, db),
+		jobs:     make(chan job, jobQueueSize),
 	}
 }
 

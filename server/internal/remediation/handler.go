@@ -156,6 +156,91 @@ func (h *Handler) Dismiss(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// ListActions handles GET /api/admin/agent-actions?status=proposed
+// (PermissionRemediationManage). Default (no status) returns the approval queue
+// (proposed). Each row carries the issue title + kind + rationale + params.
+func (h *Handler) ListActions(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = ActionProposed
+	}
+	actions, err := h.service.ListActions(status)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ListActionsResponse{Actions: actions})
+}
+
+// ApproveAction handles POST /api/admin/agent-actions/{id}/approve
+// (PermissionRemediationManage). Body {override?} optionally edits the params.
+func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action id"})
+		return
+	}
+	var body ActionDecision
+	if err := decodeOptional(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	action, err := h.service.ApproveAction(claims.UserID, id, body.Override)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, action)
+}
+
+// DenyAction handles POST /api/admin/agent-actions/{id}/deny
+// (PermissionRemediationManage). Body {note}. A denial resumes the investigation
+// (issue back to investigating), not a terminal failure.
+func (h *Handler) DenyAction(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action id"})
+		return
+	}
+	var body ActionDenyRequest
+	if err := decodeOptional(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	action, err := h.service.DenyAction(claims.UserID, id, body.Note)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, action)
+}
+
+// GetRun handles GET /api/admin/agent-runs/{id} (PermissionRemediationManage):
+// the run row plus its ordered audit steps.
+func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid run id"})
+		return
+	}
+	detail, err := h.service.GetRunDetail(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
 // GetSettings handles GET /api/admin/remediation-settings (PermissionRemediationManage).
 func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.service.Settings())
