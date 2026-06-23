@@ -514,6 +514,16 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 	}
 
 	tvdbID := r.tvdbID
+	// A request that arrives with only a TMDB ID — e.g. the AI assistant's
+	// requestMedia tool, which sends just tmdb_id + media_type — has nothing for
+	// Sonarr's series lookup to match. Resolve the TVDB ID the same way the
+	// status path does (cache -> TMDB external IDs -> Trakt) so a TMDB ID alone
+	// is enough to add a series.
+	if tvdbID == 0 && s.bridge != nil {
+		if res, err := s.bridge.ResolveTVDBID(r.tmdbID); err == nil && res != nil && res.TVDBID != 0 {
+			tvdbID = res.TVDBID
+		}
+	}
 	if tvdbID != 0 {
 		s.db.Exec("INSERT OR REPLACE INTO tmdb_tvdb_cache (tmdb_id, tvdb_id) VALUES (?, ?)", r.tmdbID, tvdbID)
 	}
@@ -538,7 +548,7 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 	}
 	if lookup == nil || err != nil {
 		if r.title == "" {
-			return "", "", fmt.Errorf("series lookup failed: no TVDB ID or title provided")
+			return "", "", fmt.Errorf("series lookup failed: could not resolve a TVDB ID for tmdb %d and no title was provided", r.tmdbID)
 		}
 		lookup, err = sonarrClient.LookupByTitle(r.title)
 		if err != nil {
