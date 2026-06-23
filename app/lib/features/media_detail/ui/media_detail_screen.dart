@@ -16,7 +16,7 @@ import '../../request/ui/request_button.dart';
 import '../../request/ui/request_options_sheet.dart';
 import '../../request/ui/request_status_sheet.dart';
 import '../logic/media_detail_provider.dart';
-import 'season_grid.dart';
+import 'season_table.dart';
 
 /// Full detail screen for a movie or TV show.
 class MediaDetailScreen extends ConsumerStatefulWidget {
@@ -256,7 +256,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                       ),
                     ],
 
-                    // Seasons (TV only)
+                    // Seasons (TV only): interactive per-season request table
+                    // fed by live availability from the request notifier.
                     if (state.seasons.isNotEmpty) ...[
                       const SizedBox(height: 24),
                       const Padding(
@@ -268,7 +269,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                 color: AppTheme.textPrimary)),
                       ),
                       const SizedBox(height: 12),
-                      SeasonGrid(seasons: state.seasons),
+                      SeasonTable(
+                        seasons: state.seasons,
+                        notifier: _requestNotifier,
+                        title: state.title,
+                        tvdbId: state.tvDetail?.externalIds?.tvdbId,
+                      ),
                     ],
 
                     // Recommendations
@@ -342,7 +348,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (_) => RequestStatusSheet(title: title, status: status),
+      builder: (_) => RequestStatusSheet(
+        title: title,
+        status: status,
+        seasons: _requestNotifier.state.seasons,
+      ),
     );
   }
 }

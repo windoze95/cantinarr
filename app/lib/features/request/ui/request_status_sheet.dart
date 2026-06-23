@@ -8,11 +8,16 @@ class RequestStatusSheet extends StatelessWidget {
   final RequestStatus status;
   final String? additionalInfo;
 
+  /// Per-season availability (TV only). When present, the "partially available"
+  /// copy names the gap (e.g. "Seasons 1-3 ready; Season 4 downloading").
+  final List<RequestSeasonStatus> seasons;
+
   const RequestStatusSheet({
     super.key,
     required this.title,
     required this.status,
     this.additionalInfo,
+    this.seasons = const [],
   });
 
   @override
@@ -90,9 +95,67 @@ class RequestStatusSheet extends StatelessWidget {
           'Great news! This title is currently downloading and should be available shortly.',
         RequestStatus.available =>
           'This title is ready to watch! Open Plex or Infuse to start streaming.',
-        RequestStatus.partial =>
-          'Some episodes are available. You can request the remaining ones.',
+        RequestStatus.partial => _partialMessage,
       };
+
+  /// For a partial title, name the gap using the per-season breakdown, e.g.
+  /// "Seasons 1-3 ready; Season 4 downloading. You can request the rest."
+  /// Falls back to a generic line when no season detail is available.
+  String get _partialMessage {
+    if (seasons.isEmpty) {
+      return 'Some episodes are available. You can request the remaining ones.';
+    }
+    final ready = <int>[];
+    final downloading = <int>[];
+    final missing = <int>[];
+    for (final s in seasons) {
+      switch (s.status) {
+        case RequestStatus.available:
+          ready.add(s.seasonNumber);
+        case RequestStatus.downloading:
+        case RequestStatus.requested:
+        case RequestStatus.pending:
+          downloading.add(s.seasonNumber);
+        default:
+          missing.add(s.seasonNumber);
+      }
+    }
+    final parts = <String>[];
+    if (ready.isNotEmpty) parts.add('${_seasonsPhrase(ready)} ready');
+    if (downloading.isNotEmpty) {
+      parts.add('${_seasonsPhrase(downloading)} downloading');
+    }
+    if (parts.isEmpty) {
+      return 'Some episodes are available. You can request the remaining ones.';
+    }
+    final base = '${parts.join('; ')}.';
+    return missing.isNotEmpty
+        ? '$base You can request the remaining seasons below.'
+        : base;
+  }
+
+  /// Renders a sorted season-number list as "Season 4" or "Seasons 1-3" /
+  /// "Seasons 1, 3, 5", collapsing contiguous runs into ranges.
+  String _seasonsPhrase(List<int> numbers) {
+    final sorted = [...numbers]..sort();
+    final ranges = <String>[];
+    var start = sorted.first;
+    var prev = sorted.first;
+    for (var i = 1; i <= sorted.length; i++) {
+      final isBreak = i == sorted.length || sorted[i] != prev + 1;
+      if (isBreak) {
+        ranges.add(start == prev ? '$start' : '$start-$prev');
+        if (i < sorted.length) {
+          start = sorted[i];
+          prev = sorted[i];
+        }
+      } else {
+        prev = sorted[i];
+      }
+    }
+    final noun = sorted.length == 1 ? 'Season' : 'Seasons';
+    return '$noun ${ranges.join(', ')}';
+  }
 }
 
 class _StatusIcon extends StatelessWidget {

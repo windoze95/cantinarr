@@ -10,6 +10,9 @@ class MediaCard extends StatelessWidget {
   final String? posterPath;
   final String? statusLabel;
   final Color? statusColor;
+
+  /// Optional secondary line under the title (e.g. "18/24 eps" availability).
+  final String? subtitle;
   final VoidCallback? onTap;
   final double width;
 
@@ -20,6 +23,7 @@ class MediaCard extends StatelessWidget {
     this.posterPath,
     this.statusLabel,
     this.statusColor,
+    this.subtitle,
     this.onTap,
     this.width = 120,
   });
@@ -112,6 +116,16 @@ class MediaCard extends StatelessWidget {
                 fontWeight: FontWeight.w500,
               ),
             ),
+            if (subtitle != null)
+              Text(
+                subtitle!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 11,
+                ),
+              ),
           ],
         ),
       ),

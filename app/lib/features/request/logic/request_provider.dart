@@ -8,21 +8,28 @@ class RequestState {
   final bool isRequesting;
   final String? error;
 
+  /// Per-season availability for TV titles (empty for movies or series not yet
+  /// in the library). Drives the interactive season table.
+  final List<RequestSeasonStatus> seasons;
+
   const RequestState({
     this.status = RequestStatus.unavailable,
     this.isRequesting = false,
     this.error,
+    this.seasons = const [],
   });
 
   RequestState copyWith({
     RequestStatus? status,
     bool? isRequesting,
     String? error,
+    List<RequestSeasonStatus>? seasons,
   }) =>
       RequestState(
         status: status ?? this.status,
         isRequesting: isRequesting ?? this.isRequesting,
         error: error,
+        seasons: seasons ?? this.seasons,
       );
 }
 
@@ -47,11 +54,12 @@ class RequestNotifier extends ChangeNotifier {
         _tmdbId = tmdbId,
         _mediaType = mediaType;
 
-  /// Check current status from the backend.
+  /// Check current status from the backend, including the per-season breakdown
+  /// for TV titles.
   Future<void> checkStatus() async {
     try {
-      final status = await _service.checkStatus(_tmdbId, _mediaType);
-      state = state.copyWith(status: status);
+      final detail = await _service.checkStatusDetail(_tmdbId, _mediaType);
+      state = state.copyWith(status: detail.status, seasons: detail.seasons);
     } catch (e) {
       state = state.copyWith(error: 'Could not check status');
     }
@@ -67,6 +75,7 @@ class RequestNotifier extends ChangeNotifier {
     String? title,
     int? tvdbId,
     String? seasonScope,
+    List<int>? seasons,
     int? qualityProfileId,
   }) async {
     if (state.isRequesting) return;
@@ -78,6 +87,7 @@ class RequestNotifier extends ChangeNotifier {
       title: title,
       tvdbId: tvdbId,
       seasonScope: seasonScope,
+      seasons: seasons,
       qualityProfileId: qualityProfileId,
     );
 

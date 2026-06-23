@@ -38,8 +38,31 @@ type Series struct {
 	Statistics     *struct {
 		EpisodeFileCount  int     `json:"episodeFileCount"`
 		EpisodeCount      int     `json:"episodeCount"`
+		TotalEpisodeCount int     `json:"totalEpisodeCount"`
+		SizeOnDisk        int64   `json:"sizeOnDisk"`
 		PercentOfEpisodes float64 `json:"percentOfEpisodes"`
 	} `json:"statistics,omitempty"`
+	// Seasons carries Sonarr's per-season monitoring + statistics, used to
+	// drive per-season availability in the request UI.
+	Seasons []SeasonResource `json:"seasons,omitempty"`
+}
+
+// SeasonResource is one entry of a series' seasons[] array: its number, whether
+// Sonarr is monitoring it, and (when the series is in the library) its episode
+// statistics.
+type SeasonResource struct {
+	SeasonNumber int               `json:"seasonNumber"`
+	Monitored    bool              `json:"monitored"`
+	Statistics   *SeasonStatistics `json:"statistics,omitempty"`
+}
+
+// SeasonStatistics is the per-season episode rollup Sonarr returns on a season.
+type SeasonStatistics struct {
+	EpisodeFileCount  int     `json:"episodeFileCount"`
+	EpisodeCount      int     `json:"episodeCount"`
+	TotalEpisodeCount int     `json:"totalEpisodeCount"`
+	SizeOnDisk        int64   `json:"sizeOnDisk"`
+	PercentOfEpisodes float64 `json:"percentOfEpisodes"`
 }
 
 type QualityProfile struct {
@@ -252,6 +275,32 @@ func (c *Client) AddSeries(addReq *AddSeriesRequest) error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("sonarr add series returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// SetSeasonsViaSeasonPass monitors exactly the seasons whose entry in monitored
+// is true and unmonitors the rest, via Sonarr's /seasonpass endpoint. This is
+// the only way to honor an arbitrary set of season numbers: addSeries's
+// AddOptions.Monitor is a single enum (all/firstSeason/...) with no field for an
+// explicit list. monitoringOptions.monitor is "none" so Sonarr applies our
+// per-season flags verbatim instead of overriding them with a scope.
+func (c *Client) SetSeasonsViaSeasonPass(seriesID int, monitored map[int]bool) error {
+	seasons := make([]map[string]any, 0, len(monitored))
+	for seasonNumber, isMonitored := range monitored {
+		seasons = append(seasons, map[string]any{
+			"seasonNumber": seasonNumber,
+			"monitored":    isMonitored,
+		})
+	}
+	payload := map[string]any{
+		"series": []map[string]any{
+			{"id": seriesID, "seasons": seasons},
+		},
+		"monitoringOptions": map[string]any{"monitor": "none"},
+	}
+	if err := c.do("POST", "/api/v3/seasonpass", payload, nil); err != nil {
+		return fmt.Errorf("sonarr seasonpass: %w", err)
 	}
 	return nil
 }
