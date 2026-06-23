@@ -7,6 +7,7 @@ import '../../../core/widgets/error_banner.dart';
 import '../data/radarr_api_service.dart';
 import '../data/radarr_models.dart';
 import '../logic/radarr_movies_provider.dart';
+import 'radarr_movie_detail_screen.dart';
 import 'radarr_movie_list.dart';
 import 'radarr_releases_screen.dart';
 
@@ -72,6 +73,19 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
           instanceId: instanceId,
           movieId: movie.id,
           movieTitle: movie.title,
+        ),
+      ),
+    );
+  }
+
+  void _openMovie(RadarrMovie movie) {
+    final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
+    if (instanceId == null) return;
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (_) => RadarrMovieDetailScreen(
+          instanceId: instanceId,
+          movie: movie,
         ),
       ),
     );
@@ -189,6 +203,7 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
                             _notifier!.deleteMovie(id, deleteFiles: false),
                         onSearch: _triggerAutomaticSearch,
                         onInteractiveSearch: _openInteractiveSearch,
+                        onOpen: _openMovie,
                       ),
                     ),
             ),

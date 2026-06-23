@@ -1,3 +1,5 @@
+import '../../sonarr/data/sonarr_models.dart' show SonarrStatusMessage;
+
 /// A movie managed by Radarr.
 class RadarrMovie {
   final int id;
@@ -20,6 +22,11 @@ class RadarrMovie {
   final DateTime? inCinemas;
   final DateTime? physicalRelease;
   final DateTime? digitalRelease;
+  final int sizeOnDisk;
+
+  /// True when the movie has reached its minimum availability (i.e. Radarr will
+  /// actively search for it). Drives the "Available"/"Not yet available" line.
+  final bool isAvailable;
 
   const RadarrMovie({
     required this.id,
@@ -42,6 +49,8 @@ class RadarrMovie {
     this.inCinemas,
     this.physicalRelease,
     this.digitalRelease,
+    this.sizeOnDisk = 0,
+    this.isAvailable = false,
   });
 
   factory RadarrMovie.fromJson(Map<String, dynamic> json) => RadarrMovie(
@@ -77,6 +86,8 @@ class RadarrMovie {
             DateTime.tryParse(json['physicalRelease'] as String? ?? ''),
         digitalRelease:
             DateTime.tryParse(json['digitalRelease'] as String? ?? ''),
+        sizeOnDisk: (json['sizeOnDisk'] as num?)?.toInt() ?? 0,
+        isAvailable: json['isAvailable'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -105,6 +116,11 @@ class RadarrMovie {
     final fanart = images.where((i) => i.coverType == 'fanart');
     return fanart.isNotEmpty ? fanart.first.remoteUrl : null;
   }
+
+  /// Size on disk, preferring the top-level field but falling back to the
+  /// movie file's size (the list endpoint omits one or the other at times).
+  String get sizeOnDiskFormatted =>
+      _formatBytes(sizeOnDisk > 0 ? sizeOnDisk : (movieFile?.size ?? 0));
 }
 
 class RadarrImage {
@@ -136,28 +152,31 @@ class RadarrMovieFile {
   final String? relativePath;
   final int? size;
   final String? quality;
+  final bool qualityCutoffNotMet;
+  final String? releaseGroup;
 
   const RadarrMovieFile({
     required this.id,
     this.relativePath,
     this.size,
     this.quality,
+    this.qualityCutoffNotMet = false,
+    this.releaseGroup,
   });
 
   factory RadarrMovieFile.fromJson(Map<String, dynamic> json) =>
       RadarrMovieFile(
         id: json['id'] as int,
         relativePath: json['relativePath'] as String?,
-        size: json['size'] as int?,
+        size: (json['size'] as num?)?.toInt(),
         quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
             as String?,
+        qualityCutoffNotMet: json['qualityCutoffNotMet'] as bool? ?? false,
+        releaseGroup: json['releaseGroup'] as String?,
       );
 
-  String get sizeFormatted {
-    if (size == null) return 'Unknown';
-    final gb = size! / (1024 * 1024 * 1024);
-    return '${gb.toStringAsFixed(1)} GB';
-  }
+  String get sizeFormatted =>
+      (size == null || size! <= 0) ? 'Unknown' : _formatBytes(size!);
 }
 
 class RadarrQualityProfile {
@@ -246,7 +265,16 @@ class RadarrQueueItem {
   final double sizeleft;
   final String? timeleft;
   final String? errorMessage;
+
+  /// Flat list of message strings — kept for existing consumers (the queue
+  /// card's inline issues box).
   final List<String> statusMessages;
+
+  /// Grouped status messages ({title, messages[]}) — the data the Import Doctor
+  /// classifies, mirroring [SonarrQueueItem.statusMessageGroups].
+  final List<SonarrStatusMessage> statusMessageGroups;
+  final String? outputPath;
+  final String? downloadId;
   final String? quality;
 
   const RadarrQueueItem({
@@ -265,13 +293,18 @@ class RadarrQueueItem {
     this.timeleft,
     this.errorMessage,
     this.statusMessages = const [],
+    this.statusMessageGroups = const [],
+    this.outputPath,
+    this.downloadId,
     this.quality,
   });
 
   factory RadarrQueueItem.fromJson(Map<String, dynamic> json) {
     final messages = <String>[];
+    final groups = <SonarrStatusMessage>[];
     for (final entry in (json['statusMessages'] as List<dynamic>? ?? [])) {
       final map = entry as Map<String, dynamic>;
+      groups.add(SonarrStatusMessage.fromJson(map));
       for (final msg in (map['messages'] as List<dynamic>? ?? [])) {
         final text = msg.toString();
         if (text.isNotEmpty) messages.add(text);
@@ -297,6 +330,9 @@ class RadarrQueueItem {
       timeleft: json['timeleft'] as String?,
       errorMessage: json['errorMessage'] as String?,
       statusMessages: messages,
+      statusMessageGroups: groups,
+      outputPath: json['outputPath'] as String?,
+      downloadId: json['downloadId'] as String?,
       quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
           as String?,
     );
@@ -321,6 +357,8 @@ class RadarrHistoryRecord {
   final DateTime? date;
   final String? quality;
   final int? movieId;
+  final Map<String, String> data;
+  final String? downloadId;
 
   const RadarrHistoryRecord({
     required this.id,
@@ -329,6 +367,8 @@ class RadarrHistoryRecord {
     this.date,
     this.quality,
     this.movieId,
+    this.data = const {},
+    this.downloadId,
   });
 
   factory RadarrHistoryRecord.fromJson(Map<String, dynamic> json) =>
@@ -340,7 +380,16 @@ class RadarrHistoryRecord {
         quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
             as String?,
         movieId: json['movieId'] as int?,
+        data: ((json['data'] as Map<String, dynamic>?) ?? {})
+            .map((k, v) => MapEntry(k, v?.toString() ?? '')),
+        downloadId: json['downloadId'] as String?,
       );
+
+  /// Indexer the release was grabbed from, e.g. "NZBgeek (Prowlarr)".
+  String? get indexer => data['indexer'];
+
+  /// Release group parsed from the grab, when present.
+  String? get releaseGroup => data['releaseGroup'];
 }
 
 /// Paged envelope for Radarr history.
@@ -440,4 +489,95 @@ class RadarrRelease {
     if (ageHours >= 1) return '${ageHours.round()}h';
     return '<1h';
   }
+}
+
+/// Why a manual-import candidate was rejected. `type` is "permanent" or
+/// "temporary"; permanent rejections only import with force.
+class RadarrImportRejection {
+  final String reason;
+  final String type;
+
+  const RadarrImportRejection({this.reason = '', this.type = ''});
+
+  factory RadarrImportRejection.fromJson(Map<String, dynamic> json) =>
+      RadarrImportRejection(
+        reason: json['reason'] as String? ?? '',
+        type: json['type'] as String? ?? '',
+      );
+
+  bool get isPermanent => type.toLowerCase() == 'permanent';
+}
+
+/// One importable file returned by GET /manualimport for a movie. Mirrors
+/// [SonarrManualImportCandidate] but keyed by `movieId` (movies are single
+/// items — no episodes). The `quality` and `languages` blobs are kept VERBATIM
+/// and round-tripped back into the ManualImport command unchanged (re-modelling
+/// them loses fields Radarr needs).
+class RadarrManualImportCandidate {
+  final int id;
+  final String path;
+  final String? folderName;
+  final String name;
+  final int size;
+  final int? movieId;
+  final Map<String, dynamic>? quality;
+  final List<dynamic> languages;
+  final String? releaseGroup;
+  final String? downloadId;
+  final int? indexerFlags;
+  final List<RadarrImportRejection> rejections;
+
+  const RadarrManualImportCandidate({
+    required this.id,
+    required this.path,
+    this.folderName,
+    this.name = '',
+    this.size = 0,
+    this.movieId,
+    this.quality,
+    this.languages = const [],
+    this.releaseGroup,
+    this.downloadId,
+    this.indexerFlags,
+    this.rejections = const [],
+  });
+
+  factory RadarrManualImportCandidate.fromJson(Map<String, dynamic> json) =>
+      RadarrManualImportCandidate(
+        id: json['id'] as int? ?? 0,
+        path: json['path'] as String? ?? '',
+        folderName: json['folderName'] as String?,
+        name: json['name'] as String? ??
+            (json['relativePath'] as String?) ??
+            (json['path'] as String? ?? ''),
+        size: (json['size'] as num?)?.toInt() ?? 0,
+        movieId: (json['movie'] as Map<String, dynamic>?)?['id'] as int?,
+        quality: json['quality'] as Map<String, dynamic>?,
+        languages: (json['languages'] as List<dynamic>?) ?? const [],
+        releaseGroup: json['releaseGroup'] as String?,
+        downloadId: json['downloadId'] as String?,
+        indexerFlags: json['indexerFlags'] as int?,
+        rejections: ((json['rejections'] as List<dynamic>?) ?? [])
+            .map((r) => RadarrImportRejection.fromJson(r as Map<String, dynamic>))
+            .toList(),
+      );
+
+  bool get hasPermanentRejection => rejections.any((r) => r.isPermanent);
+
+  /// A candidate is importable once Radarr has matched it to a movie.
+  bool get isMapped => movieId != null;
+  String get sizeFormatted => _formatBytes(size);
+
+  /// The file entry for the ManualImport command, with quality/languages sent
+  /// back exactly as received.
+  Map<String, dynamic> toImportFile() => {
+        'path': path,
+        if (folderName != null) 'folderName': folderName,
+        if (movieId != null) 'movieId': movieId,
+        if (quality != null) 'quality': quality,
+        'languages': languages,
+        if (releaseGroup != null) 'releaseGroup': releaseGroup,
+        if (downloadId != null) 'downloadId': downloadId,
+        if (indexerFlags != null) 'indexerFlags': indexerFlags,
+      };
 }
