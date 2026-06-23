@@ -9,6 +9,7 @@ class RadarrMovieList extends StatelessWidget {
   final void Function(int id) onDelete;
   final void Function(int id) onSearch;
   final void Function(RadarrMovie movie)? onInteractiveSearch;
+  final void Function(RadarrMovie movie)? onOpen;
   final bool embedded;
 
   const RadarrMovieList({
@@ -17,6 +18,7 @@ class RadarrMovieList extends StatelessWidget {
     required this.onDelete,
     required this.onSearch,
     this.onInteractiveSearch,
+    this.onOpen,
     this.embedded = false,
   });
 
@@ -54,6 +56,7 @@ class RadarrMovieList extends StatelessWidget {
             onInteractiveSearch: onInteractiveSearch != null
                 ? () => onInteractiveSearch!(movie)
                 : null,
+            onOpen: onOpen != null ? () => onOpen!(movie) : null,
           ),
         );
       },
@@ -86,16 +89,19 @@ class _MovieTile extends StatelessWidget {
   final RadarrMovie movie;
   final VoidCallback onSearch;
   final VoidCallback? onInteractiveSearch;
+  final VoidCallback? onOpen;
 
   const _MovieTile({
     required this.movie,
     required this.onSearch,
     this.onInteractiveSearch,
+    this.onOpen,
   });
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
+      onTap: onOpen,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(6),

@@ -34,6 +34,10 @@ class RadarrApiService {
     return RadarrMovie.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Alias for [getMovie] used by the movie detail screen for naming parity
+  /// with the Sonarr drill-down (getSeriesById).
+  Future<RadarrMovie> getMovieById(int id) => getMovie(id);
+
   Future<List<RadarrMovie>> lookupMovies(String term) async {
     final resp = await _dio
         .get('$_basePath/movie/lookup', queryParameters: {'term': term});
@@ -114,14 +118,21 @@ class RadarrApiService {
   }
 
   /// Removes a queue item, optionally from the download client / blocklist.
+  /// [changeCategory] hands the download to the post-import category instead of
+  /// deleting it (e.g. for Unpackerr); [skipRedownload] suppresses the
+  /// automatic re-grab on a blocklist removal.
   Future<void> deleteQueueItem(
     int id, {
     bool removeFromClient = true,
     bool blocklist = false,
+    bool skipRedownload = false,
+    bool changeCategory = false,
   }) async {
     await _dio.delete('$_basePath/queue/$id', queryParameters: {
       'removeFromClient': removeFromClient,
       'blocklist': blocklist,
+      'skipRedownload': skipRedownload,
+      'changeCategory': changeCategory,
     });
   }
 
@@ -137,6 +148,19 @@ class RadarrApiService {
       'sortDirection': 'descending',
     });
     return RadarrHistoryPage.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// History for a single movie, newest first. Uses the non-paged
+  /// /history/movie endpoint.
+  Future<List<RadarrHistoryRecord>> getMovieHistory(int movieId) async {
+    final resp = await _dio.get('$_basePath/history/movie',
+        queryParameters: {'movieId': movieId});
+    final records = (resp.data as List<dynamic>)
+        .map((r) => RadarrHistoryRecord.fromJson(r as Map<String, dynamic>))
+        .toList();
+    records.sort(
+        (a, b) => (b.date ?? DateTime(0)).compareTo(a.date ?? DateTime(0)));
+    return records;
   }
 
   /// Fetches a page of monitored movies that have no file, newest in
@@ -183,6 +207,10 @@ class RadarrApiService {
         .toList();
   }
 
+  /// Alias for [getReleases] (naming parity with the Sonarr drill-down).
+  Future<List<RadarrRelease>> getMovieReleases(int movieId) =>
+      getReleases(movieId);
+
   /// Sends a release from interactive search to the download client.
   Future<void> grabRelease({
     required String guid,
@@ -193,5 +221,55 @@ class RadarrApiService {
       data: {'guid': guid, 'indexerId': indexerId},
       options: Options(receiveTimeout: const Duration(seconds: 60)),
     );
+  }
+
+  // --- Import Doctor (admin; proxy requires instances:manage) ---
+
+  /// Lists the importable files Radarr found for a finished download, with any
+  /// rejection reasons. Backs the manual-import recovery flow.
+  Future<List<RadarrManualImportCandidate>> getManualImportCandidates(
+    String downloadId,
+  ) async {
+    final resp = await _dio.get(
+      '$_basePath/manualimport',
+      queryParameters: {
+        'downloadId': downloadId,
+        'filterExistingFiles': false,
+      },
+      options: Options(receiveTimeout: const Duration(seconds: 60)),
+    );
+    return (resp.data as List<dynamic>)
+        .map((c) =>
+            RadarrManualImportCandidate.fromJson(c as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Imports the given candidate files. [importMode] must be lowercase
+  /// (`move`/`copy`/`auto`); `copy` preserves seeding for torrents.
+  Future<void> executeManualImport(
+    List<Map<String, dynamic>> files, {
+    String importMode = 'move',
+  }) async {
+    await _dio.post('$_basePath/command', data: {
+      'name': 'ManualImport',
+      'importMode': importMode,
+      'files': files,
+    });
+  }
+
+  /// Nudges Radarr to run its completed-download import pass now (clears items
+  /// stuck "waiting to import").
+  Future<void> processMonitoredDownloads() async {
+    await _dio.post('$_basePath/command',
+        data: {'name': 'ProcessMonitoredDownloads'});
+  }
+
+  /// Rescans a movie's files on disk (retries imports blocked by a transient
+  /// path/permissions problem).
+  Future<void> rescanMovie(int movieId) async {
+    await _dio.post('$_basePath/command', data: {
+      'name': 'RescanMovie',
+      'movieIds': [movieId],
+    });
   }
 }

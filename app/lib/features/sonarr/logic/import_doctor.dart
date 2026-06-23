@@ -1,3 +1,4 @@
+import '../../radarr/data/radarr_models.dart';
 import '../data/sonarr_models.dart';
 
 /// One-click remediation a diagnosis can suggest. Mirrors the action verbs in
@@ -15,14 +16,16 @@ enum DoctorAction {
 
 enum DoctorSeverity { ok, info, warning, error }
 
-/// The classifier's verdict for one queue item.
-class SonarrDiagnosis {
+/// The classifier's verdict for one queue item. Service-neutral: the same rule
+/// engine drives both Sonarr and Radarr (movies are single items, so the
+/// signals are identical — only the remediation wiring differs).
+class QueueDiagnosis {
   final DoctorSeverity severity;
   final String problem;
   final String transparency;
   final List<DoctorAction> actions;
 
-  const SonarrDiagnosis({
+  const QueueDiagnosis({
     required this.severity,
     this.problem = '',
     this.transparency = '',
@@ -31,6 +34,9 @@ class SonarrDiagnosis {
 
   bool get isHealthy => severity == DoctorSeverity.ok;
 }
+
+/// Back-compat alias for callers that referenced the old Sonarr-specific name.
+typedef SonarrDiagnosis = QueueDiagnosis;
 
 class _Rule {
   final String prefix; // stable English fragment, lower-cased
@@ -118,7 +124,7 @@ const List<_Rule> _messageRules = [
   _Rule(
     'does not exist',
     'Path not accessible',
-    "The download path doesn't exist or isn't accessible to Sonarr — usually a remote-path mapping issue. Fix the path, then rescan to retry.",
+    "The download path doesn't exist or isn't accessible — usually a remote-path mapping issue. Fix the path, then rescan to retry.",
     DoctorSeverity.error,
     [DoctorAction.rescan],
   ),
@@ -148,12 +154,12 @@ const List<_Rule> _errorRules = [
   ),
 ];
 
-SonarrDiagnosis? _matchRule(String line, List<_Rule> rules) {
+QueueDiagnosis? _matchRule(String line, List<_Rule> rules) {
   final lower = line.toLowerCase().trim();
   if (lower.isEmpty) return null;
   for (final r in rules) {
     if (lower.contains(r.prefix)) {
-      return SonarrDiagnosis(
+      return QueueDiagnosis(
         severity: r.severity,
         problem: r.problem,
         transparency: r.transparency,
@@ -164,11 +170,15 @@ SonarrDiagnosis? _matchRule(String line, List<_Rule> rules) {
   return null;
 }
 
-bool _looksHealthy(SonarrQueueItem item) {
-  final tds = (item.trackedDownloadStatus ?? '').toLowerCase();
+bool _looksHealthy({
+  required String? trackedDownloadStatus,
+  required String? errorMessage,
+  required List<SonarrStatusMessage> statusMessageGroups,
+}) {
+  final tds = (trackedDownloadStatus ?? '').toLowerCase();
   if (tds.isNotEmpty && tds != 'ok') return false;
-  if ((item.errorMessage ?? '').isNotEmpty) return false;
-  for (final g in item.statusMessageGroups) {
+  if ((errorMessage ?? '').isNotEmpty) return false;
+  for (final g in statusMessageGroups) {
     for (final line in g.messages) {
       if (line.trim().isNotEmpty) return false;
     }
@@ -176,19 +186,26 @@ bool _looksHealthy(SonarrQueueItem item) {
   return true;
 }
 
-/// Classifies a queue item with first-match-wins rules. Mirrors the Go
-/// classifier's order: client/stalled error → import rejections → stuck
-/// pending → failed → healthy → unknown-blocked fallback.
-SonarrDiagnosis diagnoseSonarrQueueItem(SonarrQueueItem item) {
-  final status = (item.trackedDownloadStatus ?? '').toLowerCase();
-  final state = (item.trackedDownloadState ?? '').toLowerCase();
+/// Service-neutral rule engine. Classifies a queue item from its raw signals
+/// with first-match-wins rules. Mirrors the Go classifier's order:
+/// client/stalled error → import rejections → stuck pending → failed → healthy →
+/// unknown-blocked fallback. Both [diagnoseSonarrQueueItem] and
+/// [diagnoseRadarrQueueItem] funnel through here so the catalog lives once.
+QueueDiagnosis diagnoseQueueSignal({
+  String? trackedDownloadStatus,
+  String? trackedDownloadState,
+  String? errorMessage,
+  required List<SonarrStatusMessage> statusMessageGroups,
+}) {
+  final status = (trackedDownloadStatus ?? '').toLowerCase();
+  final state = (trackedDownloadState ?? '').toLowerCase();
 
   // 1. Hard download-client / stalled errors.
   if (status == 'error') {
-    final matched = _matchRule(item.errorMessage ?? '', _errorRules);
+    final matched = _matchRule(errorMessage ?? '', _errorRules);
     if (matched != null) return matched;
-    final msg = item.errorMessage ?? '';
-    return SonarrDiagnosis(
+    final msg = errorMessage ?? '';
+    return QueueDiagnosis(
       severity: DoctorSeverity.error,
       problem: 'Download error',
       transparency: msg.isNotEmpty
@@ -199,7 +216,7 @@ SonarrDiagnosis diagnoseSonarrQueueItem(SonarrQueueItem item) {
   }
 
   // 2. Import rejections surfaced as statusMessages.
-  for (final g in item.statusMessageGroups) {
+  for (final g in statusMessageGroups) {
     final candidates = <String>[
       if (g.title.isNotEmpty) g.title,
       ...g.messages,
@@ -212,18 +229,18 @@ SonarrDiagnosis diagnoseSonarrQueueItem(SonarrQueueItem item) {
 
   // 3. Stuck waiting on the import pass.
   if (state == 'importpending') {
-    return const SonarrDiagnosis(
+    return const QueueDiagnosis(
       severity: DoctorSeverity.warning,
       problem: 'Waiting to import',
       transparency:
-          "The download finished but hasn't been imported yet — Sonarr hasn't run its import pass. Process it now to import it.",
+          "The download finished but hasn't been imported yet — the import pass hasn't run. Process it now to import it.",
       actions: [DoctorAction.process, DoctorAction.manualImport],
     );
   }
 
   // 4. Failed download.
   if (state == 'failed' || state == 'failedpending') {
-    return const SonarrDiagnosis(
+    return const QueueDiagnosis(
       severity: DoctorSeverity.error,
       problem: 'Download failed',
       transparency:
@@ -233,16 +250,38 @@ SonarrDiagnosis diagnoseSonarrQueueItem(SonarrQueueItem item) {
   }
 
   // 5. Healthy.
-  if (_looksHealthy(item)) {
-    return const SonarrDiagnosis(severity: DoctorSeverity.ok);
+  if (_looksHealthy(
+    trackedDownloadStatus: trackedDownloadStatus,
+    errorMessage: errorMessage,
+    statusMessageGroups: statusMessageGroups,
+  )) {
+    return const QueueDiagnosis(severity: DoctorSeverity.ok);
   }
 
   // 6. Unknown blocked state.
-  return const SonarrDiagnosis(
+  return const QueueDiagnosis(
     severity: DoctorSeverity.warning,
     problem: 'Import blocked',
     transparency:
-        "Sonarr couldn't import this automatically. Review the candidate files and import manually, or remove and re-search.",
+        "This download couldn't be imported automatically. Review the candidate files and import manually, or remove and re-search.",
     actions: [DoctorAction.manualImport, DoctorAction.blocklistSearch],
   );
 }
+
+/// Classifies a Sonarr queue item (thin wrapper over [diagnoseQueueSignal]).
+QueueDiagnosis diagnoseSonarrQueueItem(SonarrQueueItem item) =>
+    diagnoseQueueSignal(
+      trackedDownloadStatus: item.trackedDownloadStatus,
+      trackedDownloadState: item.trackedDownloadState,
+      errorMessage: item.errorMessage,
+      statusMessageGroups: item.statusMessageGroups,
+    );
+
+/// Classifies a Radarr queue item (thin wrapper over [diagnoseQueueSignal]).
+QueueDiagnosis diagnoseRadarrQueueItem(RadarrQueueItem item) =>
+    diagnoseQueueSignal(
+      trackedDownloadStatus: item.trackedDownloadStatus,
+      trackedDownloadState: item.trackedDownloadState,
+      errorMessage: item.errorMessage,
+      statusMessageGroups: item.statusMessageGroups,
+    );
