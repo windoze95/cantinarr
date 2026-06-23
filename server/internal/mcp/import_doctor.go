@@ -71,8 +71,12 @@ func radarrQueueTitle(item radarr.DetailedQueueItem) string {
 	return fmt.Sprintf("movie %d", item.MovieID)
 }
 
-// renderDiagnosis appends a problem item's diagnosis to the builder.
-func renderDiagnosis(sb *strings.Builder, mediaType string, queueID int, title string, d arr.Diagnosis) {
+// renderDiagnosis appends a problem item's diagnosis to the builder, including
+// the exact next MCP tool call(s) to run for each suggested action so a weak
+// agent can execute verbatim. tmdbID is the resolved TMDB id of the underlying
+// movie/series (0 when it could not be resolved cheaply, e.g. a Sonarr queue
+// item only carries a TVDB id).
+func renderDiagnosis(sb *strings.Builder, mediaType string, queueID, tmdbID int, title string, d arr.Diagnosis) {
 	fmt.Fprintf(sb, "\n\n- [queue %d] (%s) %s\n  problem: %s [%s]", queueID, mediaType, title, d.Problem, d.Severity)
 	if d.Transparency != "" {
 		fmt.Fprintf(sb, "\n  what happened: %s", d.Transparency)
@@ -86,6 +90,126 @@ func renderDiagnosis(sb *strings.Builder, mediaType string, queueID int, title s
 	if len(actions) > 0 {
 		fmt.Fprintf(sb, "\n  suggested actions: %s", strings.Join(actions, ", "))
 	}
+	if next := nextCalls(mediaType, queueID, tmdbID, d.SuggestedActions); next != "" {
+		fmt.Fprintf(sb, "\n  → next: %s", next)
+	}
+}
+
+// nextCalls maps a diagnosis's suggested action verbs to the precise MCP tool
+// call(s) to run, with JSON args, joined with " then " when an action needs
+// more than one step. It renders only the FIRST actionable verb (the primary
+// fix); the rest stay visible in "suggested actions" as alternatives. Returns
+// "" when there is nothing actionable.
+func nextCalls(mediaType string, queueID, tmdbID int, verbs []string) string {
+	for _, v := range verbs {
+		switch v {
+		case arr.ActionProcess, arr.ActionRescan:
+			// rescan_media runs Rescan{Series,Movie} then the import pass. It
+			// needs a tmdb_id; the Sonarr queue item only carries a TVDB id, so
+			// fall back to naming the tool when we could not resolve one.
+			if tmdbID != 0 {
+				return toolCall("rescan_media", fmt.Sprintf(`{"tmdb_id": %d, "media_type": %q}`, tmdbID, mediaType))
+			}
+			return "rescan_media (resolve this item's tmdb_id first — get_library media_type=" + mediaType + " by title — then call it with that tmdb_id)"
+		case arr.ActionManualImport:
+			return toolCall("get_manual_import_candidates", fmt.Sprintf(`{"queue_id": %d, "media_type": %q}`, queueID, mediaType)) +
+				" then " + toolCall("execute_manual_import", fmt.Sprintf(`{"queue_id": %d, "media_type": %q}`, queueID, mediaType))
+		case arr.ActionForceImport:
+			return toolCall("execute_manual_import", fmt.Sprintf(`{"queue_id": %d, "media_type": %q, "force": true}`, queueID, mediaType))
+		case arr.ActionRemove, arr.ActionBlocklistSearch, arr.ActionChangeCategory:
+			return toolCall("remediate_queue_item", fmt.Sprintf(`{"queue_id": %d, "media_type": %q, "action": %q}`, queueID, mediaType, v))
+		}
+	}
+	return ""
+}
+
+// toolCall renders a "name args" call fragment for the next-step line.
+func toolCall(name, args string) string {
+	return name + " " + args
+}
+
+// --- get_arr_health ---
+
+// renderHealthSection renders a service's non-ok health checks (ok-type checks
+// are skipped so the agent only sees actionable config problems). The generic
+// parameter lets the one renderer serve both sonarr.HealthCheck and
+// radarr.HealthCheck, which are structurally identical but distinct types.
+func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck](label string, checks []T) string {
+	var sb strings.Builder
+	shown := 0
+	for _, c := range checks {
+		var source, ctype, message, wiki string
+		switch v := any(c).(type) {
+		case sonarr.HealthCheck:
+			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
+		case radarr.HealthCheck:
+			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
+		}
+		if strings.EqualFold(ctype, "ok") {
+			continue
+		}
+		if shown == 0 {
+			fmt.Fprintf(&sb, "%s health:", label)
+		}
+		shown++
+		fmt.Fprintf(&sb, "\n- [%s] %s", strings.ToLower(ctype), message)
+		if source != "" {
+			fmt.Fprintf(&sb, " (%s)", source)
+		}
+		if wiki != "" {
+			fmt.Fprintf(&sb, "\n  more: %s", wiki)
+		}
+	}
+	if shown == 0 {
+		fmt.Fprintf(&sb, "%s health: no warnings or errors.", label)
+	}
+	return sb.String()
+}
+
+func (s *ToolServer) getArrHealth(input json.RawMessage) (*ToolResult, error) {
+	var params struct {
+		MediaType string `json:"media_type"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	mediaType := normalizeMediaType(params.MediaType)
+
+	var sections []string
+
+	if mediaType == "movie" || mediaType == "all" {
+		client := s.GetRadarr()
+		if client == nil {
+			if mediaType == "movie" {
+				return &ToolResult{Text: "Radarr is not configured."}, nil
+			}
+			sections = append(sections, "Radarr is not configured.")
+		} else {
+			checks, err := client.GetHealth()
+			if err != nil {
+				return nil, err
+			}
+			sections = append(sections, renderHealthSection("Radarr", checks))
+		}
+	}
+
+	if mediaType == "tv" || mediaType == "all" {
+		client := s.GetSonarr()
+		if client == nil {
+			if mediaType == "tv" {
+				return &ToolResult{Text: "Sonarr is not configured."}, nil
+			}
+			sections = append(sections, "Sonarr is not configured.")
+		} else {
+			checks, err := client.GetHealth()
+			if err != nil {
+				return nil, err
+			}
+			sections = append(sections, renderHealthSection("Sonarr", checks))
+		}
+	}
+
+	return &ToolResult{Text: strings.Join(sections, "\n\n")}, nil
 }
 
 // --- diagnose_queue ---
@@ -123,7 +247,13 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 					continue
 				}
 				problems++
-				renderDiagnosis(&sb, "movie", item.ID, radarrQueueTitle(item), d)
+				// Radarr queue items embed the movie's TMDB id, so rescan_media
+				// calls can be rendered fully resolved.
+				tmdbID := 0
+				if item.Movie != nil {
+					tmdbID = item.Movie.TmdbID
+				}
+				renderDiagnosis(&sb, "movie", item.ID, tmdbID, radarrQueueTitle(item), d)
 			}
 		}
 	}
@@ -147,7 +277,10 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 					continue
 				}
 				problems++
-				renderDiagnosis(&sb, "tv", item.ID, sonarrQueueTitle(item), d)
+				// Sonarr queue items carry only a TVDB id (no TMDB), so we
+				// cannot resolve a tmdb_id cheaply here; pass 0 and let
+				// nextCalls name the tool with a resolve hint instead.
+				renderDiagnosis(&sb, "tv", item.ID, 0, sonarrQueueTitle(item), d)
 			}
 		}
 	}
@@ -163,7 +296,7 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 		if healthy > 0 {
 			fmt.Fprintf(&header, " (%d other item(s) are healthy)", healthy)
 		}
-		header.WriteString(". Use get_manual_import_candidates, execute_manual_import, remediate_queue_item, or rescan_media with the queue_id to fix them:")
+		header.WriteString(". Each item lists the exact next tool call to run on its \"→ next:\" line (get_manual_import_candidates, execute_manual_import, remediate_queue_item, or rescan_media). For path/permission/client errors, get_arr_health confirms the config root cause:")
 	}
 	if len(notes) > 0 {
 		fmt.Fprintf(&header, " (%s)", strings.Join(notes, " "))

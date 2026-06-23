@@ -571,6 +571,27 @@ func (c *Client) GetDiskSpace() ([]DiskSpace, error) {
 	return disks, nil
 }
 
+// HealthCheck is one entry from Sonarr's system health report: a config-level
+// problem (download client unreachable, remote path mapping, indexers down, no
+// root folder, low disk, etc.). Type is one of ok/notice/warning/error.
+type HealthCheck struct {
+	Source  string `json:"source"`
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	WikiURL string `json:"wikiUrl"`
+}
+
+// GetHealth returns Sonarr's current system health checks. These surface
+// config-level root causes (download client down, remote path mapping wrong,
+// indexers unavailable) that per-item queue diagnosis can only guess at.
+func (c *Client) GetHealth() ([]HealthCheck, error) {
+	var checks []HealthCheck
+	if err := c.do("GET", "/api/v3/health", nil, &checks); err != nil {
+		return nil, fmt.Errorf("sonarr health: %w", err)
+	}
+	return checks, nil
+}
+
 type Episode struct {
 	ID            int        `json:"id"`
 	SeriesID      int        `json:"seriesId"`
