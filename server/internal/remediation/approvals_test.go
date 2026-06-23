@@ -3,6 +3,7 @@ package remediation
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -97,11 +98,16 @@ func approvalFixture(t *testing.T) (*Service, *fakeExecutor, int64, int64) {
 	}
 	issueID, _ := res.LastInsertId()
 
-	// A parked run with a transcript that ends in the propose_action tool_use.
+	// A parked run with a transcript shaped exactly as the Runner persists it on
+	// park: the assistant turn with the propose_action tool_use, then a user turn
+	// carrying the PLACEHOLDER tool_result for that tool_use (so every tool_use is
+	// answered). The decision must REPLACE this placeholder in place, not append a
+	// second tool_result for the same id (which a real provider rejects).
 	toolUseID := "toolu_propose_1"
 	history := []map[string]any{
 		{"role": "user", "content": []map[string]any{{"type": "text", "text": "investigate"}}},
 		{"role": "assistant", "content": []map[string]any{{"type": "tool_use", "id": toolUseID, "name": "propose_action", "input": map[string]any{}}}},
+		{"role": "user", "content": []map[string]any{{"type": "tool_result", "tool_use_id": toolUseID, "name": "propose_action", "content": "Proposal #1 recorded; awaiting admin approval."}}},
 	}
 	htData, _ := json.Marshal(history)
 	runRes, err := database.Exec(
@@ -211,29 +217,12 @@ func TestApproveExecutesTypedMutationWithRightParams(t *testing.T) {
 		t.Fatalf("executor params = %+v, want movie/7/blocklist_search", p)
 	}
 
-	// The resume tool_result was appended to the run transcript, keyed to the
-	// proposal's tool_use_id, carrying the execution outcome.
-	var transcriptJSON string
-	if err := svc.db.QueryRow("SELECT transcript_json FROM agent_runs WHERE issue_id = ?", issueID).Scan(&transcriptJSON); err != nil {
-		t.Fatalf("load transcript: %v", err)
-	}
-	var history []map[string]any
-	if err := json.Unmarshal([]byte(transcriptJSON), &history); err != nil {
-		t.Fatalf("decode transcript: %v", err)
-	}
-	last := history[len(history)-1]
-	content := last["content"].([]any)
-	block := content[0].(map[string]any)
-	if block["type"] != "tool_result" {
-		t.Fatalf("last block type = %v, want tool_result", block["type"])
-	}
-	if block["tool_use_id"] != "toolu_propose_1" {
-		t.Fatalf("resume tool_result tool_use_id = %v, want toolu_propose_1", block["tool_use_id"])
-	}
-	outcome, _ := block["content"].(string)
-	if outcome == "" || outcome[:21] != "Approved and executed" {
-		t.Fatalf("resume tool_result content = %q, want it to start with 'Approved and executed'", outcome)
-	}
+	// The decision REPLACED the parked placeholder tool_result in place (keyed to
+	// the proposal's tool_use_id), carrying the execution outcome — and there is
+	// still EXACTLY ONE tool_result for that id (no duplicate that a real provider
+	// would 400 on).
+	transcriptJSON := loadTranscript(t, svc, issueID)
+	assertWellFormedResume(t, transcriptJSON, "toolu_propose_1", "Approved and executed")
 
 	// A resume job was enqueued (drained here so the test asserts it exists).
 	select {
@@ -267,22 +256,10 @@ func TestDenyDoesNotExecuteAndResumes(t *testing.T) {
 		t.Fatalf("deny_reason = %v, want 'wrong release'", act.DenyReason)
 	}
 
-	// The denial tool_result was appended keyed to the tool_use_id.
-	var transcriptJSON string
-	if err := svc.db.QueryRow("SELECT transcript_json FROM agent_runs WHERE issue_id = ?", issueID).Scan(&transcriptJSON); err != nil {
-		t.Fatalf("load transcript: %v", err)
-	}
-	var history []map[string]any
-	if err := json.Unmarshal([]byte(transcriptJSON), &history); err != nil {
-		t.Fatalf("decode transcript: %v", err)
-	}
-	block := history[len(history)-1]["content"].([]any)[0].(map[string]any)
-	if block["tool_use_id"] != "toolu_propose_1" {
-		t.Fatalf("denial tool_result tool_use_id = %v, want toolu_propose_1", block["tool_use_id"])
-	}
-	if outcome, _ := block["content"].(string); outcome != "Admin denied: wrong release" {
-		t.Fatalf("denial tool_result = %q, want 'Admin denied: wrong release'", outcome)
-	}
+	// The denial REPLACED the placeholder tool_result in place (keyed to the
+	// tool_use_id), with exactly one tool_result for that id.
+	transcriptJSON := loadTranscript(t, svc, issueID)
+	assertWellFormedResume(t, transcriptJSON, "toolu_propose_1", "Admin denied: wrong release")
 
 	// A resume job was enqueued so the agent can try another tack.
 	select {
@@ -432,6 +409,12 @@ func TestProposeApproveExecuteResumeCycle(t *testing.T) {
 		t.Fatalf("executor params = %+v, want movie/abc-guid/3", gp)
 	}
 
+	// The transcript the REAL Runner parked (which already held the placeholder
+	// propose_action tool_result) now carries exactly ONE tool_result for prop1,
+	// replaced in place with the approval outcome — never a duplicate that a real
+	// provider would 400 on. This is the regression guard for the park/resume bug.
+	assertWellFormedResume(t, loadTranscript(t, svc, issueID), "prop1", "Approved and executed")
+
 	// Drain the enqueued resume job (the worker pool isn't running in this test).
 	select {
 	case j := <-svc.jobs:
@@ -566,4 +549,52 @@ func newProposeCycleRunner(t *testing.T) (*Runner, *Service, *fakeExecutor, int6
 		},
 	}
 	return r, svc, fx, issueID
+}
+
+// loadTranscript reads the run transcript for an issue's (single) run.
+func loadTranscript(t *testing.T, svc *Service, issueID int64) string {
+	t.Helper()
+	var transcriptJSON string
+	if err := svc.db.QueryRow("SELECT transcript_json FROM agent_runs WHERE issue_id = ? ORDER BY id DESC LIMIT 1", issueID).Scan(&transcriptJSON); err != nil {
+		t.Fatalf("load transcript: %v", err)
+	}
+	return transcriptJSON
+}
+
+// assertWellFormedResume verifies the resumed transcript is something a real
+// provider would accept: there is EXACTLY ONE tool_result for toolUseID (the
+// placeholder was replaced in place, not duplicated), its content starts with
+// wantPrefix, and no two consecutive user turns exist (which would also 400). It
+// is the regression guard for the duplicate-tool_result park/resume bug.
+func assertWellFormedResume(t *testing.T, transcriptJSON, toolUseID, wantPrefix string) {
+	t.Helper()
+	var history []map[string]any
+	if err := json.Unmarshal([]byte(transcriptJSON), &history); err != nil {
+		t.Fatalf("decode transcript: %v", err)
+	}
+
+	results := 0
+	var gotContent string
+	prevRole := ""
+	for _, msg := range history {
+		role, _ := msg["role"].(string)
+		if role == "user" && prevRole == "user" {
+			t.Fatalf("two consecutive user turns in the resumed transcript (a provider would 400): %s", transcriptJSON)
+		}
+		prevRole = role
+		content, _ := msg["content"].([]any)
+		for _, raw := range content {
+			b, _ := raw.(map[string]any)
+			if b["type"] == "tool_result" && b["tool_use_id"] == toolUseID {
+				results++
+				gotContent, _ = b["content"].(string)
+			}
+		}
+	}
+	if results != 1 {
+		t.Fatalf("tool_result blocks for %s = %d, want exactly 1 (no duplicate)", toolUseID, results)
+	}
+	if !strings.HasPrefix(gotContent, wantPrefix) {
+		t.Fatalf("resume tool_result content = %q, want prefix %q", gotContent, wantPrefix)
+	}
 }

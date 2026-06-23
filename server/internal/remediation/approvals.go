@@ -142,11 +142,19 @@ func (s *Service) DenyAction(adminID, actionID int64, note string) (*AgentAction
 	return s.GetAction(actionID)
 }
 
-// appendResumeResult writes the decision outcome back into the run so the resume
-// continues exactly the tool_use -> tool_result cycle across the human gate. It
-// appends a tool_result block (keyed to the proposal's tool_use_id) to the run's
-// transcript_json and records a matching agent_step. Best-effort: a missing
-// run/tool_use_id only means the resume re-seeds, never a crash.
+// appendResumeResult records the admin's decision back into the run so the resume
+// continues exactly the tool_use -> tool_result cycle across the human gate.
+//
+// When the Runner parked it ALREADY persisted a tool_result block for the
+// propose_action tool_use (a placeholder, "Proposal #N recorded; awaiting admin
+// approval…"). So we must NOT append a second tool_result for the same
+// tool_use_id — that would leave two tool_results for one tool_use across two
+// user turns, which a real provider rejects (a tool_result must answer a
+// tool_use in the immediately-preceding assistant turn). Instead we REPLACE that
+// placeholder block's content in place with the decision outcome, keeping exactly
+// one tool_result. Sibling read-tool results that shared the park turn are left
+// untouched. Best-effort: a missing run/tool_use_id only means the resume re-
+// seeds, never a crash.
 func (s *Service) appendResumeResult(act *AgentAction, outcome string) {
 	if act.RunID == nil || act.ToolUseID == "" {
 		return
@@ -165,21 +173,28 @@ func (s *Service) appendResumeResult(act *AgentAction, outcome string) {
 			return
 		}
 	}
-	// Append the resume turn carrying the tool_result for the propose_action call.
-	history = append(history, ai.TranscriptMessage{
-		Role: ai.RoleUser,
-		Content: []ai.TranscriptBlock{{
-			Type:      ai.BlockToolResult,
-			ToolUseID: act.ToolUseID,
-			Name:      "propose_action",
-			Content:   outcome,
-		}},
-	})
+
+	// Replace the placeholder tool_result for this propose_action tool_use_id with
+	// the decision outcome. If (defensively) no such block exists, append one so
+	// the resume still has a result to react to.
+	if !replaceToolResult(history, act.ToolUseID, outcome) {
+		history = append(history, ai.TranscriptMessage{
+			Role: ai.RoleUser,
+			Content: []ai.TranscriptBlock{{
+				Type:      ai.BlockToolResult,
+				ToolUseID: act.ToolUseID,
+				Name:      "propose_action",
+				Content:   outcome,
+			}},
+		})
+	}
 	if data, err := json.Marshal(history); err == nil {
 		s.db.Exec("UPDATE agent_runs SET transcript_json = ? WHERE id = ?", string(data), runID)
 	}
 
-	// Mirror to the audit ledger as the next step.
+	// Mirror to the audit ledger as the next step (the human-readable ledger is
+	// append-only and not used to rehydrate the transcript, so a separate row here
+	// is correct and does not affect provider validity).
 	var nextSeq int
 	s.db.QueryRow("SELECT COALESCE(MAX(seq),0)+1 FROM agent_steps WHERE run_id = ?", runID).Scan(&nextSeq)
 	s.db.Exec(
@@ -187,6 +202,23 @@ func (s *Service) appendResumeResult(act *AgentAction, outcome string) {
 		 VALUES (?, ?, ?, 'tool_result', 'propose_action', ?, ?)`,
 		runID, act.IssueID, nextSeq, act.ToolUseID, outcome,
 	)
+}
+
+// replaceToolResult rewrites the Content of the tool_result block matching
+// toolUseID (the parked placeholder) with outcome, in place. Returns true when a
+// block was found and replaced.
+func replaceToolResult(history ai.Transcript, toolUseID, outcome string) bool {
+	for i := range history {
+		for j := range history[i].Content {
+			b := &history[i].Content[j]
+			if b.Type == ai.BlockToolResult && b.ToolUseID == toolUseID {
+				b.Content = outcome
+				b.IsError = false
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // loadActionForDecision loads the fields ApproveAction/DenyAction need, including
