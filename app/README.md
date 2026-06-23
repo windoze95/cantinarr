@@ -47,8 +47,14 @@ Dark-first UI with warm gold accents, designed for couch browsing.
 
 ### Requests
 - **One-tap requesting** -- tap a button, the server handles everything
+- **Season-level choice** -- request a whole show or pick exactly which seasons; partially-available shows show per-season availability and a one-tap path to request the rest
 - **No TVDB headaches** -- the backend's ID bridge translates TMDB IDs to TVDB IDs transparently
 - **Real-time status** -- WebSocket-powered download progress, live status updates
+
+### Radarr / Sonarr management
+- **Drill-down** -- open the library into a movie's detail, or a series → season → episode, with per-item download progress, quality/size, history, and messages
+- **Interactive search** -- per-episode and per-movie release search and grab
+- **Import Doctor** -- diagnose why a download is stuck and apply one-click fixes (manual/force import, remove + blocklist + re-search, hand-off, rescan)
 - **Status indicators** -- available (green), requested (orange), downloading (blue), unavailable (grey)
 
 ### AI Assistant
@@ -171,7 +177,7 @@ app/
 │   │   │   ├── logic/media_detail_provider.dart
 │   │   │   └── ui/
 │   │   │       ├── media_detail_screen.dart   # Full detail with backdrop
-│   │   │       ├── season_grid.dart           # Season/episode grid
+│   │   │       ├── season_table.dart          # Per-season availability + request
 │   │   │       └── trailer_player.dart        # YouTube trailer embed
 │   │   │
 │   │   ├── request/                           # Media requesting
@@ -239,8 +245,8 @@ Four-tab bottom navigation with GoRouter:
 | Tab | Path | Screen | Data Source |
 |---|---|---|---|
 | Discover | `/discover` | Browse & search | TMDB + Trakt |
-| Movies | `/radarr` | Radarr library | Backend proxy |
-| TV Shows | `/sonarr` | Sonarr library | Backend proxy |
+| Movies | `/radarr` | Radarr library + movie detail | Backend proxy |
+| TV Shows | `/sonarr` | Sonarr library + season/episode drill-down | Backend proxy |
 | Assistant | `/assistant` | AI chat | Backend SSE |
 
 Full-screen routes: `/detail/:type/:id`, `/settings`, `/login`

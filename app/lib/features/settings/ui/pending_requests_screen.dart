@@ -6,6 +6,10 @@ import '../data/request_settings_service.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/pending_approvals_provider.dart';
 
+/// Sentinel season-scope value used in the approve dialog meaning "keep the
+/// exact seasons the user requested" (no coarse-scope override).
+const _keepRequestedScope = '__keep_requested__';
+
 /// Admin approval queue: approve (optionally modifying options) or deny
 /// pending media requests.
 class PendingRequestsScreen extends ConsumerStatefulWidget {
@@ -71,8 +75,14 @@ class _PendingRequestsScreenState
     if (admin == null) return;
     final profiles = item.isTv ? admin.sonarrProfiles : admin.radarrProfiles;
 
-    String chosenScope =
-        item.seasonScope.isNotEmpty ? item.seasonScope : SeasonScope.all;
+    // An explicit per-season request stores a JSON list in seasonScope, which
+    // isn't one of the coarse dropdown values — represent it as a "keep
+    // requested" option so the dropdown doesn't break and the admin can leave
+    // the chosen seasons untouched.
+    final isExplicit = SeasonScope.isExplicitList(item.seasonScope);
+    String chosenScope = isExplicit
+        ? _keepRequestedScope
+        : (item.seasonScope.isNotEmpty ? item.seasonScope : SeasonScope.all);
     int? chosenProfile;
 
     final confirmed = await showDialog<bool>(
@@ -105,12 +115,17 @@ class _PendingRequestsScreenState
                         border: OutlineInputBorder(),
                         isDense: true,
                       ),
-                      items: SeasonScope.choices
-                          .map((c) => DropdownMenuItem<String>(
-                                value: c.value,
-                                child: Text(c.label),
-                              ))
-                          .toList(),
+                      items: [
+                        if (isExplicit)
+                          DropdownMenuItem<String>(
+                            value: _keepRequestedScope,
+                            child: Text(
+                                'Keep requested (${SeasonScope.describe(item.seasonScope)})'),
+                          ),
+                        ...SeasonScope.choices.map((c) =>
+                            DropdownMenuItem<String>(
+                                value: c.value, child: Text(c.label))),
+                      ],
                       onChanged: (v) {
                         if (v != null) {
                           setDialogState(() => chosenScope = v);
@@ -172,7 +187,11 @@ class _PendingRequestsScreenState
     try {
       await _service.approve(
         item.id,
-        seasonScope: item.isTv ? chosenScope : null,
+        // The "keep requested" sentinel sends no override, so the server keeps
+        // the explicit season list the user picked.
+        seasonScope: item.isTv
+            ? (chosenScope == _keepRequestedScope ? null : chosenScope)
+            : null,
         qualityProfileId: chosenProfile,
       );
       if (!mounted) return;
@@ -347,7 +366,7 @@ class _PendingTile extends StatelessWidget {
             runSpacing: 6,
             children: [
               _chip(item.isTv ? 'TV' : 'Movie'),
-              if (showScope) _chip(SeasonScope.labelFor(item.seasonScope)),
+              if (showScope) _chip(SeasonScope.describe(item.seasonScope)),
             ],
           ),
         ],
