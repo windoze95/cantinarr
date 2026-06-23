@@ -654,3 +654,119 @@ class SonarrRelease {
     return '<1h';
   }
 }
+
+/// Why a manual-import candidate was rejected. `type` is "permanent" or
+/// "temporary"; permanent rejections only import with force.
+class SonarrImportRejection {
+  final String reason;
+  final String type;
+
+  const SonarrImportRejection({this.reason = '', this.type = ''});
+
+  factory SonarrImportRejection.fromJson(Map<String, dynamic> json) =>
+      SonarrImportRejection(
+        reason: json['reason'] as String? ?? '',
+        type: json['type'] as String? ?? '',
+      );
+
+  bool get isPermanent => type.toLowerCase() == 'permanent';
+}
+
+/// One importable file returned by GET /manualimport. The `quality` and
+/// `languages` blobs are kept VERBATIM and round-tripped back into the
+/// ManualImport command unchanged (re-modelling them loses fields Sonarr needs).
+class SonarrManualImportCandidate {
+  final int id;
+  final String path;
+  final String? folderName;
+  final String name;
+  final int size;
+  final int? seriesId;
+  final int? seasonNumber;
+  final List<int> episodeIds;
+  final List<String> episodeLabels;
+  final Map<String, dynamic>? quality;
+  final List<dynamic> languages;
+  final String? releaseGroup;
+  final String? downloadId;
+  final int? indexerFlags;
+  final String? releaseType;
+  final List<SonarrImportRejection> rejections;
+
+  const SonarrManualImportCandidate({
+    required this.id,
+    required this.path,
+    this.folderName,
+    this.name = '',
+    this.size = 0,
+    this.seriesId,
+    this.seasonNumber,
+    this.episodeIds = const [],
+    this.episodeLabels = const [],
+    this.quality,
+    this.languages = const [],
+    this.releaseGroup,
+    this.downloadId,
+    this.indexerFlags,
+    this.releaseType,
+    this.rejections = const [],
+  });
+
+  factory SonarrManualImportCandidate.fromJson(Map<String, dynamic> json) {
+    final episodes = (json['episodes'] as List<dynamic>?) ?? [];
+    final ids = <int>[];
+    final labels = <String>[];
+    for (final e in episodes) {
+      final map = e as Map<String, dynamic>;
+      final id = map['id'] as int?;
+      if (id != null) ids.add(id);
+      final s = map['seasonNumber'] as int?;
+      final n = map['episodeNumber'] as int?;
+      if (s != null && n != null) {
+        labels.add('S${s.toString().padLeft(2, '0')}'
+            'E${n.toString().padLeft(2, '0')}');
+      }
+    }
+    return SonarrManualImportCandidate(
+      id: json['id'] as int? ?? 0,
+      path: json['path'] as String? ?? '',
+      folderName: json['folderName'] as String?,
+      name: json['name'] as String? ??
+          (json['relativePath'] as String?) ??
+          (json['path'] as String? ?? ''),
+      size: (json['size'] as num?)?.toInt() ?? 0,
+      seriesId: (json['series'] as Map<String, dynamic>?)?['id'] as int?,
+      seasonNumber: json['seasonNumber'] as int?,
+      episodeIds: ids,
+      episodeLabels: labels,
+      quality: json['quality'] as Map<String, dynamic>?,
+      languages: (json['languages'] as List<dynamic>?) ?? const [],
+      releaseGroup: json['releaseGroup'] as String?,
+      downloadId: json['downloadId'] as String?,
+      indexerFlags: json['indexerFlags'] as int?,
+      releaseType: json['releaseType'] as String?,
+      rejections: ((json['rejections'] as List<dynamic>?) ?? [])
+          .map((r) => SonarrImportRejection.fromJson(r as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  bool get hasPermanentRejection => rejections.any((r) => r.isPermanent);
+  bool get isMapped => episodeIds.isNotEmpty;
+  String get sizeFormatted => _formatBytes(size);
+
+  /// The file entry for the ManualImport command, with quality/languages sent
+  /// back exactly as received.
+  Map<String, dynamic> toImportFile() => {
+        'path': path,
+        if (folderName != null) 'folderName': folderName,
+        if (seriesId != null) 'seriesId': seriesId,
+        'episodeIds': episodeIds,
+        if (quality != null) 'quality': quality,
+        'languages': languages,
+        if (releaseGroup != null) 'releaseGroup': releaseGroup,
+        if (downloadId != null) 'downloadId': downloadId,
+        if (indexerFlags != null) 'indexerFlags': indexerFlags,
+        if (releaseType != null) 'releaseType': releaseType,
+      };
+}

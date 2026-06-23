@@ -141,14 +141,21 @@ class SonarrApiService {
   }
 
   /// Removes a queue item, optionally from the download client / blocklist.
+  /// [changeCategory] hands the download to the post-import category instead of
+  /// deleting it (e.g. for Unpackerr); [skipRedownload] suppresses the
+  /// automatic re-grab on a blocklist removal.
   Future<void> deleteQueueItem(
     int id, {
     bool removeFromClient = true,
     bool blocklist = false,
+    bool skipRedownload = false,
+    bool changeCategory = false,
   }) async {
     await _dio.delete('$_basePath/queue/$id', queryParameters: {
       'removeFromClient': removeFromClient,
       'blocklist': blocklist,
+      'skipRedownload': skipRedownload,
+      'changeCategory': changeCategory,
     });
   }
 
@@ -279,5 +286,53 @@ class SonarrApiService {
       }
     }
     await _dio.put('$_basePath/series/$seriesId', data: series);
+  }
+
+  // --- Import Doctor (admin; proxy requires instances:manage) ---
+
+  /// Lists the importable files Sonarr found for a finished download, with any
+  /// rejection reasons. Backs the manual-import recovery flow.
+  Future<List<SonarrManualImportCandidate>> getManualImportCandidates(
+    String downloadId,
+  ) async {
+    final resp = await _dio.get(
+      '$_basePath/manualimport',
+      queryParameters: {
+        'downloadId': downloadId,
+        'filterExistingFiles': false,
+      },
+      options: Options(receiveTimeout: const Duration(seconds: 60)),
+    );
+    return (resp.data as List<dynamic>)
+        .map((c) =>
+            SonarrManualImportCandidate.fromJson(c as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Imports the given candidate files. [importMode] must be lowercase
+  /// (`move`/`copy`/`auto`); `copy` preserves seeding for torrents.
+  Future<void> executeManualImport(
+    List<Map<String, dynamic>> files, {
+    String importMode = 'move',
+  }) async {
+    await _dio.post('$_basePath/command', data: {
+      'name': 'ManualImport',
+      'importMode': importMode,
+      'files': files,
+    });
+  }
+
+  /// Nudges Sonarr to run its completed-download import pass now (clears items
+  /// stuck "waiting to import").
+  Future<void> processMonitoredDownloads() async {
+    await _dio.post('$_basePath/command',
+        data: {'name': 'ProcessMonitoredDownloads'});
+  }
+
+  /// Rescans a series' files on disk (retries imports blocked by a transient
+  /// path/permissions problem).
+  Future<void> rescanSeries(int seriesId) async {
+    await _dio.post('$_basePath/command',
+        data: {'name': 'RescanSeries', 'seriesId': seriesId});
   }
 }

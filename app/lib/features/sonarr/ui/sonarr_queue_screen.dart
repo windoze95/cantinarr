@@ -8,6 +8,7 @@ import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
+import 'import_doctor_sheet.dart';
 import 'widgets/queue_item_card.dart';
 
 /// Shows the current Sonarr download queue with per-item actions.
@@ -96,6 +97,21 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
         _error = 'Failed to load queue: $e';
       });
     }
+  }
+
+  void _showDoctor(SonarrQueueItem item) {
+    final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
+    if (instanceId == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => ImportDoctorSheet(
+        instanceId: instanceId,
+        item: item,
+        onChanged: () => _loadQueue(silent: true),
+      ),
+    );
   }
 
   Future<void> _removeItem(SonarrQueueItem item) async {
@@ -200,6 +216,8 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
             primaryTitle: primaryTitle,
             releaseTitle: item.seriesTitle != null ? item.title : null,
             onRemove: () => _removeItem(item),
+            onShowIssues:
+                item.hasIssues ? () => _showDoctor(item) : null,
           );
         },
       ),

@@ -135,8 +135,8 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
     );
   }
 
-  void _openEpisode(SonarrEpisode episode) {
-    showModalBottomSheet<void>(
+  Future<void> _openEpisode(SonarrEpisode episode) async {
+    final changed = await showModalBottomSheet<bool>(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
@@ -149,6 +149,8 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
         onInteractiveSearch: () => _interactiveEpisodeSearch(episode),
       ),
     );
+    // The episode sheet returns true after an Import Doctor fix.
+    if (changed == true && mounted) _load();
   }
 
   @override
