@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/network/backend_client.dart';
 import '../../core/storage/secure_storage.dart';
+import '../../navigation/app_router.dart';
 
 /// Bridges native APNs registration to the Cantinarr backend.
 ///
@@ -35,11 +36,14 @@ class PushService {
   bool get _isSupported => !kIsWeb && Platform.isIOS;
 
   Future<dynamic> _handleNativeCall(MethodCall call) async {
-    if (call.method == 'onApnsToken') {
-      final token = call.arguments as String?;
-      if (token != null && token.isNotEmpty && token != _registeredToken) {
-        await _sendToken(token);
-      }
+    switch (call.method) {
+      case 'onApnsToken':
+        final token = call.arguments as String?;
+        if (token != null && token.isNotEmpty && token != _registeredToken) {
+          await _sendToken(token);
+        }
+      case 'onNotificationTap':
+        _routeNotification(call.arguments);
     }
     return null;
   }
@@ -90,6 +94,61 @@ class PushService {
     } catch (e) {
       debugPrint('Push: openSystemSettings failed: $e');
     }
+  }
+
+  /// Sets the home-screen app-icon badge to [count] (0 clears it), mirroring
+  /// the in-app approvals count. Best-effort; a no-op on unsupported platforms.
+  Future<void> setBadgeCount(int count) async {
+    if (!_isSupported) return;
+    try {
+      await _channel.invokeMethod('setBadgeCount', {'count': count});
+    } catch (e) {
+      debugPrint('Push: setBadgeCount failed: $e');
+    }
+  }
+
+  /// Pulls the notification (if any) that cold-started the app and routes to it,
+  /// and signals the native side that subsequent (warm) taps can be delivered
+  /// live. Call once at startup, after the router exists. No-op off iOS.
+  Future<void> handleInitialNotification() async {
+    if (!_isSupported) return;
+    try {
+      final args = await _channel.invokeMethod('getInitialNotification');
+      if (args != null) _routeNotification(args);
+    } catch (e) {
+      debugPrint('Push: getInitialNotification failed: $e');
+    }
+  }
+
+  /// Routes a tapped notification to the right screen from its custom payload:
+  /// the approvals queue for `request_pending`; the media detail page for an
+  /// approval decision or a new-content alert.
+  void _routeNotification(Object? arguments) {
+    final data = _asStringMap(arguments);
+    final type = data['type'] as String?;
+    if (type == null) return;
+    final router = _ref.read(appRouterProvider);
+    switch (type) {
+      case 'request_pending':
+        router.push('/approvals');
+      case 'request_decision':
+      case 'new_movie':
+      case 'new_episode':
+        final tmdbId = _asInt(data['tmdb_id']);
+        if (tmdbId == null || tmdbId <= 0) return;
+        final mediaType = data['media_type'] == 'tv' ? 'tv' : 'movie';
+        router.push('/detail/$mediaType/$tmdbId');
+    }
+  }
+
+  Map<String, dynamic> _asStringMap(Object? value) =>
+      value is Map ? value.map((k, v) => MapEntry(k.toString(), v)) : const {};
+
+  int? _asInt(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
   }
 
   /// Asks the backend to send a test push to this account's own devices and

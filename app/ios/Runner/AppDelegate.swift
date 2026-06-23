@@ -13,6 +13,15 @@ import UserNotifications
   /// ready when the token first arrived from APNs.
   private var apnsToken: String?
 
+  /// Routing payload from a notification tap that arrived before Dart was ready
+  /// to handle it (i.e. a cold start launched by the tap). Held until Dart pulls
+  /// it via `getInitialNotification`.
+  private var pendingTapPayload: [String: Any]?
+
+  /// True once Dart has called `getInitialNotification`, meaning its tap handler
+  /// is wired and subsequent (warm) taps can be delivered live.
+  private var dartTapReady = false
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -57,6 +66,19 @@ import UserNotifications
       fetchAuthorizationStatus { status in result(status) }
     case "openNotificationSettings":
       openNotificationSettings { opened in result(opened) }
+    case "setBadgeCount":
+      let count = (call.arguments as? [String: Any])?["count"] as? Int ?? 0
+      DispatchQueue.main.async {
+        UNUserNotificationCenter.current().setBadgeCount(count)
+      }
+      result(nil)
+    case "getInitialNotification":
+      // Dart pulls the cold-start tap (if any) and signals it's ready for live
+      // taps from here on.
+      dartTapReady = true
+      let payload = pendingTapPayload
+      pendingTapPayload = nil
+      result(payload)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -153,5 +175,32 @@ import UserNotifications
   ) {
     // Present notifications while the app is in the foreground.
     completionHandler([.banner, .sound, .badge])
+  }
+
+  /// Handles a notification tap. Routes live when Dart's handler is ready
+  /// (warm/background launch); otherwise caches the payload for Dart to pull on
+  /// startup (cold launch).
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    let payload = routingPayload(from: response.notification.request.content.userInfo)
+    if dartTapReady, let channel = pushChannel {
+      channel.invokeMethod("onNotificationTap", arguments: payload)
+    } else {
+      pendingTapPayload = payload
+    }
+    completionHandler()
+  }
+
+  /// Extracts the tap-routing fields the Dart side understands from an APNs
+  /// `userInfo` dict. Custom keys are delivered as siblings of `aps`.
+  private func routingPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
+    var payload: [String: Any] = [:]
+    if let type = userInfo["type"] as? String { payload["type"] = type }
+    if let mediaType = userInfo["media_type"] as? String { payload["media_type"] = mediaType }
+    if let tmdbID = userInfo["tmdb_id"] { payload["tmdb_id"] = tmdbID }
+    return payload
   }
 }

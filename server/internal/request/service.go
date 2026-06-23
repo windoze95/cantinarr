@@ -434,11 +434,18 @@ func (s *Service) createPending(r *resolvedRequest) (*CreateResponse, error) {
 
 	// Only notify admins when a new row was actually queued (not a duplicate).
 	if n, _ := res.RowsAffected(); n > 0 && s.notifier != nil {
-		s.notifier.NotifyAdmins("request_pending", map[string]interface{}{
+		data := map[string]interface{}{
 			"tmdb_id":    r.tmdbID,
 			"media_type": r.mediaType,
 			"title":      r.title,
-		})
+		}
+		// Carry the live queue depth so the in-app surface and the home-screen
+		// icon can badge the count (push sets aps.badge, the WS client reads it
+		// directly).
+		if count, err := s.PendingCount(); err == nil {
+			data["pending_count"] = count
+		}
+		s.notifier.NotifyAdmins("request_pending", data)
 	}
 	return &CreateResponse{Success: true, Status: StatusPending, Title: r.title}, nil
 }
@@ -722,6 +729,17 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 }
 
 // ListPending returns the admin approval queue (oldest first).
+// PendingCount returns the number of requests awaiting admin approval. It backs
+// the badge on the admin approval surface (in-app drawer entry + home-screen
+// app icon).
+func (s *Service) PendingCount() (int, error) {
+	var n int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE status = ?", StatusPending).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count pending requests: %w", err)
+	}
+	return n, nil
+}
+
 func (s *Service) ListPending() ([]PendingRequest, error) {
 	rows, err := s.db.Query(
 		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), r.media_type, r.title, COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at

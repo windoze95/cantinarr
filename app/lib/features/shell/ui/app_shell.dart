@@ -16,6 +16,7 @@ import '../../discover/data/tmdb_models.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/logic/radarr_movies_provider.dart';
+import '../../request/logic/pending_approvals_provider.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
 import '../logic/shell_search_provider.dart';
@@ -334,6 +335,9 @@ class _AppShellState extends ConsumerState<AppShell>
     final searchNotifier = ref.read(shellSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
+    // Admin approval queue depth — drives the hamburger dot (here) and the
+    // drawer "Approvals" entry. Always 0 for non-admins.
+    final pendingApprovals = ref.watch(pendingApprovalsProvider);
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
     final libraryStatus = searchState.isSearching && showSearchResults
@@ -399,7 +403,15 @@ class _AppShellState extends ConsumerState<AppShell>
           Padding(
             padding: const EdgeInsets.only(left: 4, top: 8, bottom: 8),
             child: IconButton(
-              icon: const Icon(Icons.menu, color: AppTheme.textPrimary),
+              icon: Badge(
+                isLabelVisible: pendingApprovals > 0,
+                backgroundColor: AppTheme.accent,
+                smallSize: 9,
+                child: const Icon(Icons.menu, color: AppTheme.textPrimary),
+              ),
+              tooltip: pendingApprovals > 0
+                  ? '$pendingApprovals approval${pendingApprovals == 1 ? '' : 's'} waiting'
+                  : null,
               onPressed: () {
                 _dismissKeyboard();
                 _scaffoldKey.currentState?.openDrawer();
@@ -724,6 +736,9 @@ class _AppShellState extends ConsumerState<AppShell>
 
   Widget _buildDrawerContent(BuildContext context, {required bool isOverlay}) {
     final moduleState = ref.watch(moduleProvider);
+    final isAdmin =
+        ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    final pendingApprovals = ref.watch(pendingApprovalsProvider);
 
     return SafeArea(
       child: Column(
@@ -761,6 +776,21 @@ class _AppShellState extends ConsumerState<AppShell>
             ),
           ),
           const Divider(color: AppTheme.border),
+
+          // Admin approval queue — kept above the modules so a waiting count is
+          // the first thing an admin sees when the drawer opens.
+          if (isAdmin) ...[
+            _DrawerItem(
+              icon: Icons.fact_check_outlined,
+              title: 'Approvals',
+              badgeCount: pendingApprovals,
+              onTap: () {
+                if (isOverlay) Navigator.pop(context);
+                context.push('/approvals');
+              },
+            ),
+            const Divider(color: AppTheme.border),
+          ],
 
           // Scrollable module navigation items
           Expanded(
@@ -856,11 +886,15 @@ class _DrawerItem extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  /// When > 0, renders a trailing count pill (e.g. the pending-approvals count).
+  final int badgeCount;
+
   const _DrawerItem({
     required this.icon,
     required this.title,
     this.selected = false,
     required this.onTap,
+    this.badgeCount = 0,
   });
 
   @override
@@ -875,10 +909,38 @@ class _DrawerItem extends StatelessWidget {
           fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
         ),
       ),
+      trailing: badgeCount > 0 ? _CountPill(count: badgeCount) : null,
       selected: selected,
       selectedTileColor: AppTheme.accent.withValues(alpha: 0.08),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       onTap: onTap,
+    );
+  }
+}
+
+/// A small filled pill showing a count (capped at 99+), used for the drawer
+/// approvals badge.
+class _CountPill extends StatelessWidget {
+  final int count;
+
+  const _CountPill({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.accent,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        count > 99 ? '99+' : '$count',
+        style: const TextStyle(
+          color: AppTheme.background,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 }

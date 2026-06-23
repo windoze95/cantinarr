@@ -178,12 +178,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/ai-tools'),
             ),
             _SettingsTile(
-              icon: Icons.playlist_add_check_circle_outlined,
-              title: 'Pending Requests',
-              subtitle: 'Approve or deny requests awaiting review',
-              onTap: () => context.push('/settings/requests'),
-            ),
-            _SettingsTile(
               icon: Icons.tune,
               title: 'Request Settings',
               subtitle: 'Approval, season, and quality defaults',
