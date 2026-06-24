@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -605,8 +607,18 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("no root folders available")
 	}
 
+	title := match.Title
+	if title == "" {
+		title = r.title
+	}
+	titleSlug := match.TitleSlug
+	if titleSlug == "" {
+		titleSlug = fallbackTitleSlug(title)
+	}
 	addReq := chaptarr.AddBookRequest{
 		ForeignBookID: match.ForeignBookID,
+		Title:         title,
+		TitleSlug:     titleSlug,
 		Monitored:     true,
 		AnyEditionOk:  normalizeBookFormat(r.bookFormat) == BookFormatBoth,
 	}
@@ -644,10 +656,6 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		}
 	}
 
-	title := match.Title
-	if title == "" {
-		title = r.title
-	}
 	if _, err := client.AddBook(addReq); err != nil {
 		return "", "", fmt.Errorf("add book failed: %w", err)
 	}
@@ -1389,6 +1397,23 @@ func chaptarrEditionFormat(edition chaptarr.Edition) string {
 		return BookFormatAudiobook
 	}
 	return "unknown"
+}
+
+func fallbackTitleSlug(title string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(title) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if b.Len() > 0 && !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // sonarrMonitor maps a season scope to Sonarr's addOptions.monitor enum.

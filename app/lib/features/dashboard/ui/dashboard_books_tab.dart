@@ -276,7 +276,6 @@ class _BookResultTile extends StatelessWidget {
                   foreignId: fid,
                   title: book.title,
                   service: requestService,
-                  availableFormats: book.formats,
                 )
               : null,
     );
@@ -289,13 +288,11 @@ class _BookRequestButton extends StatefulWidget {
   final String foreignId;
   final String title;
   final RequestService service;
-  final Set<BookFormat> availableFormats;
 
   const _BookRequestButton({
     required this.foreignId,
     required this.title,
     required this.service,
-    required this.availableFormats,
   });
 
   @override
@@ -324,21 +321,12 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
 
   Future<void> _request() async {
     if (_busy) return;
-    final choices = _formatChoices(widget.availableFormats);
-    BookRequestFormat format =
-        choices.length == 1 ? choices.first : BookRequestFormat.both;
-    if (choices.length > 1) {
-      final selected = await showModalBottomSheet<BookRequestFormat>(
-        context: context,
-        backgroundColor: Colors.transparent,
-        builder: (_) => _BookFormatSheet(
-          title: widget.title,
-          choices: choices,
-        ),
-      );
-      if (selected == null) return;
-      format = selected;
-    }
+    final selected = await showModalBottomSheet<BookRequestFormat>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _BookFormatSheet(title: widget.title),
+    );
+    if (selected == null) return;
     if (!mounted) return;
     setState(() => _busy = true);
     RequestStatus? s;
@@ -347,7 +335,7 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
       s = await widget.service.requestBook(
         foreignId: widget.foreignId,
         title: widget.title,
-        format: format,
+        format: selected,
       );
     } on RequestSubmissionException catch (e) {
       failureMessage = e.message;
@@ -408,33 +396,10 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
   }
 }
 
-List<BookRequestFormat> _formatChoices(Set<BookFormat> available) {
-  final hasEbook = available.contains(BookFormat.ebook);
-  final hasAudiobook = available.contains(BookFormat.audiobook);
-  if (hasEbook && hasAudiobook) {
-    return const [
-      BookRequestFormat.ebook,
-      BookRequestFormat.audiobook,
-      BookRequestFormat.both,
-    ];
-  }
-  if (hasEbook) return const [BookRequestFormat.ebook];
-  if (hasAudiobook) return const [BookRequestFormat.audiobook];
-  return const [
-    BookRequestFormat.ebook,
-    BookRequestFormat.audiobook,
-    BookRequestFormat.both,
-  ];
-}
-
 class _BookFormatSheet extends StatelessWidget {
   final String title;
-  final List<BookRequestFormat> choices;
 
-  const _BookFormatSheet({
-    required this.title,
-    required this.choices,
-  });
+  const _BookFormatSheet({required this.title});
 
   @override
   Widget build(BuildContext context) {
@@ -471,7 +436,7 @@ class _BookFormatSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 14),
-            for (final choice in choices)
+            for (final choice in BookRequestFormat.values)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: _FormatChoiceTile(choice: choice),
