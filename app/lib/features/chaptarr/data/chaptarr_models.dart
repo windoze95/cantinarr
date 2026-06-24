@@ -2,6 +2,48 @@
 /// ebook formats (EPUB/MOBI/…) vs audiobook formats (MP3/M4B/…).
 enum BookFormat { ebook, audiobook, unknown }
 
+List<dynamic> _asList(dynamic value) => value is List ? value : const [];
+
+Map<String, dynamic>? _asMap(dynamic value) {
+  if (value is Map<String, dynamic>) return value;
+  if (value is Map) {
+    return value.map((key, val) => MapEntry(key.toString(), val));
+  }
+  return null;
+}
+
+List<T> _modelList<T>(
+  dynamic value,
+  T Function(Map<String, dynamic>) fromJson,
+) =>
+    _asList(value)
+        .map(_asMap)
+        .whereType<Map<String, dynamic>>()
+        .map(fromJson)
+        .toList();
+
+List<String> _stringList(dynamic value, {bool splitCommaString = false}) {
+  if (value is List) {
+    return value
+        .map((item) => item.toString())
+        .where((item) => item.isNotEmpty)
+        .toList();
+  }
+  if (value is String) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return const [];
+    if (splitCommaString) {
+      return trimmed
+          .split(',')
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty)
+          .toList();
+    }
+    return [trimmed];
+  }
+  return const [];
+}
+
 /// Classifies a Chaptarr/Readarr quality name into a [BookFormat]. Matches the
 /// server's `FormatOf` helper: a case-insensitive substring check against the
 /// known ebook and audiobook quality names. Unknown/empty names fall through to
@@ -85,14 +127,8 @@ class ChaptarrAuthor {
             ? ChaptarrAuthorStatistics.fromJson(
                 json['statistics'] as Map<String, dynamic>)
             : null,
-        images: (json['images'] as List<dynamic>?)
-                ?.map((i) => ChaptarrImage.fromJson(i as Map<String, dynamic>))
-                .toList() ??
-            [],
-        genres: (json['genres'] as List<dynamic>?)
-                ?.map((g) => g.toString())
-                .toList() ??
-            [],
+        images: _modelList(json['images'], ChaptarrImage.fromJson),
+        genres: _stringList(json['genres'], splitCommaString: true),
       );
 
   Map<String, dynamic> toJson() => {
@@ -260,10 +296,7 @@ class ChaptarrEdition {
         monitored: json['monitored'] as bool? ?? true,
         manualAdd: json['manualAdd'] as bool? ?? false,
         isEbook: json['isEbook'] as bool? ?? false,
-        images: (json['images'] as List<dynamic>?)
-                ?.map((i) => ChaptarrImage.fromJson(i as Map<String, dynamic>))
-                .toList() ??
-            [],
+        images: _modelList(json['images'], ChaptarrImage.fromJson),
       );
 
   Map<String, dynamic> toJson() => {
@@ -347,19 +380,9 @@ class ChaptarrBook {
             ? ChaptarrBookStatistics.fromJson(
                 json['statistics'] as Map<String, dynamic>)
             : null,
-        editions: (json['editions'] as List<dynamic>?)
-                ?.map(
-                    (e) => ChaptarrEdition.fromJson(e as Map<String, dynamic>))
-                .toList() ??
-            [],
-        images: (json['images'] as List<dynamic>?)
-                ?.map((i) => ChaptarrImage.fromJson(i as Map<String, dynamic>))
-                .toList() ??
-            [],
-        genres: (json['genres'] as List<dynamic>?)
-                ?.map((g) => g.toString())
-                .toList() ??
-            [],
+        editions: _modelList(json['editions'], ChaptarrEdition.fromJson),
+        images: _modelList(json['images'], ChaptarrImage.fromJson),
+        genres: _stringList(json['genres'], splitCommaString: true),
       );
 
   Map<String, dynamic> toJson() => {
@@ -562,10 +585,7 @@ class ChaptarrStatusMessage {
   factory ChaptarrStatusMessage.fromJson(Map<String, dynamic> json) =>
       ChaptarrStatusMessage(
         title: json['title'] as String? ?? '',
-        messages: ((json['messages'] as List<dynamic>?) ?? [])
-            .map((m) => m.toString())
-            .where((m) => m.isNotEmpty)
-            .toList(),
+        messages: _stringList(json['messages']),
       );
 }
 
@@ -619,14 +639,16 @@ class ChaptarrQueueItem {
   factory ChaptarrQueueItem.fromJson(Map<String, dynamic> json) {
     final messages = <String>[];
     final groups = <ChaptarrStatusMessage>[];
-    for (final entry in (json['statusMessages'] as List<dynamic>? ?? [])) {
-      final map = entry as Map<String, dynamic>;
+    for (final entry in _asList(json['statusMessages'])) {
+      final map = _asMap(entry);
+      if (map == null) continue;
       groups.add(ChaptarrStatusMessage.fromJson(map));
-      for (final msg in (map['messages'] as List<dynamic>? ?? [])) {
+      final groupMessages = _stringList(map['messages']);
+      for (final msg in groupMessages) {
         final text = msg.toString();
         if (text.isNotEmpty) messages.add(text);
       }
-      if (map['messages'] == null || (map['messages'] as List).isEmpty) {
+      if (map['messages'] == null || groupMessages.isEmpty) {
         final title = map['title'] as String?;
         if (title != null && title.isNotEmpty) messages.add(title);
       }
@@ -734,11 +756,7 @@ class ChaptarrHistoryPage {
 
   factory ChaptarrHistoryPage.fromJson(Map<String, dynamic> json) =>
       ChaptarrHistoryPage(
-        records: (json['records'] as List<dynamic>?)
-                ?.map((r) =>
-                    ChaptarrHistoryRecord.fromJson(r as Map<String, dynamic>))
-                .toList() ??
-            [],
+        records: _modelList(json['records'], ChaptarrHistoryRecord.fromJson),
         totalRecords: json['totalRecords'] as int? ?? 0,
       );
 }
@@ -785,11 +803,7 @@ class ChaptarrWantedPage {
 
   factory ChaptarrWantedPage.fromJson(Map<String, dynamic> json) =>
       ChaptarrWantedPage(
-        records: (json['records'] as List<dynamic>?)
-                ?.map((r) =>
-                    ChaptarrWantedRecord.fromJson(r as Map<String, dynamic>))
-                .toList() ??
-            [],
+        records: _modelList(json['records'], ChaptarrWantedRecord.fromJson),
         totalRecords: json['totalRecords'] as int? ?? 0,
       );
 }
@@ -841,13 +855,12 @@ class ChaptarrRelease {
         seeders: json['seeders'] as int?,
         leechers: json['leechers'] as int?,
         rejected: json['rejected'] as bool? ?? false,
-        rejections: (json['rejections'] as List<dynamic>?)
-                ?.map((r) => r is Map<String, dynamic>
-                    ? (r['reason']?.toString() ?? '')
-                    : r.toString())
-                .where((r) => r.isNotEmpty)
-                .toList() ??
-            [],
+        rejections: _asList(json['rejections'])
+            .map((r) => r is Map<String, dynamic>
+                ? (r['reason']?.toString() ?? '')
+                : r.toString())
+            .where((r) => r.isNotEmpty)
+            .toList(),
       );
 
   bool get isTorrent => protocol == 'torrent';
@@ -921,10 +934,8 @@ class ChaptarrManualImportCandidate {
         quality: json['quality'] as Map<String, dynamic>?,
         releaseGroup: json['releaseGroup'] as String?,
         downloadId: json['downloadId'] as String?,
-        rejections: ((json['rejections'] as List<dynamic>?) ?? [])
-            .map((r) =>
-                ChaptarrImportRejection.fromJson(r as Map<String, dynamic>))
-            .toList(),
+        rejections:
+            _modelList(json['rejections'], ChaptarrImportRejection.fromJson),
       );
 
   bool get hasPermanentRejection => rejections.any((r) => r.isPermanent);
