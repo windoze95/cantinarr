@@ -48,6 +48,25 @@ enum BookRequestFormat {
       );
 }
 
+class RequestSubmissionException implements Exception {
+  final String message;
+
+  const RequestSubmissionException(this.message);
+
+  @override
+  String toString() => message;
+}
+
+String _requestErrorMessage(DioException error) {
+  final data = error.response?.data;
+  if (data is Map) {
+    final message = data['error'] ?? data['message'];
+    if (message is String && message.isNotEmpty) return message;
+  }
+  if (data is String && data.isNotEmpty) return data;
+  return error.message ?? 'Request failed. Please try again.';
+}
+
 /// The TV season-scope choices a user may attach to a request. The string
 /// values mirror the backend's season_scope enum.
 class SeasonScope {
@@ -307,7 +326,7 @@ class RequestService {
   /// Submit a book request. Books are keyed by the foreignBookId, not a tmdb_id;
   /// the backend adds the book to the user's granted Chaptarr instance (after
   /// approval when the user's policy requires it). Returns the resulting status
-  /// (e.g. [RequestStatus.pending]) or null on failure.
+  /// (e.g. [RequestStatus.pending]) or null on non-HTTP failure.
   Future<RequestStatus?> requestBook({
     required String foreignId,
     required String title,
@@ -327,6 +346,8 @@ class RequestService {
         (s) => s.name == name,
         orElse: () => RequestStatus.requested,
       );
+    } on DioException catch (e) {
+      throw RequestSubmissionException(_requestErrorMessage(e));
     } catch (_) {
       return null;
     }
