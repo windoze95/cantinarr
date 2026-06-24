@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
@@ -85,11 +86,27 @@ func (s *Service) getSonarr(userID int64) *sonarr.Client {
 	return nil
 }
 
+// getChaptarr returns the Chaptarr client for the user's granted instance, or
+// nil when the user has no grant (Chaptarr has no global default — access is
+// admin-granted per user).
+func (s *Service) getChaptarr(userID int64) *chaptarr.Client {
+	if s.registry != nil {
+		client, _, err := s.registry.GetUserChaptarrClient(userID)
+		if err == nil && client != nil {
+			return client
+		}
+	}
+	return nil
+}
+
 type CreateRequest struct {
-	TmdbID           int    `json:"tmdb_id"`
-	MediaType        string `json:"media_type"`
-	Title            string `json:"title"`
-	TvdbID           int    `json:"tvdb_id"`
+	TmdbID    int    `json:"tmdb_id"`
+	MediaType string `json:"media_type"`
+	Title     string `json:"title"`
+	TvdbID    int    `json:"tvdb_id"`
+	// ForeignID is the Chaptarr/Readarr foreignBookId for book requests, which
+	// have no TMDB id. Required when media_type == "book"; ignored otherwise.
+	ForeignID        string `json:"foreign_id"`
 	SeasonScope      string `json:"season_scope"`
 	QualityProfileID int    `json:"quality_profile_id"`
 	// Seasons is an optional explicit list of season numbers (TV only). When
@@ -221,6 +238,7 @@ type resolvedRequest struct {
 	userID           int64
 	tmdbID           int
 	tvdbID           int
+	foreignID        string // Chaptarr foreignBookId (book requests)
 	mediaType        string
 	title            string
 	seasonScope      string
@@ -384,8 +402,11 @@ func (s *Service) effectiveSettings(userID int64, isAdmin bool) (effective, erro
 }
 
 func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateResponse, error) {
-	if req.MediaType != "movie" && req.MediaType != "tv" {
+	if req.MediaType != "movie" && req.MediaType != "tv" && req.MediaType != "book" {
 		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
+	}
+	if req.MediaType == "book" && req.ForeignID == "" {
+		return nil, fmt.Errorf("foreign_id is required for book requests")
 	}
 
 	isAdmin := s.userIsAdmin(userID)
@@ -398,6 +419,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		userID:    userID,
 		tmdbID:    req.TmdbID,
 		tvdbID:    req.TvdbID,
+		foreignID: req.ForeignID,
 		mediaType: req.MediaType,
 		title:     req.Title,
 	}
@@ -426,12 +448,15 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 
 	// Quality profile. Default per service; honor the client's choice only
 	// when allowed (out of the box non-admins cannot choose).
-	if req.MediaType == "tv" {
+	switch req.MediaType {
+	case "tv":
 		resolved.qualityProfileID = eff.QualitySonarr
-	} else {
+	case "movie":
 		resolved.qualityProfileID = eff.QualityRadarr
 	}
-	if req.QualityProfileID != 0 && eff.AllowQualityChoice {
+	// Books pick the Chaptarr instance's first quality/metadata profile at add
+	// time (addToChaptarr), so they carry no per-user quality profile here.
+	if req.QualityProfileID != 0 && eff.AllowQualityChoice && req.MediaType != "book" {
 		resolved.qualityProfileID = req.QualityProfileID
 	}
 
@@ -451,18 +476,33 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 // createPending records a request awaiting admin approval without touching the
 // arr services. The stored options are replayed verbatim on approval.
 func (s *Service) createPending(r *resolvedRequest) (*CreateResponse, error) {
-	// Insert atomically only when no pending row already exists for this
-	// user+title, so a double-submit can't create duplicate queue entries
-	// (the check + insert is one statement under the single-writer DB).
-	res, err := s.db.Exec(
-		`INSERT INTO request_log (user_id, tmdb_id, tvdb_id, media_type, title, status, season_scope, quality_profile_id)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?
-		 WHERE NOT EXISTS (
-		     SELECT 1 FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND status = ?
-		 )`,
-		r.userID, r.tmdbID, sqlNullInt(r.tvdbID), r.mediaType, r.title, StatusPending, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
-		r.userID, r.tmdbID, r.mediaType, StatusPending,
-	)
+	// Insert atomically only when no pending row already exists for this user +
+	// title, so a double-submit can't create duplicate queue entries (the check +
+	// insert is one statement under the single-writer DB). Books have no tmdb_id,
+	// so they dedupe/key on the Readarr foreignBookId instead.
+	var res sql.Result
+	var err error
+	if r.mediaType == "book" {
+		res, err = s.db.Exec(
+			`INSERT INTO request_log (user_id, tmdb_id, foreign_id, media_type, title, status)
+			 SELECT ?, 0, ?, ?, ?, ?
+			 WHERE NOT EXISTS (
+			     SELECT 1 FROM request_log WHERE user_id = ? AND foreign_id = ? AND media_type = ? AND status = ?
+			 )`,
+			r.userID, r.foreignID, r.mediaType, r.title, StatusPending,
+			r.userID, r.foreignID, r.mediaType, StatusPending,
+		)
+	} else {
+		res, err = s.db.Exec(
+			`INSERT INTO request_log (user_id, tmdb_id, tvdb_id, media_type, title, status, season_scope, quality_profile_id)
+			 SELECT ?, ?, ?, ?, ?, ?, ?, ?
+			 WHERE NOT EXISTS (
+			     SELECT 1 FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND status = ?
+			 )`,
+			r.userID, r.tmdbID, sqlNullInt(r.tvdbID), r.mediaType, r.title, StatusPending, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
+			r.userID, r.tmdbID, r.mediaType, StatusPending,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("save pending request: %w", err)
 	}
@@ -499,9 +539,74 @@ func (s *Service) addToArr(r *resolvedRequest) (status string, title string, err
 		return s.addMovie(r)
 	case "tv":
 		return s.addSeries(r)
+	case "book":
+		return s.addToChaptarr(r)
 	default:
 		return "", "", fmt.Errorf("unsupported media type: %s", r.mediaType)
 	}
+}
+
+// addToChaptarr adds a book to the requesting user's granted Chaptarr instance.
+// Books have no TMDB id, so the request carries the Readarr foreignBookId; we
+// resolve it through Chaptarr's lookup (by title, matched on foreignBookId) and
+// add the book with the instance's first quality/metadata profile + root folder,
+// mirroring the addSeries flow. Verify the exact add payload against a live
+// Chaptarr instance — the lookup/add field shapes are the Readarr v1 convention.
+func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
+	client := s.getChaptarr(r.userID)
+	if client == nil {
+		return "", "", fmt.Errorf("chaptarr is not configured for you")
+	}
+
+	results, err := client.LookupBook(r.title)
+	if err != nil {
+		return "", "", fmt.Errorf("book lookup failed: %w", err)
+	}
+	var match *chaptarr.LookupResult
+	for i := range results {
+		if results[i].ForeignBookID == r.foreignID {
+			match = &results[i]
+			break
+		}
+	}
+	if match == nil {
+		return "", "", fmt.Errorf("book not found for foreign id %s", r.foreignID)
+	}
+
+	qps, err := client.GetQualityProfiles()
+	if err != nil || len(qps) == 0 {
+		return "", "", fmt.Errorf("no quality profiles available")
+	}
+	mps, err := client.GetMetadataProfiles()
+	if err != nil || len(mps) == 0 {
+		return "", "", fmt.Errorf("no metadata profiles available")
+	}
+	folders, err := client.GetRootFolders()
+	if err != nil || len(folders) == 0 {
+		return "", "", fmt.Errorf("no root folders available")
+	}
+
+	addReq := chaptarr.AddBookRequest{
+		ForeignBookID: match.ForeignBookID,
+		Monitored:     true,
+	}
+	addReq.Author.AuthorName = match.AuthorName
+	addReq.Author.ForeignAuthorID = match.ForeignAuthorID
+	addReq.Author.QualityProfileID = qps[0].ID
+	addReq.Author.MetadataProfileID = mps[0].ID
+	addReq.Author.RootFolderPath = folders[0].Path
+	addReq.Author.Monitored = true
+	addReq.Author.AddOptions.Monitor = "all"
+	addReq.AddOptions.SearchForNewBook = true
+
+	title := match.Title
+	if title == "" {
+		title = r.title
+	}
+	if _, err := client.AddBook(addReq); err != nil {
+		return "", "", fmt.Errorf("add book failed: %w", err)
+	}
+	return StatusRequested, title, nil
 }
 
 func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
@@ -759,6 +864,29 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType string) (*St
 	return s.statusFor(userID, tmdbID, mediaType)
 }
 
+// GetUserBookStatus reports a user's request state for a book, keyed by the
+// Readarr foreignBookId (books have no tmdb_id). It reflects the request_log
+// row (pending / denied / requested); deeper library availability + download
+// progress are shown in the Books module itself.
+func (s *Service) GetUserBookStatus(userID int64, foreignID string) (*StatusResponse, error) {
+	var status string
+	err := s.db.QueryRow(
+		"SELECT status FROM request_log WHERE user_id = ? AND foreign_id = ? AND media_type = 'book' ORDER BY requested_at DESC, id DESC LIMIT 1",
+		userID, foreignID,
+	).Scan(&status)
+	if err != nil {
+		return &StatusResponse{Status: StatusUnavailable}, nil
+	}
+	switch status {
+	case StatusPending:
+		return &StatusResponse{Status: StatusPending}, nil
+	case StatusDenied:
+		return &StatusResponse{Status: StatusDenied}, nil
+	default:
+		return &StatusResponse{Status: StatusRequested}, nil
+	}
+}
+
 func (s *Service) getMovieStatus(userID int64, tmdbID int) (*StatusResponse, error) {
 	radarrClient := s.getRadarr(userID)
 	if radarrClient == nil {
@@ -932,9 +1060,9 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	var r resolvedRequest
 	var status string
 	err := s.db.QueryRow(
-		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
+		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
 		requestID,
-	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
+	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
 	if err == sql.ErrNoRows {
 		return nil, "", fmt.Errorf("request not found")
 	}
@@ -1087,8 +1215,8 @@ func (s *Service) GetAdminSettings() *AdminSettingsView {
 // insertRequest writes a request_log row and returns its id.
 func (s *Service) insertRequest(r *resolvedRequest, title, status string) (int64, error) {
 	res, err := s.db.Exec(
-		"INSERT INTO request_log (user_id, tmdb_id, tvdb_id, media_type, title, status, season_scope, quality_profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		r.userID, r.tmdbID, sqlNullInt(r.tvdbID), r.mediaType, title, status, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
+		"INSERT INTO request_log (user_id, tmdb_id, tvdb_id, foreign_id, media_type, title, status, season_scope, quality_profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		r.userID, r.tmdbID, sqlNullInt(r.tvdbID), sqlNullStr(r.foreignID), r.mediaType, title, status, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
 	)
 	if err != nil {
 		return 0, err

@@ -32,8 +32,19 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.TmdbID == 0 || req.MediaType == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tmdb_id and media_type required"})
+	if req.MediaType == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "media_type required"})
+		return
+	}
+	// Books are keyed by the Readarr foreignBookId (no tmdb_id); everything else
+	// is keyed by tmdb_id.
+	if req.MediaType == "book" {
+		if req.ForeignID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required for book requests"})
+			return
+		}
+	} else if req.TmdbID == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tmdb_id required"})
 		return
 	}
 
@@ -71,6 +82,27 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GetBookStatus reports the current user's request state for a book, keyed by
+// the Readarr foreignBookId (books have no tmdb_id).
+func (h *Handler) GetBookStatus(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	foreignID := r.URL.Query().Get("foreign_id")
+	if foreignID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
+		return
+	}
+	resp, err := h.service.GetUserBookStatus(claims.UserID, foreignID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

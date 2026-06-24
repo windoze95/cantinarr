@@ -206,6 +206,7 @@ func NewRouter(
 			r.Post("/requests", requestHandler.Create)
 			r.Get("/requests", requestHandler.List)
 			r.Get("/requests/options", requestHandler.Options)
+			r.Get("/requests/book-status", requestHandler.GetBookStatus)
 			r.Get("/requests/{tmdb_id}/status", requestHandler.GetStatus)
 		})
 

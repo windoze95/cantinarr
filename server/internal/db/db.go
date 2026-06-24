@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS request_log (
     user_id INTEGER REFERENCES users(id),
     tmdb_id INTEGER NOT NULL,
     tvdb_id INTEGER,
+    foreign_id TEXT,
     media_type TEXT NOT NULL,
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'requested',
@@ -362,6 +363,9 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE request_log ADD COLUMN approved_by INTEGER REFERENCES users(id)"},
 		{alter: "ALTER TABLE request_log ADD COLUMN decided_at DATETIME"},
 		{alter: "ALTER TABLE request_log ADD COLUMN deny_reason TEXT"},
+		// Books (Chaptarr) have no TMDB id; they are keyed by the Readarr
+		// foreignBookId stored here (tmdb_id is left 0 for book rows).
+		{alter: "ALTER TABLE request_log ADD COLUMN foreign_id TEXT"},
 		// Stable per-device hardware id (e.g. iOS identifierForVendor) so a
 		// reconnect from the same physical device updates its existing row
 		// instead of creating a duplicate. Empty for rows created before this

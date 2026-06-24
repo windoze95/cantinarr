@@ -47,8 +47,9 @@ class SeasonScope {
     (value: all, label: 'Entire series'),
   ];
 
-  static String labelFor(String value) =>
-      choices.firstWhere((c) => c.value == value, orElse: () => choices.last).label;
+  static String labelFor(String value) => choices
+      .firstWhere((c) => c.value == value, orElse: () => choices.last)
+      .label;
 
   /// True when [value] holds an explicit JSON season list (e.g. "[3,5]")
   /// rather than a coarse scope keyword. The backend stores per-season requests
@@ -170,9 +171,11 @@ class RequestOptions {
   factory RequestOptions.fromJson(Map<String, dynamic> json) => RequestOptions(
         canChooseSeason: json['can_choose_season'] as bool? ?? false,
         canChooseQuality: json['can_choose_quality'] as bool? ?? false,
-        defaultSeasonScope: json['default_season_scope'] as String? ?? SeasonScope.all,
+        defaultSeasonScope:
+            json['default_season_scope'] as String? ?? SeasonScope.all,
         qualityProfiles: ((json['quality_profiles'] as List?) ?? const [])
-            .map((e) => QualityProfileOption.fromJson(e as Map<String, dynamic>))
+            .map(
+                (e) => QualityProfileOption.fromJson(e as Map<String, dynamic>))
             .toList(),
       );
 }
@@ -257,6 +260,52 @@ class RequestService {
       final statusName = data?['status'] as String? ?? 'requested';
       return RequestStatus.values.firstWhere(
         (s) => s.name == statusName,
+        orElse: () => RequestStatus.requested,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Check the current user's request state for a book, keyed by the Chaptarr/
+  /// Readarr foreignBookId (books have no tmdb_id). Returns one of
+  /// unavailable / pending / requested / denied.
+  Future<RequestStatus> checkBookStatus(String foreignId) async {
+    try {
+      final resp = await _backendDio.get(
+        '/api/requests/book-status',
+        queryParameters: {'foreign_id': foreignId},
+      );
+      final name = (resp.data as Map<String, dynamic>)['status'] as String? ??
+          'unavailable';
+      return RequestStatus.values.firstWhere(
+        (s) => s.name == name,
+        orElse: () => RequestStatus.unavailable,
+      );
+    } catch (_) {
+      return RequestStatus.unavailable;
+    }
+  }
+
+  /// Submit a book request. Books are keyed by the foreignBookId, not a tmdb_id;
+  /// the backend adds the book to the user's granted Chaptarr instance (after
+  /// approval when the user's policy requires it). Returns the resulting status
+  /// (e.g. [RequestStatus.pending]) or null on failure.
+  Future<RequestStatus?> requestBook({
+    required String foreignId,
+    required String title,
+  }) async {
+    try {
+      final resp = await _backendDio.post('/api/requests', data: {
+        'media_type': 'book',
+        'foreign_id': foreignId,
+        'title': title,
+      });
+      if (resp.statusCode != 200 && resp.statusCode != 201) return null;
+      final data = resp.data as Map<String, dynamic>?;
+      final name = data?['status'] as String? ?? 'requested';
+      return RequestStatus.values.firstWhere(
+        (s) => s.name == name,
         orElse: () => RequestStatus.requested,
       );
     } catch (_) {
