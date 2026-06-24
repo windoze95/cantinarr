@@ -112,6 +112,7 @@ func TestBookRequestFormatMonitorsRequestedEditions(t *testing.T) {
 			_, _ = w.Write([]byte(`[
 				{
 					"title":"Star Wars: Heir to the Empire",
+					"titleSlug":"star-wars-heir-to-the-empire",
 					"foreignBookId":"book-123",
 					"author":{
 						"authorName":"Timothy Zahn",
@@ -158,6 +159,12 @@ func TestBookRequestFormatMonitorsRequestedEditions(t *testing.T) {
 	}
 	if got := addBody["anyEditionOk"]; got != false {
 		t.Fatalf("anyEditionOk = %v, want false for audiobook-only", got)
+	}
+	if addBody["title"] != "Star Wars: Heir to the Empire" {
+		t.Fatalf("title = %v, want Star Wars: Heir to the Empire", addBody["title"])
+	}
+	if addBody["titleSlug"] != "star-wars-heir-to-the-empire" {
+		t.Fatalf("titleSlug = %v, want star-wars-heir-to-the-empire", addBody["titleSlug"])
 	}
 	author := addBody["author"].(map[string]any)
 	if author["authorName"] != "Timothy Zahn" || author["foreignAuthorId"] != "author-456" {
@@ -228,6 +235,12 @@ func TestAdminBookRequestsUseDefaultChaptarrWithoutUserGrant(t *testing.T) {
 	svc := NewService(database, instance.NewRegistry(store), nil, nil)
 	if client := svc.getChaptarr(uid); client == nil {
 		t.Fatal("admin getChaptarr returned nil without per-user grant; want default Chaptarr client")
+	}
+}
+
+func TestFallbackTitleSlug(t *testing.T) {
+	if got := fallbackTitleSlug("Ahsoka (Star Wars)"); got != "ahsoka-star-wars" {
+		t.Fatalf("fallbackTitleSlug = %q, want ahsoka-star-wars", got)
 	}
 }
 

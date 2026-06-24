@@ -145,6 +145,7 @@ type RootFolder struct {
 // and (for book lookups) the nested author the book belongs to.
 type LookupResult struct {
 	Title           string    `json:"title"`
+	TitleSlug       string    `json:"titleSlug,omitempty"`
 	AuthorName      string    `json:"authorName"`
 	ForeignAuthorID string    `json:"foreignAuthorId"`
 	ForeignBookID   string    `json:"foreignBookId"`
@@ -177,6 +178,8 @@ type AddAuthorRequest struct {
 // book-add payload, so an author ref is required for authors not yet tracked.
 type AddBookRequest struct {
 	ForeignBookID string           `json:"foreignBookId"`
+	Title         string           `json:"title"`
+	TitleSlug     string           `json:"titleSlug,omitempty"`
 	Monitored     bool             `json:"monitored"`
 	AnyEditionOk  bool             `json:"anyEditionOk"`
 	Author        AddAuthorRequest `json:"author"`
