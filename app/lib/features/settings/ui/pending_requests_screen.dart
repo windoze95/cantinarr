@@ -20,8 +20,7 @@ class PendingRequestsScreen extends ConsumerStatefulWidget {
       _PendingRequestsScreenState();
 }
 
-class _PendingRequestsScreenState
-    extends ConsumerState<PendingRequestsScreen> {
+class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   late final RequestSettingsService _service;
   List<PendingRequestItem>? _pending;
   AdminRequestSettings? _admin;
@@ -73,7 +72,9 @@ class _PendingRequestsScreenState
   Future<void> _approve(PendingRequestItem item) async {
     final admin = _admin;
     if (admin == null) return;
-    final profiles = item.isTv ? admin.sonarrProfiles : admin.radarrProfiles;
+    final profiles = item.isBook
+        ? const <QualityProfile>[]
+        : (item.isTv ? admin.sonarrProfiles : admin.radarrProfiles);
 
     // An explicit per-season request stores a JSON list in seasonScope, which
     // isn't one of the coarse dropdown values — represent it as a "keep
@@ -84,6 +85,7 @@ class _PendingRequestsScreenState
         ? _keepRequestedScope
         : (item.seasonScope.isNotEmpty ? item.seasonScope : SeasonScope.all);
     int? chosenProfile;
+    BookRequestFormat chosenBookFormat = item.requestedBookFormat;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -134,32 +136,63 @@ class _PendingRequestsScreenState
                     ),
                     const SizedBox(height: 16),
                   ],
-                  const Text(
-                    'Quality profile',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-                  ),
-                  const SizedBox(height: 4),
-                  DropdownButtonFormField<int?>(
-                    initialValue: chosenProfile,
-                    dropdownColor: AppTheme.surfaceVariant,
-                    style: const TextStyle(color: AppTheme.textPrimary),
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      isDense: true,
+                  if (item.isBook) ...[
+                    const Text(
+                      'Format',
+                      style: TextStyle(
+                          color: AppTheme.textSecondary, fontSize: 13),
                     ),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                        value: null,
-                        child: Text('Default'),
+                    const SizedBox(height: 4),
+                    DropdownButtonFormField<BookRequestFormat>(
+                      initialValue: chosenBookFormat,
+                      dropdownColor: AppTheme.surfaceVariant,
+                      style: const TextStyle(color: AppTheme.textPrimary),
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        isDense: true,
                       ),
-                      ...profiles.map((p) => DropdownMenuItem<int?>(
-                            value: p.id,
-                            child: Text(p.name),
-                          )),
-                    ],
-                    onChanged: (v) => setDialogState(() => chosenProfile = v),
-                  ),
+                      items: BookRequestFormat.values
+                          .map(
+                            (format) => DropdownMenuItem<BookRequestFormat>(
+                              value: format,
+                              child: Text(format.label),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (v) {
+                        if (v != null) {
+                          setDialogState(() => chosenBookFormat = v);
+                        }
+                      },
+                    ),
+                  ] else ...[
+                    const Text(
+                      'Quality profile',
+                      style: TextStyle(
+                          color: AppTheme.textSecondary, fontSize: 13),
+                    ),
+                    const SizedBox(height: 4),
+                    DropdownButtonFormField<int?>(
+                      initialValue: chosenProfile,
+                      dropdownColor: AppTheme.surfaceVariant,
+                      style: const TextStyle(color: AppTheme.textPrimary),
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      items: [
+                        const DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text('Default'),
+                        ),
+                        ...profiles.map((p) => DropdownMenuItem<int?>(
+                              value: p.id,
+                              child: Text(p.name),
+                            )),
+                      ],
+                      onChanged: (v) => setDialogState(() => chosenProfile = v),
+                    ),
+                  ],
                 ],
               ),
               actions: [
@@ -192,7 +225,8 @@ class _PendingRequestsScreenState
         seasonScope: item.isTv
             ? (chosenScope == _keepRequestedScope ? null : chosenScope)
             : null,
-        qualityProfileId: chosenProfile,
+        qualityProfileId: item.isBook ? null : chosenProfile,
+        bookFormat: item.isBook ? chosenBookFormat : null,
       );
       if (!mounted) return;
       await _load();
@@ -302,8 +336,7 @@ class _PendingRequestsScreenState
                             Center(
                               child: Text(
                                 'No pending requests.',
-                                style:
-                                    TextStyle(color: AppTheme.textSecondary),
+                                style: TextStyle(color: AppTheme.textSecondary),
                               ),
                             ),
                           ],
@@ -342,6 +375,7 @@ class _PendingTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final showScope = item.isTv && item.seasonScope.isNotEmpty;
+    final showBookFormat = item.isBook && item.bookFormat.isNotEmpty;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       title: Text(
@@ -357,16 +391,16 @@ class _PendingTile extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             'Requested by ${item.username}',
-            style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 13),
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,
             runSpacing: 6,
             children: [
-              _chip(item.isTv ? 'TV' : 'Movie'),
+              _chip(item.mediaLabel),
               if (showScope) _chip(SeasonScope.describe(item.seasonScope)),
+              if (showBookFormat) _chip(item.requestedBookFormat.label),
             ],
           ),
         ],

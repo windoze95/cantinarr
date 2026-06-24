@@ -33,6 +33,13 @@ const (
 	SeasonScopePilot  = "pilot"
 )
 
+// Book format choices a user can attach to a Chaptarr request.
+const (
+	BookFormatEbook     = "ebook"
+	BookFormatAudiobook = "audiobook"
+	BookFormatBoth      = "both"
+)
+
 // requestSettingsKey is the settings-table key holding the global request
 // defaults (JSON blob), mirroring the toolsettings storage pattern.
 const requestSettingsKey = "request_settings"
@@ -107,6 +114,7 @@ type CreateRequest struct {
 	// ForeignID is the Chaptarr/Readarr foreignBookId for book requests, which
 	// have no TMDB id. Required when media_type == "book"; ignored otherwise.
 	ForeignID        string `json:"foreign_id"`
+	BookFormat       string `json:"book_format"`
 	SeasonScope      string `json:"season_scope"`
 	QualityProfileID int    `json:"quality_profile_id"`
 	// Seasons is an optional explicit list of season numbers (TV only). When
@@ -159,6 +167,7 @@ type PendingRequest struct {
 	TvdbID           int       `json:"tvdb_id"`
 	MediaType        string    `json:"media_type"`
 	Title            string    `json:"title"`
+	BookFormat       string    `json:"book_format"`
 	SeasonScope      string    `json:"season_scope"`
 	QualityProfileID int       `json:"quality_profile_id"`
 	RequestedAt      time.Time `json:"requested_at"`
@@ -182,6 +191,7 @@ type RequestOptions struct {
 type DecisionOverride struct {
 	SeasonScope      string `json:"season_scope"`
 	QualityProfileID int    `json:"quality_profile_id"`
+	BookFormat       string `json:"book_format"`
 }
 
 // GlobalSettings holds the system-wide request defaults (settings table).
@@ -239,6 +249,7 @@ type resolvedRequest struct {
 	tmdbID           int
 	tvdbID           int
 	foreignID        string // Chaptarr foreignBookId (book requests)
+	bookFormat       string
 	mediaType        string
 	title            string
 	seasonScope      string
@@ -416,12 +427,13 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	}
 
 	resolved := &resolvedRequest{
-		userID:    userID,
-		tmdbID:    req.TmdbID,
-		tvdbID:    req.TvdbID,
-		foreignID: req.ForeignID,
-		mediaType: req.MediaType,
-		title:     req.Title,
+		userID:     userID,
+		tmdbID:     req.TmdbID,
+		tvdbID:     req.TvdbID,
+		foreignID:  req.ForeignID,
+		bookFormat: normalizeBookFormat(req.BookFormat),
+		mediaType:  req.MediaType,
+		title:      req.Title,
 	}
 
 	// Season scope (TV only). Honor the client's choice only when allowed;
@@ -484,13 +496,13 @@ func (s *Service) createPending(r *resolvedRequest) (*CreateResponse, error) {
 	var err error
 	if r.mediaType == "book" {
 		res, err = s.db.Exec(
-			`INSERT INTO request_log (user_id, tmdb_id, foreign_id, media_type, title, status)
-			 SELECT ?, 0, ?, ?, ?, ?
+			`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, media_type, title, status)
+			 SELECT ?, 0, ?, ?, ?, ?, ?
 			 WHERE NOT EXISTS (
-			     SELECT 1 FROM request_log WHERE user_id = ? AND foreign_id = ? AND media_type = ? AND status = ?
+			     SELECT 1 FROM request_log WHERE user_id = ? AND foreign_id = ? AND COALESCE(book_format, 'both') = ? AND media_type = ? AND status = ?
 			 )`,
-			r.userID, r.foreignID, r.mediaType, r.title, StatusPending,
-			r.userID, r.foreignID, r.mediaType, StatusPending,
+			r.userID, r.foreignID, normalizeBookFormat(r.bookFormat), r.mediaType, r.title, StatusPending,
+			r.userID, r.foreignID, normalizeBookFormat(r.bookFormat), r.mediaType, StatusPending,
 		)
 	} else {
 		res, err = s.db.Exec(
@@ -589,15 +601,40 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	addReq := chaptarr.AddBookRequest{
 		ForeignBookID: match.ForeignBookID,
 		Monitored:     true,
+		AnyEditionOk:  normalizeBookFormat(r.bookFormat) == BookFormatBoth,
 	}
-	addReq.Author.AuthorName = match.AuthorName
-	addReq.Author.ForeignAuthorID = match.ForeignAuthorID
+	authorName := match.AuthorName
+	foreignAuthorID := match.ForeignAuthorID
+	if match.Author != nil {
+		if authorName == "" {
+			authorName = match.Author.AuthorName
+		}
+		if foreignAuthorID == "" {
+			foreignAuthorID = match.Author.ForeignAuthorID
+		}
+	}
+	addReq.Author.AuthorName = authorName
+	addReq.Author.ForeignAuthorID = foreignAuthorID
 	addReq.Author.QualityProfileID = qps[0].ID
 	addReq.Author.MetadataProfileID = mps[0].ID
 	addReq.Author.RootFolderPath = folders[0].Path
 	addReq.Author.Monitored = true
 	addReq.Author.AddOptions.Monitor = "all"
 	addReq.AddOptions.SearchForNewBook = true
+	if len(match.Editions) > 0 {
+		addReq.Editions = make([]chaptarr.Edition, 0, len(match.Editions))
+		matchedFormat := false
+		for _, edition := range match.Editions {
+			edition.Monitored = editionMatchesBookFormat(edition, r.bookFormat)
+			if edition.Monitored {
+				matchedFormat = true
+			}
+			addReq.Editions = append(addReq.Editions, edition)
+		}
+		if !matchedFormat {
+			return "", "", fmt.Errorf("no %s edition available for %s", normalizeBookFormat(r.bookFormat), match.Title)
+		}
+	}
 
 	title := match.Title
 	if title == "" {
@@ -1034,7 +1071,7 @@ func (s *Service) PendingCount() (int, error) {
 
 func (s *Service) ListPending() ([]PendingRequest, error) {
 	rows, err := s.db.Query(
-		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), r.media_type, r.title, COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at
+		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at
 		 FROM request_log r LEFT JOIN users u ON u.id = r.user_id
 		 WHERE r.status = ? ORDER BY r.requested_at ASC`,
 		StatusPending,
@@ -1047,9 +1084,10 @@ func (s *Service) ListPending() ([]PendingRequest, error) {
 	var out []PendingRequest
 	for rows.Next() {
 		var p PendingRequest
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.MediaType, &p.Title, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.MediaType, &p.Title, &p.BookFormat, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
 			return nil, fmt.Errorf("scan pending request: %w", err)
 		}
+		p.BookFormat = normalizeBookFormat(p.BookFormat)
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -1060,15 +1098,16 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	var r resolvedRequest
 	var status string
 	err := s.db.QueryRow(
-		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
+		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
 		requestID,
-	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
+	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
 	if err == sql.ErrNoRows {
 		return nil, "", fmt.Errorf("request not found")
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("load request: %w", err)
 	}
+	r.bookFormat = normalizeBookFormat(r.bookFormat)
 	// An explicit season list was stored as JSON in season_scope; decode it so
 	// approval replays the seasonpass path the requester chose.
 	r.seasonNumbers = decodeSeasonNumbers(r.seasonScope)
@@ -1095,6 +1134,9 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 		if override.QualityProfileID != 0 {
 			r.qualityProfileID = override.QualityProfileID
 		}
+		if r.mediaType == "book" && validBookFormat(override.BookFormat) {
+			r.bookFormat = normalizeBookFormat(override.BookFormat)
+		}
 	}
 
 	newStatus, title, err := s.addToArr(r)
@@ -1104,8 +1146,8 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 	}
 
 	res, err := s.db.Exec(
-		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
-		newStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), adminID, requestID, StatusPending,
+		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, book_format = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
+		newStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(r.bookFormat), sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), adminID, requestID, StatusPending,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update request: %w", err)
@@ -1215,8 +1257,8 @@ func (s *Service) GetAdminSettings() *AdminSettingsView {
 // insertRequest writes a request_log row and returns its id.
 func (s *Service) insertRequest(r *resolvedRequest, title, status string) (int64, error) {
 	res, err := s.db.Exec(
-		"INSERT INTO request_log (user_id, tmdb_id, tvdb_id, foreign_id, media_type, title, status, season_scope, quality_profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		r.userID, r.tmdbID, sqlNullInt(r.tvdbID), sqlNullStr(r.foreignID), r.mediaType, title, status, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
+		"INSERT INTO request_log (user_id, tmdb_id, tvdb_id, foreign_id, book_format, media_type, title, status, season_scope, quality_profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		r.userID, r.tmdbID, sqlNullInt(r.tvdbID), sqlNullStr(r.foreignID), sqlNullStr(r.bookFormat), r.mediaType, title, status, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
 	)
 	if err != nil {
 		return 0, err
@@ -1297,6 +1339,42 @@ func validSeasonScope(scope string) bool {
 		return true
 	}
 	return false
+}
+
+func normalizeBookFormat(format string) string {
+	switch format {
+	case BookFormatEbook, BookFormatAudiobook, BookFormatBoth:
+		return format
+	default:
+		return BookFormatBoth
+	}
+}
+
+func validBookFormat(format string) bool {
+	return format == BookFormatEbook ||
+		format == BookFormatAudiobook ||
+		format == BookFormatBoth
+}
+
+func editionMatchesBookFormat(edition chaptarr.Edition, format string) bool {
+	switch normalizeBookFormat(format) {
+	case BookFormatBoth:
+		return true
+	case BookFormatAudiobook:
+		return chaptarrEditionFormat(edition) == BookFormatAudiobook
+	default:
+		return chaptarrEditionFormat(edition) == BookFormatEbook
+	}
+}
+
+func chaptarrEditionFormat(edition chaptarr.Edition) string {
+	if !edition.IsEbook {
+		return BookFormatAudiobook
+	}
+	if chaptarr.FormatOf(edition.Format) == BookFormatAudiobook {
+		return BookFormatAudiobook
+	}
+	return BookFormatEbook
 }
 
 // sonarrMonitor maps a season scope to Sonarr's addOptions.monitor enum.

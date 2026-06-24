@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../../request/data/request_service.dart';
+
 /// An arr quality profile (id + name) offered for selection.
 class QualityProfile {
   final int id;
@@ -142,6 +144,7 @@ class PendingRequestItem {
   final int tvdbId;
   final String mediaType;
   final String title;
+  final String bookFormat;
   final String seasonScope;
   final int qualityProfileId;
   final DateTime? requestedAt;
@@ -154,12 +157,21 @@ class PendingRequestItem {
     required this.tvdbId,
     required this.mediaType,
     required this.title,
+    required this.bookFormat,
     required this.seasonScope,
     required this.qualityProfileId,
     required this.requestedAt,
   });
 
   bool get isTv => mediaType == 'tv';
+  bool get isBook => mediaType == 'book';
+  String get mediaLabel => switch (mediaType) {
+        'tv' => 'TV',
+        'book' => 'Book',
+        _ => 'Movie',
+      };
+  BookRequestFormat get requestedBookFormat =>
+      BookRequestFormat.fromValue(bookFormat);
 
   factory PendingRequestItem.fromJson(Map<String, dynamic> json) =>
       PendingRequestItem(
@@ -170,6 +182,7 @@ class PendingRequestItem {
         tvdbId: json['tvdb_id'] as int? ?? 0,
         mediaType: json['media_type'] as String? ?? 'movie',
         title: json['title'] as String? ?? '',
+        bookFormat: json['book_format'] as String? ?? 'both',
         seasonScope: json['season_scope'] as String? ?? '',
         qualityProfileId: json['quality_profile_id'] as int? ?? 0,
         requestedAt:
@@ -230,12 +243,15 @@ class RequestSettingsService {
   }
 
   Future<void> approve(int id,
-      {String? seasonScope, int? qualityProfileId}) async {
+      {String? seasonScope,
+      int? qualityProfileId,
+      BookRequestFormat? bookFormat}) async {
     final body = <String, dynamic>{};
     if (seasonScope != null) body['season_scope'] = seasonScope;
     if (qualityProfileId != null && qualityProfileId != 0) {
       body['quality_profile_id'] = qualityProfileId;
     }
+    if (bookFormat != null) body['book_format'] = bookFormat.value;
     await _dio.post('/api/admin/requests/$id/approve', data: body);
   }
 

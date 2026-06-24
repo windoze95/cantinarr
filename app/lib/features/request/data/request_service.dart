@@ -31,6 +31,23 @@ enum RequestStatus {
   final String buttonLabel;
 }
 
+enum BookRequestFormat {
+  ebook('ebook', 'eBook'),
+  audiobook('audiobook', 'Audiobook'),
+  both('both', 'eBook + Audiobook');
+
+  const BookRequestFormat(this.value, this.label);
+
+  final String value;
+  final String label;
+
+  static BookRequestFormat fromValue(String value) =>
+      BookRequestFormat.values.firstWhere(
+        (format) => format.value == value,
+        orElse: () => BookRequestFormat.both,
+      );
+}
+
 /// The TV season-scope choices a user may attach to a request. The string
 /// values mirror the backend's season_scope enum.
 class SeasonScope {
@@ -294,12 +311,14 @@ class RequestService {
   Future<RequestStatus?> requestBook({
     required String foreignId,
     required String title,
+    BookRequestFormat format = BookRequestFormat.both,
   }) async {
     try {
       final resp = await _backendDio.post('/api/requests', data: {
         'media_type': 'book',
         'foreign_id': foreignId,
         'title': title,
+        'book_format': format.value,
       });
       if (resp.statusCode != 200 && resp.statusCode != 201) return null;
       final data = resp.data as Map<String, dynamic>?;

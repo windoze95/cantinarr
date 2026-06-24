@@ -273,7 +273,11 @@ class _BookResultTile extends StatelessWidget {
             )
           : (fid != null && fid.isNotEmpty)
               ? _BookRequestButton(
-                  foreignId: fid, title: book.title, service: requestService)
+                  foreignId: fid,
+                  title: book.title,
+                  service: requestService,
+                  availableFormats: book.formats,
+                )
               : null,
     );
   }
@@ -285,11 +289,13 @@ class _BookRequestButton extends StatefulWidget {
   final String foreignId;
   final String title;
   final RequestService service;
+  final Set<BookFormat> availableFormats;
 
   const _BookRequestButton({
     required this.foreignId,
     required this.title,
     required this.service,
+    required this.availableFormats,
   });
 
   @override
@@ -318,9 +324,28 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
 
   Future<void> _request() async {
     if (_busy) return;
+    final choices = _formatChoices(widget.availableFormats);
+    BookRequestFormat format =
+        choices.length == 1 ? choices.first : BookRequestFormat.both;
+    if (choices.length > 1) {
+      final selected = await showModalBottomSheet<BookRequestFormat>(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _BookFormatSheet(
+          title: widget.title,
+          choices: choices,
+        ),
+      );
+      if (selected == null) return;
+      format = selected;
+    }
+    if (!mounted) return;
     setState(() => _busy = true);
-    final s = await widget.service
-        .requestBook(foreignId: widget.foreignId, title: widget.title);
+    final s = await widget.service.requestBook(
+      foreignId: widget.foreignId,
+      title: widget.title,
+      format: format,
+    );
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -371,6 +396,112 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           : Text(_status.buttonLabel),
+    );
+  }
+}
+
+List<BookRequestFormat> _formatChoices(Set<BookFormat> available) {
+  final hasEbook = available.contains(BookFormat.ebook);
+  final hasAudiobook = available.contains(BookFormat.audiobook);
+  if (hasEbook && hasAudiobook) {
+    return const [
+      BookRequestFormat.ebook,
+      BookRequestFormat.audiobook,
+      BookRequestFormat.both,
+    ];
+  }
+  if (hasEbook) return const [BookRequestFormat.ebook];
+  if (hasAudiobook) return const [BookRequestFormat.audiobook];
+  return const [
+    BookRequestFormat.ebook,
+    BookRequestFormat.audiobook,
+    BookRequestFormat.both,
+  ];
+}
+
+class _BookFormatSheet extends StatelessWidget {
+  final String title;
+  final List<BookRequestFormat> choices;
+
+  const _BookFormatSheet({
+    required this.title,
+    required this.choices,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        decoration: const BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.textSecondary,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 14),
+            for (final choice in choices)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _FormatChoiceTile(choice: choice),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FormatChoiceTile extends StatelessWidget {
+  final BookRequestFormat choice;
+
+  const _FormatChoiceTile({required this.choice});
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = switch (choice) {
+      BookRequestFormat.ebook => Icons.menu_book,
+      BookRequestFormat.audiobook => Icons.headphones,
+      BookRequestFormat.both => Icons.library_books,
+    };
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+      leading: Icon(icon, color: AppTheme.accent),
+      title: Text(
+        choice.label,
+        style: const TextStyle(
+          color: AppTheme.textPrimary,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: AppTheme.border),
+      ),
+      onTap: () => Navigator.of(context).pop(choice),
     );
   }
 }

@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS request_log (
     media_type TEXT NOT NULL,
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'requested',
+    book_format TEXT,
     requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME
 );

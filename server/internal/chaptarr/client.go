@@ -142,15 +142,16 @@ type RootFolder struct {
 // fields needed to render a lookup row and seed an add: identifiers, a cover,
 // and (for book lookups) the nested author the book belongs to.
 type LookupResult struct {
-	Title           string  `json:"title"`
-	AuthorName      string  `json:"authorName"`
-	ForeignAuthorID string  `json:"foreignAuthorId"`
-	ForeignBookID   string  `json:"foreignBookId"`
-	Overview        string  `json:"overview"`
-	Year            int     `json:"year"`
-	Images          []Image `json:"images"`
-	Author          *Author `json:"author,omitempty"`
-	RemoteCover     string  `json:"remoteCover,omitempty"`
+	Title           string    `json:"title"`
+	AuthorName      string    `json:"authorName"`
+	ForeignAuthorID string    `json:"foreignAuthorId"`
+	ForeignBookID   string    `json:"foreignBookId"`
+	Overview        string    `json:"overview"`
+	Year            int       `json:"year"`
+	Images          []Image   `json:"images"`
+	Author          *Author   `json:"author,omitempty"`
+	RemoteCover     string    `json:"remoteCover,omitempty"`
+	Editions        []Edition `json:"editions,omitempty"`
 }
 
 // AddAuthorRequest mirrors Sonarr's AddSeriesRequest shape for adding an author
@@ -175,6 +176,7 @@ type AddAuthorRequest struct {
 type AddBookRequest struct {
 	ForeignBookID string           `json:"foreignBookId"`
 	Monitored     bool             `json:"monitored"`
+	AnyEditionOk  bool             `json:"anyEditionOk"`
 	Author        AddAuthorRequest `json:"author"`
 	AddOptions    struct {
 		SearchForNewBook bool `json:"searchForNewBook"`
