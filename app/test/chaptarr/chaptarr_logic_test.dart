@@ -27,6 +27,8 @@ void main() {
       for (final q in ['EPUB', 'epub', 'MOBI', 'AZW3', 'PDF', 'CBZ', 'KEPUB']) {
         expect(bookFormatFromQuality(q), BookFormat.ebook, reason: q);
       }
+      expect(bookFormatFromQuality('Kindle Edition'), BookFormat.ebook);
+      expect(bookFormatFromQuality('eBook'), BookFormat.ebook);
     });
 
     test('audiobook formats classify as audiobook', () {
@@ -38,6 +40,8 @@ void main() {
         'AAC',
         'OGG',
         'Audiobook',
+        'Audible Audio',
+        'Audio CD',
       ]) {
         expect(bookFormatFromQuality(q), BookFormat.audiobook, reason: q);
       }
@@ -91,6 +95,17 @@ void main() {
       });
 
       expect(book.genres, ['Romance', 'Mystery']);
+    });
+
+    test('leaves unclassified editions unknown when isEbook is omitted', () {
+      final book = ChaptarrBook.fromJson({
+        'title': 'Physical Book',
+        'editions': [
+          {'title': 'Hardcover', 'format': 'Hardcover'}
+        ],
+      });
+
+      expect(book.formats, isEmpty);
     });
   });
 

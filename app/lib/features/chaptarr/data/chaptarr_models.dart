@@ -59,7 +59,13 @@ BookFormat bookFormatFromQuality(String? qualityName) {
     'PDF',
     'CBZ',
     'CBR',
-    'KEPUB'
+    'KEPUB',
+    'EBOOK',
+    'E-BOOK',
+    'KINDLE',
+    'NOOK',
+    'KOBO',
+    'DIGITAL'
   ];
   for (final t in ebookTokens) {
     if (q.contains(t)) return BookFormat.ebook;
@@ -72,6 +78,11 @@ BookFormat bookFormatFromQuality(String? qualityName) {
     'AAC',
     'OGG',
     'OPUS',
+    'AUDIOBOOK',
+    'AUDIO BOOK',
+    'AUDIBLE',
+    'AUDIO CD',
+    'MP3 CD',
     'AUDIO'
   ];
   for (final t in audioTokens) {
@@ -263,7 +274,7 @@ class ChaptarrEdition {
   final int pageCount;
   final bool monitored;
   final bool manualAdd;
-  final bool isEbook;
+  final bool? isEbook;
   final List<ChaptarrImage> images;
 
   const ChaptarrEdition({
@@ -278,7 +289,7 @@ class ChaptarrEdition {
     this.pageCount = 0,
     this.monitored = true,
     this.manualAdd = false,
-    this.isEbook = false,
+    this.isEbook,
     this.images = const [],
   });
 
@@ -295,7 +306,7 @@ class ChaptarrEdition {
         pageCount: json['pageCount'] as int? ?? 0,
         monitored: json['monitored'] as bool? ?? true,
         manualAdd: json['manualAdd'] as bool? ?? false,
-        isEbook: json['isEbook'] as bool? ?? false,
+        isEbook: json.containsKey('isEbook') ? json['isEbook'] as bool? : null,
         images: _modelList(json['images'], ChaptarrImage.fromJson),
       );
 
@@ -318,9 +329,13 @@ class ChaptarrEdition {
   /// The medium this edition represents: audiobook when Chaptarr flags it as
   /// non-ebook, ebook otherwise (also inferring from the `format` string).
   BookFormat get bookFormat {
-    if (!isEbook) return BookFormat.audiobook;
     final fromFormat = bookFormatFromQuality(format);
-    return fromFormat == BookFormat.unknown ? BookFormat.ebook : fromFormat;
+    if (fromFormat != BookFormat.unknown) return fromFormat;
+    final fromTitle = bookFormatFromQuality(title);
+    if (fromTitle != BookFormat.unknown) return fromTitle;
+    if (isEbook == true) return BookFormat.ebook;
+    if (isEbook == false) return BookFormat.audiobook;
+    return BookFormat.unknown;
   }
 }
 

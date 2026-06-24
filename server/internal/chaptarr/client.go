@@ -75,19 +75,21 @@ type BookStatistics struct {
 // Edition is one published edition of a book (a specific format/ISBN). Chaptarr
 // models ebooks and audiobooks as distinct editions of the same book.
 type Edition struct {
-	ID        int     `json:"id"`
-	BookID    int     `json:"bookId"`
-	Title     string  `json:"title"`
-	Format    string  `json:"format"`
-	ASIN      string  `json:"asin"`
-	ISBN13    string  `json:"isbn13"`
-	Overview  string  `json:"overview"`
-	Publisher string  `json:"publisher"`
-	PageCount int     `json:"pageCount"`
-	Monitored bool    `json:"monitored"`
-	ManualAdd bool    `json:"manualAdd"`
-	IsEbook   bool    `json:"isEbook"`
-	Images    []Image `json:"images"`
+	ID               int     `json:"id"`
+	BookID           int     `json:"bookId"`
+	ForeignEditionID string  `json:"foreignEditionId"`
+	TitleSlug        string  `json:"titleSlug"`
+	Title            string  `json:"title"`
+	Format           string  `json:"format"`
+	ASIN             string  `json:"asin"`
+	ISBN13           string  `json:"isbn13"`
+	Overview         string  `json:"overview"`
+	Publisher        string  `json:"publisher"`
+	PageCount        int     `json:"pageCount"`
+	Monitored        bool    `json:"monitored"`
+	ManualAdd        bool    `json:"manualAdd"`
+	IsEbook          *bool   `json:"isEbook,omitempty"`
+	Images           []Image `json:"images"`
 }
 
 type Book struct {
@@ -779,8 +781,14 @@ func (c *Client) ExecuteManualImport(files []ManualImportFile) error {
 // ebookTokens and audiobookTokens are uppercase substrings matched against a
 // quality name to classify a book file's format.
 var (
-	ebookTokens     = []string{"EPUB", "MOBI", "AZW3", "AZW", "PDF", "CBZ", "CBR", "KEPUB"}
-	audiobookTokens = []string{"MP3", "M4B", "M4A", "FLAC", "AAC", "OGG", "OPUS", "AUDIOBOOK", "AUDIO"}
+	ebookTokens = []string{
+		"EPUB", "MOBI", "AZW3", "AZW", "PDF", "CBZ", "CBR", "KEPUB",
+		"EBOOK", "E-BOOK", "KINDLE", "NOOK", "KOBO", "DIGITAL",
+	}
+	audiobookTokens = []string{
+		"MP3", "M4B", "M4A", "FLAC", "AAC", "OGG", "OPUS",
+		"AUDIOBOOK", "AUDIO BOOK", "AUDIBLE", "AUDIO CD", "MP3 CD", "AUDIO",
+	}
 )
 
 // FormatOf classifies a Chaptarr quality name as "ebook", "audiobook", or

@@ -626,6 +626,7 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		matchedFormat := false
 		for _, edition := range match.Editions {
 			edition.Monitored = editionMatchesBookFormat(edition, r.bookFormat)
+			edition.ManualAdd = edition.Monitored
 			if edition.Monitored {
 				matchedFormat = true
 			}
@@ -1368,13 +1369,19 @@ func editionMatchesBookFormat(edition chaptarr.Edition, format string) bool {
 }
 
 func chaptarrEditionFormat(edition chaptarr.Edition) string {
-	if !edition.IsEbook {
+	if format := chaptarr.FormatOf(edition.Format); format != "unknown" {
+		return format
+	}
+	if format := chaptarr.FormatOf(edition.Title); format != "unknown" {
+		return format
+	}
+	if edition.IsEbook != nil {
+		if *edition.IsEbook {
+			return BookFormatEbook
+		}
 		return BookFormatAudiobook
 	}
-	if chaptarr.FormatOf(edition.Format) == BookFormatAudiobook {
-		return BookFormatAudiobook
-	}
-	return BookFormatEbook
+	return "unknown"
 }
 
 // sonarrMonitor maps a season scope to Sonarr's addOptions.monitor enum.
