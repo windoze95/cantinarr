@@ -93,14 +93,21 @@ func (s *Service) getSonarr(userID int64) *sonarr.Client {
 	return nil
 }
 
-// getChaptarr returns the Chaptarr client for the user's granted instance, or
-// nil when the user has no grant (Chaptarr has no global default — access is
-// admin-granted per user).
+// getChaptarr returns the Chaptarr client for the user's granted instance. A
+// user grant is still required for non-admins; admins fall back to the configured
+// default/first Chaptarr instance so they can request books without assigning
+// themselves a per-user grant.
 func (s *Service) getChaptarr(userID int64) *chaptarr.Client {
 	if s.registry != nil {
 		client, _, err := s.registry.GetUserChaptarrClient(userID)
 		if err == nil && client != nil {
 			return client
+		}
+		if s.userIsAdmin(userID) {
+			client, _, err := s.registry.GetDefaultChaptarrClient()
+			if err == nil && client != nil {
+				return client
+			}
 		}
 	}
 	return nil

@@ -195,6 +195,42 @@ func TestBookRequestFormatMonitorsRequestedEditions(t *testing.T) {
 	}
 }
 
+func TestAdminBookRequestsUseDefaultChaptarrWithoutUserGrant(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	res, err := database.Exec(
+		"INSERT INTO users (username, password_hash, role) VALUES ('admin', '', 'admin')",
+	)
+	if err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	uid, _ := res.LastInsertId()
+
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x24}, 32))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	store := instance.NewStore(database, cipher)
+	if err := store.Create(&instance.Instance{
+		ServiceType: "chaptarr",
+		Name:        "Books",
+		URL:         "http://chaptarr.local:8787",
+		APIKey:      "key",
+		IsDefault:   true,
+	}); err != nil {
+		t.Fatalf("create chaptarr instance: %v", err)
+	}
+
+	svc := NewService(database, instance.NewRegistry(store), nil, nil)
+	if client := svc.getChaptarr(uid); client == nil {
+		t.Fatal("admin getChaptarr returned nil without per-user grant; want default Chaptarr client")
+	}
+}
+
 func newChaptarrBookTestService(t *testing.T, chaptarrURL string) (*Service, int64) {
 	t.Helper()
 	database, err := db.Open(":memory:")
