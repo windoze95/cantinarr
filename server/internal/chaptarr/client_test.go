@@ -173,6 +173,63 @@ func TestSearchReleasesEnvelope(t *testing.T) {
 	}
 }
 
+// TestGenreListUnmarshal asserts genres decode from both a comma-separated
+// string (this Chaptarr fork) and a JSON array (stock Servarr).
+func TestGenreListUnmarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"empty string", `""`, []string{}},
+		{"comma string", `"Science Fiction, Fantasy"`, []string{"Science Fiction", "Fantasy"}},
+		{"single string", `"Fiction"`, []string{"Fiction"}},
+		{"array", `["A","B"]`, []string{"A", "B"}},
+		{"null", `null`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var g genreList
+			if err := json.Unmarshal([]byte(tc.in), &g); err != nil {
+				t.Fatalf("unmarshal %q: %v", tc.in, err)
+			}
+			if len(g) != len(tc.want) {
+				t.Fatalf("got %#v, want %#v", []string(g), tc.want)
+			}
+			for i := range tc.want {
+				if g[i] != tc.want[i] {
+					t.Fatalf("got %#v, want %#v", []string(g), tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestAddBookToleratesStringGenres guards the add-book response decode: Chaptarr
+// returns the created book with genres as a string, which previously surfaced a
+// successful add as "cannot unmarshal string into Go struct field Book.genres of
+// type []string".
+func TestAddBookToleratesStringGenres(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":51,"title":"Dune Messiah","foreignBookId":"x","monitored":true,`+
+			`"genres":"Science Fiction, Fantasy","releaseDate":null,"editions":null,`+
+			`"author":{"id":9,"authorName":"Frank Herbert"},"statistics":{"bookCount":1}}`)
+	}))
+	defer srv.Close()
+
+	book, err := NewClient(srv.URL, "key").AddBook(AddBookRequest{ForeignBookID: "x"})
+	if err != nil {
+		t.Fatalf("AddBook: %v", err)
+	}
+	if book.ID != 51 || !book.Monitored {
+		t.Fatalf("book = id %d monitored %v, want id 51 monitored true", book.ID, book.Monitored)
+	}
+	if len(book.Genres) != 2 || book.Genres[0] != "Science Fiction" {
+		t.Fatalf("genres = %#v, want [Science Fiction, Fantasy]", []string(book.Genres))
+	}
+}
+
 // TestFormatOf asserts the quality-name classifier maps representative ebook
 // and audiobook formats and falls back to "unknown".
 func TestFormatOf(t *testing.T) {

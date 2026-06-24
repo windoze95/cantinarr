@@ -38,6 +38,42 @@ type Image struct {
 	RemoteURL string `json:"remoteUrl"`
 }
 
+// genreList unmarshals a genres value that may be either a JSON array of strings
+// (stock Servarr) or a single, possibly comma-separated, string. This Chaptarr
+// fork returns genres as a string (e.g. "" or "Science Fiction, Fantasy"), which
+// would otherwise fail to decode into a []string and abort the whole response —
+// e.g. a successful book add reported as "cannot unmarshal string into Go struct
+// field Book.genres of type []string".
+type genreList []string
+
+func (g *genreList) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		*g = nil
+		return nil
+	}
+	if trimmed[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(trimmed, &arr); err != nil {
+			return err
+		}
+		*g = arr
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(trimmed, &s); err != nil {
+		return err
+	}
+	out := make([]string, 0)
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	*g = out
+	return nil
+}
+
 // AuthorStatistics is the per-author book rollup Chaptarr returns on an author.
 type AuthorStatistics struct {
 	BookCount          int     `json:"bookCount"`
@@ -61,7 +97,7 @@ type Author struct {
 	MetadataProfileID int              `json:"metadataProfileId"`
 	Statistics        AuthorStatistics `json:"statistics"`
 	Images            []Image          `json:"images"`
-	Genres            []string         `json:"genres"`
+	Genres            genreList        `json:"genres"`
 }
 
 // BookStatistics is the per-book file rollup Chaptarr returns on a book.
@@ -107,7 +143,7 @@ type Book struct {
 	Statistics    BookStatistics `json:"statistics"`
 	Editions      []Edition      `json:"editions"`
 	Images        []Image        `json:"images"`
-	Genres        []string       `json:"genres"`
+	Genres        genreList      `json:"genres"`
 }
 
 type BookFile struct {
