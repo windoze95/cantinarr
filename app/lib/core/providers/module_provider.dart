@@ -33,7 +33,8 @@ class ModuleState {
   int get activeIndex {
     for (int i = 0; i < modules.length; i++) {
       final m = modules[i];
-      if (m.type == activeModuleType && m.instanceId == activeInstanceId) {
+      if (m.type == activeModuleType &&
+          (m.instanceId == null || m.instanceId == activeInstanceId)) {
         return i;
       }
     }
@@ -64,66 +65,44 @@ class ModuleNotifier extends Notifier<ModuleState> {
     ));
 
     if (connection != null) {
-      // Radarr instances
-      for (final inst in connection.radarrInstances) {
-        modules.add(AppModule(
+      if (isAdmin && connection.radarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
           type: ModuleType.radarr,
-          label: inst.name,
+          label: 'Radarr',
           icon: Icons.movie,
-          instanceId: inst.id,
-          instanceName: inst.name,
         ));
       }
 
-      // Sonarr instances
-      for (final inst in connection.sonarrInstances) {
-        modules.add(AppModule(
+      if (isAdmin && connection.sonarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
           type: ModuleType.sonarr,
-          label: inst.name,
+          label: 'Sonarr',
           icon: Icons.tv,
-          instanceId: inst.id,
-          instanceName: inst.name,
         ));
       }
 
-      // Chaptarr (books) instances. NOT admin-gated here: the backend only
-      // surfaces a chaptarr instance to users an admin has explicitly granted,
-      // so any chaptarr instance present in the connection is one this user may
-      // see (admins see all). Visibility is enforced server-side.
-      for (final inst in connection.chaptarrInstances) {
-        modules.add(AppModule(
+      if (isAdmin && connection.chaptarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
           type: ModuleType.chaptarr,
-          label: inst.name,
+          label: 'Chaptarr',
           icon: Icons.menu_book,
-          instanceId: inst.id,
-          instanceName: inst.name,
         ));
       }
 
-      // Download client instances (admin only)
-      if (isAdmin) {
-        for (final inst in connection.downloadInstances) {
-          modules.add(AppModule(
-            type: ModuleType.downloads,
-            label: inst.name,
-            icon: Icons.download,
-            instanceId: inst.id,
-            instanceName: inst.name,
-          ));
-        }
+      if (isAdmin && connection.downloadInstances.isNotEmpty) {
+        modules.add(const AppModule(
+          type: ModuleType.downloads,
+          label: 'Downloads',
+          icon: Icons.download,
+        ));
       }
 
-      // Tautulli instances (admin only)
-      if (isAdmin) {
-        for (final inst in connection.tautulliInstances) {
-          modules.add(AppModule(
-            type: ModuleType.tautulli,
-            label: inst.name,
-            icon: Icons.monitor_heart,
-            instanceId: inst.id,
-            instanceName: inst.name,
-          ));
-        }
+      if (isAdmin && connection.tautulliInstances.isNotEmpty) {
+        modules.add(const AppModule(
+          type: ModuleType.tautulli,
+          label: 'Tautulli',
+          icon: Icons.monitor_heart,
+        ));
       }
 
       // AI Assistant

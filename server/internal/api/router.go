@@ -386,10 +386,10 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 			IsDefault   bool   `json:"is_default"`
 		}
 
-		// The config payload is per-user: the default instance for a service
-		// type can be overridden per user (admin-managed), and service types
-		// with no global default (chaptarr) are visible only to users an admin
-		// has explicitly granted an instance. Admins see every instance.
+		// The config payload is per-user: admins see every instance, while
+		// regular users only see the effective default Radarr/Sonarr instances
+		// selected for them and any Chaptarr instance explicitly granted by an
+		// admin.
 		claims := auth.GetClaims(r.Context())
 		var userID int64
 		isAdmin := false
@@ -407,11 +407,12 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 		instances := []instanceInfo{}
 		allInstances, err := store.ListAll()
 		if err == nil {
+			visibleDefaults := map[string]string{}
+			if !isAdmin {
+				visibleDefaults = effectiveUserInstanceIDs(allInstances, overrides)
+			}
 			for _, inst := range allInstances {
-				// Access gate for service types without a global default: a
-				// chaptarr instance is visible only to admins or the specific
-				// user granted THAT instance.
-				if inst.ServiceType == "chaptarr" && !isAdmin && overrides["chaptarr"] != inst.ID {
+				if !isAdmin && visibleDefaults[inst.ServiceType] != inst.ID {
 					continue
 				}
 				// Effective default: a per-user override wins over the global
@@ -464,4 +465,41 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 			"allow_reporting": remSettings.AllowReporting,
 		})
 	}
+}
+
+func effectiveUserInstanceIDs(instances []instance.Instance, overrides map[string]string) map[string]string {
+	first := map[string]string{}
+	globalDefault := map[string]string{}
+	for _, inst := range instances {
+		switch inst.ServiceType {
+		case "radarr", "sonarr":
+			if _, ok := first[inst.ServiceType]; !ok {
+				first[inst.ServiceType] = inst.ID
+			}
+			if inst.IsDefault {
+				if _, ok := globalDefault[inst.ServiceType]; !ok {
+					globalDefault[inst.ServiceType] = inst.ID
+				}
+			}
+		}
+	}
+
+	visible := map[string]string{}
+	for _, serviceType := range []string{"radarr", "sonarr"} {
+		if override, ok := overrides[serviceType]; ok {
+			visible[serviceType] = override
+			continue
+		}
+		if id, ok := globalDefault[serviceType]; ok {
+			visible[serviceType] = id
+			continue
+		}
+		if id, ok := first[serviceType]; ok {
+			visible[serviceType] = id
+		}
+	}
+	if chaptarrID, ok := overrides["chaptarr"]; ok {
+		visible["chaptarr"] = chaptarrID
+	}
+	return visible
 }
