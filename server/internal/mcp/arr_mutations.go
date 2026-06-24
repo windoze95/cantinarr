@@ -3,6 +3,7 @@ package mcp
 import (
 	"fmt"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
@@ -58,7 +59,7 @@ func seriesByTMDB(bridge *tmdb.Bridge, client *sonarr.Client, tmdbID int) (*sona
 // queueIDToReplace > 0 removes that queue item (deleting the download from the
 // client, no blocklist) before grabbing, so a "grab a different release" fix
 // doesn't leave the old one downloading alongside the new one.
-func GrabReleaseHelper(rc *radarr.Client, sc *sonarr.Client, mediaType, guid string, indexerID, queueIDToReplace int) (string, error) {
+func GrabReleaseHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType, guid string, indexerID, queueIDToReplace int) (string, error) {
 	if guid == "" {
 		return "guid is required (from search_releases).", nil
 	}
@@ -87,8 +88,20 @@ func GrabReleaseHelper(rc *radarr.Client, sc *sonarr.Client, mediaType, guid str
 		if err := sc.GrabRelease(guid, indexerID); err != nil {
 			return "", err
 		}
+	case "book":
+		if cc == nil {
+			return "Chaptarr is not configured.", nil
+		}
+		if queueIDToReplace > 0 {
+			if err := cc.RemoveQueueItem(queueIDToReplace, true, false, false, false); err != nil {
+				return "", err
+			}
+		}
+		if err := cc.GrabRelease(guid, indexerID); err != nil {
+			return "", err
+		}
 	default:
-		return "media_type must be \"movie\" or \"tv\".", nil
+		return "media_type must be \"movie\", \"tv\", or \"book\".", nil
 	}
 	msg := "Release sent to the download client. It should show up in get_queue shortly."
 	if queueIDToReplace > 0 {
@@ -100,7 +113,7 @@ func GrabReleaseHelper(rc *radarr.Client, sc *sonarr.Client, mediaType, guid str
 // RemoveQueueItemHelper removes a queue item (deleting the download from the
 // client), optionally blocklisting the release so it is not re-grabbed. Shared
 // body of the remove_queue_item tool.
-func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, mediaType string, queueID int, blocklist bool) (string, error) {
+func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, queueID int, blocklist bool) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -116,8 +129,15 @@ func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, mediaType strin
 		if err := sc.RemoveQueueItem(queueID, true, blocklist, false, false); err != nil {
 			return "", err
 		}
+	case "book":
+		if cc == nil {
+			return "Chaptarr is not configured.", nil
+		}
+		if err := cc.RemoveQueueItem(queueID, true, blocklist, false, false); err != nil {
+			return "", err
+		}
 	default:
-		return "media_type must be \"movie\" or \"tv\".", nil
+		return "media_type must be \"movie\", \"tv\", or \"book\".", nil
 	}
 	text := fmt.Sprintf("Removed queue item %d and deleted the download from the client.", queueID)
 	if blocklist {
@@ -129,7 +149,7 @@ func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, mediaType strin
 // RemediateQueueItemHelper applies one of the structured queue remediations
 // (remove | blocklist_search | change_category) to a queue item. Shared body of
 // the remediate_queue_item tool and the Executor's remediate_queue kind.
-func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, mediaType string, queueID int, action string) (string, error) {
+func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, queueID int, action string) (string, error) {
 	switch action {
 	case "remove", "blocklist_search", "change_category":
 	default:
@@ -207,8 +227,43 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, mediaType st
 			return fmt.Sprintf("Handed queue item %d (%s) to the download client's post-import category. It stays in the client for tools like Unpackerr.", queueID, sonarrQueueTitle(*item)), nil
 		}
 
+	case "book":
+		if cc == nil {
+			return "Chaptarr is not configured.", nil
+		}
+		item, err := findChaptarrQueueItem(cc, queueID)
+		if err != nil {
+			return "", err
+		}
+		if item == nil {
+			return fmt.Sprintf("No book queue item with id %d.", queueID), nil
+		}
+		switch action {
+		case "remove":
+			if err := cc.RemoveQueueItem(queueID, true, false, false, false); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, chaptarrQueueTitle(*item)), nil
+		case "blocklist_search":
+			if err := cc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
+				return "", err
+			}
+			if item.BookID != 0 {
+				if err := cc.TriggerBookSearch([]int{item.BookID}); err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, chaptarrQueueTitle(*item)), nil
+			}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s). Could not start a search: no book id on the item.", queueID, chaptarrQueueTitle(*item)), nil
+		case "change_category":
+			if err := cc.RemoveQueueItem(queueID, false, false, false, true); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Handed queue item %d (%s) to the download client's post-import category. It stays in the client for tools like Unpackerr.", queueID, chaptarrQueueTitle(*item)), nil
+		}
+
 	default:
-		return "media_type must be \"movie\" or \"tv\".", nil
+		return "media_type must be \"movie\", \"tv\", or \"book\".", nil
 	}
 	return "No remediation was applied.", nil
 }
@@ -217,7 +272,7 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, mediaType st
 // item's download, honoring force (force imports despite permanent rejections).
 // Shared body of the execute_manual_import tool and the Executor's manual_import
 // kind.
-func ExecuteManualImportHelper(rc *radarr.Client, sc *sonarr.Client, mediaType string, queueID int, force bool) (string, error) {
+func ExecuteManualImportHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, queueID int, force bool) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -327,15 +382,70 @@ func ExecuteManualImportHelper(rc *radarr.Client, sc *sonarr.Client, mediaType s
 		}
 		return importResultMessage(len(files), importMode, skipped), nil
 
+	case "book":
+		if cc == nil {
+			return "Chaptarr is not configured.", nil
+		}
+		item, err := findChaptarrQueueItem(cc, queueID)
+		if err != nil {
+			return "", err
+		}
+		if item == nil {
+			return fmt.Sprintf("No book queue item with id %d.", queueID), nil
+		}
+		if item.DownloadID == "" {
+			return fmt.Sprintf("Queue item %d has no download-client id yet; nothing to import.", queueID), nil
+		}
+		candidates, err := cc.GetManualImportCandidates(item.DownloadID)
+		if err != nil {
+			return "", err
+		}
+		var files []chaptarr.ManualImportFile
+		var skipped []string
+		for _, c := range candidates {
+			rejections := toRejectionViews(c.Rejections)
+			if !force && hasPermanentRejection(rejections) {
+				skipped = append(skipped, fmt.Sprintf("%s (%s)", c.Name, formatRejections(rejections)))
+				continue
+			}
+			if c.BookID == 0 {
+				skipped = append(skipped, fmt.Sprintf("%s (not matched to a book)", c.Name))
+				continue
+			}
+			files = append(files, chaptarr.ManualImportFile{
+				Path:         c.Path,
+				FolderName:   c.FolderName,
+				AuthorID:     c.AuthorID,
+				BookID:       c.BookID,
+				Quality:      c.Quality,
+				ReleaseGroup: c.ReleaseGroup,
+				DownloadID:   c.DownloadID,
+			})
+		}
+		if len(files) == 0 {
+			return importSkippedMessage(skipped, force), nil
+		}
+		// Chaptarr's ManualImport command sets importMode itself (auto); the
+		// helper still reports the protocol-derived mode (copy for torrent, else
+		// move) so the result message matches the movie/TV path.
+		importMode := importModeFor(item.Protocol)
+		if err := cc.ExecuteManualImport(files); err != nil {
+			return "", err
+		}
+		return importResultMessage(len(files), importMode, skipped), nil
+
 	default:
-		return "media_type must be \"movie\" or \"tv\".", nil
+		return "media_type must be \"movie\", \"tv\", or \"book\".", nil
 	}
 }
 
 // TriggerSearchHelper kicks off an automatic search for a movie, a whole series,
-// or a single season (when seasonNumber != nil). Shared body of the
+// or a single season (when seasonNumber != nil). For books the search targets
+// specific bookIDs when present, otherwise every monitored book of authorID;
+// books carry no TMDB id, so tmdbID/seasonNumber are unused on the book path
+// (and authorID/bookIDs are unused on the movie/TV paths). Shared body of the
 // trigger_search tool and the Executor's trigger_search kind.
-func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, mediaType string, tmdbID int, seasonNumber *int) (string, error) {
+func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, tmdbID int, seasonNumber *int, authorID int, bookIDs []int) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -375,15 +485,35 @@ func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Clie
 		}
 		return fmt.Sprintf("Search started for all monitored episodes of %s. Check get_queue in a bit to see if releases were grabbed.", series.Title), nil
 
+	case "book":
+		if cc == nil {
+			return "Chaptarr is not configured.", nil
+		}
+		if len(bookIDs) > 0 {
+			if err := cc.TriggerBookSearch(bookIDs); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Search started for %d book(s). Check get_queue in a bit to see if releases were grabbed.", len(bookIDs)), nil
+		}
+		if authorID == 0 {
+			return "trigger_search for a book requires author_id or book_id.", nil
+		}
+		if err := cc.TriggerAuthorSearch(authorID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Search started for all monitored books of author %d. Check get_queue in a bit to see if releases were grabbed.", authorID), nil
+
 	default:
-		return "media_type must be \"movie\" or \"tv\".", nil
+		return "media_type must be \"movie\", \"tv\", or \"book\".", nil
 	}
 }
 
 // RescanMediaHelper rescans a movie or series on disk and runs the import pass
-// (ProcessMonitoredDownloads). Shared body of the rescan_media tool and the
-// Executor's rescan kind.
-func RescanMediaHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, mediaType string, tmdbID int) (string, error) {
+// (ProcessMonitoredDownloads). For books it rescans authorID (books carry no
+// TMDB id, so tmdbID is unused on the book path and authorID is unused on the
+// movie/TV paths). Shared body of the rescan_media tool and the Executor's
+// rescan kind.
+func RescanMediaHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, tmdbID, authorID int) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -423,7 +553,22 @@ func RescanMediaHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client
 		}
 		return fmt.Sprintf("Rescanning %s and running the import pass. Check diagnose_queue shortly.", series.Title), nil
 
+	case "book":
+		if cc == nil {
+			return "Chaptarr is not configured.", nil
+		}
+		if authorID == 0 {
+			return "rescan for a book requires author_id.", nil
+		}
+		if err := cc.RescanAuthor(authorID); err != nil {
+			return "", err
+		}
+		if err := cc.ProcessMonitoredDownloads(); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Rescanning author %d and running the import pass. Check diagnose_queue shortly.", authorID), nil
+
 	default:
-		return "media_type must be \"movie\" or \"tv\".", nil
+		return "media_type must be \"movie\", \"tv\", or \"book\".", nil
 	}
 }

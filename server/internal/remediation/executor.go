@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -32,6 +33,15 @@ func NewExecutor(registry *instance.Registry, bridge *tmdb.Bridge, db *sql.DB) *
 	return &Executor{registry: registry, bridge: bridge, db: db}
 }
 
+// chaptarrQueuePage / chaptarrQueuePageSize drive the paginated
+// chaptarr.GetQueueDetailed call used by the book validation gate (the client
+// loops from this page until every record is fetched). Radarr/Sonarr expose a
+// non-paginated GetQueueDetailed, so these are book-only.
+const (
+	chaptarrQueuePage     = 1
+	chaptarrQueuePageSize = 100
+)
+
 // issueContext is the stable, cheap-to-fetch identity of an issue's media used to
 // resolve the arr client and to validate a queue-targeting action still applies
 // to THIS issue. instance_id/download_id are set for auto issues; for user issues
@@ -52,7 +62,7 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		return "", err
 	}
 
-	rc, sc, err := e.clientsFor(ic)
+	rc, sc, cc, err := e.clientsFor(ic)
 	if err != nil {
 		return "", err
 	}
@@ -70,45 +80,49 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		// release and re-hammer indexers); the arr returns a clean error on a stale
 		// guid, which Execute surfaces as a definitive failure.
 		if p.QueueIDToReplace > 0 {
-			if err := e.validateQueueItem(p.MediaType, p.QueueIDToReplace, ic, rc, sc); err != nil {
+			if err := e.validateQueueItem(p.MediaType, p.QueueIDToReplace, ic, rc, sc, cc); err != nil {
 				return "", err
 			}
 		}
-		return mcp.GrabReleaseHelper(rc, sc, p.MediaType, p.GUID, p.IndexerID, p.QueueIDToReplace)
+		return mcp.GrabReleaseHelper(rc, sc, cc, p.MediaType, p.GUID, p.IndexerID, p.QueueIDToReplace)
 
 	case ActionRemediateQueue:
 		var p RemediateQueueParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", fmt.Errorf("decode remediate_queue params: %w", err)
 		}
-		if err := e.validateQueueItem(p.MediaType, p.QueueID, ic, rc, sc); err != nil {
+		if err := e.validateQueueItem(p.MediaType, p.QueueID, ic, rc, sc, cc); err != nil {
 			return "", err
 		}
-		return mcp.RemediateQueueItemHelper(rc, sc, p.MediaType, p.QueueID, p.Action)
+		return mcp.RemediateQueueItemHelper(rc, sc, cc, p.MediaType, p.QueueID, p.Action)
 
 	case ActionManualImport:
 		var p ManualImportParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", fmt.Errorf("decode manual_import params: %w", err)
 		}
-		if err := e.validateQueueItem(p.MediaType, p.QueueID, ic, rc, sc); err != nil {
+		if err := e.validateQueueItem(p.MediaType, p.QueueID, ic, rc, sc, cc); err != nil {
 			return "", err
 		}
-		return mcp.ExecuteManualImportHelper(rc, sc, p.MediaType, p.QueueID, p.Force)
+		return mcp.ExecuteManualImportHelper(rc, sc, cc, p.MediaType, p.QueueID, p.Force)
 
 	case ActionTriggerSearch:
 		var p TriggerSearchParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", fmt.Errorf("decode trigger_search params: %w", err)
 		}
-		return mcp.TriggerSearchHelper(e.bridge, rc, sc, p.MediaType, p.TmdbID, p.Season)
+		var bookIDs []int
+		if p.BookID != 0 {
+			bookIDs = []int{p.BookID}
+		}
+		return mcp.TriggerSearchHelper(e.bridge, rc, sc, cc, p.MediaType, p.TmdbID, p.Season, p.AuthorID, bookIDs)
 
 	case ActionRescan:
 		var p RescanParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return "", fmt.Errorf("decode rescan params: %w", err)
 		}
-		return mcp.RescanMediaHelper(e.bridge, rc, sc, p.MediaType, p.TmdbID)
+		return mcp.RescanMediaHelper(e.bridge, rc, sc, cc, p.MediaType, p.TmdbID, p.AuthorID)
 
 	default:
 		return "", fmt.Errorf("unknown action kind: %s", kind)
@@ -130,29 +144,34 @@ func (e *Executor) loadIssueContext(issueID int64) (issueContext, error) {
 	return issueContext{instanceID: instanceID.String, downloadID: downloadID.String}, nil
 }
 
-// clientsFor resolves the Radarr and Sonarr clients for the issue. If the issue
-// carries a specific instance_id, that instance's client is used; otherwise the
-// default instance for each service is resolved. A nil client is fine — the
-// shared helpers return a "<service> is not configured" message for the wrong
-// media_type. An error is only returned when a NAMED instance fails to resolve.
-func (e *Executor) clientsFor(ic issueContext) (*radarr.Client, *sonarr.Client, error) {
+// clientsFor resolves the Radarr, Sonarr, and Chaptarr clients for the issue. If
+// the issue carries a specific instance_id, that instance's client is used;
+// otherwise the default instance for each service is resolved. A nil client is
+// fine — the shared helpers return a "<service> is not configured" message for
+// the wrong media_type. An error is only returned when a NAMED instance fails to
+// resolve as ANY of the three service kinds.
+func (e *Executor) clientsFor(ic issueContext) (*radarr.Client, *sonarr.Client, *chaptarr.Client, error) {
 	if e.registry == nil {
-		return nil, nil, fmt.Errorf("instance registry not configured")
+		return nil, nil, nil, fmt.Errorf("instance registry not configured")
 	}
 	if ic.instanceID != "" {
-		// A specific instance was recorded (auto issue). Try it as both a Radarr and
-		// a Sonarr instance; whichever matches yields a client, the other stays nil.
+		// A specific instance was recorded (auto issue). Try it as a Radarr, a
+		// Sonarr, and a Chaptarr instance; whichever matches yields a client, the
+		// others stay nil.
 		rc, rErr := e.registry.GetRadarrClient(ic.instanceID)
 		sc, sErr := e.registry.GetSonarrClient(ic.instanceID)
-		if rErr != nil && sErr != nil {
-			return nil, nil, fmt.Errorf("resolve instance %q: %v / %v", ic.instanceID, rErr, sErr)
+		cc, cErr := e.registry.GetChaptarrClient(ic.instanceID)
+		if rErr != nil && sErr != nil && cErr != nil {
+			return nil, nil, nil, fmt.Errorf("resolve instance %q: %v / %v / %v", ic.instanceID, rErr, sErr, cErr)
 		}
-		return rc, sc, nil
+		return rc, sc, cc, nil
 	}
-	// User issue with no instance: fall back to the default Radarr + Sonarr.
+	// User issue with no instance: fall back to the default Radarr + Sonarr +
+	// Chaptarr.
 	rc, _, _ := e.registry.GetDefaultRadarrClient()
 	sc, _, _ := e.registry.GetDefaultSonarrClient()
-	return rc, sc, nil
+	cc, _, _ := e.registry.GetDefaultChaptarrClient()
+	return rc, sc, cc, nil
 }
 
 // validateQueueItem is the stable-invariant gate for a queue-targeting action: it
@@ -162,7 +181,7 @@ func (e *Executor) clientsFor(ic issueContext) (*radarr.Client, *sonarr.Client, 
 // to a different download since the proposal. Cheap (one detailed-queue fetch)
 // and stable. A definitive mismatch returns an error so the action is marked
 // failed rather than executing against the wrong item.
-func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueContext, rc *radarr.Client, sc *sonarr.Client) error {
+func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueContext, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client) error {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -200,7 +219,25 @@ func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueCont
 		}
 		return fmt.Errorf("queue item %d is no longer in the Sonarr queue (already handled or removed); not executing", queueID)
 
+	case "book":
+		if cc == nil {
+			return nil
+		}
+		items, err := cc.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+		if err != nil {
+			return fmt.Errorf("validate queue item: %w", err)
+		}
+		for i := range items {
+			if items[i].ID == queueID {
+				if ic.downloadID != "" && items[i].DownloadID != "" && items[i].DownloadID != ic.downloadID {
+					return fmt.Errorf("queue item %d no longer matches this issue's download (it was reassigned); not executing", queueID)
+				}
+				return nil
+			}
+		}
+		return fmt.Errorf("queue item %d is no longer in the Chaptarr queue (already handled or removed); not executing", queueID)
+
 	default:
-		return fmt.Errorf("media_type must be \"movie\" or \"tv\"")
+		return fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
 	}
 }

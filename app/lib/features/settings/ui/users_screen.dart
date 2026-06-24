@@ -121,10 +121,9 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   Future<void> _resendInvite(UserSummary user) async {
     String? link;
     try {
-      final resp =
-          await ref.read(authProvider.notifier).generateConnectToken(
-                user.username,
-              );
+      final resp = await ref.read(authProvider.notifier).generateConnectToken(
+            user.username,
+          );
       link = resp.link;
     } catch (e) {
       if (mounted) {
@@ -260,7 +259,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_friendlyError(e, 'Failed to update sign-in methods')),
+            content:
+                Text(_friendlyError(e, 'Failed to update sign-in methods')),
           ),
         );
       }
@@ -478,7 +478,7 @@ class _UserTile extends StatelessWidget {
             value: 'request_settings',
             child: ListTile(
               leading: Icon(Icons.tune),
-              title: Text('Request settings…'),
+              title: Text('User settings…'),
               contentPadding: EdgeInsets.zero,
             ),
           ),
@@ -528,12 +528,14 @@ class _UserTile extends StatelessWidget {
         // Admins always keep both methods, so toggles are only for other users.
         if (!user.isAdmin)
           PopupMenuItem(
-            value: user.passwordEnabled ? 'disable_password' : 'enable_password',
+            value:
+                user.passwordEnabled ? 'disable_password' : 'enable_password',
             child: ListTile(
               leading: Icon(
                   user.passwordEnabled ? Icons.lock_outline : Icons.lock_open),
-              title: Text(
-                  user.passwordEnabled ? 'Disable password' : 'Enable password'),
+              title: Text(user.passwordEnabled
+                  ? 'Disable password'
+                  : 'Enable password'),
               contentPadding: EdgeInsets.zero,
             ),
           ),

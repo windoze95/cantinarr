@@ -206,6 +206,22 @@ class RequestSettingsService {
         data: settings.toJson());
   }
 
+  /// The user's per-service default-instance overrides, keyed by service type.
+  /// Only set overrides are returned; absent keys inherit the global default.
+  Future<Map<String, String>> getUserDefaultInstances(int userId) async {
+    final resp = await _dio.get('/api/admin/users/$userId/default-instances');
+    final data = (resp.data as Map?) ?? const {};
+    return data.map((k, v) => MapEntry(k.toString(), v.toString()));
+  }
+
+  /// Sets the user's default-instance overrides. A null value clears that
+  /// override (for chaptarr, clearing revokes access). Returns the updated map.
+  Future<void> updateUserDefaultInstances(
+      int userId, Map<String, String?> defaults) async {
+    await _dio.put('/api/admin/users/$userId/default-instances',
+        data: defaults);
+  }
+
   Future<List<PendingRequestItem>> listPending() async {
     final resp = await _dio.get('/api/admin/requests');
     return ((resp.data as List?) ?? const [])
@@ -213,7 +229,8 @@ class RequestSettingsService {
         .toList();
   }
 
-  Future<void> approve(int id, {String? seasonScope, int? qualityProfileId}) async {
+  Future<void> approve(int id,
+      {String? seasonScope, int? qualityProfileId}) async {
     final body = <String, dynamic>{};
     if (seasonScope != null) body['season_scope'] = seasonScope;
     if (qualityProfileId != null && qualityProfileId != 0) {

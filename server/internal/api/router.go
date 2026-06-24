@@ -138,6 +138,13 @@ func NewRouter(
 			// Send a test push to a specific user's devices (delivery diagnostics).
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/test-push", pushHandler.TestPushToUser)
 
+			// Per-user default *arr instance overrides (admin-managed). Pins which
+			// instance is a given user's default source per service type, and —
+			// for service types with no global default (chaptarr) — grants the
+			// user access to that instance.
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/default-instances", instanceHandler.GetUserDefaultInstances)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/default-instances", instanceHandler.UpdateUserDefaultInstances)
+
 			// Credential management
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/credentials", credHandler.Get)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/credentials", credHandler.Update)
@@ -281,7 +288,7 @@ func NewRouter(
 			// every other request (writes, commands, interactive search, config,
 			// and non-arr services) requires instances:manage. See
 			// auth.RequireArrProxyAccess.
-			r.With(auth.RequireArrProxyAccess).HandleFunc("/instances/{instanceID}/*", proxyHandler.InstanceProxy())
+			r.With(auth.RequireArrProxyAccess(instanceStore)).HandleFunc("/instances/{instanceID}/*", proxyHandler.InstanceProxy())
 		})
 
 		// Download client routes (admin only)
@@ -378,31 +385,67 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 			IsDefault   bool   `json:"is_default"`
 		}
 
-		var instances []instanceInfo
+		// The config payload is per-user: the default instance for a service
+		// type can be overridden per user (admin-managed), and service types
+		// with no global default (chaptarr) are visible only to users an admin
+		// has explicitly granted an instance. Admins see every instance.
+		claims := auth.GetClaims(r.Context())
+		var userID int64
+		isAdmin := false
+		if claims != nil {
+			userID = claims.UserID
+			isAdmin = auth.HasPermission(claims.Role, auth.PermissionInstancesManage)
+		}
+		overrides := map[string]string{}
+		if userID != 0 {
+			if ov, err := store.ListUserDefaults(userID); err == nil {
+				overrides = ov
+			}
+		}
+
+		instances := []instanceInfo{}
 		allInstances, err := store.ListAll()
 		if err == nil {
 			for _, inst := range allInstances {
+				// Access gate for service types without a global default: a
+				// chaptarr instance is visible only to admins or the specific
+				// user granted THAT instance.
+				if inst.ServiceType == "chaptarr" && !isAdmin && overrides["chaptarr"] != inst.ID {
+					continue
+				}
+				// Effective default: a per-user override wins over the global
+				// is_default flag for its service type.
+				isDefault := inst.IsDefault
+				if pinned, ok := overrides[inst.ServiceType]; ok {
+					isDefault = pinned == inst.ID
+				}
 				instances = append(instances, instanceInfo{
 					ID:          inst.ID,
 					ServiceType: inst.ServiceType,
 					Name:        inst.Name,
-					IsDefault:   inst.IsDefault,
+					IsDefault:   isDefault,
 				})
 			}
 		}
-		if instances == nil {
-			instances = []instanceInfo{}
-		}
 
-		// Derive radarr/sonarr availability from instances
-		hasRadarr := false
-		hasSonarr := false
+		// Derive service availability from the per-user filtered instance list,
+		// so a user without a chaptarr grant sees services.chaptarr == false.
+		services := map[string]bool{
+			"radarr":   false,
+			"sonarr":   false,
+			"chaptarr": false,
+			"ai":       creds.IsAIConfigured(),
+			"tmdb":     creds.IsConfigured(credentials.KeyTMDBAccessToken),
+			"trakt":    creds.IsConfigured(credentials.KeyTraktClientID),
+		}
 		for _, inst := range instances {
-			if inst.ServiceType == "radarr" {
-				hasRadarr = true
-			}
-			if inst.ServiceType == "sonarr" {
-				hasSonarr = true
+			switch inst.ServiceType {
+			case "radarr":
+				services["radarr"] = true
+			case "sonarr":
+				services["sonarr"] = true
+			case "chaptarr":
+				services["chaptarr"] = true
 			}
 		}
 
@@ -413,14 +456,8 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"server_name": cfg.ServerName,
-			"services": map[string]bool{
-				"radarr": hasRadarr,
-				"sonarr": hasSonarr,
-				"ai":     creds.IsAIConfigured(),
-				"tmdb":   creds.IsConfigured(credentials.KeyTMDBAccessToken),
-				"trakt":  creds.IsConfigured(credentials.KeyTraktClientID),
-			},
+			"server_name":     cfg.ServerName,
+			"services":        services,
 			"instances":       instances,
 			"issues_enabled":  remSettings.Enabled,
 			"allow_reporting": remSettings.AllowReporting,

@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -357,6 +358,7 @@ func (h *Hub) pollLoop(ctx context.Context) {
 		case <-arrTicker.C:
 			h.pollAllRadarr()
 			h.pollAllSonarr()
+			h.pollAllChaptarr()
 		case <-downloadsTicker.C:
 			h.pollAllDownloadClients()
 		}
@@ -647,6 +649,23 @@ func (h *Hub) pollAllSonarr() {
 	}
 }
 
+func (h *Hub) pollAllChaptarr() {
+	if h.store == nil || h.registry == nil {
+		return
+	}
+	instances, err := h.store.List("chaptarr")
+	if err != nil {
+		return
+	}
+	for _, inst := range instances {
+		client, err := h.registry.GetChaptarrClient(inst.ID)
+		if err != nil {
+			continue
+		}
+		h.pollChaptarrInstance(inst.ID, client)
+	}
+}
+
 func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	queue, err := client.GetQueue()
 	if err != nil {
@@ -790,4 +809,24 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 
 	// Auto-dispatch pass (see pollRadarrInstance). No-op when the opener is nil.
 	h.autoDispatchSonarr(instanceID, client)
+}
+
+// pollChaptarrInstance emits an arr_queue_changed invalidation ping whenever the
+// instance's download queue composition changes. Unlike the Radarr/Sonarr
+// pollers it does not emit per-item download_progress events: Chaptarr books
+// carry no TMDB id, which those events key on. There is also no auto-dispatch
+// pass; remediation does not cover chaptarr.
+func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
+	queue, err := client.GetQueue()
+	if err != nil {
+		log.Printf("websocket: poll chaptarr queue (%s): %v", instanceID, err)
+		return
+	}
+
+	tuples := make([]string, 0, len(queue))
+	for _, item := range queue {
+		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.BookID, item.Status, item.Sizeleft))
+	}
+
+	h.noteArrQueueComposition(instanceID, "chaptarr", tuples)
 }

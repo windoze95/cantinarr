@@ -83,6 +83,12 @@ class BackendConnection {
   List<ServiceInstance> get sonarrInstances =>
       instances.where((i) => i.serviceType == 'sonarr').toList();
 
+  /// Get all Chaptarr (books) instances. The backend only includes a chaptarr
+  /// instance in this list for users an admin has explicitly granted access, so
+  /// its mere presence means the user may see the Books module.
+  List<ServiceInstance> get chaptarrInstances =>
+      instances.where((i) => i.serviceType == 'chaptarr').toList();
+
   /// Get all download client instances
   /// (SABnzbd, qBittorrent, NZBGet or Transmission).
   List<ServiceInstance> get downloadInstances => instances
@@ -110,12 +116,21 @@ class BackendConnection {
     if (sonarr.isEmpty) return null;
     return sonarr.firstWhere((i) => i.isDefault, orElse: () => sonarr.first);
   }
+
+  /// Get the default Chaptarr instance, if any (the user's granted instance).
+  ServiceInstance? get defaultChaptarrInstance {
+    final chaptarr = chaptarrInstances;
+    if (chaptarr.isEmpty) return null;
+    return chaptarr.firstWhere((i) => i.isDefault,
+        orElse: () => chaptarr.first);
+  }
 }
 
 /// Which services the backend has configured.
 class AvailableServices {
   final bool radarr;
   final bool sonarr;
+  final bool chaptarr;
   final bool ai;
   final bool tmdb;
   final bool trakt;
@@ -123,6 +138,7 @@ class AvailableServices {
   const AvailableServices({
     this.radarr = false,
     this.sonarr = false,
+    this.chaptarr = false,
     this.ai = false,
     this.tmdb = false,
     this.trakt = false,
@@ -132,6 +148,7 @@ class AvailableServices {
       AvailableServices(
         radarr: json['radarr'] as bool? ?? false,
         sonarr: json['sonarr'] as bool? ?? false,
+        chaptarr: json['chaptarr'] as bool? ?? false,
         ai: json['ai'] as bool? ?? false,
         tmdb: json['tmdb'] as bool? ?? false,
         trakt: json['trakt'] as bool? ?? false,
@@ -140,6 +157,7 @@ class AvailableServices {
   Map<String, dynamic> toJson() => {
         'radarr': radarr,
         'sonarr': sonarr,
+        'chaptarr': chaptarr,
         'ai': ai,
         'tmdb': tmdb,
         'trakt': trakt,

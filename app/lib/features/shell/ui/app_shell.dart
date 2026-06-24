@@ -888,6 +888,8 @@ class _AppShellState extends ConsumerState<AppShell>
           instances.setActiveDownloadInstance(instanceId);
         case ModuleType.tautulli:
           instances.setActiveTautulliInstance(instanceId);
+        case ModuleType.chaptarr:
+          instances.setActiveChaptarrInstance(instanceId);
         default:
           break;
       }
@@ -899,6 +901,8 @@ class _AppShellState extends ConsumerState<AppShell>
         context.go('/radarr/library');
       case ModuleType.sonarr:
         context.go('/sonarr/library');
+      case ModuleType.chaptarr:
+        context.go('/chaptarr/library');
       case ModuleType.downloads:
         context.go('/downloads/queue');
       case ModuleType.tautulli:

@@ -6,8 +6,18 @@ import (
 	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
+)
+
+// chaptarrQueuePage / chaptarrQueuePageSize drive the paginated
+// chaptarr.GetQueueDetailed calls (the client loops from this page until every
+// record is fetched). Radarr/Sonarr expose a non-paginated GetQueueDetailed, so
+// these are book-only.
+const (
+	chaptarrQueuePage     = 1
+	chaptarrQueuePageSize = 100
 )
 
 // --- Import Doctor: shared signal mapping ---
@@ -30,6 +40,24 @@ func sonarrSignal(item sonarr.DetailedQueueItem) arr.QueueSignal {
 
 // radarrSignal projects a Radarr queue item into the neutral classifier input.
 func radarrSignal(item radarr.DetailedQueueItem) arr.QueueSignal {
+	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
+	for _, m := range item.StatusMessages {
+		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
+	}
+	return arr.QueueSignal{
+		Status:                item.Status,
+		TrackedDownloadStatus: item.TrackedDownloadStatus,
+		TrackedDownloadState:  item.TrackedDownloadState,
+		ErrorMessage:          item.ErrorMessage,
+		StatusMessages:        messages,
+		Protocol:              item.Protocol,
+	}
+}
+
+// chaptarrSignal projects a Chaptarr queue item into the neutral classifier
+// input. Chaptarr's queue item is structurally identical to Sonarr's for the
+// fields the classifier reasons over.
+func chaptarrSignal(item chaptarr.QueueItem) arr.QueueSignal {
 	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
 	for _, m := range item.StatusMessages {
 		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
@@ -71,6 +99,19 @@ func radarrQueueTitle(item radarr.DetailedQueueItem) string {
 	return fmt.Sprintf("movie %d", item.MovieID)
 }
 
+func chaptarrQueueTitle(item chaptarr.QueueItem) string {
+	if item.Book != nil && item.Book.Title != "" {
+		if item.Author != nil && item.Author.AuthorName != "" {
+			return fmt.Sprintf("%s — %s", item.Author.AuthorName, item.Book.Title)
+		}
+		return item.Book.Title
+	}
+	if item.Title != "" {
+		return item.Title
+	}
+	return fmt.Sprintf("book %d", item.BookID)
+}
+
 // renderDiagnosis appends a problem item's diagnosis to the builder, including
 // the exact next MCP tool call(s) to run for each suggested action so a weak
 // agent can execute verbatim. tmdbID is the resolved TMDB id of the underlying
@@ -104,9 +145,14 @@ func nextCalls(mediaType string, queueID, tmdbID int, verbs []string) string {
 	for _, v := range verbs {
 		switch v {
 		case arr.ActionProcess, arr.ActionRescan:
-			// rescan_media runs Rescan{Series,Movie} then the import pass. It
-			// needs a tmdb_id; the Sonarr queue item only carries a TVDB id, so
-			// fall back to naming the tool when we could not resolve one.
+			// rescan_media runs Rescan{Series,Movie,Author} then the import pass.
+			// For movies/TV it needs a tmdb_id (the Sonarr queue item only carries
+			// a TVDB id, so we fall back to naming the tool when we could not
+			// resolve one). Books carry no TMDB id at all — rescan_media takes an
+			// author_id there — so book always renders a resolve hint.
+			if mediaType == "book" {
+				return "rescan_media (resolve this item's author_id first — get_library media_type=book by author/title — then call it with that author_id)"
+			}
 			if tmdbID != 0 {
 				return toolCall("rescan_media", fmt.Sprintf(`{"tmdb_id": %d, "media_type": %q}`, tmdbID, mediaType))
 			}
@@ -134,7 +180,7 @@ func toolCall(name, args string) string {
 // are skipped so the agent only sees actionable config problems). The generic
 // parameter lets the one renderer serve both sonarr.HealthCheck and
 // radarr.HealthCheck, which are structurally identical but distinct types.
-func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck](label string, checks []T) string {
+func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck | chaptarr.HealthCheck](label string, checks []T) string {
 	var sb strings.Builder
 	shown := 0
 	for _, c := range checks {
@@ -143,6 +189,8 @@ func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck](label string
 		case sonarr.HealthCheck:
 			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
 		case radarr.HealthCheck:
+			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
+		case chaptarr.HealthCheck:
 			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
 		}
 		if strings.EqualFold(ctype, "ok") {
@@ -206,6 +254,22 @@ func (s *ToolServer) getArrHealth(input json.RawMessage) (*ToolResult, error) {
 				return nil, err
 			}
 			sections = append(sections, renderHealthSection("Sonarr", checks))
+		}
+	}
+
+	if mediaType == "book" || mediaType == "all" {
+		client := s.GetChaptarr()
+		if client == nil {
+			if mediaType == "book" {
+				return &ToolResult{Text: "Chaptarr is not configured."}, nil
+			}
+			sections = append(sections, "Chaptarr is not configured.")
+		} else {
+			checks, err := client.GetHealth()
+			if err != nil {
+				return nil, err
+			}
+			sections = append(sections, renderHealthSection("Chaptarr", checks))
 		}
 	}
 
@@ -285,6 +349,33 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 		}
 	}
 
+	if mediaType == "book" || mediaType == "all" {
+		chaptarrClient := s.GetChaptarr()
+		if chaptarrClient == nil {
+			if mediaType == "book" {
+				return &ToolResult{Text: "Chaptarr is not configured."}, nil
+			}
+			notes = append(notes, "Chaptarr is not configured.")
+		} else {
+			items, err := chaptarrClient.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+			if err != nil {
+				return nil, err
+			}
+			for _, item := range items {
+				d := arr.Diagnose(chaptarrSignal(item))
+				if d.Severity == arr.SeverityOK {
+					healthy++
+					continue
+				}
+				problems++
+				// Chaptarr books carry no TMDB id, so rescan_media can't be
+				// resolved cheaply here; pass 0 and let nextCalls name the tool
+				// with a resolve hint instead.
+				renderDiagnosis(&sb, "book", item.ID, 0, chaptarrQueueTitle(item), d)
+			}
+		}
+	}
+
 	var header strings.Builder
 	if problems == 0 {
 		header.WriteString("Import Doctor: no queue problems found.")
@@ -324,6 +415,20 @@ func findRadarrQueueItem(client *radarr.Client, queueID int) (*radarr.DetailedQu
 // findSonarrQueueItem returns the queue item with the given id, or nil.
 func findSonarrQueueItem(client *sonarr.Client, queueID int) (*sonarr.DetailedQueueItem, error) {
 	items, err := client.GetQueueDetailed()
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		if items[i].ID == queueID {
+			return &items[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// findChaptarrQueueItem returns the queue item with the given id, or nil.
+func findChaptarrQueueItem(client *chaptarr.Client, queueID int) (*chaptarr.DetailedQueueItem, error) {
+	items, err := client.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -442,18 +547,58 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage) (*ToolResu
 		sb.WriteString("\n\nUse execute_manual_import to import these (add force=true to import despite permanent rejections).")
 		return &ToolResult{Text: sb.String()}, nil
 
+	case "book":
+		client := s.GetChaptarr()
+		if client == nil {
+			return &ToolResult{Text: "Chaptarr is not configured."}, nil
+		}
+		item, err := findChaptarrQueueItem(client, params.QueueID)
+		if err != nil {
+			return nil, err
+		}
+		if item == nil {
+			return &ToolResult{Text: fmt.Sprintf("No book queue item with id %d. Run get_queue or diagnose_queue for current ids.", params.QueueID)}, nil
+		}
+		if item.DownloadID == "" {
+			return &ToolResult{Text: fmt.Sprintf("Queue item %d has no download-client id yet, so its files cannot be inspected. Wait until it has been handed to the download client.", params.QueueID)}, nil
+		}
+		candidates, err := client.GetManualImportCandidates(item.DownloadID)
+		if err != nil {
+			return nil, err
+		}
+		if len(candidates) == 0 {
+			return &ToolResult{Text: fmt.Sprintf("No importable files found for %s. The folder may be empty, an unextracted archive, or inaccessible.", chaptarrQueueTitle(*item))}, nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%d candidate file(s) for %s:", len(candidates), chaptarrQueueTitle(*item))
+		for _, c := range candidates {
+			fmt.Fprintf(&sb, "\n- %s (%s)", c.Name, humanBytes(float64(c.Size)))
+			if c.BookID != 0 {
+				fmt.Fprintf(&sb, "\n  maps to book id %d", c.BookID)
+			} else {
+				sb.WriteString("\n  not matched to a book (cannot be imported without a book mapping)")
+			}
+			if rej := formatRejections(toRejectionViews(c.Rejections)); rej != "" {
+				fmt.Fprintf(&sb, "\n  rejections: %s", rej)
+			}
+		}
+		sb.WriteString("\n\nUse execute_manual_import to import these (add force=true to import despite permanent rejections).")
+		return &ToolResult{Text: sb.String()}, nil
+
 	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
+		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", or \"book\"."}, nil
 	}
 }
 
-func toRejectionViews[T sonarr.ManualImportRejection | radarr.ManualImportRejection](rejections []T) []arr.ManualImportRejectionView {
+func toRejectionViews[T sonarr.ManualImportRejection | radarr.ManualImportRejection | chaptarr.ManualImportRejection](rejections []T) []arr.ManualImportRejectionView {
 	out := make([]arr.ManualImportRejectionView, 0, len(rejections))
 	for _, r := range rejections {
 		switch v := any(r).(type) {
 		case sonarr.ManualImportRejection:
 			out = append(out, arr.ManualImportRejectionView{Reason: v.Reason, Type: v.Type})
 		case radarr.ManualImportRejection:
+			out = append(out, arr.ManualImportRejectionView{Reason: v.Reason, Type: v.Type})
+		case chaptarr.ManualImportRejection:
 			out = append(out, arr.ManualImportRejectionView{Reason: v.Reason, Type: v.Type})
 		}
 	}
@@ -481,7 +626,7 @@ func (s *ToolServer) executeManualImport(input json.RawMessage) (*ToolResult, er
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := ExecuteManualImportHelper(s.GetRadarr(), s.GetSonarr(), params.MediaType, params.QueueID, params.Force)
+	text, err := ExecuteManualImportHelper(s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.QueueID, params.Force)
 	if err != nil {
 		return nil, err
 	}
@@ -527,7 +672,7 @@ func (s *ToolServer) remediateQueueItem(input json.RawMessage) (*ToolResult, err
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := RemediateQueueItemHelper(s.GetRadarr(), s.GetSonarr(), params.MediaType, params.QueueID, params.Action)
+	text, err := RemediateQueueItemHelper(s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.QueueID, params.Action)
 	if err != nil {
 		return nil, err
 	}
@@ -540,11 +685,12 @@ func (s *ToolServer) rescanMedia(input json.RawMessage) (*ToolResult, error) {
 	var params struct {
 		TmdbID    int    `json:"tmdb_id"`
 		MediaType string `json:"media_type"`
+		AuthorID  int    `json:"author_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := RescanMediaHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), params.MediaType, params.TmdbID)
+	text, err := RescanMediaHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.TmdbID, params.AuthorID)
 	if err != nil {
 		return nil, err
 	}

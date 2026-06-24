@@ -41,21 +41,31 @@ type ManualImportParams struct {
 	Force     bool   `json:"force,omitempty"`
 }
 
-// TriggerSearchParams starts an automatic search.
+// TriggerSearchParams starts an automatic search. Movies/TV target a library
+// item by tmdb_id (TV optionally narrowed to a season); books carry no TMDB id,
+// so they target a single book by book_id or all of an author's monitored books
+// by author_id. The book fields are omitempty so a movie/TV action's canonical
+// JSON (and therefore its fingerprint) is unchanged by their addition.
 type TriggerSearchParams struct {
 	MediaType string `json:"media_type"`
-	TmdbID    int    `json:"tmdb_id"`
+	TmdbID    int    `json:"tmdb_id,omitempty"`
 	Season    *int   `json:"season,omitempty"`
+	AuthorID  int    `json:"author_id,omitempty"`
+	BookID    int    `json:"book_id,omitempty"`
 }
 
-// RescanParams rescans the media on disk and runs the import pass.
+// RescanParams rescans the media on disk and runs the import pass. Movies/TV are
+// addressed by tmdb_id; books carry no TMDB id and are addressed by author_id.
+// author_id is omitempty so a movie/TV action's canonical JSON (and fingerprint)
+// is unchanged by its addition.
 type RescanParams struct {
 	MediaType string `json:"media_type"`
-	TmdbID    int    `json:"tmdb_id"`
+	TmdbID    int    `json:"tmdb_id,omitempty"`
+	AuthorID  int    `json:"author_id,omitempty"`
 }
 
 // validMediaType reports whether m is a supported media type.
-func validMediaType(m string) bool { return m == "movie" || m == "tv" }
+func validMediaType(m string) bool { return m == "movie" || m == "tv" || m == "book" }
 
 // validateActionParams validates params against the kind's schema and returns the
 // CANONICAL JSON form to store + fingerprint. Canonicalization is by struct-field
@@ -71,7 +81,7 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\" or \"tv\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
 		}
 		if p.GUID == "" || p.IndexerID == 0 {
 			return nil, fmt.Errorf("grab_release requires guid and indexer_id (from search_releases)")
@@ -87,7 +97,7 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\" or \"tv\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
 		}
 		if p.QueueID <= 0 {
 			return nil, fmt.Errorf("remediate_queue requires a positive queue_id")
@@ -105,7 +115,7 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\" or \"tv\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
 		}
 		if p.QueueID <= 0 {
 			return nil, fmt.Errorf("manual_import requires a positive queue_id")
@@ -118,10 +128,26 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\" or \"tv\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
 		}
-		if p.TmdbID <= 0 {
-			return nil, fmt.Errorf("trigger_search requires a positive tmdb_id")
+		if p.MediaType == "book" {
+			// Books carry no TMDB id: target a single book by book_id or all of
+			// an author's monitored books by author_id. Reject a stray tmdb_id so
+			// only the documented book params are ever stored/fingerprinted.
+			if p.TmdbID != 0 {
+				return nil, fmt.Errorf("trigger_search for a book must not set tmdb_id")
+			}
+			if p.AuthorID <= 0 && p.BookID <= 0 {
+				return nil, fmt.Errorf("trigger_search for a book requires a positive author_id or book_id")
+			}
+		} else {
+			// Movies/TV are addressed by tmdb_id; the book fields don't apply.
+			if p.AuthorID != 0 || p.BookID != 0 {
+				return nil, fmt.Errorf("author_id and book_id apply only to media_type book")
+			}
+			if p.TmdbID <= 0 {
+				return nil, fmt.Errorf("trigger_search requires a positive tmdb_id")
+			}
 		}
 		return canonicalJSON(p)
 
@@ -131,10 +157,23 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, err
 		}
 		if !validMediaType(p.MediaType) {
-			return nil, fmt.Errorf("media_type must be \"movie\" or \"tv\"")
+			return nil, fmt.Errorf("media_type must be \"movie\", \"tv\", or \"book\"")
 		}
-		if p.TmdbID <= 0 {
-			return nil, fmt.Errorf("rescan requires a positive tmdb_id")
+		if p.MediaType == "book" {
+			// Books carry no TMDB id and are rescanned by author_id.
+			if p.TmdbID != 0 {
+				return nil, fmt.Errorf("rescan for a book must not set tmdb_id")
+			}
+			if p.AuthorID <= 0 {
+				return nil, fmt.Errorf("rescan for a book requires a positive author_id")
+			}
+		} else {
+			if p.AuthorID != 0 {
+				return nil, fmt.Errorf("author_id applies only to media_type book")
+			}
+			if p.TmdbID <= 0 {
+				return nil, fmt.Errorf("rescan requires a positive tmdb_id")
+			}
 		}
 		return canonicalJSON(p)
 

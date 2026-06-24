@@ -6,20 +6,24 @@ import '../models/backend_connection.dart';
 class InstanceState {
   final List<ServiceInstance> radarrInstances;
   final List<ServiceInstance> sonarrInstances;
+  final List<ServiceInstance> chaptarrInstances;
   final List<ServiceInstance> downloadInstances;
   final List<ServiceInstance> tautulliInstances;
   final String? activeRadarrInstanceId;
   final String? activeSonarrInstanceId;
+  final String? activeChaptarrInstanceId;
   final String? activeDownloadInstanceId;
   final String? activeTautulliInstanceId;
 
   const InstanceState({
     this.radarrInstances = const [],
     this.sonarrInstances = const [],
+    this.chaptarrInstances = const [],
     this.downloadInstances = const [],
     this.tautulliInstances = const [],
     this.activeRadarrInstanceId,
     this.activeSonarrInstanceId,
+    this.activeChaptarrInstanceId,
     this.activeDownloadInstanceId,
     this.activeTautulliInstanceId,
   });
@@ -27,22 +31,27 @@ class InstanceState {
   InstanceState copyWith({
     List<ServiceInstance>? radarrInstances,
     List<ServiceInstance>? sonarrInstances,
+    List<ServiceInstance>? chaptarrInstances,
     List<ServiceInstance>? downloadInstances,
     List<ServiceInstance>? tautulliInstances,
     String? activeRadarrInstanceId,
     String? activeSonarrInstanceId,
+    String? activeChaptarrInstanceId,
     String? activeDownloadInstanceId,
     String? activeTautulliInstanceId,
   }) =>
       InstanceState(
         radarrInstances: radarrInstances ?? this.radarrInstances,
         sonarrInstances: sonarrInstances ?? this.sonarrInstances,
+        chaptarrInstances: chaptarrInstances ?? this.chaptarrInstances,
         downloadInstances: downloadInstances ?? this.downloadInstances,
         tautulliInstances: tautulliInstances ?? this.tautulliInstances,
         activeRadarrInstanceId:
             activeRadarrInstanceId ?? this.activeRadarrInstanceId,
         activeSonarrInstanceId:
             activeSonarrInstanceId ?? this.activeSonarrInstanceId,
+        activeChaptarrInstanceId:
+            activeChaptarrInstanceId ?? this.activeChaptarrInstanceId,
         activeDownloadInstanceId:
             activeDownloadInstanceId ?? this.activeDownloadInstanceId,
         activeTautulliInstanceId:
@@ -71,6 +80,19 @@ class InstanceState {
     }
     return sonarrInstances.firstWhere((i) => i.isDefault,
         orElse: () => sonarrInstances.first);
+  }
+
+  /// Get the active Chaptarr instance, falling back to default.
+  ServiceInstance? get activeChaptarrInstance {
+    if (chaptarrInstances.isEmpty) return null;
+    if (activeChaptarrInstanceId != null) {
+      final found = chaptarrInstances
+          .where((i) => i.id == activeChaptarrInstanceId)
+          .toList();
+      if (found.isNotEmpty) return found.first;
+    }
+    return chaptarrInstances.firstWhere((i) => i.isDefault,
+        orElse: () => chaptarrInstances.first);
   }
 
   /// Get the active download client instance, falling back to default.
@@ -109,12 +131,14 @@ class InstanceNotifier extends Notifier<InstanceState> {
 
     final radarr = connection.radarrInstances;
     final sonarr = connection.sonarrInstances;
+    final chaptarr = connection.chaptarrInstances;
     final downloads = connection.downloadInstances;
     final tautulli = connection.tautulliInstances;
 
     return InstanceState(
       radarrInstances: radarr,
       sonarrInstances: sonarr,
+      chaptarrInstances: chaptarr,
       downloadInstances: downloads,
       tautulliInstances: tautulli,
       activeRadarrInstanceId: radarr.isNotEmpty
@@ -123,6 +147,11 @@ class InstanceNotifier extends Notifier<InstanceState> {
           : null,
       activeSonarrInstanceId: sonarr.isNotEmpty
           ? (sonarr.firstWhere((i) => i.isDefault, orElse: () => sonarr.first))
+              .id
+          : null,
+      activeChaptarrInstanceId: chaptarr.isNotEmpty
+          ? (chaptarr.firstWhere((i) => i.isDefault,
+                  orElse: () => chaptarr.first))
               .id
           : null,
       activeDownloadInstanceId: downloads.isNotEmpty
@@ -142,6 +171,10 @@ class InstanceNotifier extends Notifier<InstanceState> {
 
   void setActiveSonarrInstance(String instanceId) {
     state = state.copyWith(activeSonarrInstanceId: instanceId);
+  }
+
+  void setActiveChaptarrInstance(String instanceId) {
+    state = state.copyWith(activeChaptarrInstanceId: instanceId);
   }
 
   void setActiveDownloadInstance(String instanceId) {
