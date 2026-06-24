@@ -12,6 +12,7 @@ import '../features/chaptarr/ui/chaptarr_home_screen.dart';
 import '../features/chaptarr/ui/chaptarr_module_shell.dart';
 import '../features/chaptarr/ui/chaptarr_queue_screen.dart';
 import '../features/chaptarr/ui/chaptarr_wanted_screen.dart';
+import '../features/dashboard/ui/dashboard_books_tab.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_releases_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
@@ -133,6 +134,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: '/dashboard/releases',
                     builder: (_, __) => const DashboardReleasesTab(),
+                  ),
+                ],
+              ),
+              // Books (Chaptarr) — last branch so the Books tab can be shown or
+              // hidden (per the user's chaptarr grant) without shifting the
+              // Movies/TV/Releases tab indices. The DashboardShell only surfaces
+              // the Books tab when services.chaptarr is true.
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/dashboard/books',
+                    builder: (_, __) => const DashboardBooksTab(),
                   ),
                 ],
               ),
