@@ -9,14 +9,16 @@ import '../data/chaptarr_models.dart';
 import 'chaptarr_releases_screen.dart';
 import 'widgets/book_status.dart';
 import 'widgets/format_badge.dart';
+import 'widgets/format_picker.dart';
 
-/// Opens the book detail bottom sheet for one book. Returns `true` when the
-/// caller should refresh (an Automatic/Interactive search was started from the
-/// sheet). Mirrors [showModalBottomSheet] usage around the Sonarr episode sheet.
+/// Opens the book detail bottom sheet for a title. Chaptarr stores a title's
+/// ebook and audiobook as separate records (same foreignBookId); [records] holds
+/// the 1–2 records. Returns `true` when the caller should refresh (an
+/// Automatic/Interactive search was started). Mirrors the Sonarr episode sheet.
 Future<bool?> showChaptarrBookDetailSheet(
   BuildContext context, {
   required String instanceId,
-  required int bookId,
+  required List<ChaptarrBook> records,
   String? bookTitle,
 }) {
   return showModalBottomSheet<bool>(
@@ -25,23 +27,23 @@ Future<bool?> showChaptarrBookDetailSheet(
     isScrollControlled: true,
     builder: (_) => _ChaptarrBookDetailSheet(
       instanceId: instanceId,
-      bookId: bookId,
+      records: records,
       bookTitle: bookTitle,
     ),
   );
 }
 
-/// Bottom sheet for a single book: status, overview and recent history, with
-/// Automatic/Interactive search actions. Mirrors [EpisodeDetailSheet], but
-/// fetches the book + history itself (the caller passes only ids).
+/// Bottom sheet for one title: status, formats, overview and recent history,
+/// with Automatic/Interactive search actions that prompt for a format when the
+/// title has both an ebook and an audiobook record.
 class _ChaptarrBookDetailSheet extends ConsumerStatefulWidget {
   final String instanceId;
-  final int bookId;
+  final List<ChaptarrBook> records;
   final String? bookTitle;
 
   const _ChaptarrBookDetailSheet({
     required this.instanceId,
-    required this.bookId,
+    required this.records,
     this.bookTitle,
   });
 
@@ -53,10 +55,11 @@ class _ChaptarrBookDetailSheet extends ConsumerStatefulWidget {
 class _ChaptarrBookDetailSheetState
     extends ConsumerState<_ChaptarrBookDetailSheet> {
   late final ChaptarrApiService _service;
-  ChaptarrBook? _book;
   List<ChaptarrHistoryRecord> _history = [];
-  bool _historyLoading = true; // history load (independent of the book)
-  String? _error; // book-load failure, if any
+  bool _historyLoading = true;
+
+  // The records are passed in already loaded; the primary drives the header.
+  ChaptarrBook get _primary => widget.records.first;
 
   @override
   void initState() {
@@ -65,92 +68,73 @@ class _ChaptarrBookDetailSheetState
       backendDio: ref.read(backendClientProvider),
       instanceId: widget.instanceId,
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
-  }
-
-  // Book and history load independently: a history failure must never blank out
-  // the book the sheet is for (a single try/catch around both previously left
-  // the sheet stuck on "Loading…" when the history call errored).
-  void _load() {
-    _loadBook();
-    _loadHistory();
-  }
-
-  Future<void> _loadBook() async {
-    try {
-      final book = await _service.getBookById(widget.bookId);
-      if (!mounted) return;
-      setState(() {
-        _book = book;
-        _error = null;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = '$e');
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadHistory());
   }
 
   Future<void> _loadHistory() async {
     try {
-      final history = await _service.getBookHistory(widget.bookId);
+      final history = await _service.getBookHistory(_primary.id);
       if (!mounted) return;
       setState(() {
         _history = history.take(8).toList();
         _historyLoading = false;
       });
     } catch (_) {
-      // History is best-effort: the book is already shown, so a history
-      // failure just drops to "No history yet." rather than surfacing an error.
+      // History is best-effort; the book is already shown.
       if (!mounted) return;
       setState(() => _historyLoading = false);
     }
   }
 
+  // Pick the format (when the title has both), close the sheet, then search.
   Future<void> _automaticSearch() async {
+    final chosen = await pickFormatRecord(context, widget.records);
+    if (chosen == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
     try {
-      await _service.searchBook([widget.bookId]);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Book search started')));
+      await _service.searchBook([chosen.id]);
+      messenger.showSnackBar(SnackBar(
+          content: Text(
+              'Searching for ${chaptarrFormatLabel(chosen.format)} — ${chosen.title}…')));
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
+      messenger
           .showSnackBar(SnackBar(content: Text('Failed to start search: $e')));
     }
+    if (mounted) Navigator.of(context).pop(true);
   }
 
-  void _interactiveSearch() {
-    Navigator.of(context, rootNavigator: true).push(
+  Future<void> _interactiveSearch() async {
+    final chosen = await pickFormatRecord(context, widget.records);
+    if (chosen == null || !mounted) return;
+    final nav = Navigator.of(context, rootNavigator: true);
+    Navigator.of(context).pop(true);
+    nav.push(
       MaterialPageRoute(
         builder: (_) => ChaptarrReleasesScreen(
           instanceId: widget.instanceId,
-          bookId: widget.bookId,
-          bookTitle: _book?.title ?? widget.bookTitle,
+          bookId: chosen.id,
+          bookTitle: chosen.title,
         ),
       ),
     );
   }
 
   ({String label, Color color}) get _shortStatus {
-    final book = _book;
-    if (book == null) {
-      if (_error != null) {
-        return (label: 'Unavailable', color: AppTheme.error);
-      }
-      return (label: 'Loading…', color: AppTheme.textSecondary);
-    }
-    final line = bookFileStatusLine(book);
+    final line = bookFileStatusLine(_primary);
     return (label: line.text, color: line.color);
   }
 
   @override
   Widget build(BuildContext context) {
-    final book = _book;
-    final title = book?.title ?? widget.bookTitle ?? 'Book';
+    final title = _primary.title.isNotEmpty
+        ? _primary.title
+        : (widget.bookTitle ?? 'Book');
     final status = _shortStatus;
-    final release = book?.releaseDate;
-    final formats = book?.formats.toList() ?? [];
-    formats.sort((a, b) => a.index - b.index);
+    final release = _primary.releaseDate;
+    final formats = widget.records
+        .map((r) => r.format)
+        .where((f) => f != BookFormat.unknown)
+        .toList();
 
     return Padding(
       padding:
@@ -186,9 +170,9 @@ class _ChaptarrBookDetailSheetState
                     fontSize: 20,
                     fontWeight: FontWeight.bold),
               ),
-              if (book?.author?.authorName.isNotEmpty ?? false) ...[
+              if (_primary.author?.authorName.isNotEmpty ?? false) ...[
                 const SizedBox(height: 4),
-                Text(book!.author!.authorName,
+                Text(_primary.author!.authorName,
                     style: const TextStyle(
                         color: AppTheme.textSecondary, fontSize: 14)),
               ],
@@ -207,16 +191,10 @@ class _ChaptarrBookDetailSheetState
                   ...formats.map((f) => ChaptarrFormatBadge(format: f)),
                 ],
               ),
-              if (book == null && _error != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  "Couldn't load this book.\n$_error",
-                  style: const TextStyle(color: AppTheme.error, fontSize: 12),
-                ),
-              ],
-              if (book?.overview != null && book!.overview!.isNotEmpty) ...[
+              if (_primary.overview != null &&
+                  _primary.overview!.isNotEmpty) ...[
                 const SizedBox(height: 14),
-                Text(book.overview!,
+                Text(_primary.overview!,
                     style: const TextStyle(
                         color: AppTheme.textPrimary,
                         fontSize: 14,
@@ -235,10 +213,7 @@ class _ChaptarrBookDetailSheetState
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.of(context).pop(true);
-                        _automaticSearch();
-                      },
+                      onPressed: _automaticSearch,
                       icon: const Icon(Icons.search,
                           size: 18, color: AppTheme.available),
                       label: const Text('Automatic',
@@ -254,10 +229,7 @@ class _ChaptarrBookDetailSheetState
                   const SizedBox(width: 10),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.of(context).pop(true);
-                        _interactiveSearch();
-                      },
+                      onPressed: _interactiveSearch,
                       icon: const Icon(Icons.manage_search,
                           size: 18, color: AppTheme.available),
                       label: const Text('Interactive',

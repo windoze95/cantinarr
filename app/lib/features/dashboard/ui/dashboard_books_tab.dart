@@ -300,6 +300,7 @@ class _BookRequestButton extends StatefulWidget {
 }
 
 class _BookRequestButtonState extends State<_BookRequestButton> {
+  BookRequestStatusDetail _detail = const BookRequestStatusDetail();
   RequestStatus _status = RequestStatus.unavailable;
   bool _loading = true;
   bool _busy = false;
@@ -311,10 +312,11 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
   }
 
   Future<void> _check() async {
-    final s = await widget.service.checkBookStatus(widget.foreignId);
+    final detail = await widget.service.checkBookStatusDetail(widget.foreignId);
     if (!mounted) return;
     setState(() {
-      _status = s;
+      _detail = detail;
+      _status = detail.status;
       _loading = false;
     });
   }
@@ -324,7 +326,7 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
     final selected = await showModalBottomSheet<BookRequestFormat>(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (_) => _BookFormatSheet(title: widget.title),
+      builder: (_) => _BookFormatSheet(title: widget.title, detail: _detail),
     );
     if (selected == null) return;
     if (!mounted) return;
@@ -341,31 +343,45 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
       failureMessage = e.message;
     }
     if (!mounted) return;
-    setState(() {
-      _busy = false;
-      if (s != null) _status = s;
-    });
-    if (s == null && mounted) {
+    setState(() => _busy = false);
+    if (s == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(failureMessage ?? 'Request failed. Please try again.'),
         ),
       );
+      return;
     }
+    // Re-pull per-format coverage so the button reflects the still-open format.
+    await _check();
   }
 
-  bool get _requestable =>
-      _status == RequestStatus.unavailable || _status == RequestStatus.denied;
+  bool _isCovered(BookRequestFormat f) => _detail.isCovered(f);
 
-  Color get _color => switch (_status) {
-        RequestStatus.pending ||
-        RequestStatus.requested ||
-        RequestStatus.partial =>
-          AppTheme.requested,
-        RequestStatus.downloading => AppTheme.downloading,
-        RequestStatus.available => AppTheme.available,
-        _ => AppTheme.accent,
-      };
+  /// Requestable while at least one of ebook/audiobook hasn't been requested.
+  bool get _requestable =>
+      !(_isCovered(BookRequestFormat.ebook) &&
+          _isCovered(BookRequestFormat.audiobook));
+
+  String get _buttonText {
+    if (!_requestable) return _status.buttonLabel; // both formats covered
+    final anyCovered = _isCovered(BookRequestFormat.ebook) ||
+        _isCovered(BookRequestFormat.audiobook);
+    return anyCovered ? 'Request more' : _status.buttonLabel;
+  }
+
+  Color get _color {
+    if (_requestable) return AppTheme.accent;
+    return switch (_status) {
+      RequestStatus.pending ||
+      RequestStatus.requested ||
+      RequestStatus.partial =>
+        AppTheme.requested,
+      RequestStatus.downloading => AppTheme.downloading,
+      RequestStatus.available => AppTheme.available,
+      _ => AppTheme.accent,
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -391,18 +407,39 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
               height: 16,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
-          : Text(_status.buttonLabel),
+          : Text(_buttonText),
     );
   }
 }
 
 class _BookFormatSheet extends StatelessWidget {
   final String title;
+  final BookRequestStatusDetail detail;
 
-  const _BookFormatSheet({required this.title});
+  const _BookFormatSheet({required this.title, required this.detail});
+
+  bool _coveredFor(BookRequestFormat choice) {
+    final eb = detail.isCovered(BookRequestFormat.ebook);
+    final ab = detail.isCovered(BookRequestFormat.audiobook);
+    return switch (choice) {
+      BookRequestFormat.ebook => eb,
+      BookRequestFormat.audiobook => ab,
+      BookRequestFormat.both => eb && ab,
+    };
+  }
+
+  String? _statusLabelFor(BookRequestFormat choice) {
+    if (!_coveredFor(choice)) return null;
+    final key =
+        choice == BookRequestFormat.both ? BookRequestFormat.ebook : choice;
+    return (detail.formats[key] ?? RequestStatus.requested).label;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final eb = detail.isCovered(BookRequestFormat.ebook);
+    final ab = detail.isCovered(BookRequestFormat.audiobook);
+    final exactlyOneCovered = eb != ab;
     return SafeArea(
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
@@ -437,10 +474,17 @@ class _BookFormatSheet extends StatelessWidget {
             ),
             const SizedBox(height: 14),
             for (final choice in BookRequestFormat.values)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: _FormatChoiceTile(choice: choice),
-              ),
+              // Hide "both" when exactly one format is already requested — only
+              // the remaining single format is worth offering.
+              if (!(choice == BookRequestFormat.both && exactlyOneCovered))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _FormatChoiceTile(
+                    choice: choice,
+                    covered: _coveredFor(choice),
+                    statusLabel: _statusLabelFor(choice),
+                  ),
+                ),
           ],
         ),
       ),
@@ -450,8 +494,14 @@ class _BookFormatSheet extends StatelessWidget {
 
 class _FormatChoiceTile extends StatelessWidget {
   final BookRequestFormat choice;
+  final bool covered;
+  final String? statusLabel;
 
-  const _FormatChoiceTile({required this.choice});
+  const _FormatChoiceTile({
+    required this.choice,
+    this.covered = false,
+    this.statusLabel,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -461,20 +511,29 @@ class _FormatChoiceTile extends StatelessWidget {
       BookRequestFormat.both => Icons.library_books,
     };
     return ListTile(
+      enabled: !covered,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-      leading: Icon(icon, color: AppTheme.accent),
+      leading: Icon(icon, color: covered ? AppTheme.textSecondary : AppTheme.accent),
       title: Text(
         choice.label,
-        style: const TextStyle(
-          color: AppTheme.textPrimary,
+        style: TextStyle(
+          color: covered ? AppTheme.textSecondary : AppTheme.textPrimary,
           fontWeight: FontWeight.w600,
         ),
       ),
+      subtitle: covered && statusLabel != null
+          ? Text(statusLabel!,
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12))
+          : null,
+      trailing: covered
+          ? const Icon(Icons.check, color: AppTheme.available, size: 18)
+          : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: const BorderSide(color: AppTheme.border),
       ),
-      onTap: () => Navigator.of(context).pop(choice),
+      onTap: covered ? null : () => Navigator.of(context).pop(choice),
     );
   }
 }

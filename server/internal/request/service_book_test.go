@@ -103,6 +103,69 @@ func TestBookRequestStatusAndDedup(t *testing.T) {
 	}
 }
 
+// TestGetUserBookStatusPerFormat covers the per-format breakdown that lets the
+// dashboard offer the other format after one is requested: a format-specific row
+// covers only that format, a "both" row covers both, denied stays re-requestable,
+// and the collapsed Status is preserved for back-compat.
+func TestGetUserBookStatusPerFormat(t *testing.T) {
+	svc, uid := newBookTestService(t)
+	insert := func(fid, format, status string) {
+		t.Helper()
+		if _, err := svc.db.Exec(
+			"INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, media_type, title, status) VALUES (?, 0, ?, ?, 'book', 'T', ?)",
+			uid, fid, format, status,
+		); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	// Ebook requested only: ebook covered, audiobook still open (absent).
+	insert("b-ebook", BookFormatEbook, StatusRequested)
+	st, _ := svc.GetUserBookStatus(uid, "b-ebook")
+	if st.BookFormats[BookFormatEbook] != StatusRequested {
+		t.Fatalf("ebook = %v, want requested", st.BookFormats[BookFormatEbook])
+	}
+	if _, ok := st.BookFormats[BookFormatAudiobook]; ok {
+		t.Fatalf("audiobook should be absent (still requestable), got %v", st.BookFormats)
+	}
+
+	// Two separate format rows.
+	insert("b-two", BookFormatEbook, StatusRequested)
+	insert("b-two", BookFormatAudiobook, StatusPending)
+	st, _ = svc.GetUserBookStatus(uid, "b-two")
+	if st.BookFormats[BookFormatEbook] != StatusRequested ||
+		st.BookFormats[BookFormatAudiobook] != StatusPending {
+		t.Fatalf("two-format = %#v, want ebook requested + audiobook pending", st.BookFormats)
+	}
+
+	// A single "both" row expands to both concrete formats.
+	insert("b-both", BookFormatBoth, StatusRequested)
+	st, _ = svc.GetUserBookStatus(uid, "b-both")
+	if st.BookFormats[BookFormatEbook] != StatusRequested ||
+		st.BookFormats[BookFormatAudiobook] != StatusRequested {
+		t.Fatalf("both = %#v, want ebook+audiobook requested", st.BookFormats)
+	}
+
+	// Denied ebook, no audiobook: collapsed Status preserved; audiobook still open.
+	insert("b-denied", BookFormatEbook, StatusDenied)
+	st, _ = svc.GetUserBookStatus(uid, "b-denied")
+	if st.BookFormats[BookFormatEbook] != StatusDenied {
+		t.Fatalf("denied ebook = %#v, want ebook denied", st.BookFormats)
+	}
+	if _, ok := st.BookFormats[BookFormatAudiobook]; ok {
+		t.Fatalf("audiobook should be absent for denied-ebook book, got %#v", st.BookFormats)
+	}
+	if st.Status != StatusDenied {
+		t.Fatalf("collapsed status = %v, want denied (back-compat)", st.Status)
+	}
+
+	// Unknown foreign id: unavailable, no per-format map.
+	st, _ = svc.GetUserBookStatus(uid, "nope")
+	if st.Status != StatusUnavailable || len(st.BookFormats) != 0 {
+		t.Fatalf("unknown = %#v, want unavailable + no formats", st)
+	}
+}
+
 func TestBookRequestFormatMonitorsRequestedEditions(t *testing.T) {
 	var addBody map[string]any
 	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

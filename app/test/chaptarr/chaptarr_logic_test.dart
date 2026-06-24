@@ -107,6 +107,31 @@ void main() {
 
       expect(book.formats, isEmpty);
     });
+
+    test('format derives from mediaType', () {
+      ChaptarrBook book(String? mediaType) =>
+          ChaptarrBook.fromJson({'title': 'T', 'mediaType': mediaType});
+      expect(book('ebook').format, BookFormat.ebook);
+      expect(book('audiobook').format, BookFormat.audiobook);
+      expect(book(null).format, BookFormat.unknown);
+    });
+
+    test('groupKey groups records by foreignBookId, else falls back to id', () {
+      final ebook = ChaptarrBook.fromJson(
+          {'id': 1, 'title': 'T', 'foreignBookId': 'fb-1', 'mediaType': 'ebook'});
+      final audio = ChaptarrBook.fromJson({
+        'id': 2,
+        'title': 'T',
+        'foreignBookId': 'fb-1',
+        'mediaType': 'audiobook'
+      });
+      final noForeign = ChaptarrBook.fromJson({'id': 3, 'title': 'T'});
+      // The two formats of one title share a key; a foreignId-less record gets
+      // its own (id-based) key so unrelated books never merge.
+      expect(ebook.groupKey, audio.groupKey);
+      expect(noForeign.groupKey, 'id:3');
+      expect(noForeign.groupKey, isNot(ebook.groupKey));
+    });
   });
 
   // diagnoseChaptarrQueueItem bridges ChaptarrStatusMessage -> the shared neutral
