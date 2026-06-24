@@ -50,6 +50,50 @@ void main() {
     });
   });
 
+  group('ChaptarrBook.fromJson', () {
+    test('parses lookup results with string genres', () {
+      final book = ChaptarrBook.fromJson({
+        'title': 'Flock',
+        'foreignBookId': '40748777',
+        'genres': '',
+        'author': {
+          'authorName': 'Kate Stewart',
+          'foreignAuthorId': 'gr:7390938',
+        },
+        'images': [
+          {
+            'url': '/MediaCoverProxy/cover.jpg',
+            'coverType': 'cover',
+          }
+        ],
+        'editions': [
+          {
+            'title': 'Flock (The Ravenhood, #1)',
+            'isEbook': false,
+            'pageCount': 354,
+            'images': [],
+          }
+        ],
+      });
+
+      expect(book.title, 'Flock');
+      expect(book.foreignBookId, '40748777');
+      expect(book.genres, isEmpty);
+      expect(book.author?.authorName, 'Kate Stewart');
+      expect(book.editions, hasLength(1));
+      expect(book.formats, contains(BookFormat.audiobook));
+    });
+
+    test('splits comma-separated genres defensively', () {
+      final book = ChaptarrBook.fromJson({
+        'title': 'Genre Book',
+        'genres': 'Romance, Mystery',
+      });
+
+      expect(book.genres, ['Romance', 'Mystery']);
+    });
+  });
+
   // diagnoseChaptarrQueueItem bridges ChaptarrStatusMessage -> the shared neutral
   // engine; these confirm the bridge feeds the catalog correctly for books.
   group('diagnoseChaptarrQueueItem', () {
