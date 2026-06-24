@@ -146,6 +146,11 @@ type StatusResponse struct {
 	// movies and for series not yet in the library). Season 0 / Specials are
 	// excluded, matching the rest of the app's season handling.
 	Seasons []SeasonStatus `json:"seasons,omitempty"`
+	// BookFormats maps each already-requested book format ("ebook"/"audiobook")
+	// to its request status, so the dashboard can still offer the other format
+	// after one is requested. Only populated for book status; nil (omitted) for
+	// movies/TV. A stored "both" request covers both formats.
+	BookFormats map[string]string `json:"book_formats,omitempty"`
 }
 
 // SeasonStatus is one season's availability, mirroring the title-level status
@@ -959,25 +964,65 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType string) (*St
 }
 
 // GetUserBookStatus reports a user's request state for a book, keyed by the
-// Readarr foreignBookId (books have no tmdb_id). It reflects the request_log
-// row (pending / denied / requested); deeper library availability + download
-// progress are shown in the Books module itself.
+// Readarr foreignBookId (books have no tmdb_id). Status is the collapsed
+// (latest) request_log state (pending / denied / requested); BookFormats breaks
+// it down per format so the dashboard can still offer the other format after one
+// is requested. A stored "both" request covers both ebook and audiobook. Deeper
+// library availability + download progress are shown in the Books module itself.
 func (s *Service) GetUserBookStatus(userID int64, foreignID string) (*StatusResponse, error) {
-	var status string
-	err := s.db.QueryRow(
-		"SELECT status FROM request_log WHERE user_id = ? AND foreign_id = ? AND media_type = 'book' ORDER BY requested_at DESC, id DESC LIMIT 1",
+	rows, err := s.db.Query(
+		"SELECT COALESCE(book_format, 'both'), status FROM request_log WHERE user_id = ? AND foreign_id = ? AND media_type = 'book' ORDER BY requested_at DESC, id DESC",
 		userID, foreignID,
-	).Scan(&status)
+	)
 	if err != nil {
 		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
-	switch status {
+	defer rows.Close()
+
+	formats := map[string]string{}
+	collapsed := ""
+	for rows.Next() {
+		var format, status string
+		if err := rows.Scan(&format, &status); err != nil {
+			return &StatusResponse{Status: StatusUnavailable}, nil
+		}
+		if collapsed == "" {
+			collapsed = status // first row is the latest overall
+		}
+		// Rows are newest-first, so only record a format's status the first
+		// (latest) time it appears. A "both" row fills both concrete formats.
+		for _, f := range expandBookFormat(format) {
+			if _, ok := formats[f]; !ok {
+				formats[f] = status
+			}
+		}
+	}
+	if collapsed == "" {
+		return &StatusResponse{Status: StatusUnavailable}, nil
+	}
+
+	resp := &StatusResponse{BookFormats: formats}
+	switch collapsed {
 	case StatusPending:
-		return &StatusResponse{Status: StatusPending}, nil
+		resp.Status = StatusPending
 	case StatusDenied:
-		return &StatusResponse{Status: StatusDenied}, nil
+		resp.Status = StatusDenied
 	default:
-		return &StatusResponse{Status: StatusRequested}, nil
+		resp.Status = StatusRequested
+	}
+	return resp, nil
+}
+
+// expandBookFormat maps a stored book_format to the concrete formats it covers:
+// "both" (and any unrecognized value) covers both ebook and audiobook.
+func expandBookFormat(format string) []string {
+	switch normalizeBookFormat(format) {
+	case BookFormatEbook:
+		return []string{BookFormatEbook}
+	case BookFormatAudiobook:
+		return []string{BookFormatAudiobook}
+	default:
+		return []string{BookFormatEbook, BookFormatAudiobook}
 	}
 }
 

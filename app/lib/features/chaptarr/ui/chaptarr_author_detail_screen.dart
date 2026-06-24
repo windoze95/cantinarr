@@ -9,6 +9,7 @@ import '../data/chaptarr_models.dart';
 import 'chaptarr_book_screen.dart';
 import 'widgets/book_status.dart';
 import 'widgets/format_badge.dart';
+import 'widgets/format_picker.dart';
 
 /// Author detail: an author summary plus the author's books, each with its
 /// format badges, availability line and a monitor toggle. Tapping a book drills
@@ -97,16 +98,31 @@ class _ChaptarrAuthorDetailScreenState
     }
   }
 
-  void _openBook(ChaptarrBook book) {
+  void _openBookGroup(List<ChaptarrBook> records) {
     Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(
         builder: (_) => ChaptarrBookScreen(
           instanceId: widget.instanceId,
-          bookId: book.id,
-          bookTitle: book.title,
+          records: records,
+          bookTitle: records.first.title,
         ),
       ),
     );
+  }
+
+  /// Groups the flat book list into one entry per title: Chaptarr stores a
+  /// title's ebook and audiobook as separate records sharing a foreignBookId.
+  /// Insertion order (already release-date sorted) is preserved; within a group
+  /// ebook is ordered before audiobook.
+  List<List<ChaptarrBook>> _groupedBooks() {
+    final groups = <String, List<ChaptarrBook>>{};
+    for (final b in _books) {
+      (groups[b.groupKey] ??= []).add(b);
+    }
+    for (final records in groups.values) {
+      records.sort((a, b) => a.format.index.compareTo(b.format.index));
+    }
+    return groups.values.toList();
   }
 
   @override
@@ -138,11 +154,11 @@ class _ChaptarrAuthorDetailScreenState
                     ErrorBanner(message: _error!, onRetry: _load),
                   if (_author != null) _AuthorSummaryCard(author: _author!),
                   const SizedBox(height: 4),
-                  ..._books.map((b) => _BookCard(
-                        book: b,
-                        busy: _togglingBooks.contains(b.id),
-                        onTap: () => _openBook(b),
-                        onToggleMonitored: () => _toggleBookMonitored(b),
+                  ..._groupedBooks().map((records) => _BookCard(
+                        records: records,
+                        togglingIds: _togglingBooks,
+                        onTap: () => _openBookGroup(records),
+                        onToggleRecord: _toggleBookMonitored,
                       )),
                   if (_books.isEmpty && !_isLoading)
                     const Padding(
@@ -170,6 +186,7 @@ ChaptarrBook _withMonitored(ChaptarrBook b, bool monitored) => ChaptarrBook(
       overview: b.overview,
       releaseDate: b.releaseDate,
       monitored: monitored,
+      mediaType: b.mediaType,
       anyEditionOk: b.anyEditionOk,
       pageCount: b.pageCount,
       author: b.author,
@@ -247,23 +264,34 @@ class _AuthorSummaryCard extends StatelessWidget {
   }
 }
 
+/// One card per title. Chaptarr stores a title's ebook and audiobook as
+/// separate records (same foreignBookId); [records] holds the 1–2 records so the
+/// card shows a single entry with a format badge and monitor toggle per format.
 class _BookCard extends StatelessWidget {
-  final ChaptarrBook book;
-  final bool busy;
+  final List<ChaptarrBook> records;
+  final Set<int> togglingIds;
   final VoidCallback onTap;
-  final VoidCallback onToggleMonitored;
+  final void Function(ChaptarrBook record) onToggleRecord;
 
   const _BookCard({
-    required this.book,
-    required this.busy,
+    required this.records,
+    required this.togglingIds,
     required this.onTap,
-    required this.onToggleMonitored,
+    required this.onToggleRecord,
   });
 
   @override
   Widget build(BuildContext context) {
-    final status = bookFileStatusLine(book);
-    final formats = book.formats.toList()..sort((a, b) => a.index - b.index);
+    final primary = records.first;
+    // Prefer a downloaded record for the status line, else the first record.
+    final fileRecord =
+        records.firstWhere((r) => r.hasFile, orElse: () => primary);
+    final status = bookFileStatusLine(fileRecord);
+    final anyMonitored = records.any((r) => r.monitored);
+    final formats = records
+        .map((r) => r.format)
+        .where((f) => f != BookFormat.unknown)
+        .toList();
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -281,14 +309,14 @@ class _BookCard extends StatelessWidget {
               child: SizedBox(
                 width: 44,
                 height: 60,
-                child: book.coverUrl != null
+                child: primary.coverUrl != null
                     ? CachedNetworkImage(
-                        imageUrl: book.coverUrl!, fit: BoxFit.cover)
+                        imageUrl: primary.coverUrl!, fit: BoxFit.cover)
                     : Container(
                         color: AppTheme.surfaceVariant,
                         child: Icon(
                           Icons.menu_book_outlined,
-                          color: book.monitored
+                          color: anyMonitored
                               ? AppTheme.available
                               : AppTheme.unavailable,
                           size: 22,
@@ -301,7 +329,7 @@ class _BookCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(book.title,
+                  Text(primary.title,
                       style: const TextStyle(
                           color: AppTheme.textPrimary,
                           fontSize: 16,
@@ -331,23 +359,71 @@ class _BookCard extends StatelessWidget {
                 ],
               ),
             ),
-            IconButton(
-              onPressed: busy ? null : onToggleMonitored,
-              tooltip: book.monitored ? 'Stop monitoring' : 'Monitor',
-              icon: busy
+            const SizedBox(width: 8),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final r in records)
+                  _MonitorToggle(
+                    record: r,
+                    busy: togglingIds.contains(r.id),
+                    onTap: () => onToggleRecord(r),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A compact per-format monitor toggle: the format icon plus a bookmark that
+/// fills when that record is monitored, so a "both" title can monitor its ebook
+/// and audiobook independently.
+class _MonitorToggle extends StatelessWidget {
+  final ChaptarrBook record;
+  final bool busy;
+  final VoidCallback onTap;
+
+  const _MonitorToggle({
+    required this.record,
+    required this.busy,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final monitored = record.monitored;
+    final label = chaptarrFormatLabel(record.format);
+    return Tooltip(
+      message: monitored ? 'Stop monitoring $label' : 'Monitor $label',
+      child: InkWell(
+        onTap: busy ? null : onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(chaptarrFormatIcon(record.format),
+                  size: 14, color: AppTheme.textSecondary),
+              const SizedBox(width: 4),
+              busy
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppTheme.accent))
+                          strokeWidth: 2, color: AppTheme.accent),
+                    )
                   : Icon(
-                      book.monitored ? Icons.bookmark : Icons.bookmark_border,
-                      color: book.monitored
-                          ? AppTheme.accent
-                          : AppTheme.textSecondary,
+                      monitored ? Icons.bookmark : Icons.bookmark_border,
+                      size: 20,
+                      color:
+                          monitored ? AppTheme.accent : AppTheme.textSecondary,
                     ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

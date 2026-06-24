@@ -350,6 +350,10 @@ class ChaptarrBook {
   final String? overview;
   final DateTime? releaseDate;
   final bool monitored;
+
+  /// Chaptarr (this fork) tracks a title's ebook and audiobook as separate book
+  /// records distinguished by mediaType ("ebook"/"audiobook").
+  final String? mediaType;
   final bool anyEditionOk;
   final int pageCount;
   final ChaptarrAuthorContext? author;
@@ -367,6 +371,7 @@ class ChaptarrBook {
     this.overview,
     this.releaseDate,
     this.monitored = true,
+    this.mediaType,
     this.anyEditionOk = true,
     this.pageCount = 0,
     this.author,
@@ -385,6 +390,7 @@ class ChaptarrBook {
         overview: json['overview'] as String?,
         releaseDate: DateTime.tryParse(json['releaseDate'] as String? ?? ''),
         monitored: json['monitored'] as bool? ?? true,
+        mediaType: json['mediaType'] as String?,
         anyEditionOk: json['anyEditionOk'] as bool? ?? true,
         pageCount: json['pageCount'] as int? ?? 0,
         author: json['author'] != null
@@ -409,6 +415,7 @@ class ChaptarrBook {
         'overview': overview,
         'releaseDate': releaseDate?.toIso8601String(),
         'monitored': monitored,
+        'mediaType': mediaType,
         'anyEditionOk': anyEditionOk,
         'pageCount': pageCount,
         'editions': editions.map((e) => e.toJson()).toList(),
@@ -434,6 +441,27 @@ class ChaptarrBook {
     }
     return set;
   }
+
+  /// The single format this record represents. Chaptarr stores a title's ebook
+  /// and audiobook as separate records distinguished by [mediaType]; fall back
+  /// to a lone edition's format, else unknown.
+  BookFormat get format {
+    switch (mediaType) {
+      case 'ebook':
+        return BookFormat.ebook;
+      case 'audiobook':
+        return BookFormat.audiobook;
+    }
+    final fs = formats;
+    return fs.length == 1 ? fs.first : BookFormat.unknown;
+  }
+
+  /// Groups the ebook and audiobook records of one title (they share a
+  /// foreignBookId). Falls back to the unique id so records without a
+  /// foreignBookId never merge into one another.
+  String get groupKey => (foreignBookId != null && foreignBookId!.isNotEmpty)
+      ? foreignBookId!
+      : 'id:$id';
 }
 
 /// A downloaded book file: drives the "EPUB — 4.6 MB" status line. The raw

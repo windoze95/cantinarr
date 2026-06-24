@@ -10,20 +10,22 @@ import 'chaptarr_book_detail_sheet.dart';
 import 'chaptarr_releases_screen.dart';
 import 'widgets/book_status.dart';
 import 'widgets/format_badge.dart';
+import 'widgets/format_picker.dart';
 
-/// Editions/files for one book: each edition's title, format badge and the
-/// matched file's quality+size (or a Missing/Unreleased line). Tapping the book
-/// header opens its detail sheet; the action bar runs a per-book search.
-/// Mirrors [SonarrSeasonScreen].
+/// One title's formats. Chaptarr stores a title's ebook and audiobook as
+/// separate book records (same foreignBookId); [records] holds the 1–2 records.
+/// Shows a section per format with its availability + matched file, and an
+/// action bar whose Automatic/Interactive searches prompt for the format when
+/// the title has both. Mirrors [SonarrSeasonScreen].
 class ChaptarrBookScreen extends ConsumerStatefulWidget {
   final String instanceId;
-  final int bookId;
+  final List<ChaptarrBook> records;
   final String? bookTitle;
 
   const ChaptarrBookScreen({
     super.key,
     required this.instanceId,
-    required this.bookId,
+    required this.records,
     this.bookTitle,
   });
 
@@ -33,10 +35,12 @@ class ChaptarrBookScreen extends ConsumerStatefulWidget {
 
 class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
   late final ChaptarrApiService _service;
-  ChaptarrBook? _book;
-  List<ChaptarrBookFile> _files = [];
+  // Downloaded files keyed by record (book) id.
+  Map<int, List<ChaptarrBookFile>> _filesByBook = {};
   bool _isLoading = true;
   String? _error;
+
+  List<ChaptarrBook> get _records => widget.records;
 
   @override
   void initState() {
@@ -51,16 +55,16 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
-      // Kick off both requests, then await — effectively parallel without the
-      // heterogeneous Future.wait cast.
-      final bookFuture = _service.getBookById(widget.bookId);
-      final filesFuture = _service.getBookFiles(bookId: widget.bookId);
-      final book = await bookFuture;
-      final files = await filesFuture;
+      final results = await Future.wait(
+        _records.map((r) => _service.getBookFiles(bookId: r.id)),
+      );
       if (!mounted) return;
+      final map = <int, List<ChaptarrBookFile>>{};
+      for (var i = 0; i < _records.length; i++) {
+        map[_records[i].id] = results[i];
+      }
       setState(() {
-        _book = book;
-        _files = files;
+        _filesByBook = map;
         _isLoading = false;
         _error = null;
       });
@@ -74,11 +78,14 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
   }
 
   Future<void> _automaticSearch() async {
+    final chosen = await pickFormatRecord(context, _records);
+    if (chosen == null || !mounted) return;
     try {
-      await _service.searchBook([widget.bookId]);
+      await _service.searchBook([chosen.id]);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Searching for ${_book?.title ?? 'book'}…')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'Searching for ${chaptarrFormatLabel(chosen.format)} — ${chosen.title}…')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -86,13 +93,15 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
     }
   }
 
-  void _interactiveSearch() {
+  Future<void> _interactiveSearch() async {
+    final chosen = await pickFormatRecord(context, _records);
+    if (chosen == null || !mounted) return;
     Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(
         builder: (_) => ChaptarrReleasesScreen(
           instanceId: widget.instanceId,
-          bookId: widget.bookId,
-          bookTitle: _book?.title ?? widget.bookTitle,
+          bookId: chosen.id,
+          bookTitle: chosen.title,
         ),
       ),
     );
@@ -102,17 +111,19 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
     final changed = await showChaptarrBookDetailSheet(
       context,
       instanceId: widget.instanceId,
-      bookId: widget.bookId,
-      bookTitle: _book?.title ?? widget.bookTitle,
+      records: _records,
+      bookTitle: widget.bookTitle,
     );
-    // The book sheet returns true after an Automatic/Interactive search.
+    // The sheet returns true after an Automatic/Interactive search.
     if (changed == true && mounted) _load();
   }
 
   @override
   Widget build(BuildContext context) {
-    final title = _book?.title ?? widget.bookTitle ?? 'Book';
-    final author = _book?.author?.authorName;
+    final primary = _records.first;
+    final title =
+        primary.title.isNotEmpty ? primary.title : (widget.bookTitle ?? 'Book');
+    final author = primary.author?.authorName;
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -148,54 +159,31 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
   }
 
   Widget _buildBody() {
-    if (_isLoading && _book == null) {
-      return const Center(
-          child: CircularProgressIndicator(color: AppTheme.accent));
-    }
-    if (_error != null && _book == null) {
+    if (_error != null) {
       return FullScreenError(message: _error!, onRetry: _load);
     }
-    final book = _book;
-    if (book == null) {
-      return const Center(
-        child: Text('No book',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
-      );
-    }
-    final fileByEdition = {
-      for (final f in _files) f.editionId: f,
-    };
-    final editions = [...book.editions];
     return RefreshIndicator(
       onRefresh: _load,
       color: AppTheme.accent,
       child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          if (_error != null) ErrorBanner(message: _error!, onRetry: _load),
-          _BookHeader(book: book, onTap: _openDetail),
+          _BookHeader(book: _records.first, onTap: _openDetail),
           const Divider(color: AppTheme.border, height: 1),
-          if (editions.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(24),
-              child: Center(
-                child: Text('No editions',
-                    style: TextStyle(color: AppTheme.textSecondary)),
-              ),
-            )
-          else
-            ...editions.map((e) => _EditionTile(
-                  edition: e,
-                  file: fileByEdition[e.id],
-                  onTap: _openDetail,
-                )),
+          for (final r in _records)
+            _FormatSection(
+              record: r,
+              files: _filesByBook[r.id] ?? const [],
+              loading: _isLoading,
+              onTap: _openDetail,
+            ),
         ],
       ),
     );
   }
 }
 
-/// The book summary header — cover icon, title, availability line. Tapping it
+/// The book summary header — title, release date, availability line. Tapping it
 /// opens the detail sheet.
 class _BookHeader extends StatelessWidget {
   final ChaptarrBook book;
@@ -248,25 +236,30 @@ class _BookHeader extends StatelessWidget {
   }
 }
 
-/// One edition row: format badge, edition title and the matched file's
-/// quality+size (when downloaded).
-class _EditionTile extends StatelessWidget {
-  final ChaptarrEdition edition;
-  final ChaptarrBookFile? file;
+/// One format (ebook or audiobook) of a title: a format badge, this record's
+/// availability/file line, and a read-only monitor indicator (the toggle lives
+/// on the author screen's card).
+class _FormatSection extends StatelessWidget {
+  final ChaptarrBook record;
+  final List<ChaptarrBookFile> files;
+  final bool loading;
   final VoidCallback onTap;
 
-  const _EditionTile({
-    required this.edition,
-    required this.file,
+  const _FormatSection({
+    required this.record,
+    required this.files,
+    required this.loading,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final f = file;
-    final fileLine = f != null
-        ? '${f.qualityName ?? 'Downloaded'} — ${f.sizeFormatted}'
-        : 'Not downloaded';
+    final status = bookFileStatusLine(record);
+    final file = files.isNotEmpty ? files.first : null;
+    final hasFile = file != null;
+    final line = hasFile
+        ? '${file.qualityName ?? 'Downloaded'} — ${file.sizeFormatted}'
+        : (loading ? 'Checking…' : status.text);
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -280,37 +273,35 @@ class _EditionTile extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      ChaptarrFormatBadge(format: edition.bookFormat),
-                      if (edition.title != null &&
-                          edition.title!.isNotEmpty) ...[
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            edition.title!,
-                            style: const TextStyle(
+                      ChaptarrFormatBadge(format: record.format),
+                      if (record.format == BookFormat.unknown)
+                        const Text('Book',
+                            style: TextStyle(
                                 color: AppTheme.textPrimary,
                                 fontSize: 14,
-                                fontWeight: FontWeight.w500),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+                                fontWeight: FontWeight.w500)),
                     ],
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    fileLine,
+                    line,
                     style: TextStyle(
-                        color: f != null
-                            ? AppTheme.available
-                            : AppTheme.textSecondary,
+                        color: hasFile ? AppTheme.available : status.color,
                         fontSize: 13,
                         fontWeight: FontWeight.w500),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
+              ),
+            ),
+            Tooltip(
+              message: record.monitored ? 'Monitored' : 'Not monitored',
+              child: Icon(
+                record.monitored ? Icons.bookmark : Icons.bookmark_border,
+                size: 18,
+                color:
+                    record.monitored ? AppTheme.accent : AppTheme.textSecondary,
               ),
             ),
           ],

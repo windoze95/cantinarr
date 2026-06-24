@@ -48,6 +48,29 @@ enum BookRequestFormat {
       );
 }
 
+/// A user's per-format request state for a book. [status] is the collapsed
+/// (latest) state; [formats] maps each already-requested concrete format to its
+/// status (a stored "both" request fills both ebook and audiobook). Lets the
+/// dashboard keep offering a format that hasn't been requested yet.
+class BookRequestStatusDetail {
+  final RequestStatus status;
+  final Map<BookRequestFormat, RequestStatus> formats;
+
+  const BookRequestStatusDetail({
+    this.status = RequestStatus.unavailable,
+    this.formats = const {},
+  });
+
+  /// A format is "covered" (no longer requestable) when it has a non-denied
+  /// row. Denied and never-requested formats stay requestable.
+  bool isCovered(BookRequestFormat format) {
+    final s = formats[format];
+    return s != null &&
+        s != RequestStatus.denied &&
+        s != RequestStatus.unavailable;
+  }
+}
+
 class RequestSubmissionException implements Exception {
   final String message;
 
@@ -306,20 +329,45 @@ class RequestService {
   /// Check the current user's request state for a book, keyed by the Chaptarr/
   /// Readarr foreignBookId (books have no tmdb_id). Returns one of
   /// unavailable / pending / requested / denied.
-  Future<RequestStatus> checkBookStatus(String foreignId) async {
+  Future<RequestStatus> checkBookStatus(String foreignId) async =>
+      (await checkBookStatusDetail(foreignId)).status;
+
+  /// Like [checkBookStatus] but also returns the per-format breakdown so the
+  /// caller can still offer a not-yet-requested format. Falls back to an
+  /// unavailable/empty detail on any failure.
+  Future<BookRequestStatusDetail> checkBookStatusDetail(
+      String foreignId) async {
     try {
       final resp = await _backendDio.get(
         '/api/requests/book-status',
         queryParameters: {'foreign_id': foreignId},
       );
-      final name = (resp.data as Map<String, dynamic>)['status'] as String? ??
-          'unavailable';
-      return RequestStatus.values.firstWhere(
-        (s) => s.name == name,
+      final data = resp.data as Map<String, dynamic>;
+      final status = RequestStatus.values.firstWhere(
+        (s) => s.name == (data['status'] as String? ?? 'unavailable'),
         orElse: () => RequestStatus.unavailable,
       );
+      final formats = <BookRequestFormat, RequestStatus>{};
+      final raw = data['book_formats'];
+      if (raw is Map) {
+        raw.forEach((key, value) {
+          BookRequestFormat? fmt;
+          for (final f in BookRequestFormat.values) {
+            if (f.value == key.toString()) {
+              fmt = f;
+              break;
+            }
+          }
+          if (fmt == null) return;
+          formats[fmt] = RequestStatus.values.firstWhere(
+            (s) => s.name == value.toString(),
+            orElse: () => RequestStatus.requested,
+          );
+        });
+      }
+      return BookRequestStatusDetail(status: status, formats: formats);
     } catch (_) {
-      return RequestStatus.unavailable;
+      return const BookRequestStatusDetail();
     }
   }
 
