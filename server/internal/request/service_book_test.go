@@ -118,8 +118,8 @@ func TestBookRequestFormatMonitorsRequestedEditions(t *testing.T) {
 						"foreignAuthorId":"author-456"
 					},
 					"editions":[
-						{"id":1,"title":"eBook","format":"EPUB","isEbook":true},
-						{"id":2,"title":"Audiobook","format":"M4B","isEbook":false}
+						{"id":1,"foreignEditionId":"edition-ebook","titleSlug":"ebook","title":"Kindle Edition","format":"Kindle Edition"},
+						{"id":2,"foreignEditionId":"edition-audio","titleSlug":"audio","title":"Audiobook","format":"Audible Audio"}
 					]
 				}
 			]`))
@@ -174,6 +174,12 @@ func TestBookRequestFormatMonitorsRequestedEditions(t *testing.T) {
 	}
 	if audio["monitored"] != true {
 		t.Fatalf("audiobook monitored = %v, want true", audio["monitored"])
+	}
+	if audio["manualAdd"] != true {
+		t.Fatalf("audiobook manualAdd = %v, want true", audio["manualAdd"])
+	}
+	if audio["foreignEditionId"] != "edition-audio" || audio["titleSlug"] != "audio" {
+		t.Fatalf("audiobook edition = %#v, want foreignEditionId/titleSlug preserved", audio)
 	}
 
 	var stored string

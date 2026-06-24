@@ -341,11 +341,17 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
     }
     if (!mounted) return;
     setState(() => _busy = true);
-    final s = await widget.service.requestBook(
-      foreignId: widget.foreignId,
-      title: widget.title,
-      format: format,
-    );
+    RequestStatus? s;
+    String? failureMessage;
+    try {
+      s = await widget.service.requestBook(
+        foreignId: widget.foreignId,
+        title: widget.title,
+        format: format,
+      );
+    } on RequestSubmissionException catch (e) {
+      failureMessage = e.message;
+    }
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -353,7 +359,9 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
     });
     if (s == null && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request failed. Please try again.')),
+        SnackBar(
+          content: Text(failureMessage ?? 'Request failed. Please try again.'),
+        ),
       );
     }
   }

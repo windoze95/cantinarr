@@ -26,6 +26,31 @@ void main() {
     expect(adapter.body['book_format'], 'audiobook');
   });
 
+  test('requestBook surfaces backend error messages', () async {
+    final adapter = _CaptureAdapter(
+      statusCode: 500,
+      response: {'error': 'no audiobook edition available'},
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    final service = RequestService(backendDio: dio);
+
+    expect(
+      () => service.requestBook(
+        foreignId: 'book-123',
+        title: 'Star Wars: Heir to the Empire',
+        format: BookRequestFormat.audiobook,
+      ),
+      throwsA(
+        isA<RequestSubmissionException>().having(
+          (e) => e.message,
+          'message',
+          'no audiobook edition available',
+        ),
+      ),
+    );
+  });
+
   test('pending book requests expose media and format labels', () {
     final item = PendingRequestItem.fromJson({
       'id': 1,
@@ -44,6 +69,13 @@ void main() {
 
 class _CaptureAdapter implements HttpClientAdapter {
   Map<String, dynamic> body = {};
+  final int statusCode;
+  final Map<String, dynamic> response;
+
+  _CaptureAdapter({
+    this.statusCode = 200,
+    this.response = const {'status': 'requested'},
+  });
 
   @override
   Future<ResponseBody> fetch(
@@ -59,8 +91,8 @@ class _CaptureAdapter implements HttpClientAdapter {
     }
     body = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
     return ResponseBody.fromString(
-      jsonEncode({'status': 'requested'}),
-      200,
+      jsonEncode(response),
+      statusCode,
       headers: {
         'content-type': ['application/json'],
       },
