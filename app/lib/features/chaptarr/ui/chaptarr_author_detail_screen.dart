@@ -9,7 +9,6 @@ import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
 import 'chaptarr_book_screen.dart';
 import 'widgets/book_status.dart';
-import 'widgets/format_badge.dart';
 import 'widgets/format_picker.dart';
 
 /// Author detail: an author summary plus the author's books, each with its
@@ -131,39 +130,17 @@ class _ChaptarrAuthorDetailScreenState
   String _addKey(List<ChaptarrBook> records, BookFormat format) =>
       '${records.first.groupKey}:${format.index}';
 
-  /// Adds the missing format (ebook or audiobook) for a title as a new monitored
-  /// Chaptarr record sharing the title's foreignBookId. The author already
-  /// exists here, so a record added monitored stays monitored (no editions
-  /// needed); searchForNewBook then kicks off a download search.
+  /// Starts monitoring a format the title doesn't have a record for yet, by
+  /// creating a monitored Chaptarr record sharing the title's foreignBookId.
+  /// Format is never pre-determined — this is just the unmonitored bookmark for
+  /// that format being switched on, the same as monitoring any record. The
+  /// author already exists here, so the record stays monitored (no editions
+  /// needed) and searchForNewBook starts a download search.
   Future<void> _addFormat(List<ChaptarrBook> records, BookFormat format) async {
     final primary = records.first;
     final foreignBookId = primary.foreignBookId;
     if (foreignBookId == null || foreignBookId.isEmpty) return;
     final label = chaptarrFormatLabel(format);
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        title: Text('Add $label?',
-            style: const TextStyle(color: AppTheme.textPrimary)),
-        content: Text(
-          'Add the $label of “${primary.title}”? It will be monitored '
-          'and a download search will start.',
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Add')),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
     final key = _addKey(records, format);
     setState(() => _addingFormats.add(key));
     try {
@@ -186,13 +163,14 @@ class _ChaptarrAuthorDetailScreenState
         rootFolderPath: chaptarrRootFolderFor(format, folders),
       ));
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Added $label — searching for ${primary.title}…')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text('Monitoring $label — searching for ${primary.title}…')));
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not add $label: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not monitor $label: $e')));
     } finally {
       if (mounted) setState(() => _addingFormats.remove(key));
     }
@@ -368,10 +346,6 @@ class _BookCard extends StatelessWidget {
         records.firstWhere((r) => r.hasFile, orElse: () => primary);
     final status = bookFileStatusLine(fileRecord);
     final anyMonitored = records.any((r) => r.monitored);
-    final formats = records
-        .map((r) => r.format)
-        .where((f) => f != BookFormat.unknown)
-        .toList();
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -416,16 +390,6 @@ class _BookCard extends StatelessWidget {
                           fontWeight: FontWeight.w600),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis),
-                  if (formats.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 4,
-                      children: formats
-                          .map((f) => ChaptarrFormatBadge(format: f))
-                          .toList(),
-                    ),
-                  ],
                   const SizedBox(height: 6),
                   Text(
                     status.text,
@@ -467,8 +431,8 @@ class _BookCard extends StatelessWidget {
   }
 }
 
-/// Finds a title's record for a format, or null when that format hasn't been
-/// added yet.
+/// Finds a title's record for a format, or null when nothing is monitored as
+/// that format yet.
 ChaptarrBook? _recordForFormat(List<ChaptarrBook> records, BookFormat format) {
   for (final r in records) {
     if (r.format == format) return r;
@@ -476,9 +440,11 @@ ChaptarrBook? _recordForFormat(List<ChaptarrBook> records, BookFormat format) {
   return null;
 }
 
-/// A compact per-format control on the right of a book card: a monitor toggle
-/// when the format's record exists (the bookmark fills when monitored), or an
-/// "add" button when the title doesn't have that format yet.
+/// A per-format monitoring bookmark on the right of a book card. Format is never
+/// pre-determined: every title shows both an ebook and an audiobook bookmark,
+/// filled when that format is monitored and empty otherwise. Tapping an empty
+/// bookmark monitors that format — creating the record if the title doesn't have
+/// one yet — and tapping a filled one stops monitoring it.
 class _FormatControl extends StatelessWidget {
   final BookFormat format;
   final ChaptarrBook? record;
@@ -498,13 +464,11 @@ class _FormatControl extends StatelessWidget {
   Widget build(BuildContext context) {
     final label = chaptarrFormatLabel(format);
     final r = record;
-    final exists = r != null;
     final monitored = r?.monitored ?? false;
-    final tooltip = exists
-        ? (monitored ? 'Stop monitoring $label' : 'Monitor $label')
-        : 'Add $label';
     return Tooltip(
-      message: tooltip,
+      message: monitored ? 'Stop monitoring $label' : 'Monitor $label',
+      // Tap an existing record to toggle its monitoring; tap an empty bookmark
+      // with no record to start monitoring that format (which creates it).
       child: InkWell(
         onTap: busy ? null : (r != null ? () => onToggle(r) : onAdd),
         borderRadius: BorderRadius.circular(8),
@@ -516,22 +480,19 @@ class _FormatControl extends StatelessWidget {
               Icon(chaptarrFormatIcon(format),
                   size: 14, color: AppTheme.textSecondary),
               const SizedBox(width: 4),
-              if (busy)
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: AppTheme.accent),
-                )
-              else if (exists)
-                Icon(
-                  monitored ? Icons.bookmark : Icons.bookmark_border,
-                  size: 20,
-                  color: monitored ? AppTheme.accent : AppTheme.textSecondary,
-                )
-              else
-                const Icon(Icons.add_circle_outline,
-                    size: 20, color: AppTheme.textSecondary),
+              busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppTheme.accent),
+                    )
+                  : Icon(
+                      monitored ? Icons.bookmark : Icons.bookmark_border,
+                      size: 20,
+                      color:
+                          monitored ? AppTheme.accent : AppTheme.textSecondary,
+                    ),
             ],
           ),
         ),
