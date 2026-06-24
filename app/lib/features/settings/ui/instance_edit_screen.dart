@@ -48,6 +48,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   static const _serviceTypes = <(String, String)>[
     ('radarr', 'Radarr'),
     ('sonarr', 'Sonarr'),
+    ('chaptarr', 'Chaptarr'),
     ('sabnzbd', 'SABnzbd'),
     ('qbittorrent', 'qBittorrent'),
     ('nzbget', 'NZBGet'),
@@ -70,8 +71,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'nzbget' ||
       _serviceType == 'transmission';
 
-  /// Only the arr services support a device-direct connection test; the
-  /// rest are validated by the backend when saving.
+  /// Only the v3 arr services support a device-direct connection test (it hits
+  /// `/api/v3/system/status`); the rest — including Chaptarr, which is `/api/v1`
+  /// — are validated by the backend when saving.
   bool get _supportsDirectTest =>
       _serviceType == 'radarr' || _serviceType == 'sonarr';
 
@@ -277,6 +279,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     switch (_serviceType) {
       case 'sonarr':
         return 'http://192.168.1.100:8989';
+      case 'chaptarr':
+        return 'http://192.168.1.100:8787';
       case 'sabnzbd':
         return 'http://192.168.1.100:8080';
       case 'qbittorrent':
@@ -401,7 +405,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                         ? 'Your SABnzbd API key'
                         : (_serviceType == 'tautulli'
                             ? 'Your Tautulli API key'
-                            : 'Your Radarr/Sonarr API key')),
+                            : (_serviceType == 'chaptarr'
+                                ? 'Your Chaptarr API key'
+                                : 'Your Radarr/Sonarr API key'))),
               ),
               obscureText: true,
             ),

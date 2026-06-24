@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 var allowedServiceTypes = map[string]bool{
 	"radarr":       true,
 	"sonarr":       true,
+	"chaptarr":     true,
 	"sabnzbd":      true,
 	"qbittorrent":  true,
 	"nzbget":       true,
@@ -85,7 +87,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !allowedServiceTypes[inst.ServiceType] {
-		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"}`, http.StatusBadRequest)
 		return
 	}
 	if err := validateRequiredFields(&inst); err != nil {
@@ -183,6 +185,74 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GetUserDefaultInstances returns a user's per-user default instance overrides
+// as a {service_type: instance_id} map (admin-only). Service types absent from
+// the map inherit the global default.
+func (h *Handler) GetUserDefaultInstances(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user id"}`, http.StatusBadRequest)
+		return
+	}
+	defaults, err := h.store.ListUserDefaults(userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if defaults == nil {
+		defaults = map[string]string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(defaults)
+}
+
+// UpdateUserDefaultInstances sets or clears a user's per-user default instances
+// (admin-only). Body is a {service_type: instance_id|null} map; a null/empty
+// value clears that override (for chaptarr, this revokes access). Each instance
+// id must exist and match its service type. Returns the updated map.
+func (h *Handler) UpdateUserDefaultInstances(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user id"}`, http.StatusBadRequest)
+		return
+	}
+	var body map[string]*string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	// Reject unknown service types up front so a typo never partially applies.
+	for serviceType := range body {
+		if !allowedServiceTypes[serviceType] {
+			http.Error(w, fmt.Sprintf(`{"error":"unknown service_type: %s"}`, serviceType), http.StatusBadRequest)
+			return
+		}
+	}
+	for serviceType, instanceID := range body {
+		if instanceID == nil || *instanceID == "" {
+			if err := h.store.ClearUserDefault(userID, serviceType); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+				return
+			}
+			continue
+		}
+		if err := h.store.SetUserDefault(userID, serviceType, *instanceID); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+			return
+		}
+	}
+	defaults, err := h.store.ListUserDefaults(userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if defaults == nil {
+		defaults = map[string]string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(defaults)
+}
+
 // validateRequiredFields enforces per-service-type required fields.
 func validateRequiredFields(inst *Instance) error {
 	if inst.Name == "" || inst.URL == "" {
@@ -195,7 +265,7 @@ func validateRequiredFields(inst *Instance) error {
 		}
 	case "transmission":
 		// Username/password are optional: Transmission RPC may run without auth.
-	default: // radarr, sonarr, sabnzbd, tautulli
+	default: // radarr, sonarr, chaptarr, sabnzbd, tautulli
 		if inst.APIKey == "" {
 			return fmt.Errorf("name, url, and api_key are required")
 		}
@@ -207,7 +277,10 @@ func validateRequiredFields(inst *Instance) error {
 func validateConnection(inst *Instance) error {
 	switch inst.ServiceType {
 	case "radarr", "sonarr":
-		return validateArrURL(inst.URL, inst.APIKey)
+		return validateArrURL(inst.URL, inst.APIKey, "v3")
+	case "chaptarr":
+		// Chaptarr is a Readarr fork speaking the Servarr /api/v1 API.
+		return validateArrURL(inst.URL, inst.APIKey, "v1")
 	case "sabnzbd":
 		_, err := sabnzbd.NewClient(inst.URL, inst.APIKey).Version()
 		return err
@@ -232,11 +305,11 @@ func validateConnection(inst *Instance) error {
 	}
 }
 
-// validateArrURL checks that a Radarr/Sonarr instance is reachable by hitting
-// its system/status endpoint.
-func validateArrURL(baseURL, apiKey string) error {
+// validateArrURL checks that a Servarr instance (Radarr/Sonarr on v3, Chaptarr
+// on v1) is reachable by hitting its system/status endpoint.
+func validateArrURL(baseURL, apiKey, apiVersion string) error {
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", baseURL+"/api/v3/system/status", nil)
+	req, err := http.NewRequest("GET", baseURL+"/api/"+apiVersion+"/system/status", nil)
 	if err != nil {
 		return fmt.Errorf("invalid url: %w", err)
 	}

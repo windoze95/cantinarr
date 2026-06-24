@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -77,6 +78,19 @@ func (s *ToolServer) GetRadarr() *radarr.Client {
 func (s *ToolServer) GetSonarr() *sonarr.Client {
 	if s.registry != nil {
 		client, _, err := s.registry.GetDefaultSonarrClient()
+		if err == nil && client != nil {
+			return client
+		}
+	}
+	return nil
+}
+
+// GetChaptarr returns the default Chaptarr client. Chaptarr has no global
+// default flag, so GetDefaultChaptarrClient resolves an arbitrary configured
+// instance (and returns a nil client, no error, when none is configured).
+func (s *ToolServer) GetChaptarr() *chaptarr.Client {
+	if s.registry != nil {
+		client, _, err := s.registry.GetDefaultChaptarrClient()
 		if err == nil && client != nil {
 			return client
 		}

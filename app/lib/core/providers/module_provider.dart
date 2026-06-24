@@ -86,6 +86,20 @@ class ModuleNotifier extends Notifier<ModuleState> {
         ));
       }
 
+      // Chaptarr (books) instances. NOT admin-gated here: the backend only
+      // surfaces a chaptarr instance to users an admin has explicitly granted,
+      // so any chaptarr instance present in the connection is one this user may
+      // see (admins see all). Visibility is enforced server-side.
+      for (final inst in connection.chaptarrInstances) {
+        modules.add(AppModule(
+          type: ModuleType.chaptarr,
+          label: inst.name,
+          icon: Icons.menu_book,
+          instanceId: inst.id,
+          instanceName: inst.name,
+        ));
+      }
+
       // Download client instances (admin only)
       if (isAdmin) {
         for (final inst in connection.downloadInstances) {

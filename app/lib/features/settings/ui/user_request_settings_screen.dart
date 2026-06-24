@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/request_settings_service.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../../request/data/request_service.dart';
 
 /// Admin screen for editing one user's per-user request overrides. A null
@@ -42,6 +44,10 @@ class _UserRequestSettingsScreenState
   int? _qualityRadarr;
   int? _qualitySonarr;
 
+  // The user's per-service default-instance overrides, keyed by service type
+  // (null = inherit the global default; for chaptarr, null = no access).
+  Map<String, String?> _defaultInstances = {};
+
   @override
   void initState() {
     super.initState();
@@ -66,6 +72,7 @@ class _UserRequestSettingsScreenState
     try {
       final user = await _service.getUserSettings(widget.userId);
       final admin = await _service.getAdminSettings();
+      final defaults = await _service.getUserDefaultInstances(widget.userId);
       if (!mounted) return;
       setState(() {
         _global = admin.settings;
@@ -77,6 +84,7 @@ class _UserRequestSettingsScreenState
         _allowQualityChoice = user.allowQualityChoice;
         _qualityRadarr = user.qualityProfileRadarr;
         _qualitySonarr = user.qualityProfileSonarr;
+        _defaultInstances = Map<String, String?>.from(defaults);
         _isLoading = false;
       });
     } catch (e) {
@@ -103,6 +111,13 @@ class _UserRequestSettingsScreenState
           qualityProfileSonarr: _qualitySonarr,
         ),
       );
+      // Send the override for every service type that has instances so a
+      // cleared selection serializes to null (which clears it server-side).
+      final defaults = <String, String?>{
+        for (final type in _instancesByType().keys)
+          type: _defaultInstances[type],
+      };
+      await _service.updateUserDefaultInstances(widget.userId, defaults);
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context)
@@ -118,7 +133,7 @@ class _UserRequestSettingsScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Request Settings — ${widget.username}')),
+      appBar: AppBar(title: Text('User Settings — ${widget.username}')),
       body: _isLoading
           ? const Center(
               child: CircularProgressIndicator(color: AppTheme.accent))
@@ -158,7 +173,8 @@ class _UserRequestSettingsScreenState
         ),
         _TriBool(
           title: 'Require approval',
-          subtitle: 'Requests from this user must be approved before being sent.',
+          subtitle:
+              'Requests from this user must be approved before being sent.',
           value: _requireApproval,
           inheritedDefault: global.requireApproval,
           onChanged: (v) => setState(() => _requireApproval = v),
@@ -192,6 +208,7 @@ class _UserRequestSettingsScreenState
           value: _qualitySonarr,
           onChanged: (v) => setState(() => _qualitySonarr = v),
         ),
+        ..._buildDefaultInstancesSection(),
         const SizedBox(height: 24),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -218,6 +235,124 @@ class _UserRequestSettingsScreenState
         const SizedBox(height: 32),
       ],
     );
+  }
+
+  /// The admin's connection lists every configured instance; group them by
+  /// service type (first-seen order) so we can render one dropdown per type.
+  /// Service types whose default instance is a per-user "source" override.
+  /// Download clients and Tautulli are admin-only infrastructure (not a
+  /// per-user content source), so they are excluded from this section.
+  static const _sourceServiceTypes = {'radarr', 'sonarr', 'chaptarr'};
+
+  Map<String, List<ServiceInstance>> _instancesByType() {
+    final instances =
+        ref.read(authProvider).valueOrNull?.connection?.instances ?? const [];
+    final grouped = <String, List<ServiceInstance>>{};
+    for (final inst in instances) {
+      if (!_sourceServiceTypes.contains(inst.serviceType)) continue;
+      grouped.putIfAbsent(inst.serviceType, () => []).add(inst);
+    }
+    return grouped;
+  }
+
+  /// A "Default instances" section with one dropdown per service type that has
+  /// at least one configured instance.
+  List<Widget> _buildDefaultInstancesSection() {
+    final grouped = _instancesByType();
+    if (grouped.isEmpty) return const [];
+    return [
+      const Divider(color: AppTheme.border),
+      const Padding(
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: Text(
+          'Default instances',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      const Padding(
+        padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+        child: Text(
+          'Pin which instance this user defaults to per service. Chaptarr (Books) '
+          'has no global default — choosing an instance grants access.',
+          style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        ),
+      ),
+      for (final entry in grouped.entries)
+        _defaultInstanceField(serviceType: entry.key, instances: entry.value),
+    ];
+  }
+
+  Widget _defaultInstanceField({
+    required String serviceType,
+    required List<ServiceInstance> instances,
+  }) {
+    // Chaptarr has no global default, so an unset value means "no access";
+    // every other service type falls back to its global default.
+    final isChaptarr = serviceType == 'chaptarr';
+    final value = _defaultInstances[serviceType];
+    // Guard against a stored id that's no longer in the instance list.
+    final hasValue = value != null && instances.any((i) => i.id == value);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      child: DropdownButtonFormField<String?>(
+        initialValue: hasValue ? value : null,
+        isExpanded: true,
+        dropdownColor: AppTheme.surfaceVariant,
+        decoration: InputDecoration(
+          labelText: 'Default ${_serviceLabel(serviceType)} instance',
+          labelStyle: const TextStyle(color: AppTheme.textSecondary),
+          enabledBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: AppTheme.border),
+          ),
+          focusedBorder: const OutlineInputBorder(
+            borderSide: BorderSide(color: AppTheme.accent),
+          ),
+        ),
+        style: const TextStyle(color: AppTheme.textPrimary),
+        items: [
+          DropdownMenuItem<String?>(
+            value: null,
+            child: Text(
+              isChaptarr ? 'No access' : 'Inherit (global default)',
+              style: const TextStyle(color: AppTheme.textSecondary),
+            ),
+          ),
+          ...instances.map(
+            (i) => DropdownMenuItem<String?>(
+              value: i.id,
+              child: Text(i.name),
+            ),
+          ),
+        ],
+        onChanged: (v) => setState(() => _defaultInstances[serviceType] = v),
+      ),
+    );
+  }
+
+  String _serviceLabel(String serviceType) {
+    switch (serviceType) {
+      case 'radarr':
+        return 'Radarr';
+      case 'sonarr':
+        return 'Sonarr';
+      case 'chaptarr':
+        return 'Chaptarr';
+      case 'sabnzbd':
+        return 'SABnzbd';
+      case 'qbittorrent':
+        return 'qBittorrent';
+      case 'nzbget':
+        return 'NZBGet';
+      case 'transmission':
+        return 'Transmission';
+      case 'tautulli':
+        return 'Tautulli';
+      default:
+        return serviceType;
+    }
   }
 
   Widget _seasonScopeField(GlobalRequestSettings global) {

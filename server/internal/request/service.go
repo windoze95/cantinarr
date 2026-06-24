@@ -59,10 +59,12 @@ func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, no
 	}
 }
 
-// getRadarr returns the default Radarr client from the registry.
-func (s *Service) getRadarr() *radarr.Client {
+// getRadarr returns the Radarr client to use as a given user's source: their
+// per-user default override when set, else the global default. A userID of 0
+// (no specific user / admin-global context) resolves to the global default.
+func (s *Service) getRadarr(userID int64) *radarr.Client {
 	if s.registry != nil {
-		client, _, err := s.registry.GetDefaultRadarrClient()
+		client, _, err := s.registry.GetUserDefaultRadarrClient(userID)
 		if err == nil && client != nil {
 			return client
 		}
@@ -70,10 +72,12 @@ func (s *Service) getRadarr() *radarr.Client {
 	return nil
 }
 
-// getSonarr returns the default Sonarr client from the registry.
-func (s *Service) getSonarr() *sonarr.Client {
+// getSonarr returns the Sonarr client to use as a given user's source: their
+// per-user default override when set, else the global default. A userID of 0
+// (no specific user / admin-global context) resolves to the global default.
+func (s *Service) getSonarr(userID int64) *sonarr.Client {
 	if s.registry != nil {
-		client, _, err := s.registry.GetDefaultSonarrClient()
+		client, _, err := s.registry.GetUserDefaultSonarrClient(userID)
 		if err == nil && client != nil {
 			return client
 		}
@@ -501,7 +505,7 @@ func (s *Service) addToArr(r *resolvedRequest) (status string, title string, err
 }
 
 func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
-	radarrClient := s.getRadarr()
+	radarrClient := s.getRadarr(r.userID)
 	if radarrClient == nil {
 		return "", "", fmt.Errorf("radarr is not configured")
 	}
@@ -551,7 +555,7 @@ func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
 }
 
 func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
-	sonarrClient := s.getSonarr()
+	sonarrClient := s.getSonarr(r.userID)
 	if sonarrClient == nil {
 		return "", "", fmt.Errorf("sonarr is not configured")
 	}
@@ -710,12 +714,21 @@ func (s *Service) monitorAndSearchSeasons(client *sonarr.Client, series *sonarr.
 	return nil
 }
 
+// GetStatus reports a title's availability against the GLOBAL default instance
+// (userID 0). User-scoped checks go through GetUserStatus, which resolves the
+// requesting user's source instance.
 func (s *Service) GetStatus(tmdbID int, mediaType string) (*StatusResponse, error) {
+	return s.statusFor(0, tmdbID, mediaType)
+}
+
+// statusFor reports a title's availability against userID's source instance
+// (their per-user default override, else the global default).
+func (s *Service) statusFor(userID int64, tmdbID int, mediaType string) (*StatusResponse, error) {
 	switch mediaType {
 	case "movie":
-		return s.getMovieStatus(tmdbID)
+		return s.getMovieStatus(userID, tmdbID)
 	case "tv":
-		return s.getTVStatus(tmdbID)
+		return s.getTVStatus(userID, tmdbID)
 	default:
 		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
@@ -737,17 +750,17 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType string) (*St
 		// A denied request shows "denied" only while the title isn't otherwise
 		// available; if it later lands in the arr, prefer the live state.
 		if status == StatusDenied {
-			if live, lerr := s.GetStatus(tmdbID, mediaType); lerr == nil && live != nil && live.Status != StatusUnavailable {
+			if live, lerr := s.statusFor(userID, tmdbID, mediaType); lerr == nil && live != nil && live.Status != StatusUnavailable {
 				return live, nil
 			}
 			return &StatusResponse{Status: StatusDenied}, nil
 		}
 	}
-	return s.GetStatus(tmdbID, mediaType)
+	return s.statusFor(userID, tmdbID, mediaType)
 }
 
-func (s *Service) getMovieStatus(tmdbID int) (*StatusResponse, error) {
-	radarrClient := s.getRadarr()
+func (s *Service) getMovieStatus(userID int64, tmdbID int) (*StatusResponse, error) {
+	radarrClient := s.getRadarr(userID)
 	if radarrClient == nil {
 		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
@@ -781,8 +794,8 @@ func (s *Service) getMovieStatus(tmdbID int) (*StatusResponse, error) {
 	return &StatusResponse{Status: StatusUnavailable}, nil
 }
 
-func (s *Service) getTVStatus(tmdbID int) (*StatusResponse, error) {
-	sonarrClient := s.getSonarr()
+func (s *Service) getTVStatus(userID int64, tmdbID int) (*StatusResponse, error) {
+	sonarrClient := s.getSonarr(userID)
 	if sonarrClient == nil {
 		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
@@ -1032,16 +1045,17 @@ func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType string
 		QualityProfiles:    []QualityProfile{},
 	}
 	if eff.AllowQualityChoice {
-		opts.QualityProfiles = s.qualityProfiles(mediaType)
+		opts.QualityProfiles = s.qualityProfiles(userID, mediaType)
 	}
 	return opts, nil
 }
 
-// qualityProfiles fetches the selectable quality profiles for a media type.
-func (s *Service) qualityProfiles(mediaType string) []QualityProfile {
+// qualityProfiles fetches the selectable quality profiles for a media type from
+// userID's source instance (userID 0 = global default).
+func (s *Service) qualityProfiles(userID int64, mediaType string) []QualityProfile {
 	out := []QualityProfile{}
 	if mediaType == "tv" {
-		if c := s.getSonarr(); c != nil {
+		if c := s.getSonarr(userID); c != nil {
 			if ps, err := c.GetQualityProfiles(); err == nil {
 				for _, p := range ps {
 					out = append(out, QualityProfile{ID: p.ID, Name: p.Name})
@@ -1050,7 +1064,7 @@ func (s *Service) qualityProfiles(mediaType string) []QualityProfile {
 		}
 		return out
 	}
-	if c := s.getRadarr(); c != nil {
+	if c := s.getRadarr(userID); c != nil {
 		if ps, err := c.GetQualityProfiles(); err == nil {
 			for _, p := range ps {
 				out = append(out, QualityProfile{ID: p.ID, Name: p.Name})
@@ -1065,8 +1079,8 @@ func (s *Service) qualityProfiles(mediaType string) []QualityProfile {
 func (s *Service) GetAdminSettings() *AdminSettingsView {
 	return &AdminSettingsView{
 		Settings:       s.GetGlobalSettings(),
-		RadarrProfiles: s.qualityProfiles("movie"),
-		SonarrProfiles: s.qualityProfiles("tv"),
+		RadarrProfiles: s.qualityProfiles(0, "movie"),
+		SonarrProfiles: s.qualityProfiles(0, "tv"),
 	}
 }
 

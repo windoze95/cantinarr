@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -18,13 +19,13 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_queue",
 		Permission:  auth.PermissionArrRead,
-		Description: "Get the current download queue from Radarr/Sonarr with progress, time left, protocol, and any errors per item. Admin only",
+		Description: "Get the current download queue from Radarr/Sonarr/Chaptarr with progress, time left, protocol, and any errors per item. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "all"},
+					"enum":        []string{"movie", "tv", "book", "all"},
 					"description": "Which queue to fetch (default: all)",
 				},
 			},
@@ -33,14 +34,14 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_calendar",
 		Permission:  auth.PermissionArrRead,
-		Description: "Get upcoming movie releases and TV episode air dates, grouped by date. Admin only",
+		Description: "Get upcoming movie releases and TV episode air dates, grouped by date. Books have no calendar in Chaptarr, so media_type=book is not supported. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "all"},
-					"description": "Which calendar to fetch (default: all)",
+					"enum":        []string{"movie", "tv", "book", "all"},
+					"description": "Which calendar to fetch (default: all). Books have no calendar.",
 				},
 				"days": map[string]interface{}{
 					"type":        "integer",
@@ -54,14 +55,14 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_library",
 		Permission:  auth.PermissionArrRead,
-		Description: "Browse the Radarr/Sonarr library. Filter for missing (monitored but not downloaded) or unmonitored items, optionally narrowed by a title query. Admin only",
+		Description: "Browse the Radarr/Sonarr/Chaptarr library. Filter for missing (monitored but not downloaded) or unmonitored items, optionally narrowed by a title query. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether to list movies or TV series",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether to list movies, TV series, or books",
 				},
 				"filter": map[string]interface{}{
 					"type":        "string",
@@ -79,14 +80,14 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_history",
 		Permission:  auth.PermissionArrRead,
-		Description: "Get recent download activity (grabs, imports, failures) from Radarr/Sonarr. Admin only",
+		Description: "Get recent download activity (grabs, imports, failures) from Radarr/Sonarr/Chaptarr. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether to fetch movie or TV history",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether to fetch movie, TV, or book history",
 				},
 				"limit": map[string]interface{}{
 					"type":        "integer",
@@ -99,50 +100,62 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "trigger_search",
 		Permission:  auth.PermissionArrSearch,
-		Description: "Trigger an automatic indexer search for a movie or series that is already in the library. For TV, pass season_number to search a single season. Admin only",
+		Description: "Trigger an automatic indexer search for a movie, series, or book that is already in the library. For movies/TV pass tmdb_id (and, for TV, season_number to search a single season). For books pass book_id to search one book or author_id to search all of an author's monitored books (books have no tmdb_id). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
-					"description": "The TMDB ID of the movie or TV show",
+					"description": "Movie/TV only: the TMDB ID of the movie or TV show",
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether this is a movie or TV show",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether this is a movie, TV show, or book",
 				},
 				"season_number": map[string]interface{}{
 					"type":        "integer",
 					"description": "TV only: limit the search to this season",
 				},
+				"author_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Book only: search all monitored books of this Chaptarr author id (used when book_id is absent)",
+				},
+				"book_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Book only: search this single Chaptarr book id",
+				},
 			},
-			"required": []string{"tmdb_id", "media_type"},
+			"required": []string{"media_type"},
 		},
 	},
 	{
 		Name:        "search_releases",
 		AdminOnly:   true,
 		Permission:  auth.PermissionArrSearch,
-		Description: "Interactively search indexers for downloadable releases of a library item and list them with the guid and indexer_id needed to grab one. For TV, season_number is required. Admin only",
+		Description: "Interactively search indexers for downloadable releases of a library item and list them with the guid and indexer_id needed to grab one. For movies/TV pass tmdb_id (TV also requires season_number). For books pass book_id (books have no tmdb_id). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
-					"description": "The TMDB ID of the movie or TV show",
+					"description": "Movie/TV only: the TMDB ID of the movie or TV show",
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether this is a movie or TV show",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether this is a movie, TV show, or book",
 				},
 				"season_number": map[string]interface{}{
 					"type":        "integer",
 					"description": "TV only: the season to search releases for (required for tv)",
 				},
+				"book_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Book only: the Chaptarr book id to search releases for (required for book)",
+				},
 			},
-			"required": []string{"tmdb_id", "media_type"},
+			"required": []string{"media_type"},
 		},
 	},
 	{
@@ -163,8 +176,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether the release is for a movie or TV show",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether the release is for a movie, TV show, or book",
 				},
 			},
 			"required": []string{"guid", "indexer_id", "media_type"},
@@ -184,8 +197,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether the queue item is a movie or TV download",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether the queue item is a movie, TV, or book download",
 				},
 				"blocklist": map[string]interface{}{
 					"type":        "boolean",
@@ -199,7 +212,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "get_disk_space",
 		AdminOnly:   true,
 		Permission:  auth.PermissionSystemRead,
-		Description: "Get free and total disk space for the Radarr and Sonarr volumes. Admin only",
+		Description: "Get free and total disk space for the Radarr, Sonarr, and Chaptarr volumes. Admin only",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
@@ -208,13 +221,13 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_arr_health",
 		Permission:  auth.PermissionArrRead,
-		Description: "Check Radarr/Sonarr system health for config-level problems (download client unreachable, remote path mapping, indexers down, disk, no root folder). Use this when diagnose_queue shows path/permission/client errors to confirm the root cause that per-item queue diagnosis can only guess at. Admin only",
+		Description: "Check Radarr/Sonarr/Chaptarr system health for config-level problems (download client unreachable, remote path mapping, indexers down, disk, no root folder). Use this when diagnose_queue shows path/permission/client errors to confirm the root cause that per-item queue diagnosis can only guess at. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "all"},
+					"enum":        []string{"movie", "tv", "book", "all"},
 					"description": "Which service's health to fetch (default: all)",
 				},
 			},
@@ -223,13 +236,13 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "diagnose_queue",
 		Permission:  auth.PermissionArrRead,
-		Description: "Import Doctor: scan the Radarr/Sonarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
+		Description: "Import Doctor: scan the Radarr/Sonarr/Chaptarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "all"},
+					"enum":        []string{"movie", "tv", "book", "all"},
 					"description": "Which queue to diagnose (default: all)",
 				},
 			},
@@ -239,7 +252,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "get_manual_import_candidates",
 		AdminOnly:   true,
 		Permission:  auth.PermissionDownloadsManage,
-		Description: "List the files Radarr/Sonarr found for a stuck download (from its queue_id), including each file's mapped movie/series/episodes and any rejection reasons that blocked an automatic import. Use this to understand why an item won't import before calling execute_manual_import. Admin only",
+		Description: "List the files Radarr/Sonarr/Chaptarr found for a stuck download (from its queue_id), including each file's mapped movie/series/episodes/book and any rejection reasons that blocked an automatic import. Use this to understand why an item won't import before calling execute_manual_import. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -249,8 +262,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether the queue item is a movie or TV download",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether the queue item is a movie, TV, or book download",
 				},
 			},
 			"required": []string{"queue_id", "media_type"},
@@ -270,8 +283,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether the queue item is a movie or TV download",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether the queue item is a movie, TV, or book download",
 				},
 				"force": map[string]interface{}{
 					"type":        "boolean",
@@ -295,8 +308,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether the queue item is a movie or TV download",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether the queue item is a movie, TV, or book download",
 				},
 				"action": map[string]interface{}{
 					"type":        "string",
@@ -311,21 +324,25 @@ var arrToolDefinitions = []Tool{
 		Name:        "rescan_media",
 		AdminOnly:   true,
 		Permission:  auth.PermissionArrSearch,
-		Description: "Rescan the files on disk for a library movie or series, then run the import pass. Use this after fixing a disk-space, path, or permissions problem so Radarr/Sonarr picks up files that are already there. Admin only",
+		Description: "Rescan the files on disk for a library movie, series, or author, then run the import pass. Use this after fixing a disk-space, path, or permissions problem so the service picks up files that are already there. For movies/TV pass tmdb_id; for books pass author_id (books have no tmdb_id). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
-					"description": "The TMDB ID of the movie or TV show",
+					"description": "Movie/TV only: the TMDB ID of the movie or TV show",
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether this is a movie or TV show",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether this is a movie, TV show, or book",
+				},
+				"author_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Book only: the Chaptarr author id to rescan (required for book)",
 				},
 			},
-			"required": []string{"tmdb_id", "media_type"},
+			"required": []string{"media_type"},
 		},
 	},
 }
@@ -450,6 +467,42 @@ func formatSonarrQueueItem(item sonarr.DetailedQueueItem) string {
 	return sb.String()
 }
 
+func formatChaptarrQueueItem(item chaptarr.DetailedQueueItem) string {
+	title := item.Title
+	if item.Book != nil && item.Book.Title != "" {
+		title = item.Book.Title
+		if item.Author != nil && item.Author.AuthorName != "" {
+			title = fmt.Sprintf("%s — %s", item.Author.AuthorName, item.Book.Title)
+		}
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "- [queue %d] %s — %s", item.ID, title, item.Status)
+	if item.Size > 0 {
+		fmt.Fprintf(&sb, ", %.1f%% done", (item.Size-item.Sizeleft)/item.Size*100)
+	}
+	if item.Timeleft != "" {
+		fmt.Fprintf(&sb, ", %s left", item.Timeleft)
+	}
+	if item.Protocol != "" {
+		fmt.Fprintf(&sb, ", %s", item.Protocol)
+	}
+	if item.DownloadClient != "" {
+		fmt.Fprintf(&sb, " via %s", item.DownloadClient)
+	}
+	if item.TrackedDownloadStatus != "" && !strings.EqualFold(item.TrackedDownloadStatus, "ok") {
+		fmt.Fprintf(&sb, " [%s/%s]", item.TrackedDownloadStatus, item.TrackedDownloadState)
+	}
+	if item.ErrorMessage != "" {
+		fmt.Fprintf(&sb, "\n  error: %s", item.ErrorMessage)
+	}
+	for _, msg := range item.StatusMessages {
+		if len(msg.Messages) > 0 {
+			fmt.Fprintf(&sb, "\n  issue: %s", strings.Join(msg.Messages, "; "))
+		}
+	}
+	return sb.String()
+}
+
 func (s *ToolServer) getQueue(input json.RawMessage) (*ToolResult, error) {
 	var params struct {
 		MediaType string `json:"media_type"`
@@ -517,6 +570,34 @@ func (s *ToolServer) getQueue(input json.RawMessage) (*ToolResult, error) {
 		}
 	}
 
+	if mediaType == "book" || mediaType == "all" {
+		chaptarrClient := s.GetChaptarr()
+		if chaptarrClient == nil {
+			if mediaType == "book" {
+				return &ToolResult{Text: "Chaptarr is not configured."}, nil
+			}
+			sections = append(sections, "Chaptarr is not configured.")
+		} else {
+			items, err := chaptarrClient.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+			if err != nil {
+				return nil, err
+			}
+			if len(items) == 0 {
+				sections = append(sections, "Book queue: empty.")
+			} else {
+				shown := items
+				if len(shown) > maxQueueItems {
+					shown = shown[:maxQueueItems]
+				}
+				lines := make([]string, 0, len(shown))
+				for _, item := range shown {
+					lines = append(lines, formatChaptarrQueueItem(item))
+				}
+				sections = append(sections, renderQueueSection("Book queue", len(items), lines))
+			}
+		}
+	}
+
 	return &ToolResult{Text: strings.Join(sections, "\n\n")}, nil
 }
 
@@ -536,6 +617,12 @@ func (s *ToolServer) getCalendar(input json.RawMessage) (*ToolResult, error) {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	mediaType := normalizeMediaType(params.MediaType)
+	// Chaptarr has no calendar endpoint (books carry no air/release schedule the
+	// way episodes and theatrical/digital releases do), so book is unsupported
+	// here. Return a graceful explanation rather than an error.
+	if mediaType == "book" {
+		return &ToolResult{Text: "get_calendar is not supported for books — Chaptarr has no calendar. Use get_library (filter=missing) to see monitored books without a file."}, nil
+	}
 	days := params.Days
 	if days < 1 {
 		days = 14
@@ -548,6 +635,10 @@ func (s *ToolServer) getCalendar(input json.RawMessage) (*ToolResult, error) {
 
 	var entries []calendarEntry
 	var notes []string
+	if mediaType == "all" {
+		// The combined view still skips books; note it so the omission is explicit.
+		notes = append(notes, "Books have no calendar.")
+	}
 
 	if mediaType == "movie" || mediaType == "all" {
 		radarrClient := s.GetRadarr()
@@ -768,8 +859,59 @@ func (s *ToolServer) getLibrary(input json.RawMessage) (*ToolResult, error) {
 		}
 		return &ToolResult{Text: sb.String()}, nil
 
+	case "book":
+		chaptarrClient := s.GetChaptarr()
+		if chaptarrClient == nil {
+			return &ToolResult{Text: "Chaptarr is not configured."}, nil
+		}
+		authors, err := chaptarrClient.GetAllAuthors()
+		if err != nil {
+			return nil, err
+		}
+		total := len(authors)
+		var matched []chaptarr.Author
+		for _, a := range authors {
+			switch filter {
+			case "missing":
+				if !a.Monitored {
+					continue
+				}
+				if a.Statistics.PercentOfBooks >= 100 {
+					continue
+				}
+			case "unmonitored":
+				if a.Monitored {
+					continue
+				}
+			}
+			if query != "" && !strings.Contains(strings.ToLower(a.AuthorName), query) {
+				continue
+			}
+			matched = append(matched, a)
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Book library: %d author(s) total, %d matching (filter: %s", total, len(matched), filter)
+		if query != "" {
+			fmt.Fprintf(&sb, ", query: %q", params.Query)
+		}
+		sb.WriteString(")")
+		shown := matched
+		if len(shown) > maxLibraryItems {
+			shown = shown[:maxLibraryItems]
+			fmt.Fprintf(&sb, ", showing first %d of %d matches for filter %q", maxLibraryItems, len(matched), filter)
+		}
+		for _, a := range shown {
+			fmt.Fprintf(&sb, "\n- %s [author ID %d]", a.AuthorName, a.ID)
+			fmt.Fprintf(&sb, " — %d/%d books", a.Statistics.BookFileCount, a.Statistics.BookCount)
+			if !a.Monitored {
+				sb.WriteString(" — unmonitored")
+			}
+		}
+		sb.WriteString("\n\nUse get_queue, search_releases (book_id), or trigger_search (author_id/book_id) for per-book actions; book ids come from the Chaptarr library, not this summary.")
+		return &ToolResult{Text: sb.String()}, nil
+
 	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
+		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", or \"book\"."}, nil
 	}
 }
 
@@ -851,8 +993,42 @@ func (s *ToolServer) getHistory(input json.RawMessage) (*ToolResult, error) {
 		}
 		return &ToolResult{Text: sb.String()}, nil
 
+	case "book":
+		chaptarrClient := s.GetChaptarr()
+		if chaptarrClient == nil {
+			return &ToolResult{Text: "Chaptarr is not configured."}, nil
+		}
+		page, err := chaptarrClient.GetHistory(1, limit)
+		if err != nil {
+			return nil, err
+		}
+		if page == nil || len(page.Records) == 0 {
+			return &ToolResult{Text: "No book history found."}, nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Recent book history (%d records):", len(page.Records))
+		for _, rec := range page.Records {
+			when := "unknown date"
+			if rec.Date != nil {
+				when = rec.Date.UTC().Format("2006-01-02 15:04")
+			}
+			fmt.Fprintf(&sb, "\n- %s %s", when, rec.EventType)
+			if rec.Author != nil && rec.Author.AuthorName != "" {
+				fmt.Fprintf(&sb, ": %s", rec.Author.AuthorName)
+				if rec.Book != nil && rec.Book.Title != "" {
+					fmt.Fprintf(&sb, " — %s", rec.Book.Title)
+				}
+			} else if rec.Book != nil && rec.Book.Title != "" {
+				fmt.Fprintf(&sb, ": %s", rec.Book.Title)
+			}
+			if rec.SourceTitle != "" {
+				fmt.Fprintf(&sb, " — %s", rec.SourceTitle)
+			}
+		}
+		return &ToolResult{Text: sb.String()}, nil
+
 	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
+		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", or \"book\"."}, nil
 	}
 }
 
@@ -863,12 +1039,18 @@ func (s *ToolServer) triggerSearch(input json.RawMessage) (*ToolResult, error) {
 		TmdbID       int    `json:"tmdb_id"`
 		MediaType    string `json:"media_type"`
 		SeasonNumber *int   `json:"season_number"`
+		AuthorID     int    `json:"author_id"`
+		BookID       int    `json:"book_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
 
-	text, err := TriggerSearchHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), params.MediaType, params.TmdbID, params.SeasonNumber)
+	var bookIDs []int
+	if params.BookID != 0 {
+		bookIDs = []int{params.BookID}
+	}
+	text, err := TriggerSearchHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.TmdbID, params.SeasonNumber, params.AuthorID, bookIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -937,11 +1119,51 @@ func formatSonarrReleases(releases []sonarr.Release) string {
 	return sb.String()
 }
 
+// chaptarrSeeders dereferences a Chaptarr release's optional seeder/leecher
+// count (the API omits them for usenet), returning 0 when absent.
+func chaptarrSeeders(n *int) int {
+	if n == nil {
+		return 0
+	}
+	return *n
+}
+
+func formatChaptarrReleases(releases []chaptarr.Release) string {
+	sort.SliceStable(releases, func(i, j int) bool {
+		if releases[i].Rejected != releases[j].Rejected {
+			return !releases[i].Rejected
+		}
+		si, sj := chaptarrSeeders(releases[i].Seeders), chaptarrSeeders(releases[j].Seeders)
+		if si != sj {
+			return si > sj
+		}
+		return releases[i].Size > releases[j].Size
+	})
+	if len(releases) > maxReleaseResults {
+		releases = releases[:maxReleaseResults]
+	}
+	var sb strings.Builder
+	for i, rel := range releases {
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, rel.Title)
+		fmt.Fprintf(&sb, "   size: %s | %s", humanBytes(float64(rel.Size)), rel.Protocol)
+		if rel.Protocol == "torrent" {
+			fmt.Fprintf(&sb, " (%d seeders / %d leechers)", chaptarrSeeders(rel.Seeders), chaptarrSeeders(rel.Leechers))
+		}
+		fmt.Fprintf(&sb, " | indexer: %s (indexer_id: %d) | age: %.1f days\n", rel.Indexer, rel.IndexerID, rel.AgeHours/24)
+		if rel.Rejected {
+			fmt.Fprintf(&sb, "   rejected: %s\n", strings.Join(rel.Rejections, "; "))
+		}
+		fmt.Fprintf(&sb, "   guid: %s\n", rel.GUID)
+	}
+	return sb.String()
+}
+
 func (s *ToolServer) searchReleases(input json.RawMessage) (*ToolResult, error) {
 	var params struct {
 		TmdbID       int    `json:"tmdb_id"`
 		MediaType    string `json:"media_type"`
 		SeasonNumber *int   `json:"season_number"`
+		BookID       int    `json:"book_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -997,8 +1219,27 @@ func (s *ToolServer) searchReleases(input json.RawMessage) (*ToolResult, error) 
 			len(releases), series.Title, *params.SeasonNumber, min(len(releases), maxReleaseResults))
 		return &ToolResult{Text: header + formatSonarrReleases(releases)}, nil
 
+	case "book":
+		chaptarrClient := s.GetChaptarr()
+		if chaptarrClient == nil {
+			return &ToolResult{Text: "Chaptarr is not configured."}, nil
+		}
+		if params.BookID == 0 {
+			return &ToolResult{Text: "book_id is required when searching book releases."}, nil
+		}
+		releases, err := chaptarrClient.SearchReleases(params.BookID)
+		if err != nil {
+			return nil, err
+		}
+		if len(releases) == 0 {
+			return &ToolResult{Text: fmt.Sprintf("No releases found for book id %d.", params.BookID)}, nil
+		}
+		header := fmt.Sprintf("Found %d release(s) for book id %d, showing top %d. Use grab_release with a guid and indexer_id to download one.\n",
+			len(releases), params.BookID, min(len(releases), maxReleaseResults))
+		return &ToolResult{Text: header + formatChaptarrReleases(releases)}, nil
+
 	default:
-		return &ToolResult{Text: "media_type must be \"movie\" or \"tv\"."}, nil
+		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", or \"book\"."}, nil
 	}
 }
 
@@ -1013,7 +1254,7 @@ func (s *ToolServer) grabRelease(input json.RawMessage) (*ToolResult, error) {
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := GrabReleaseHelper(s.GetRadarr(), s.GetSonarr(), params.MediaType, params.GUID, params.IndexerID, 0)
+	text, err := GrabReleaseHelper(s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.GUID, params.IndexerID, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -1031,7 +1272,7 @@ func (s *ToolServer) removeQueueItem(input json.RawMessage) (*ToolResult, error)
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := RemoveQueueItemHelper(s.GetRadarr(), s.GetSonarr(), params.MediaType, params.QueueID, params.Blocklist)
+	text, err := RemoveQueueItemHelper(s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.QueueID, params.Blocklist)
 	if err != nil {
 		return nil, err
 	}
@@ -1055,8 +1296,9 @@ func formatDiskLines(sb *strings.Builder, path, label string, free, total int64)
 func (s *ToolServer) getDiskSpace() (*ToolResult, error) {
 	radarrClient := s.GetRadarr()
 	sonarrClient := s.GetSonarr()
-	if radarrClient == nil && sonarrClient == nil {
-		return &ToolResult{Text: "Radarr/Sonarr is not configured."}, nil
+	chaptarrClient := s.GetChaptarr()
+	if radarrClient == nil && sonarrClient == nil && chaptarrClient == nil {
+		return &ToolResult{Text: "Radarr/Sonarr/Chaptarr is not configured."}, nil
 	}
 
 	var sb strings.Builder
@@ -1086,6 +1328,21 @@ func (s *ToolServer) getDiskSpace() (*ToolResult, error) {
 		}
 	} else {
 		sb.WriteString("Sonarr is not configured.")
+	}
+
+	sb.WriteString("\n\n")
+
+	if chaptarrClient != nil {
+		disks, err := chaptarrClient.GetDiskSpace()
+		if err != nil {
+			return nil, err
+		}
+		sb.WriteString("Chaptarr disk space:")
+		for _, d := range disks {
+			formatDiskLines(&sb, d.Path, d.Label, d.FreeSpace, d.TotalSpace)
+		}
+	} else {
+		sb.WriteString("Chaptarr is not configured.")
 	}
 
 	return &ToolResult{Text: sb.String()}, nil

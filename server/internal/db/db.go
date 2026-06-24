@@ -70,6 +70,20 @@ CREATE TABLE IF NOT EXISTS service_instances (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Per-user default *arr instance override (admin-managed). A row pins which
+-- instance is THIS user's default source for a service type, overriding the
+-- global service_instances.is_default. For service types that have NO global
+-- default (chaptarr), a row is ALSO the per-user access grant: without one the
+-- user can neither see nor proxy to that instance. Absent row = inherit the
+-- global default (or, for chaptarr, no access). At most one row per
+-- (user, service_type). Mirrors user_request_settings (admin-managed per-user).
+CREATE TABLE IF NOT EXISTS user_default_instances (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    service_type TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
+    PRIMARY KEY (user_id, service_type)
+);
+
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),

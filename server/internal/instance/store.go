@@ -161,6 +161,12 @@ func (s *Store) Delete(id string) error {
 	if rows == 0 {
 		return fmt.Errorf("instance not found: %s", id)
 	}
+	// Drop any per-user defaults/grants that pointed at this instance so a
+	// deleted instance neither lingers as someone's default nor (for chaptarr)
+	// keeps granting access to a now-removed instance.
+	if _, err := s.db.Exec("DELETE FROM user_default_instances WHERE instance_id = ?", id); err != nil {
+		return fmt.Errorf("delete instance user defaults: %w", err)
+	}
 	return nil
 }
 
@@ -188,6 +194,103 @@ func (s *Store) GetDefault(serviceType string) (*Instance, error) {
 		return nil, err
 	}
 	return &inst, nil
+}
+
+// GetUserDefault returns the instance ID a user has pinned as their default for
+// a service type, or ("", false, nil) when the user has no per-user override
+// (the caller should fall back to the global default). For service types with no
+// global default (chaptarr), the returned ID is also the access grant.
+func (s *Store) GetUserDefault(userID int64, serviceType string) (string, bool, error) {
+	var instanceID string
+	err := s.db.QueryRow(
+		"SELECT instance_id FROM user_default_instances WHERE user_id = ? AND service_type = ?",
+		userID, serviceType,
+	).Scan(&instanceID)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("get user default instance: %w", err)
+	}
+	return instanceID, true, nil
+}
+
+// ListUserDefaults returns a user's per-user default overrides keyed by service
+// type. Service types absent from the map inherit the global default.
+func (s *Store) ListUserDefaults(userID int64) (map[string]string, error) {
+	rows, err := s.db.Query(
+		"SELECT service_type, instance_id FROM user_default_instances WHERE user_id = ?",
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list user default instances: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var serviceType, instanceID string
+		if err := rows.Scan(&serviceType, &instanceID); err != nil {
+			return nil, fmt.Errorf("scan user default instance: %w", err)
+		}
+		out[serviceType] = instanceID
+	}
+	return out, rows.Err()
+}
+
+// SetUserDefault pins instanceID as userID's default for serviceType. The
+// instance must exist and its stored service type must match serviceType, so a
+// single admin endpoint can accept a {service_type: instance_id} map without
+// risking a mismatched pin.
+func (s *Store) SetUserDefault(userID int64, serviceType, instanceID string) error {
+	inst, err := s.Get(instanceID)
+	if err != nil {
+		return err
+	}
+	if inst == nil {
+		return fmt.Errorf("instance not found: %s", instanceID)
+	}
+	if inst.ServiceType != serviceType {
+		return fmt.Errorf("instance %s is %q, not %q", instanceID, inst.ServiceType, serviceType)
+	}
+	_, err = s.db.Exec(
+		"INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, ?, ?) "+
+			"ON CONFLICT(user_id, service_type) DO UPDATE SET instance_id = excluded.instance_id",
+		userID, serviceType, instanceID,
+	)
+	if err != nil {
+		return fmt.Errorf("set user default instance: %w", err)
+	}
+	return nil
+}
+
+// ClearUserDefault removes a user's per-user override for a service type, so it
+// reverts to the global default (or, for chaptarr, revokes access).
+func (s *Store) ClearUserDefault(userID int64, serviceType string) error {
+	if _, err := s.db.Exec(
+		"DELETE FROM user_default_instances WHERE user_id = ? AND service_type = ?",
+		userID, serviceType,
+	); err != nil {
+		return fmt.Errorf("clear user default instance: %w", err)
+	}
+	return nil
+}
+
+// UserHasInstanceAccess reports whether a user has been granted a specific
+// instance via a per-user default row. Used to gate access to service types that
+// have no global default (chaptarr); admins bypass this check at the caller.
+func (s *Store) UserHasInstanceAccess(userID int64, instanceID string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(
+		"SELECT 1 FROM user_default_instances WHERE user_id = ? AND instance_id = ? LIMIT 1",
+		userID, instanceID,
+	).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check user instance access: %w", err)
+	}
+	return true, nil
 }
 
 // Count returns the number of instances for a service type.

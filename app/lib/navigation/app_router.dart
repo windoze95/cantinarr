@@ -7,6 +7,11 @@ import '../features/auth/ui/auth_screen.dart';
 import '../features/auth/ui/passkey_create_screen.dart';
 import '../features/auth/ui/passkey_management_screen.dart';
 import '../features/auth/ui/set_password_screen.dart';
+import '../features/chaptarr/ui/chaptarr_history_screen.dart';
+import '../features/chaptarr/ui/chaptarr_home_screen.dart';
+import '../features/chaptarr/ui/chaptarr_module_shell.dart';
+import '../features/chaptarr/ui/chaptarr_queue_screen.dart';
+import '../features/chaptarr/ui/chaptarr_wanted_screen.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_releases_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
@@ -234,6 +239,51 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: '/sonarr/calendar',
                     builder: (_, __) => const SonarrCalendarScreen(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          // Chaptarr module (Library/Queue/History/Wanted tabs)
+          StatefulShellRoute.indexedStack(
+            builder: (context, state, navigationShell) {
+              return ChaptarrModuleShell(
+                currentIndex: navigationShell.currentIndex,
+                onTabChanged: (index) => navigationShell.goBranch(index),
+                child: navigationShell,
+              );
+            },
+            branches: [
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/chaptarr/library',
+                    builder: (_, __) => const ChaptarrHomeScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/chaptarr/queue',
+                    builder: (_, __) => const ChaptarrQueueScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/chaptarr/history',
+                    builder: (_, __) => const ChaptarrHistoryScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/chaptarr/wanted',
+                    builder: (_, __) => const ChaptarrWantedScreen(),
                   ),
                 ],
               ),

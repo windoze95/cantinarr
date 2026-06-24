@@ -373,6 +373,8 @@ IconData _serviceIcon(String serviceType) {
       return Icons.movie_outlined;
     case 'sonarr':
       return Icons.tv_outlined;
+    case 'chaptarr':
+      return Icons.menu_book;
     case 'sabnzbd':
     case 'qbittorrent':
     case 'nzbget':
@@ -391,6 +393,8 @@ String _serviceLabel(String serviceType) {
       return 'Radarr';
     case 'sonarr':
       return 'Sonarr';
+    case 'chaptarr':
+      return 'Chaptarr';
     case 'sabnzbd':
       return 'SABnzbd';
     case 'qbittorrent':

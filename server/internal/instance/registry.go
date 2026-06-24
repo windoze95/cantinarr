@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -19,6 +20,7 @@ type Registry struct {
 	mu                  sync.RWMutex
 	radarrClients       map[string]*radarr.Client
 	sonarrClients       map[string]*sonarr.Client
+	chaptarrClients     map[string]*chaptarr.Client
 	sabnzbdClients      map[string]*sabnzbd.Client
 	qbittorrentClients  map[string]*qbittorrent.Client
 	nzbgetClients       map[string]*nzbget.Client
@@ -32,6 +34,7 @@ func NewRegistry(store *Store) *Registry {
 		store:               store,
 		radarrClients:       make(map[string]*radarr.Client),
 		sonarrClients:       make(map[string]*sonarr.Client),
+		chaptarrClients:     make(map[string]*chaptarr.Client),
 		sabnzbdClients:      make(map[string]*sabnzbd.Client),
 		qbittorrentClients:  make(map[string]*qbittorrent.Client),
 		nzbgetClients:       make(map[string]*nzbget.Client),
@@ -81,6 +84,29 @@ func (r *Registry) GetSonarrClient(instanceID string) (*sonarr.Client, error) {
 
 	r.mu.Lock()
 	r.sonarrClients[instanceID] = client
+	r.mu.Unlock()
+
+	return client, nil
+}
+
+// GetChaptarrClient returns a cached or new Chaptarr client for the given instance ID.
+func (r *Registry) GetChaptarrClient(instanceID string) (*chaptarr.Client, error) {
+	r.mu.RLock()
+	if client, ok := r.chaptarrClients[instanceID]; ok {
+		r.mu.RUnlock()
+		return client, nil
+	}
+	r.mu.RUnlock()
+
+	inst, err := r.getInstanceOfType(instanceID, "chaptarr")
+	if err != nil {
+		return nil, err
+	}
+
+	client := chaptarr.NewClient(inst.URL, inst.APIKey)
+
+	r.mu.Lock()
+	r.chaptarrClients[instanceID] = client
 	r.mu.Unlock()
 
 	return client, nil
@@ -292,11 +318,69 @@ func (r *Registry) GetDefaultTautulliClient() (*tautulli.Client, string, error) 
 	return client, inst.ID, err
 }
 
+// GetUserDefaultRadarrClient returns the Radarr client for a user's per-user
+// default instance, falling back to the global default when the user has no
+// override. The second return is the resolved instance ID.
+func (r *Registry) GetUserDefaultRadarrClient(userID int64) (*radarr.Client, string, error) {
+	if id, ok, err := r.store.GetUserDefault(userID, "radarr"); err != nil {
+		return nil, "", fmt.Errorf("get user default radarr: %w", err)
+	} else if ok {
+		client, err := r.GetRadarrClient(id)
+		return client, id, err
+	}
+	return r.GetDefaultRadarrClient()
+}
+
+// GetUserDefaultSonarrClient returns the Sonarr client for a user's per-user
+// default instance, falling back to the global default when the user has no
+// override. The second return is the resolved instance ID.
+func (r *Registry) GetUserDefaultSonarrClient(userID int64) (*sonarr.Client, string, error) {
+	if id, ok, err := r.store.GetUserDefault(userID, "sonarr"); err != nil {
+		return nil, "", fmt.Errorf("get user default sonarr: %w", err)
+	} else if ok {
+		client, err := r.GetSonarrClient(id)
+		return client, id, err
+	}
+	return r.GetDefaultSonarrClient()
+}
+
+// GetUserChaptarrClient returns the Chaptarr client for a user's granted
+// instance. Chaptarr has NO global default: a user with no grant gets a nil
+// client and an empty ID, which callers surface as "no access / not configured".
+func (r *Registry) GetUserChaptarrClient(userID int64) (*chaptarr.Client, string, error) {
+	id, ok, err := r.store.GetUserDefault(userID, "chaptarr")
+	if err != nil {
+		return nil, "", fmt.Errorf("get user chaptarr: %w", err)
+	}
+	if !ok {
+		return nil, "", nil
+	}
+	client, err := r.GetChaptarrClient(id)
+	return client, id, err
+}
+
+// GetDefaultChaptarrClient returns a client for an arbitrary configured Chaptarr
+// instance (lowest sort_order). Chaptarr has no global default flag; this exists
+// for admin/AI contexts that operate without a specific user identity. Returns a
+// nil client when no Chaptarr instance is configured.
+func (r *Registry) GetDefaultChaptarrClient() (*chaptarr.Client, string, error) {
+	inst, err := r.store.GetDefault("chaptarr")
+	if err != nil {
+		return nil, "", fmt.Errorf("get default chaptarr: %w", err)
+	}
+	if inst == nil {
+		return nil, "", nil
+	}
+	client, err := r.GetChaptarrClient(inst.ID)
+	return client, inst.ID, err
+}
+
 // InvalidateClient removes a cached client, forcing recreation on next access.
 func (r *Registry) InvalidateClient(instanceID string) {
 	r.mu.Lock()
 	delete(r.radarrClients, instanceID)
 	delete(r.sonarrClients, instanceID)
+	delete(r.chaptarrClients, instanceID)
 	delete(r.sabnzbdClients, instanceID)
 	delete(r.qbittorrentClients, instanceID)
 	delete(r.nzbgetClients, instanceID)
