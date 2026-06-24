@@ -45,7 +45,7 @@ class _UserRequestSettingsScreenState
   int? _qualitySonarr;
 
   // The user's per-service default-instance overrides, keyed by service type
-  // (null = inherit the global default; for chaptarr, null = no access).
+  // (null = inherit the global default; for chaptarr, null = no per-user grant).
   Map<String, String?> _defaultInstances = {};
 
   @override
@@ -275,8 +275,9 @@ class _UserRequestSettingsScreenState
       const Padding(
         padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
         child: Text(
-          'Pin which instance this user defaults to per service. Chaptarr (Books) '
-          'has no global default — choosing an instance grants access.',
+          'Pin which instance this user defaults to per service. For regular '
+          'users, choosing a Chaptarr instance grants Books access. Admins can '
+          'pin their own request target here too.',
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
       ),
@@ -289,8 +290,8 @@ class _UserRequestSettingsScreenState
     required String serviceType,
     required List<ServiceInstance> instances,
   }) {
-    // Chaptarr has no global default, so an unset value means "no access";
-    // every other service type falls back to its global default.
+    // Chaptarr grants are per-user for regular users. Admins can also use this
+    // setting to pin their own request target.
     final isChaptarr = serviceType == 'chaptarr';
     final value = _defaultInstances[serviceType];
     // Guard against a stored id that's no longer in the instance list.
@@ -316,7 +317,9 @@ class _UserRequestSettingsScreenState
           DropdownMenuItem<String?>(
             value: null,
             child: Text(
-              isChaptarr ? 'No access' : 'Inherit (global default)',
+              isChaptarr
+                  ? 'No per-user Chaptarr assignment'
+                  : 'Inherit (global default)',
               style: const TextStyle(color: AppTheme.textSecondary),
             ),
           ),

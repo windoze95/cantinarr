@@ -473,15 +473,14 @@ class _UserTile extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
-        if (!isSelf)
-          const PopupMenuItem(
-            value: 'request_settings',
-            child: ListTile(
-              leading: Icon(Icons.tune),
-              title: Text('User settings…'),
-              contentPadding: EdgeInsets.zero,
-            ),
+        const PopupMenuItem(
+          value: 'request_settings',
+          child: ListTile(
+            leading: Icon(Icons.tune),
+            title: Text('User settings…'),
+            contentPadding: EdgeInsets.zero,
           ),
+        ),
         // A connect link works for any user: re-invite one stuck in invited
         // limbo, re-auth one who lost their session, or authorize a new device
         // for one who already has one (find-or-create reuses the account).
