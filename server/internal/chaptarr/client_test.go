@@ -9,8 +9,9 @@ import (
 	"testing"
 )
 
-// TestSetBookMonitored asserts SetBookMonitored posts the {bookIds, monitored}
-// body Chaptarr's book/monitor endpoint expects.
+// TestSetBookMonitored asserts SetBookMonitored PUTs the {bookIds, monitored}
+// body Chaptarr's book/monitor endpoint expects (a POST returns 405 on the
+// fork).
 func TestSetBookMonitored(t *testing.T) {
 	var gotPath, gotMethod string
 	var body map[string]any
@@ -29,8 +30,8 @@ func TestSetBookMonitored(t *testing.T) {
 		t.Fatalf("SetBookMonitored: %v", err)
 	}
 
-	if gotMethod != http.MethodPost {
-		t.Errorf("method = %s, want POST", gotMethod)
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %s, want PUT", gotMethod)
 	}
 	if gotPath != "/api/v1/book/monitor" {
 		t.Errorf("path = %s, want /api/v1/book/monitor", gotPath)
@@ -138,6 +139,37 @@ func TestGetQueue(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].BookID != 42 {
 		t.Fatalf("items = %+v, want one item with bookId 42", items)
+	}
+}
+
+// TestSearchReleasesEnvelope asserts the interactive-search response is parsed
+// whether Chaptarr returns its {"releases":[...]} envelope (this fork) or a
+// bare array (stock Servarr). A bare-array assumption here surfaced in the app
+// as "type '_Map<String, dynamic>' is not a subtype of type 'List<dynamic>'".
+func TestSearchReleasesEnvelope(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"envelope", `{"releases":[{"guid":"a","indexerId":2,"title":"R","protocol":"torrent"}],"hiddenReleases":[],"filterSummary":{}}`},
+		{"bare array", `[{"guid":"a","indexerId":2,"title":"R","protocol":"torrent"}]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+
+			releases, err := NewClient(srv.URL, "key").SearchReleases(42)
+			if err != nil {
+				t.Fatalf("SearchReleases: %v", err)
+			}
+			if len(releases) != 1 || releases[0].GUID != "a" || releases[0].IndexerID != 2 {
+				t.Fatalf("releases = %+v, want one release guid=a indexerId=2", releases)
+			}
+		})
 	}
 }
 
