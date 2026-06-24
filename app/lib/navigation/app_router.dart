@@ -87,6 +87,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return isAuthRoute ? null : '/login';
       }
       if (isAuthenticated && isAuthRoute) return '/dashboard/movies';
+      final isAdmin = auth?.user?.isAdmin ?? false;
+      if (isAuthenticated &&
+          !isAdmin &&
+          _isInstanceModuleRoute(state.uri.path)) {
+        return '/dashboard/movies';
+      }
       return null;
     },
     routes: [
@@ -523,3 +529,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
+
+bool _isInstanceModuleRoute(String path) {
+  return path.startsWith('/radarr/') ||
+      path.startsWith('/sonarr/') ||
+      path.startsWith('/chaptarr/') ||
+      path.startsWith('/downloads/') ||
+      path.startsWith('/tautulli/');
+}

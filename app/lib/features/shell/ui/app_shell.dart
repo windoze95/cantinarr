@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/models/app_module.dart';
+import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/module_provider.dart';
@@ -745,8 +746,8 @@ class _AppShellState extends ConsumerState<AppShell>
 
   Widget _buildDrawerContent(BuildContext context, {required bool isOverlay}) {
     final moduleState = ref.watch(moduleProvider);
-    final isAdmin =
-        ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    final instanceState = ref.watch(instanceProvider);
+    final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
     final openIssues = ref.watch(openIssuesProvider);
     final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
@@ -828,18 +829,49 @@ class _AppShellState extends ConsumerState<AppShell>
               children: moduleState.modules.asMap().entries.map((entry) {
                 final module = entry.value;
                 final isActive = entry.key == moduleState.activeIndex;
+                final selectorInstances = isAdmin
+                    ? _instancesForModule(instanceState, module.type)
+                    : const <ServiceInstance>[];
+                final activeInstance =
+                    _activeInstanceForModule(instanceState, module.type);
 
                 return _DrawerItem(
                   icon: module.icon,
                   title: module.label,
                   selected: isActive,
+                  trailing: selectorInstances.length > 1
+                      ? _InstanceSelector(
+                          appName: module.label,
+                          instances: selectorInstances,
+                          activeInstanceId: activeInstance?.id,
+                          onSelected: (instanceId) {
+                            if (isOverlay) Navigator.pop(context);
+                            _navigateToModule(
+                              context,
+                              module,
+                              instanceId: instanceId,
+                            );
+                            if (module.type != ModuleType.assistant) {
+                              ref
+                                  .read(moduleProvider.notifier)
+                                  .setActiveModule(module.type);
+                            }
+                          },
+                        )
+                      : null,
                   onTap: () {
                     if (isOverlay) Navigator.pop(context);
-                    _navigateToModule(context, module);
+                    _navigateToModule(
+                      context,
+                      module,
+                      instanceId: _defaultInstanceForModule(
+                        instanceState,
+                        module.type,
+                      )?.id,
+                    );
                     if (module.type != ModuleType.assistant) {
                       ref.read(moduleProvider.notifier).setActiveModule(
                             module.type,
-                            instanceId: module.instanceId,
                           );
                     }
                   },
@@ -872,11 +904,63 @@ class _AppShellState extends ConsumerState<AppShell>
     );
   }
 
-  void _navigateToModule(BuildContext context, AppModule module) {
-    // Drawer entries are per-instance for multi-instance services; make the
-    // tapped instance active so the module opens on it rather than on
-    // whatever instance the in-module dropdown was last set to.
-    final instanceId = module.instanceId;
+  List<ServiceInstance> _instancesForModule(
+    InstanceState state,
+    ModuleType type,
+  ) {
+    switch (type) {
+      case ModuleType.radarr:
+        return state.radarrInstances;
+      case ModuleType.sonarr:
+        return state.sonarrInstances;
+      case ModuleType.downloads:
+        return state.downloadInstances;
+      case ModuleType.tautulli:
+        return state.tautulliInstances;
+      case ModuleType.chaptarr:
+        return state.chaptarrInstances;
+      default:
+        return const [];
+    }
+  }
+
+  ServiceInstance? _activeInstanceForModule(
+    InstanceState state,
+    ModuleType type,
+  ) {
+    switch (type) {
+      case ModuleType.radarr:
+        return state.activeRadarrInstance;
+      case ModuleType.sonarr:
+        return state.activeSonarrInstance;
+      case ModuleType.downloads:
+        return state.activeDownloadInstance;
+      case ModuleType.tautulli:
+        return state.activeTautulliInstance;
+      case ModuleType.chaptarr:
+        return state.activeChaptarrInstance;
+      default:
+        return null;
+    }
+  }
+
+  ServiceInstance? _defaultInstanceForModule(
+    InstanceState state,
+    ModuleType type,
+  ) {
+    final instances = _instancesForModule(state, type);
+    if (instances.isEmpty) return null;
+    return instances.firstWhere(
+      (instance) => instance.isDefault,
+      orElse: () => instances.first,
+    );
+  }
+
+  void _navigateToModule(
+    BuildContext context,
+    AppModule module, {
+    String? instanceId,
+  }) {
     if (instanceId != null) {
       final instances = ref.read(instanceProvider.notifier);
       switch (module.type) {
@@ -918,6 +1002,7 @@ class _DrawerItem extends StatelessWidget {
   final String title;
   final bool selected;
   final VoidCallback onTap;
+  final Widget? trailing;
 
   /// When > 0, renders a trailing count pill (e.g. the pending-approvals count).
   final int badgeCount;
@@ -927,6 +1012,7 @@ class _DrawerItem extends StatelessWidget {
     required this.title,
     this.selected = false,
     required this.onTap,
+    this.trailing,
     this.badgeCount = 0,
   });
 
@@ -942,11 +1028,96 @@ class _DrawerItem extends StatelessWidget {
           fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
         ),
       ),
-      trailing: badgeCount > 0 ? _CountPill(count: badgeCount) : null,
+      trailing: badgeCount > 0 ? _CountPill(count: badgeCount) : trailing,
       selected: selected,
       selectedTileColor: AppTheme.accent.withValues(alpha: 0.08),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       onTap: onTap,
+    );
+  }
+}
+
+class _InstanceSelector extends StatelessWidget {
+  final String appName;
+  final List<ServiceInstance> instances;
+  final String? activeInstanceId;
+  final ValueChanged<String> onSelected;
+
+  const _InstanceSelector({
+    required this.appName,
+    required this.instances,
+    required this.activeInstanceId,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final activeInstance = instances.firstWhere(
+      (instance) => instance.id == activeInstanceId,
+      orElse: () => instances.firstWhere(
+        (instance) => instance.isDefault,
+        orElse: () => instances.first,
+      ),
+    );
+
+    return PopupMenuButton<String>(
+      tooltip: 'Choose $appName instance',
+      color: AppTheme.surface,
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final instance in instances)
+          PopupMenuItem<String>(
+            value: instance.id,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    instance.name,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (instance.id == activeInstance.id)
+                  const Icon(
+                    Icons.check,
+                    size: 18,
+                    color: AppTheme.accent,
+                  ),
+              ],
+            ),
+          ),
+      ],
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 128),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            border: Border.all(color: AppTheme.border),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  activeInstance.name,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.arrow_drop_down,
+                color: AppTheme.textSecondary,
+                size: 18,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
