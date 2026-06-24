@@ -55,7 +55,8 @@ class _ChaptarrBookDetailSheetState
   late final ChaptarrApiService _service;
   ChaptarrBook? _book;
   List<ChaptarrHistoryRecord> _history = [];
-  bool _loading = true;
+  bool _historyLoading = true; // history load (independent of the book)
+  String? _error; // book-load failure, if any
 
   @override
   void initState() {
@@ -67,23 +68,41 @@ class _ChaptarrBookDetailSheetState
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  Future<void> _load() async {
+  // Book and history load independently: a history failure must never blank out
+  // the book the sheet is for (a single try/catch around both previously left
+  // the sheet stuck on "Loading…" when the history call errored).
+  void _load() {
+    _loadBook();
+    _loadHistory();
+  }
+
+  Future<void> _loadBook() async {
     try {
-      // Kick off both requests, then await — effectively parallel without the
-      // heterogeneous Future.wait cast.
-      final bookFuture = _service.getBookById(widget.bookId);
-      final historyFuture = _service.getBookHistory(widget.bookId);
-      final book = await bookFuture;
-      final history = await historyFuture;
+      final book = await _service.getBookById(widget.bookId);
       if (!mounted) return;
       setState(() {
         _book = book;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
+    }
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      final history = await _service.getBookHistory(widget.bookId);
+      if (!mounted) return;
+      setState(() {
         _history = history.take(8).toList();
-        _loading = false;
+        _historyLoading = false;
       });
     } catch (_) {
+      // History is best-effort: the book is already shown, so a history
+      // failure just drops to "No history yet." rather than surfacing an error.
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() => _historyLoading = false);
     }
   }
 
@@ -115,6 +134,9 @@ class _ChaptarrBookDetailSheetState
   ({String label, Color color}) get _shortStatus {
     final book = _book;
     if (book == null) {
+      if (_error != null) {
+        return (label: 'Unavailable', color: AppTheme.error);
+      }
       return (label: 'Loading…', color: AppTheme.textSecondary);
     }
     final line = bookFileStatusLine(book);
@@ -185,6 +207,13 @@ class _ChaptarrBookDetailSheetState
                   ...formats.map((f) => ChaptarrFormatBadge(format: f)),
                 ],
               ),
+              if (book == null && _error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  "Couldn't load this book.\n$_error",
+                  style: const TextStyle(color: AppTheme.error, fontSize: 12),
+                ),
+              ],
               if (book?.overview != null && book!.overview!.isNotEmpty) ...[
                 const SizedBox(height: 14),
                 Text(book.overview!,
@@ -251,7 +280,7 @@ class _ChaptarrBookDetailSheetState
   }
 
   Widget _buildHistory() {
-    if (_loading) {
+    if (_historyLoading) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 12),
         child: Center(

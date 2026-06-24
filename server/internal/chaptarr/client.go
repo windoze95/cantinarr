@@ -143,18 +143,23 @@ type RootFolder struct {
 // LookupResult is one entry from author/lookup or book/lookup. It carries the
 // fields needed to render a lookup row and seed an add: identifiers, a cover,
 // and (for book lookups) the nested author the book belongs to.
+//
+// Editions is kept as raw JSON, not a typed []Edition, so it can be round-tripped
+// verbatim into the book-add payload. Chaptarr's Editions table has NOT NULL
+// constraints on columns the typed struct would drop (notably links and images),
+// so a lossy re-encode fails the add with a SQLite constraint error.
 type LookupResult struct {
-	Title           string    `json:"title"`
-	TitleSlug       string    `json:"titleSlug,omitempty"`
-	AuthorName      string    `json:"authorName"`
-	ForeignAuthorID string    `json:"foreignAuthorId"`
-	ForeignBookID   string    `json:"foreignBookId"`
-	Overview        string    `json:"overview"`
-	Year            int       `json:"year"`
-	Images          []Image   `json:"images"`
-	Author          *Author   `json:"author,omitempty"`
-	RemoteCover     string    `json:"remoteCover,omitempty"`
-	Editions        []Edition `json:"editions,omitempty"`
+	Title           string            `json:"title"`
+	TitleSlug       string            `json:"titleSlug,omitempty"`
+	AuthorName      string            `json:"authorName"`
+	ForeignAuthorID string            `json:"foreignAuthorId"`
+	ForeignBookID   string            `json:"foreignBookId"`
+	Overview        string            `json:"overview"`
+	Year            int               `json:"year"`
+	Images          []Image           `json:"images"`
+	Author          *Author           `json:"author,omitempty"`
+	RemoteCover     string            `json:"remoteCover,omitempty"`
+	Editions        []json.RawMessage `json:"editions,omitempty"`
 }
 
 // AddAuthorRequest mirrors Sonarr's AddSeriesRequest shape for adding an author
@@ -176,17 +181,26 @@ type AddAuthorRequest struct {
 
 // AddBookRequest adds a single book. Readarr nests the author inside the
 // book-add payload, so an author ref is required for authors not yet tracked.
+//
+// This Chaptarr fork tracks ebook vs audiobook at the book level via
+// MediaType + EbookMonitored/AudiobookMonitored (not per edition — lookup
+// editions carry no format), so requested-format intent is set through those
+// fields. Editions is raw JSON round-tripped from the lookup result so the
+// add satisfies Chaptarr's NOT NULL edition columns (links, images).
 type AddBookRequest struct {
-	ForeignBookID string           `json:"foreignBookId"`
-	Title         string           `json:"title"`
-	TitleSlug     string           `json:"titleSlug,omitempty"`
-	Monitored     bool             `json:"monitored"`
-	AnyEditionOk  bool             `json:"anyEditionOk"`
-	Author        AddAuthorRequest `json:"author"`
-	AddOptions    struct {
+	ForeignBookID      string            `json:"foreignBookId"`
+	Title              string            `json:"title"`
+	TitleSlug          string            `json:"titleSlug,omitempty"`
+	Monitored          bool              `json:"monitored"`
+	AnyEditionOk       bool              `json:"anyEditionOk"`
+	MediaType          string            `json:"mediaType,omitempty"`
+	EbookMonitored     *bool             `json:"ebookMonitored,omitempty"`
+	AudiobookMonitored *bool             `json:"audiobookMonitored,omitempty"`
+	Author             AddAuthorRequest  `json:"author"`
+	AddOptions         struct {
 		SearchForNewBook bool `json:"searchForNewBook"`
 	} `json:"addOptions"`
-	Editions []Edition `json:"editions,omitempty"`
+	Editions []json.RawMessage `json:"editions,omitempty"`
 }
 
 // AuthorContext is the lean author object embedded in queue/history/book records.
@@ -572,10 +586,13 @@ func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
 	return &book, nil
 }
 
-// SetBookMonitored toggles monitoring for the given books.
+// SetBookMonitored toggles monitoring for the given books. Chaptarr's
+// book/monitor endpoint is a PUT (a POST returns 405); it also re-derives a
+// book's ebook/audiobook monitor flags from its mediaType, so monitoring a book
+// whose mediaType was set on add applies the requested format.
 func (c *Client) SetBookMonitored(bookIDs []int, monitored bool) error {
 	body := map[string]any{"bookIds": bookIDs, "monitored": monitored}
-	if err := c.do("POST", "/api/v1/book/monitor", body, nil); err != nil {
+	if err := c.do("PUT", "/api/v1/book/monitor", body, nil); err != nil {
 		return fmt.Errorf("chaptarr set book monitored: %w", err)
 	}
 	return nil
@@ -680,10 +697,38 @@ func releaseSearchClient() *http.Client {
 
 // SearchReleases runs an interactive release search for a book.
 func (c *Client) SearchReleases(bookID int) ([]Release, error) {
-	var releases []Release
+	var raw json.RawMessage
 	path := fmt.Sprintf("/api/v1/release?bookId=%d", bookID)
-	if err := c.doWith(releaseSearchClient(), "GET", path, nil, &releases); err != nil {
+	if err := c.doWith(releaseSearchClient(), "GET", path, nil, &raw); err != nil {
 		return nil, fmt.Errorf("chaptarr release search: %w", err)
+	}
+	releases, err := decodeReleases(raw)
+	if err != nil {
+		return nil, fmt.Errorf("chaptarr release search: %w", err)
+	}
+	return releases, nil
+}
+
+// decodeReleases parses Chaptarr's interactive-search response. This fork wraps
+// results in a {"releases": [...]} envelope (alongside hiddenReleases /
+// filterSummary), while stock Servarr returns a bare array — accept either.
+func decodeReleases(raw json.RawMessage) ([]Release, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	if trimmed[0] == '{' {
+		var env struct {
+			Releases []Release `json:"releases"`
+		}
+		if err := json.Unmarshal(trimmed, &env); err != nil {
+			return nil, fmt.Errorf("decode release envelope: %w", err)
+		}
+		return env.Releases, nil
+	}
+	var releases []Release
+	if err := json.Unmarshal(trimmed, &releases); err != nil {
+		return nil, fmt.Errorf("decode releases: %w", err)
 	}
 	return releases, nil
 }

@@ -615,13 +615,39 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	if titleSlug == "" {
 		titleSlug = fallbackTitleSlug(title)
 	}
+
+	// Chaptarr stores a title's ebook and audiobook as separate book records
+	// (same foreignBookId, different mediaType), so a "both" request adds the
+	// book once per format. Adding at least one record counts as requested; the
+	// last error is surfaced only if every requested format failed.
+	formats := chaptarrRequestFormats(r.bookFormat)
+	var lastErr error
+	added := 0
+	for _, mediaType := range formats {
+		if err := s.addChaptarrBookRecord(client, match, qps[0].ID, mps[0].ID, folders[0].Path, title, titleSlug, mediaType); err != nil {
+			lastErr = err
+			continue
+		}
+		added++
+	}
+	if added == 0 {
+		return "", "", fmt.Errorf("add book failed: %w", lastErr)
+	}
+	return StatusRequested, title, nil
+}
+
+// addChaptarrBookRecord adds one format record (ebook or audiobook) of a book and
+// ensures it ends up monitored and searched. Chaptarr tracks format at the book
+// level via mediaType, so each requested format is its own record.
+func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr.LookupResult, qualityProfileID, metadataProfileID int, rootFolderPath, title, titleSlug, mediaType string) error {
 	addReq := chaptarr.AddBookRequest{
 		ForeignBookID: match.ForeignBookID,
 		Title:         title,
 		TitleSlug:     titleSlug,
 		Monitored:     true,
-		AnyEditionOk:  normalizeBookFormat(r.bookFormat) == BookFormatBoth,
 	}
+	setChaptarrMediaType(&addReq, mediaType)
+
 	authorName := match.AuthorName
 	foreignAuthorID := match.ForeignAuthorID
 	if match.Author != nil {
@@ -634,32 +660,47 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	}
 	addReq.Author.AuthorName = authorName
 	addReq.Author.ForeignAuthorID = foreignAuthorID
-	addReq.Author.QualityProfileID = qps[0].ID
-	addReq.Author.MetadataProfileID = mps[0].ID
-	addReq.Author.RootFolderPath = folders[0].Path
+	addReq.Author.QualityProfileID = qualityProfileID
+	addReq.Author.MetadataProfileID = metadataProfileID
+	addReq.Author.RootFolderPath = rootFolderPath
 	addReq.Author.Monitored = true
 	addReq.Author.AddOptions.Monitor = "all"
 	addReq.AddOptions.SearchForNewBook = true
+
+	// Round-trip the lookup's editions verbatim, marking them monitored so
+	// Chaptarr tracks the book (an add with no editions stays unmonitored).
+	// patchEditionForAdd also guards Chaptarr's NOT NULL links/images columns so
+	// the add can't fail a SQLite constraint.
 	if len(match.Editions) > 0 {
-		addReq.Editions = make([]chaptarr.Edition, 0, len(match.Editions))
-		matchedFormat := false
-		for _, edition := range match.Editions {
-			edition.Monitored = editionMatchesBookFormat(edition, r.bookFormat)
-			edition.ManualAdd = edition.Monitored
-			if edition.Monitored {
-				matchedFormat = true
+		addReq.Editions = make([]json.RawMessage, 0, len(match.Editions))
+		for _, raw := range match.Editions {
+			patched, ok, err := patchEditionForAdd(raw)
+			if err != nil {
+				return fmt.Errorf("prepare edition: %w", err)
 			}
-			addReq.Editions = append(addReq.Editions, edition)
-		}
-		if !matchedFormat {
-			return "", "", fmt.Errorf("no %s edition available for %s", normalizeBookFormat(r.bookFormat), match.Title)
+			if !ok {
+				continue // skip a non-object edition element rather than emit junk
+			}
+			addReq.Editions = append(addReq.Editions, patched)
 		}
 	}
 
-	if _, err := client.AddBook(addReq); err != nil {
-		return "", "", fmt.Errorf("add book failed: %w", err)
+	book, err := client.AddBook(addReq)
+	if err != nil {
+		return err
 	}
-	return StatusRequested, title, nil
+	// A book added under an author created by this same request comes back
+	// unmonitored (Chaptarr's async author refresh hasn't applied monitoring),
+	// so the format flags and searchForNewBook never take effect. Monitor +
+	// search it explicitly; SetBookMonitored re-derives the format from the
+	// mediaType set above. Books under an already-tracked author come back
+	// monitored and need nothing further. Best-effort: the add already succeeded.
+	if book != nil && book.ID != 0 && !book.Monitored {
+		if err := client.SetBookMonitored([]int{book.ID}, true); err == nil {
+			_ = client.TriggerBookSearch([]int{book.ID})
+		}
+	}
+	return nil
 }
 
 func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
@@ -1372,31 +1413,63 @@ func validBookFormat(format string) bool {
 		format == BookFormatBoth
 }
 
-func editionMatchesBookFormat(edition chaptarr.Edition, format string) bool {
+// chaptarrRequestFormats expands a requested book format into the concrete
+// Chaptarr media types to add. Chaptarr stores a title's ebook and audiobook as
+// separate book records (same foreignBookId, different mediaType), so "both"
+// expands to two adds rather than one record flagged for both.
+func chaptarrRequestFormats(format string) []string {
 	switch normalizeBookFormat(format) {
-	case BookFormatBoth:
-		return true
+	case BookFormatEbook:
+		return []string{"ebook"}
 	case BookFormatAudiobook:
-		return chaptarrEditionFormat(edition) == BookFormatAudiobook
-	default:
-		return chaptarrEditionFormat(edition) == BookFormatEbook
+		return []string{"audiobook"}
+	default: // both
+		return []string{"ebook", "audiobook"}
 	}
 }
 
-func chaptarrEditionFormat(edition chaptarr.Edition) string {
-	if format := chaptarr.FormatOf(edition.Format); format != "unknown" {
-		return format
+// setChaptarrMediaType pins one add-book payload to a single Chaptarr media type
+// (ebook or audiobook) and its matching monitor flag. This fork tracks format at
+// the book level via mediaType — its lookup editions carry no format — so format
+// intent is expressed here, not by selecting an edition. A book record holds one
+// format; the flag that doesn't match mediaType is ignored by Chaptarr.
+func setChaptarrMediaType(req *chaptarr.AddBookRequest, mediaType string) {
+	req.MediaType = mediaType
+	ebook := mediaType == "ebook"
+	audiobook := mediaType == "audiobook"
+	req.EbookMonitored = &ebook
+	req.AudiobookMonitored = &audiobook
+}
+
+// patchEditionForAdd prepares one lookup edition for the add payload: it marks
+// the edition monitored/manualAdd and guarantees the NOT NULL links and images
+// arrays survive. The edition is otherwise passed through verbatim — Chaptarr's
+// Editions table rejects a null links or images, and the lookup result already
+// carries both. ok is false when the element is a JSON null (which decodes to a
+// nil map) — Chaptarr never sends that, but guarding it avoids a nil-map-write
+// panic; the caller skips such elements.
+func patchEditionForAdd(raw json.RawMessage) (out json.RawMessage, ok bool, err error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, false, err
 	}
-	if format := chaptarr.FormatOf(edition.Title); format != "unknown" {
-		return format
+	if obj == nil {
+		return nil, false, nil
 	}
-	if edition.IsEbook != nil {
-		if *edition.IsEbook {
-			return BookFormatEbook
-		}
-		return BookFormatAudiobook
+	t := json.RawMessage("true")
+	obj["monitored"] = t
+	obj["manualAdd"] = t
+	if v, ok := obj["links"]; !ok || string(v) == "null" {
+		obj["links"] = json.RawMessage("[]")
 	}
-	return "unknown"
+	if v, ok := obj["images"]; !ok || string(v) == "null" {
+		obj["images"] = json.RawMessage("[]")
+	}
+	out, err = json.Marshal(obj)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
 }
 
 func fallbackTitleSlug(title string) string {

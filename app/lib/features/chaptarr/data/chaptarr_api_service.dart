@@ -16,6 +16,25 @@ List<dynamic> _jsonList(dynamic data) {
   return const [];
 }
 
+/// Extracts the releases array from an interactive-search response. This
+/// Chaptarr fork wraps results as `{"releases": [...]}` (alongside
+/// `hiddenReleases`/`filterSummary`), whereas stock Servarr returns a bare
+/// array. A String body (no `application/json` content-type) is decoded first.
+/// Anything unexpected yields an empty list, so a stray object can no longer
+/// throw the `_Map is not a subtype of List` cast error a bare cast did.
+List<dynamic> _releaseList(dynamic data) {
+  dynamic decoded = data;
+  if (decoded is String && decoded.trim().isNotEmpty) {
+    decoded = jsonDecode(decoded);
+  }
+  if (decoded is List) return decoded;
+  if (decoded is Map) {
+    final releases = decoded['releases'];
+    if (releases is List) return releases;
+  }
+  return const [];
+}
+
 /// Networking layer for Chaptarr (a Readarr-family books service), proxied
 /// through the Cantinarr backend. Note the Readarr API is v1 (not v3).
 class ChaptarrApiService {
@@ -243,13 +262,26 @@ class ChaptarrApiService {
     return records;
   }
 
-  /// History for a single book, newest first. Uses the non-paged
-  /// /history/author endpoint filtered by bookId.
+  /// History for a single book, newest first. Uses the paged /history endpoint
+  /// filtered by bookId: the author-scoped /history/author requires an authorId
+  /// and 404s ("Author with ID 0 does not exist") when called with only a
+  /// bookId on this Chaptarr build, which left the book sheet stuck on
+  /// "Loading…".
   Future<List<ChaptarrHistoryRecord>> getBookHistory(int bookId) async {
-    final resp = await _dio
-        .get('$_basePath/history/author', queryParameters: {'bookId': bookId});
-    final records = (resp.data as List<dynamic>)
-        .map((r) => ChaptarrHistoryRecord.fromJson(r as Map<String, dynamic>))
+    final resp = await _dio.get('$_basePath/history', queryParameters: {
+      'bookId': bookId,
+      'pageSize': 50,
+      'sortKey': 'date',
+      'sortDirection': 'descending',
+    });
+    var data = resp.data;
+    // Decode a raw String body first (some Chaptarr endpoints omit the JSON
+    // content-type), mirroring _jsonList/_releaseList.
+    if (data is String && data.trim().isNotEmpty) data = jsonDecode(data);
+    final raw = data is Map ? data['records'] : data;
+    final records = (raw is List ? raw : const [])
+        .whereType<Map<String, dynamic>>()
+        .map(ChaptarrHistoryRecord.fromJson)
         .toList();
     records.sort(
         (a, b) => (b.date ?? DateTime(0)).compareTo(a.date ?? DateTime(0)));
@@ -298,8 +330,9 @@ class ChaptarrApiService {
       queryParameters: {'bookId': bookId},
       options: Options(receiveTimeout: const Duration(seconds: 120)),
     );
-    return (resp.data as List<dynamic>)
-        .map((r) => ChaptarrRelease.fromJson(r as Map<String, dynamic>))
+    return _releaseList(resp.data)
+        .whereType<Map<String, dynamic>>()
+        .map(ChaptarrRelease.fromJson)
         .toList();
   }
 
