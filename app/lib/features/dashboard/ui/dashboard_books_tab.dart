@@ -232,10 +232,25 @@ class _BookResultTile extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: AppTheme.textSecondary)),
-      trailing: (fid != null && fid.isNotEmpty)
-          ? _BookRequestButton(
-              foreignId: fid, title: book.title, service: requestService)
-          : null,
+      // A Chaptarr lookup result that is already tracked in the library comes
+      // back with a non-zero id; show that instead of a Request button (which
+      // would otherwise try to re-add it).
+      trailing: book.id != 0
+          ? const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: Text(
+                'In Library',
+                style: TextStyle(
+                  color: AppTheme.available,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            )
+          : (fid != null && fid.isNotEmpty)
+              ? _BookRequestButton(
+                  foreignId: fid, title: book.title, service: requestService)
+              : null,
     );
   }
 }
