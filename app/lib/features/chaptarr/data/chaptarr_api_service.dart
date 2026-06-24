@@ -1,5 +1,20 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'chaptarr_models.dart';
+
+/// Coerces a Dio response body into a JSON list. Chaptarr's lookup/metadata
+/// endpoints don't reliably send an `application/json` content-type, so Dio can
+/// hand back the raw String instead of a decoded List — decode it here rather
+/// than blindly casting (which threw "String is not a subtype of List").
+List<dynamic> _jsonList(dynamic data) {
+  if (data is List) return data;
+  if (data is String && data.trim().isNotEmpty) {
+    final decoded = jsonDecode(data);
+    if (decoded is List) return decoded;
+  }
+  return const [];
+}
 
 /// Networking layer for Chaptarr (a Readarr-family books service), proxied
 /// through the Cantinarr backend. Note the Readarr API is v1 (not v3).
@@ -34,7 +49,7 @@ class ChaptarrApiService {
   Future<List<ChaptarrAuthor>> lookupAuthor(String term) async {
     final resp = await _dio
         .get('$_basePath/author/lookup', queryParameters: {'term': term});
-    return (resp.data as List<dynamic>)
+    return _jsonList(resp.data)
         .map((a) => ChaptarrAuthor.fromJson(a as Map<String, dynamic>))
         .toList();
   }
@@ -58,7 +73,7 @@ class ChaptarrApiService {
   Future<List<ChaptarrBook>> lookupBook(String term) async {
     final resp = await _dio
         .get('$_basePath/book/lookup', queryParameters: {'term': term});
-    return (resp.data as List<dynamic>)
+    return _jsonList(resp.data)
         .map((b) => ChaptarrBook.fromJson(b as Map<String, dynamic>))
         .toList();
   }
