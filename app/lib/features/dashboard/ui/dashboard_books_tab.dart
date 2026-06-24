@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
@@ -20,6 +23,7 @@ class DashboardBooksTab extends ConsumerStatefulWidget {
 
 class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
   final _controller = TextEditingController();
+  Timer? _debounce;
   List<ChaptarrBook> _results = [];
   bool _isSearching = false;
   bool _searched = false;
@@ -27,15 +31,18 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
   int _searchGen = 0; // guards against superseded async results
 
   @override
-  void initState() {
-    super.initState();
-    _controller.addListener(() => setState(() {})); // refresh the clear button
-  }
-
-  @override
   void dispose() {
+    _debounce?.cancel();
     _controller.dispose();
     super.dispose();
+  }
+
+  // Search as the user types (debounced) so results appear without having to
+  // hit the keyboard's submit key; also refreshes the clear-button affordance.
+  void _onChanged() {
+    setState(() {});
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), _search);
   }
 
   ChaptarrApiService? _chaptarr() {
@@ -75,12 +82,25 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
         _isSearching = false;
         _searched = true;
       });
-    } catch (_) {
+    } on DioException catch (e) {
+      if (!mounted || gen != _searchGen) return;
+      final code = e.response?.statusCode;
+      setState(() {
+        _isSearching = false;
+        _searched = true;
+        // Surface the real failure: a 404 usually means this Chaptarr build's
+        // search API differs from Readarr's /api/v1/book/lookup; 401/403 is an
+        // access/grant problem.
+        _error = code != null
+            ? 'Search failed (HTTP $code). This Chaptarr instance may not support /api/v1/book/lookup.'
+            : 'Search failed: ${e.message ?? 'network error'}.';
+      });
+    } catch (e) {
       if (!mounted || gen != _searchGen) return;
       setState(() {
         _isSearching = false;
         _searched = true;
-        _error = 'Search failed. Please try again.';
+        _error = 'Search failed: $e';
       });
     }
   }
@@ -94,7 +114,11 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
           child: TextField(
             controller: _controller,
             textInputAction: TextInputAction.search,
-            onSubmitted: (_) => _search(),
+            onChanged: (_) => _onChanged(),
+            onSubmitted: (_) {
+              _debounce?.cancel();
+              _search();
+            },
             style: const TextStyle(color: AppTheme.textPrimary),
             decoration: InputDecoration(
               hintText: 'Search books or authors…',
