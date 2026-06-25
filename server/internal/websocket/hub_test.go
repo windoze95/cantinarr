@@ -14,8 +14,9 @@ import (
 // reaches the opener, and the opener is then called once per confirming poll
 // (the real DB dedupe — exercised separately — collapses those into one issue).
 type fakeOpener struct {
-	mu    sync.Mutex
-	calls []openCall
+	mu     sync.Mutex
+	calls  []openCall
+	closes []openCall
 }
 
 type openCall struct {
@@ -31,10 +32,52 @@ func (f *fakeOpener) OpenAutoIssue(serviceType, instanceID, downloadID string, d
 	f.calls = append(f.calls, openCall{serviceType, instanceID, downloadID, d.Problem})
 }
 
+func (f *fakeOpener) CloseAutoIssue(serviceType, instanceID, downloadID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closes = append(f.closes, openCall{serviceType, instanceID, downloadID, ""})
+}
+
 func (f *fakeOpener) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.calls)
+}
+
+func (f *fakeOpener) closeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.closes)
+}
+
+// TestDispatchClosesWhenProblemClears asserts a confirmed problem that later
+// drops out of a successful poll triggers exactly one CloseAutoIssue, and that a
+// further absent poll doesn't re-close (the key already dropped from the map).
+func TestDispatchClosesWhenProblemClears(t *testing.T) {
+	f := &fakeOpener{}
+	h := newTestHub(f)
+
+	// Two confirming polls open the issue.
+	h.dispatchDetailedItems("radarr", "inst1", []queueSignalItem{stuckItem("dl1")})
+	h.dispatchDetailedItems("radarr", "inst1", []queueSignalItem{stuckItem("dl1")})
+	if f.count() == 0 {
+		t.Fatal("expected the stuck download to open after two polls")
+	}
+
+	// The download is gone on a successful poll → recovered → close once.
+	h.dispatchDetailedItems("radarr", "inst1", nil)
+	if f.closeCount() != 1 {
+		t.Fatalf("close calls = %d, want 1 after the problem cleared", f.closeCount())
+	}
+	if c := f.closes[0]; c.downloadID != "dl1" || c.instanceID != "inst1" {
+		t.Fatalf("close call = %+v, want dl1/inst1", c)
+	}
+
+	// Still gone next poll → no duplicate close (key already dropped out).
+	h.dispatchDetailedItems("radarr", "inst1", nil)
+	if f.closeCount() != 1 {
+		t.Fatalf("close calls = %d, want still 1 (no re-close)", f.closeCount())
+	}
 }
 
 // newTestHub builds a hub wired with only the given opener. The other

@@ -222,6 +222,27 @@ func (s *Service) OpenAutoIssue(scope, instanceID, downloadID string, d arr.Diag
 	return true, newID
 }
 
+// CloseAutoIssueForDownload resolves the open auto issue for a download whose
+// problem the poller no longer detects (it recovered or left the queue). A
+// no-op when there's no matching open issue. Idempotent via ConcludeIssue's CAS.
+func (s *Service) CloseAutoIssueForDownload(instanceID, downloadID string) {
+	if downloadID == "" {
+		return
+	}
+	var issueID int64
+	err := s.db.QueryRow(
+		`SELECT id FROM issues
+		 WHERE source = ? AND instance_id = ? AND download_id = ? AND closed_at IS NULL
+		 LIMIT 1`,
+		SourceAuto, instanceID, downloadID,
+	).Scan(&issueID)
+	if err != nil {
+		return // sql.ErrNoRows (nothing open) or a read error: nothing to do.
+	}
+	_ = s.ConcludeIssue(context.Background(), issueID, IssueResolved,
+		"Auto-resolved: the download is no longer stuck or blocked — the problem cleared.")
+}
+
 // notifyIssueCreated fires the issue_created admin notification carrying the
 // live open-issue count for badging. The title is passed as a structured field
 // (arr/user-sourced) — the push layer builds the human-readable body from fixed
