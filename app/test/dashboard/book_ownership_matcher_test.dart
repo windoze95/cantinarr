@@ -155,18 +155,21 @@ void main() {
       expect(ownershipFor(result, const []), isNull);
     });
 
-    test('merges ownership across split ebook/audiobook rows', () {
+    test('marks a result from the exact-title record, not a blend', () {
       final digest = [
-        _owned('Heir to the Empire', 'Timothy Zahn', ebookDownloaded: true),
-        _owned('Heir to the Empire', 'Timothy Zahn', audiobookMonitored: true),
+        _owned('Ahsoka', 'E.K. Johnston', ebookDownloaded: true),
+        _owned('Ahsoka (Star Wars)', 'E.K. Johnston',
+            ebookMonitored: true, audiobookMonitored: true),
       ];
+      // A lookup result titled exactly "Ahsoka (Star Wars)" reflects THAT record
+      // (monitored, no file) — not the downloaded plain "Ahsoka".
       final o = ownershipFor(
-        _result('Star Wars: Heir to the Empire', author: 'Timothy Zahn'),
+        _result('Ahsoka (Star Wars)', author: 'E.K. Johnston'),
         digest,
       );
       expect(o, isNotNull);
-      expect(o!.ebook.downloaded, isTrue);
-      expect(o.audiobook.monitored, isTrue);
+      expect(o!.ebook.downloaded, isFalse);
+      expect(o.ebook.monitored, isTrue);
     });
   });
 
@@ -186,22 +189,27 @@ void main() {
       expect(injected.single.ownership.ebook.downloaded, isTrue);
     });
 
-    test('does not inject a title a lookup result already represents', () {
-      final lookup = [
-        _result('Star Wars: Heir to the Empire', author: 'Timothy Zahn'),
-      ];
+    test('skips a record a lookup result lists under the exact same title', () {
+      final lookup = [_result('Heir to the Empire', author: 'Timothy Zahn')];
       expect(ownedTitlesForQuery('heir', digest, lookup), isEmpty);
     });
 
-    test('merges split rows into one injected entry', () {
-      final split = [
-        _owned('Heir to the Empire', 'Timothy Zahn', ebookDownloaded: true),
-        _owned('Heir to the Empire', 'Timothy Zahn', audiobookMonitored: true),
+    test('still injects when only a differently-titled lookup result matches',
+        () {
+      final lookup = [
+        _result('Star Wars: Heir to the Empire', author: 'Timothy Zahn'),
       ];
-      final injected = ownedTitlesForQuery('heir', split, const []);
-      expect(injected.length, 1);
-      expect(injected.single.ownership.ebook.downloaded, isTrue);
-      expect(injected.single.ownership.audiobook.monitored, isTrue);
+      final injected = ownedTitlesForQuery('heir', digest, lookup);
+      expect(injected.map((t) => t.title), contains('Heir to the Empire'));
+    });
+
+    test('injects distinct records as separate rows (no merge)', () {
+      final two = [
+        _owned('Ahsoka', 'E.K. Johnston', ebookDownloaded: true),
+        _owned('Ahsoka (Star Wars)', 'E.K. Johnston', audiobookMonitored: true),
+      ];
+      final injected = ownedTitlesForQuery('ahsoka', two, const []);
+      expect(injected.map((t) => t.title), ['Ahsoka', 'Ahsoka (Star Wars)']);
     });
 
     test('an empty query injects nothing', () {
