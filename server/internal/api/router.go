@@ -281,6 +281,9 @@ func NewRouter(
 				r.Use(auth.RequirePermission(auth.PermissionInstancesManage))
 				r.Get("/instances", instanceHandler.List)
 				r.Post("/instances", instanceHandler.Create)
+				// Verify a Chaptarr web login (for cover fetching). Static path,
+				// so it's matched before /instances/{instanceID}.
+				r.Post("/instances/test-web-login", proxyHandler.TestWebLogin())
 				r.Put("/instances/{instanceID}", instanceHandler.Update)
 				r.Delete("/instances/{instanceID}", instanceHandler.Delete)
 			})

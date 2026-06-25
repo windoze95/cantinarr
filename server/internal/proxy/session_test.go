@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,43 @@ func TestSessionLogin(t *testing.T) {
 	}
 	if _, err := sc.login(srv.URL, "admin", "wrong"); err == nil {
 		t.Error("expected error on bad credentials (loginFailed)")
+	}
+}
+
+func TestWebLoginHandler(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.URL.Path == "/login" && r.FormValue("password") == "secret" {
+			http.SetCookie(w, &http.Cookie{Name: "auth", Value: "t"})
+			w.Header().Set("Location", "/")
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		w.Header().Set("Location", "/login?loginFailed=true")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	h := NewHandler(nil)
+
+	call := func(body string) (int, bool) {
+		req := httptest.NewRequest(http.MethodPost, "/instances/test-web-login", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.TestWebLogin()(rec, req)
+		var resp struct {
+			Success bool `json:"success"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+		return rec.Code, resp.Success
+	}
+
+	if code, ok := call(`{"url":"` + srv.URL + `","username":"admin","password":"secret"}`); code != http.StatusOK || !ok {
+		t.Errorf("valid creds: code=%d success=%v, want 200/true", code, ok)
+	}
+	if _, ok := call(`{"url":"` + srv.URL + `","username":"admin","password":"wrong"}`); ok {
+		t.Error("bad creds: want success=false")
+	}
+	if _, ok := call(`{"url":"` + srv.URL + `","username":"admin","password":""}`); ok {
+		t.Error("missing password: want success=false")
 	}
 }
 
