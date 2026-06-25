@@ -256,8 +256,11 @@ class _BookResultTile extends StatelessWidget {
     final fid = book.foreignBookId;
     final o = ownership;
     // Lookup results never carry a library id (always null), so ownership comes
-    // from the owned-books digest, matched by title+author.
-    final bothOwned = o != null && o.ebook.owned && o.audiobook.owned;
+    // from the owned-books digest, matched by title+author. Only hide the request
+    // affordance when BOTH files are present — a format that's missing or merely
+    // monitored can still be requested.
+    final bothDownloaded =
+        o != null && o.ebook.downloaded && o.audiobook.downloaded;
     final chip = _ownershipChip(o);
 
     return ListTile(
@@ -314,9 +317,9 @@ class _BookResultTile extends StatelessWidget {
                 ],
               ),
             ),
-      // Fully-owned titles show only the chip; otherwise offer a request for the
-      // format(s) the user neither owns nor already requested.
-      trailing: bothOwned
+      // Both files present → just the chip; otherwise offer Request / Request
+      // more for the format(s) without a file (the button gates per format).
+      trailing: bothDownloaded
           ? null
           : (fid != null && fid.isNotEmpty)
               ? _BookRequestButton(
