@@ -411,6 +411,31 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
               obscureText: true,
             ),
+          // Chaptarr also takes an optional web login: its cover images are
+          // served behind the web session (not the API key), so these let the
+          // backend fetch search-result cover art.
+          if (_serviceType == 'chaptarr') ...[
+            const SizedBox(height: 16),
+            TextField(
+              controller: _usernameController,
+              decoration: const InputDecoration(
+                labelText: 'Web username (optional)',
+                hintText: 'Chaptarr web login — shows cover art in search',
+              ),
+              autocorrect: false,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _passwordController,
+              decoration: InputDecoration(
+                labelText: 'Web password (optional)',
+                hintText: widget.isEditing
+                    ? 'Leave blank to keep existing'
+                    : 'Chaptarr web login password',
+              ),
+              obscureText: true,
+            ),
+          ],
           const SizedBox(height: 16),
 
           SwitchListTile(

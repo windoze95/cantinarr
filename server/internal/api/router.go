@@ -285,6 +285,12 @@ func NewRouter(
 				r.Delete("/instances/{instanceID}", instanceHandler.Delete)
 			})
 
+			// Cover-image fetch — Chaptarr's /MediaCover(Proxy) is gated behind a
+			// login session, not the API key, so this logs in with the instance's
+			// web credentials and streams the image. Registered before the
+			// catch-all so chi matches the static `cover` segment first.
+			r.With(auth.RequireArrProxyAccess(instanceStore)).Get("/instances/{instanceID}/cover", proxyHandler.CoverProxy())
+
 			// Instance proxy — forward to specific instance. Read-only
 			// Radarr/Sonarr browsing is allowed for non-admins (arr:browse);
 			// every other request (writes, commands, interactive search, config,
