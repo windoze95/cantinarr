@@ -204,9 +204,12 @@ func (s *Service) OpenAutoIssue(scope, instanceID, downloadID string, d arr.Diag
 		return false, 0
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		// Existing open issue for this key: bump occurrences, no new issue.
+		// Existing open issue for this key: just refresh last-seen, no new issue.
+		// Re-detecting the same ongoing problem on every 30s poll is NOT a new
+		// occurrence, so we don't bump occurrences (it only inflated a confusing
+		// per-poll counter that climbed with time-open, not severity).
 		s.db.Exec(
-			"UPDATE issues SET occurrences = occurrences + 1, updated_at = CURRENT_TIMESTAMP WHERE dedupe_key = ? AND closed_at IS NULL",
+			"UPDATE issues SET updated_at = CURRENT_TIMESTAMP WHERE dedupe_key = ? AND closed_at IS NULL",
 			dedupeKey,
 		)
 		return false, 0

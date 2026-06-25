@@ -72,14 +72,15 @@ func TestAutoDispatcherOpensExactlyOneIssueAcrossPolls(t *testing.T) {
 	if got := countOpenAutoIssues(t, svc); got != 1 {
 		t.Fatalf("open auto issues after repeated polls = %d, want exactly 1", got)
 	}
-	// The occurrences counter on the single issue reflects the repeats (1 insert +
-	// 5 duplicate bumps).
+	// Re-detecting the same ongoing problem each poll is not a new occurrence, so
+	// the counter stays at 1 (it used to climb per poll, which was just a confusing
+	// time-open counter).
 	var occ int
 	if err := svc.db.QueryRow("SELECT occurrences FROM issues WHERE source = ? AND closed_at IS NULL", SourceAuto).Scan(&occ); err != nil {
 		t.Fatalf("read occurrences: %v", err)
 	}
-	if occ != 6 {
-		t.Fatalf("occurrences = %d, want 6 (1 create + 5 dedupe bumps)", occ)
+	if occ != 1 {
+		t.Fatalf("occurrences = %d, want 1 (re-polls don't bump)", occ)
 	}
 	// The Runner was enqueued exactly once (only the create path enqueues).
 	if jobs := drainJobs(svc); jobs != 1 {
