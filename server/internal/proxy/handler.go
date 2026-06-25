@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -61,6 +62,52 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// TestWebLogin attempts a Chaptarr forms login with the given (or, for an
+// existing instance with a blank password, the stored) web credentials and
+// reports whether it succeeded — so an admin can confirm cover fetching will
+// work. Always 200; the JSON body carries success + any error message.
+func (h *Handler) TestWebLogin() http.HandlerFunc {
+	type request struct {
+		URL        string `json:"url"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		InstanceID string `json:"instance_id"`
+	}
+	write := func(w http.ResponseWriter, success bool, msg string) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": success, "error": msg})
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+			return
+		}
+		url, username, password := req.URL, req.Username, req.Password
+		// Editing with a blank password: fall back to the stored credentials.
+		if password == "" && req.InstanceID != "" {
+			if inst, _ := h.store.Get(req.InstanceID); inst != nil {
+				if url == "" {
+					url = inst.URL
+				}
+				if username == "" {
+					username = inst.Username
+				}
+				password = inst.Password
+			}
+		}
+		if url == "" || username == "" || password == "" {
+			write(w, false, "URL, username, and password are required")
+			return
+		}
+		if _, err := h.sessions.login(url, username, password); err != nil {
+			write(w, false, err.Error())
+			return
+		}
+		write(w, true, "")
+	}
 }
 
 // CoverProxy streams a Chaptarr cover image. Chaptarr serves /MediaCover and

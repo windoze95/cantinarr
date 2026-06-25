@@ -86,4 +86,31 @@ class InstanceApiService {
       return false;
     }
   }
+
+  /// Verifies a Chaptarr web login through the backend (which performs the same
+  /// forms login it uses to fetch cover art). Pass [instanceId] when editing so
+  /// a blank password falls back to the stored one. Returns success + any error.
+  Future<({bool success, String? error})> testWebLogin({
+    required String url,
+    required String username,
+    required String password,
+    String? instanceId,
+  }) async {
+    try {
+      final resp = await _dio.post('/api/instances/test-web-login', data: {
+        'url': url,
+        'username': username,
+        'password': password,
+        if (instanceId != null) 'instance_id': instanceId,
+      });
+      final data = resp.data as Map<String, dynamic>?;
+      final err = data?['error'] as String?;
+      return (
+        success: data?['success'] == true,
+        error: (err != null && err.isNotEmpty) ? err : null,
+      );
+    } catch (_) {
+      return (success: false, error: 'Could not reach the server');
+    }
+  }
 }

@@ -44,6 +44,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _isSaving = false;
   bool _isTesting = false;
   String? _testResult;
+  bool _isVerifyingLogin = false;
+  bool _webLoginOk = false;
+  String? _webLoginResult;
 
   static const _serviceTypes = <(String, String)>[
     ('radarr', 'Radarr'),
@@ -143,6 +146,29 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     setState(() {
       _isTesting = false;
       _testResult = success ? 'Connection successful!' : 'Connection failed';
+    });
+  }
+
+  Future<void> _verifyWebLogin() async {
+    setState(() {
+      _isVerifyingLogin = true;
+      _webLoginResult = null;
+    });
+    final service =
+        InstanceApiService(backendDio: ref.read(backendClientProvider));
+    final result = await service.testWebLogin(
+      url: _urlController.text.trim(),
+      username: _usernameController.text.trim(),
+      password: _passwordController.text,
+      instanceId: widget.isEditing ? widget.instanceId : null,
+    );
+    if (!mounted) return;
+    setState(() {
+      _isVerifyingLogin = false;
+      _webLoginOk = result.success;
+      _webLoginResult = result.success
+          ? 'Web login OK — cover art will load.'
+          : 'Web login failed${result.error != null ? ': ${result.error}' : ''}';
     });
   }
 
@@ -416,6 +442,33 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // backend fetch search-result cover art.
           if (_serviceType == 'chaptarr') ...[
             const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceVariant,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline,
+                      size: 16, color: AppTheme.textSecondary),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Chaptarr needs both: the API key above (search, requests, '
+                      'and owned-book covers) and an optional web login below. '
+                      'Search-result cover art is served only to a logged-in web '
+                      'session — not the API key — so without the web login those '
+                      'covers stay blank.',
+                      style:
+                          TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             TextField(
               controller: _usernameController,
               decoration: const InputDecoration(
@@ -435,6 +488,28 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
               obscureText: true,
             ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _isVerifyingLogin ? null : _verifyWebLogin,
+              icon: _isVerifyingLogin
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.login),
+              label: const Text('Verify web login'),
+            ),
+            if (_webLoginResult != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _webLoginResult!,
+                style: TextStyle(
+                  color: _webLoginOk ? AppTheme.available : AppTheme.error,
+                  fontSize: 13,
+                ),
+              ),
+            ],
           ],
           const SizedBox(height: 16),
 
