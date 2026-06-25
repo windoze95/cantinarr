@@ -66,6 +66,12 @@ type IssueOpener interface {
 	// stable download-client hash; d is the classifier's verdict. It must not
 	// block the poll goroutine (the Runner is enqueued, never run inline).
 	OpenAutoIssue(serviceType, instanceID, downloadID string, d arr.Diagnosis)
+
+	// CloseAutoIssue is called when a download that WAS a confirmed problem is no
+	// longer detected on a successful poll (it recovered or left the queue). The
+	// implementation resolves the matching open auto-issue; a no-op when there's
+	// none. Must not block the poll goroutine.
+	CloseAutoIssue(serviceType, instanceID, downloadID string)
 }
 
 // queueSignalItem bundles a queue item's stable download-client id with the
@@ -519,12 +525,21 @@ func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []queu
 		}
 	}
 	// Replace the remembered problems for THIS instance: drop stale keys (other
-	// downloads/instances are untouched), record the current ones.
+	// downloads/instances are untouched), record the current ones. A key that
+	// drops out — was a problem last poll, absent on this (successful) poll —
+	// means the download recovered or left the queue, so its issue can close.
+	// This only runs after a successful queue fetch (the caller returns on
+	// error), so a failed poll can never mass-close an instance's issues.
 	prefix := serviceType + ":" + instanceID + ":"
+	var toClose []string
 	for k := range h.prevArrProblems {
-		if strings.HasPrefix(k, prefix) {
-			delete(h.prevArrProblems, k)
+		if !strings.HasPrefix(k, prefix) {
+			continue
 		}
+		if _, stillAProblem := current[k]; !stillAProblem {
+			toClose = append(toClose, strings.TrimPrefix(k, prefix))
+		}
+		delete(h.prevArrProblems, k)
 	}
 	for k, v := range current {
 		h.prevArrProblems[k] = v
@@ -533,6 +548,9 @@ func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []queu
 
 	for _, d := range toOpen {
 		h.opener.OpenAutoIssue(serviceType, instanceID, d.downloadID, d.diagnosis)
+	}
+	for _, downloadID := range toClose {
+		h.opener.CloseAutoIssue(serviceType, instanceID, downloadID)
 	}
 }
 

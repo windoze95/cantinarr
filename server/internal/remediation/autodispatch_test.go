@@ -88,6 +88,41 @@ func TestAutoDispatcherOpensExactlyOneIssueAcrossPolls(t *testing.T) {
 	}
 }
 
+// TestCloseAutoIssueResolvesRecoveredDownload proves that when the poller stops
+// flagging a download, the matching open auto issue is resolved and closed.
+func TestCloseAutoIssueResolvesRecoveredDownload(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	enableAutoDispatch(t, svc, 5)
+	ad := NewAutoDispatcher(svc)
+
+	d := stalledDiagnosis()
+	ad.OpenAutoIssue("radarr", "inst1", "stuckHash", d)
+	ad.OpenAutoIssue("radarr", "inst1", "stuckHash", d) // dedupe, still one open
+	drainJobs(svc)
+	if got := countOpenAutoIssues(t, svc); got != 1 {
+		t.Fatalf("open auto issues = %d, want 1", got)
+	}
+
+	// The download recovered / left the queue → close.
+	ad.CloseAutoIssue("radarr", "inst1", "stuckHash")
+	if got := countOpenAutoIssues(t, svc); got != 0 {
+		t.Fatalf("open auto issues after recovery = %d, want 0", got)
+	}
+	var n int
+	if err := svc.db.QueryRow(
+		"SELECT COUNT(*) FROM issues WHERE source = ? AND status = ? AND closed_at IS NOT NULL",
+		SourceAuto, IssueResolved,
+	).Scan(&n); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("resolved+closed auto issues = %d, want 1", n)
+	}
+
+	// A second close for a download with no open issue is a harmless no-op.
+	ad.CloseAutoIssue("radarr", "inst1", "stuckHash")
+}
+
 // TestAutoDispatcherGatedOff proves the opener is a no-op unless BOTH the master
 // switch and the auto-dispatch sub-toggle are on — checked at call time so a live
 // toggle takes effect without a restart.

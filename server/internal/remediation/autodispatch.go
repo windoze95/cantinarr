@@ -63,6 +63,20 @@ func (a *AutoDispatcher) OpenAutoIssue(serviceType, instanceID, downloadID strin
 	a.svc.Enqueue(id)
 }
 
+// CloseAutoIssue resolves the open auto issue for a download the poller no longer
+// flags (it recovered or left the queue). Gated only on the master switch — NOT
+// AutoDispatch — so a recovered issue still auto-closes even after the circuit
+// breaker disarmed dispatch. A no-op when there's no matching open issue.
+func (a *AutoDispatcher) CloseAutoIssue(serviceType, instanceID, downloadID string) {
+	if a == nil || a.svc == nil {
+		return
+	}
+	if !a.svc.Settings().Enabled {
+		return
+	}
+	a.svc.CloseAutoIssueForDownload(instanceID, downloadID)
+}
+
 // --- circuit breaker ---
 //
 // The breaker bounds how many unattended auto-dispatch investigations can fail
