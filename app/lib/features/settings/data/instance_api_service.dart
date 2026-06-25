@@ -86,44 +86,4 @@ class InstanceApiService {
       return false;
     }
   }
-
-  /// Verifies Chaptarr cover fetching through the backend: it performs the same
-  /// forms login it uses for covers AND samples a real cover, so [coverOk]
-  /// reflects whether covers actually load (Chaptarr's cover proxy can fail even
-  /// when login works). Pass [instanceId] when editing so blank secrets fall
-  /// back to the stored ones.
-  Future<({bool success, String? error, bool coverOk, String? coverDetail})>
-      testWebLogin({
-    required String url,
-    required String username,
-    required String password,
-    String apiKey = '',
-    String? instanceId,
-  }) async {
-    try {
-      final resp = await _dio.post('/api/instances/test-web-login', data: {
-        'url': url,
-        'username': username,
-        'password': password,
-        'api_key': apiKey,
-        if (instanceId != null) 'instance_id': instanceId,
-      });
-      final data = resp.data as Map<String, dynamic>?;
-      final err = data?['error'] as String?;
-      final detail = data?['cover_detail'] as String?;
-      return (
-        success: data?['success'] == true,
-        error: (err != null && err.isNotEmpty) ? err : null,
-        coverOk: data?['cover_ok'] != false, // true unless explicitly false
-        coverDetail: (detail != null && detail.isNotEmpty) ? detail : null,
-      );
-    } catch (_) {
-      return (
-        success: false,
-        error: 'Could not reach the server',
-        coverOk: false,
-        coverDetail: null,
-      );
-    }
-  }
 }
