@@ -111,6 +111,37 @@ func TestExecuteManualImport(t *testing.T) {
 	}
 }
 
+// TestGetAllBooks asserts GetAllBooks hits /api/v1/book with no authorId filter
+// and decodes the library books (including the book-level mediaType).
+func TestGetAllBooks(t *testing.T) {
+	var gotPath string
+	var gotQuery url.Values
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[{"id":1,"title":"Heir to the Empire","foreignBookId":"fb-1","mediaType":"ebook","monitored":true,"statistics":{"bookFileCount":1}}]`)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "key")
+	books, err := c.GetAllBooks()
+	if err != nil {
+		t.Fatalf("GetAllBooks: %v", err)
+	}
+
+	if gotPath != "/api/v1/book" {
+		t.Errorf("path = %s, want /api/v1/book", gotPath)
+	}
+	if gotQuery.Get("authorId") != "" {
+		t.Errorf("authorId = %q, want empty (no per-author filter)", gotQuery.Get("authorId"))
+	}
+	if len(books) != 1 || books[0].MediaType != "ebook" || books[0].Statistics.BookFileCount != 1 {
+		t.Fatalf("books = %+v, want one ebook with bookFileCount 1", books)
+	}
+}
+
 // TestGetQueue asserts GetQueue hits the queue endpoint with includeAuthor=true
 // and decodes the records array.
 func TestGetQueue(t *testing.T) {

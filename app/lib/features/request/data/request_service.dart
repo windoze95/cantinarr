@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import '../../discover/data/tmdb_models.dart';
+import 'book_ownership.dart';
 
 /// Status of a media request from the user's perspective.
 enum RequestStatus {
@@ -50,24 +51,75 @@ enum BookRequestFormat {
 
 /// A user's per-format request state for a book. [status] is the collapsed
 /// (latest) state; [formats] maps each already-requested concrete format to its
-/// status (a stored "both" request fills both ebook and audiobook). Lets the
-/// dashboard keep offering a format that hasn't been requested yet.
+/// status (a stored "both" request fills both ebook and audiobook); [ownership]
+/// is what the user already has in the Chaptarr library. A format is covered
+/// (no longer requestable) when it's already requested OR already owned, so the
+/// dashboard keeps offering only the formats the user neither requested nor owns.
 class BookRequestStatusDetail {
   final RequestStatus status;
   final Map<BookRequestFormat, RequestStatus> formats;
+  final BookOwnership? ownership;
 
   const BookRequestStatusDetail({
     this.status = RequestStatus.unavailable,
     this.formats = const {},
+    this.ownership,
   });
 
-  /// A format is "covered" (no longer requestable) when it has a non-denied
-  /// row. Denied and never-requested formats stay requestable.
+  /// Returns a copy carrying library [ownership] (from the owned-books digest).
+  BookRequestStatusDetail withOwnership(BookOwnership? ownership) =>
+      BookRequestStatusDetail(
+          status: status, formats: formats, ownership: ownership);
+
+  /// Covered = already requested (non-denied) OR already owned in the library.
+  /// "both" is covered only when each concrete format is covered (possibly from
+  /// different sources — e.g. ebook owned + audiobook requested). The backend
+  /// expands a stored "both" request into ebook+audiobook, so [formats] never
+  /// carries a literal "both" key.
   bool isCovered(BookRequestFormat format) {
+    if (format == BookRequestFormat.both) {
+      return isCovered(BookRequestFormat.ebook) &&
+          isCovered(BookRequestFormat.audiobook);
+    }
+    return _requestCovered(format) || _ownershipCovers(format);
+  }
+
+  bool _requestCovered(BookRequestFormat format) {
     final s = formats[format];
     return s != null &&
         s != RequestStatus.denied &&
         s != RequestStatus.unavailable;
+  }
+
+  bool _ownershipCovers(BookRequestFormat format) {
+    final o = ownership;
+    if (o == null) return false;
+    return switch (format) {
+      BookRequestFormat.ebook => o.ebook.owned,
+      BookRequestFormat.audiobook => o.audiobook.owned,
+      BookRequestFormat.both => o.ebook.owned && o.audiobook.owned,
+    };
+  }
+
+  /// Short reason a [format] is covered, for the request sheet: a request status
+  /// label, else "Downloaded"/"In Library" from library ownership, else null.
+  String? coverageLabel(BookRequestFormat format) {
+    if (!isCovered(format)) return null;
+    final reqKey =
+        format == BookRequestFormat.both ? BookRequestFormat.ebook : format;
+    final s = formats[reqKey];
+    if (s != null &&
+        s != RequestStatus.denied &&
+        s != RequestStatus.unavailable) {
+      return s.label;
+    }
+    final o = ownership;
+    if (o != null) {
+      final fo = format == BookRequestFormat.audiobook ? o.audiobook : o.ebook;
+      if (fo.downloaded) return 'Downloaded';
+      if (fo.monitored) return 'In Library';
+    }
+    return null;
   }
 }
 

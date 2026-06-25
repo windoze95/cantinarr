@@ -9,7 +9,10 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
+import '../../request/data/book_ownership.dart';
 import '../../request/data/request_service.dart';
+import '../data/book_library_service.dart';
+import '../logic/book_ownership_matcher.dart';
 
 /// Dashboard Books tab: search Chaptarr's catalog (books/authors) and request a
 /// book. Chaptarr lookup is search-only (no "popular" feed like TMDB), so this
@@ -191,22 +194,43 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
     // backend's /requests endpoint, not the Chaptarr proxy).
     final requestService =
         RequestService(backendDio: ref.read(backendClientProvider));
+    // What the user already owns, to mark results and gate per-format requests.
+    final digest =
+        ref.watch(ownedBooksProvider).valueOrNull ?? const <OwnedTitle>[];
+    // Compute ownership per result and float owned titles to the top, preserving
+    // Chaptarr's relevance order within each bucket (don't collapse versions —
+    // the user wants to see ones they don't own).
+    final owned = <(ChaptarrBook, BookOwnership?)>[];
+    final rest = <(ChaptarrBook, BookOwnership?)>[];
+    for (final book in _results) {
+      final o = digest.isEmpty ? null : ownershipFor(book, digest);
+      ((o?.anyOwned ?? false) ? owned : rest).add((book, o));
+    }
+    final ordered = [...owned, ...rest];
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: _results.length,
+      itemCount: ordered.length,
       separatorBuilder: (_, __) =>
           const Divider(height: 1, color: AppTheme.border),
-      itemBuilder: (_, i) =>
-          _BookResultTile(book: _results[i], requestService: requestService),
+      itemBuilder: (_, i) => _BookResultTile(
+        book: ordered[i].$1,
+        ownership: ordered[i].$2,
+        requestService: requestService,
+      ),
     );
   }
 }
 
 class _BookResultTile extends StatelessWidget {
   final ChaptarrBook book;
+  final BookOwnership? ownership;
   final RequestService requestService;
 
-  const _BookResultTile({required this.book, required this.requestService});
+  const _BookResultTile({
+    required this.book,
+    this.ownership,
+    required this.requestService,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -216,6 +240,11 @@ class _BookResultTile extends StatelessWidget {
       if (year != null) '$year',
     ].join(' · ');
     final fid = book.foreignBookId;
+    final o = ownership;
+    // Lookup results never carry a library id (always null), so ownership comes
+    // from the owned-books digest, matched by title+author.
+    final bothOwned = o != null && o.ebook.owned && o.audiobook.owned;
+    final chip = _ownershipChip(o);
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -250,34 +279,70 @@ class _BookResultTile extends StatelessWidget {
         style: const TextStyle(
             color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
       ),
-      subtitle: subtitle.isEmpty
+      subtitle: (subtitle.isEmpty && chip == null)
           ? null
-          : Text(subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppTheme.textSecondary)),
-      // A Chaptarr lookup result that is already tracked in the library comes
-      // back with a non-zero id; show that instead of a Request button (which
-      // would otherwise try to re-add it).
-      trailing: book.id != 0
-          ? const Padding(
-              padding: EdgeInsets.only(right: 8),
-              child: Text(
-                'In Library',
-                style: TextStyle(
-                  color: AppTheme.available,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
+          : Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Row(
+                children: [
+                  if (subtitle.isNotEmpty)
+                    Flexible(
+                      child: Text(subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              const TextStyle(color: AppTheme.textSecondary)),
+                    ),
+                  if (chip != null) ...[
+                    if (subtitle.isNotEmpty) const SizedBox(width: 8),
+                    chip,
+                  ],
+                ],
               ),
-            )
+            ),
+      // Fully-owned titles show only the chip; otherwise offer a request for the
+      // format(s) the user neither owns nor already requested.
+      trailing: bothOwned
+          ? null
           : (fid != null && fid.isNotEmpty)
               ? _BookRequestButton(
                   foreignId: fid,
                   title: book.title,
                   service: requestService,
+                  ownership: o,
                 )
               : null,
+    );
+  }
+}
+
+Widget? _ownershipChip(BookOwnership? o) {
+  if (o == null || !o.anyOwned) return null;
+  final downloaded = o.anyDownloaded;
+  return _OwnershipChip(
+    label: downloaded ? 'Downloaded' : 'In Library',
+    color: downloaded ? AppTheme.available : AppTheme.requested,
+  );
+}
+
+/// A small colored pill marking that a search result is already in the library.
+class _OwnershipChip extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _OwnershipChip({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(label,
+          style: TextStyle(
+              color: color, fontSize: 10.5, fontWeight: FontWeight.w600)),
     );
   }
 }
@@ -288,11 +353,13 @@ class _BookRequestButton extends StatefulWidget {
   final String foreignId;
   final String title;
   final RequestService service;
+  final BookOwnership? ownership;
 
   const _BookRequestButton({
     required this.foreignId,
     required this.title,
     required this.service,
+    this.ownership,
   });
 
   @override
@@ -315,7 +382,9 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
     final detail = await widget.service.checkBookStatusDetail(widget.foreignId);
     if (!mounted) return;
     setState(() {
-      _detail = detail;
+      // Union request state with library ownership so an owned format is also
+      // treated as covered (unrequestable).
+      _detail = detail.withOwnership(widget.ownership);
       _status = detail.status;
       _loading = false;
     });
@@ -428,12 +497,8 @@ class _BookFormatSheet extends StatelessWidget {
     };
   }
 
-  String? _statusLabelFor(BookRequestFormat choice) {
-    if (!_coveredFor(choice)) return null;
-    final key =
-        choice == BookRequestFormat.both ? BookRequestFormat.ebook : choice;
-    return (detail.formats[key] ?? RequestStatus.requested).label;
-  }
+  String? _statusLabelFor(BookRequestFormat choice) =>
+      detail.coverageLabel(choice);
 
   @override
   Widget build(BuildContext context) {

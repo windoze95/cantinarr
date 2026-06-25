@@ -129,21 +129,25 @@ type Edition struct {
 }
 
 type Book struct {
-	ID            int            `json:"id"`
-	Title         string         `json:"title"`
-	AuthorID      int            `json:"authorId"`
-	ForeignBookID string         `json:"foreignBookId"`
-	TitleSlug     string         `json:"titleSlug"`
-	Overview      string         `json:"overview"`
-	ReleaseDate   *time.Time     `json:"releaseDate,omitempty"`
-	Monitored     bool           `json:"monitored"`
-	AnyEditionOk  bool           `json:"anyEditionOk"`
-	PageCount     int            `json:"pageCount"`
-	Author        *AuthorContext `json:"author,omitempty"`
-	Statistics    BookStatistics `json:"statistics"`
-	Editions      []Edition      `json:"editions"`
-	Images        []Image        `json:"images"`
-	Genres        genreList      `json:"genres"`
+	ID            int        `json:"id"`
+	Title         string     `json:"title"`
+	AuthorID      int        `json:"authorId"`
+	ForeignBookID string     `json:"foreignBookId"`
+	TitleSlug     string     `json:"titleSlug"`
+	Overview      string     `json:"overview"`
+	ReleaseDate   *time.Time `json:"releaseDate,omitempty"`
+	Monitored     bool       `json:"monitored"`
+	// MediaType is the book-level format Chaptarr returns on library books
+	// ("ebook"/"audiobook"); this fork tracks a title's ebook and audiobook as
+	// separate records sharing a foreignBookId, distinguished by this field.
+	MediaType    string         `json:"mediaType"`
+	AnyEditionOk bool           `json:"anyEditionOk"`
+	PageCount    int            `json:"pageCount"`
+	Author       *AuthorContext `json:"author,omitempty"`
+	Statistics   BookStatistics `json:"statistics"`
+	Editions     []Edition      `json:"editions"`
+	Images       []Image        `json:"images"`
+	Genres       genreList      `json:"genres"`
 }
 
 type BookFile struct {
@@ -224,15 +228,15 @@ type AddAuthorRequest struct {
 // fields. Editions is raw JSON round-tripped from the lookup result so the
 // add satisfies Chaptarr's NOT NULL edition columns (links, images).
 type AddBookRequest struct {
-	ForeignBookID      string            `json:"foreignBookId"`
-	Title              string            `json:"title"`
-	TitleSlug          string            `json:"titleSlug,omitempty"`
-	Monitored          bool              `json:"monitored"`
-	AnyEditionOk       bool              `json:"anyEditionOk"`
-	MediaType          string            `json:"mediaType,omitempty"`
-	EbookMonitored     *bool             `json:"ebookMonitored,omitempty"`
-	AudiobookMonitored *bool             `json:"audiobookMonitored,omitempty"`
-	Author             AddAuthorRequest  `json:"author"`
+	ForeignBookID      string           `json:"foreignBookId"`
+	Title              string           `json:"title"`
+	TitleSlug          string           `json:"titleSlug,omitempty"`
+	Monitored          bool             `json:"monitored"`
+	AnyEditionOk       bool             `json:"anyEditionOk"`
+	MediaType          string           `json:"mediaType,omitempty"`
+	EbookMonitored     *bool            `json:"ebookMonitored,omitempty"`
+	AudiobookMonitored *bool            `json:"audiobookMonitored,omitempty"`
+	Author             AddAuthorRequest `json:"author"`
 	AddOptions         struct {
 		SearchForNewBook bool `json:"searchForNewBook"`
 	} `json:"addOptions"`
@@ -532,6 +536,16 @@ func (c *Client) GetBooks(authorID int) ([]Book, error) {
 	var books []Book
 	path := fmt.Sprintf("/api/v1/book?authorId=%d", authorID)
 	if err := c.do("GET", path, nil, &books); err != nil {
+		return nil, fmt.Errorf("chaptarr books: %w", err)
+	}
+	return books, nil
+}
+
+// GetAllBooks lists every book in the Chaptarr library (all authors). Chaptarr
+// returns the same book shape as GetBooks; omitting authorId widens the scope.
+func (c *Client) GetAllBooks() ([]Book, error) {
+	var books []Book
+	if err := c.do("GET", "/api/v1/book", nil, &books); err != nil {
 		return nil, fmt.Errorf("chaptarr books: %w", err)
 	}
 	return books, nil
@@ -875,6 +889,14 @@ var (
 	}
 )
 
+// Format classifications returned by FormatOf and used to route a book record
+// to its ebook/audiobook slot.
+const (
+	FormatEbook     = "ebook"
+	FormatAudiobook = "audiobook"
+	FormatUnknown   = "unknown"
+)
+
 // FormatOf classifies a Chaptarr quality name as "ebook", "audiobook", or
 // "unknown" via a case-insensitive substring match. Ebook tokens are checked
 // first so an ambiguous name leans toward the text format.
@@ -882,13 +904,13 @@ func FormatOf(qualityName string) string {
 	upper := strings.ToUpper(qualityName)
 	for _, tok := range ebookTokens {
 		if strings.Contains(upper, tok) {
-			return "ebook"
+			return FormatEbook
 		}
 	}
 	for _, tok := range audiobookTokens {
 		if strings.Contains(upper, tok) {
-			return "audiobook"
+			return FormatAudiobook
 		}
 	}
-	return "unknown"
+	return FormatUnknown
 }
