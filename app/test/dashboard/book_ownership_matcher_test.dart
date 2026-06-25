@@ -205,6 +205,15 @@ void main() {
       expect(injected.single.ownership.ebook.downloaded, isTrue);
     });
 
+    test('skips an empty (all-missing, unmonitored) library shell', () {
+      final two = [
+        _owned('Heir to the Empire', 'Timothy Zahn', ebookDownloaded: true),
+        _owned('Star Wars: Heir to the Empire', 'Timothy Zahn'), // all missing
+      ];
+      final injected = ownedTitlesForQuery('heir', two, const []);
+      expect(injected.map((t) => t.title), ['Heir to the Empire']);
+    });
+
     test('skips a record a lookup result lists under the exact same title', () {
       final lookup = [_result('Heir to the Empire', author: 'Timothy Zahn')];
       expect(ownedTitlesForQuery('heir', digest, lookup), isEmpty);

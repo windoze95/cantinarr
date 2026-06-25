@@ -166,10 +166,12 @@ BookOwnership? ownershipFor(ChaptarrBook result, List<OwnedTitle> digest) =>
 
 /// Owned digest titles matching the search [query] (every query token appears in
 /// the title), each kept as its own entry so the user sees and picks among their
-/// distinct records — nothing is merged. Skips only a record a lookup result
-/// already lists under the exact same title (that row already carries the chip),
-/// and collapses only literally-identical titles. Injected at the top so a book
-/// the user owns/monitors surfaces even when Chaptarr's search doesn't rank it.
+/// distinct records — nothing is merged. Only titles the user actually has or is
+/// monitoring qualify, so empty library shells (all-missing, unmonitored
+/// duplicate records) don't appear. Skips a record a lookup result already lists
+/// under the exact same title (that row already carries the chip), and collapses
+/// only literally-identical titles. Injected at the top so a book the user
+/// owns/monitors surfaces even when Chaptarr's search doesn't rank it.
 List<OwnedTitle> ownedTitlesForQuery(
   String query,
   List<OwnedTitle> digest,
@@ -182,6 +184,9 @@ List<OwnedTitle> ownedTitlesForQuery(
   final seen = <String>{};
   final out = <OwnedTitle>[];
   for (final owned in digest) {
+    // Only surface books the user actually has or is monitoring — not empty
+    // library shells (all-missing, unmonitored duplicate records).
+    if (!owned.ownership.anyOwned) continue;
     final titleTokens = normalizeTitleTokens(owned.title).toSet();
     if (titleTokens.isEmpty) continue;
     // The query must be contained in the title (a partial-name match).
