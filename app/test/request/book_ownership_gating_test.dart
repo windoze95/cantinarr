@@ -13,12 +13,25 @@ void main() {
       expect(d.coverageLabel(BookRequestFormat.ebook), 'Downloaded');
     });
 
-    test('a monitored-only ebook is covered, labeled "In Library"', () {
+    test('a monitored-only ebook (no file) stays requestable', () {
       const d = BookRequestStatusDetail(
         ownership: BookOwnership(ebook: FormatOwnership(monitored: true)),
       );
-      expect(d.isCovered(BookRequestFormat.ebook), isTrue);
-      expect(d.coverageLabel(BookRequestFormat.ebook), 'In Library');
+      expect(d.isCovered(BookRequestFormat.ebook), isFalse);
+      expect(d.coverageLabel(BookRequestFormat.ebook), isNull);
+    });
+
+    test('downloaded ebook + monitored-only audiobook keeps audiobook open', () {
+      const d = BookRequestStatusDetail(
+        ownership: BookOwnership(
+          ebook: FormatOwnership(downloaded: true),
+          audiobook: FormatOwnership(monitored: true),
+        ),
+      );
+      expect(d.isCovered(BookRequestFormat.ebook), isTrue); // file present
+      expect(d.isCovered(BookRequestFormat.audiobook), isFalse); // no file yet
+      expect(d.isCovered(BookRequestFormat.both), isFalse);
+      expect(d.coverageLabel(BookRequestFormat.ebook), 'Downloaded');
     });
 
     test('owned ebook + requested audiobook → both covered, labels distinct',
@@ -38,7 +51,7 @@ void main() {
     test('withOwnership attaches ownership without mutating the original', () {
       const base = BookRequestStatusDetail();
       final withOwn = base.withOwnership(
-          const BookOwnership(audiobook: FormatOwnership(monitored: true)));
+          const BookOwnership(audiobook: FormatOwnership(downloaded: true)));
       expect(withOwn.isCovered(BookRequestFormat.audiobook), isTrue);
       expect(base.isCovered(BookRequestFormat.audiobook), isFalse);
     });
