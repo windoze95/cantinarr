@@ -165,7 +165,6 @@ class _IssueTile extends StatelessWidget {
             children: [
               if (category != null) _chip(category.label),
               _statusChip(issue.status),
-              if (issue.occurrences > 1) _chip('×${issue.occurrences}'),
             ],
           ),
         ],
