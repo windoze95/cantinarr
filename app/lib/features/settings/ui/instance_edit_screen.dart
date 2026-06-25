@@ -45,7 +45,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _isTesting = false;
   String? _testResult;
   bool _isVerifyingLogin = false;
-  bool _webLoginOk = false;
+  Color _webLoginColor = AppTheme.error;
   String? _webLoginResult;
 
   static const _serviceTypes = <(String, String)>[
@@ -160,15 +160,27 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       url: _urlController.text.trim(),
       username: _usernameController.text.trim(),
       password: _passwordController.text,
+      apiKey: _apiKeyController.text.trim(),
       instanceId: widget.isEditing ? widget.instanceId : null,
     );
     if (!mounted) return;
     setState(() {
       _isVerifyingLogin = false;
-      _webLoginOk = result.success;
-      _webLoginResult = result.success
-          ? 'Web login OK — cover art will load.'
-          : 'Web login failed${result.error != null ? ': ${result.error}' : ''}';
+      if (!result.success) {
+        _webLoginColor = AppTheme.error;
+        _webLoginResult =
+            'Web login failed${result.error != null ? ': ${result.error}' : ''}';
+      } else if (result.coverOk) {
+        _webLoginColor = AppTheme.available;
+        _webLoginResult = 'Web login OK — cover art loads.';
+      } else {
+        // Login works but Chaptarr's cover proxy failed (a Chaptarr-side issue).
+        _webLoginColor = AppTheme.downloading;
+        _webLoginResult =
+            'Login OK, but ${result.coverDetail ?? 'covers failed to load'}. '
+            "New-book covers won't show (a Chaptarr-side issue); owned-book "
+            'covers still do.';
+      }
     });
   }
 
@@ -504,10 +516,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               const SizedBox(height: 8),
               Text(
                 _webLoginResult!,
-                style: TextStyle(
-                  color: _webLoginOk ? AppTheme.available : AppTheme.error,
-                  fontSize: 13,
-                ),
+                style: TextStyle(color: _webLoginColor, fontSize: 13),
               ),
             ],
           ],
