@@ -67,6 +67,30 @@ func TestReduceLibraryMergesFormatsByForeignBookID(t *testing.T) {
 	if lt.Cover != "/MediaCover/Books/1/cover.jpg" {
 		t.Errorf("cover = %q, want /MediaCover/Books/1/cover.jpg", lt.Cover)
 	}
+	if lt.ForeignBookID != "fb-1" {
+		t.Errorf("foreignBookID = %q, want fb-1", lt.ForeignBookID)
+	}
+}
+
+func TestRecordsByForeignID(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 1, Title: "Ahsoka", ForeignBookID: "fb-9", MediaType: "ebook"},
+		{ID: 2, Title: "Ahsoka", ForeignBookID: "fb-9", MediaType: "audiobook"},
+		{ID: 3, Title: "Other", ForeignBookID: "fb-x", MediaType: "ebook"},
+	}
+	title, byFormat := recordsByForeignID(books, "fb-9")
+	if title != "Ahsoka" {
+		t.Fatalf("title = %q, want Ahsoka", title)
+	}
+	if byFormat[chaptarr.FormatEbook] == nil || byFormat[chaptarr.FormatEbook].ID != 1 {
+		t.Errorf("ebook = %+v, want id 1", byFormat[chaptarr.FormatEbook])
+	}
+	if byFormat[chaptarr.FormatAudiobook] == nil || byFormat[chaptarr.FormatAudiobook].ID != 2 {
+		t.Errorf("audiobook = %+v, want id 2", byFormat[chaptarr.FormatAudiobook])
+	}
+	if title, _ := recordsByForeignID(books, ""); title != "" {
+		t.Errorf("empty foreignID matched %q, want nothing", title)
+	}
 }
 
 // TestReduceLibraryRoutesByLoneEditionFormat asserts a record with no mediaType

@@ -342,12 +342,14 @@ Widget? _ownershipChip(BookOwnership? o) {
   );
 }
 
-/// A synthetic, non-requestable result for an owned library title the metadata
-/// search didn't return. The digest carries no foreignBookId, so the tile shows
-/// the ownership chip with no Request button.
+/// A synthetic result for an owned library title the metadata search didn't
+/// return. It carries the owned record's foreignBookId, so a partly-owned title
+/// (e.g. ebook present, audiobook missing) still gets a "Request more" button to
+/// complete the missing format.
 ChaptarrBook _ownedTitleAsBook(OwnedTitle t) => ChaptarrBook(
       id: 0,
       title: t.title,
+      foreignBookId: t.foreignBookId.isNotEmpty ? t.foreignBookId : null,
       author: ChaptarrAuthorContext(id: 0, authorName: t.author),
       releaseDate: t.year > 0 ? DateTime(t.year) : null,
     );

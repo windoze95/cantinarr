@@ -29,6 +29,9 @@ type LibraryTitle struct {
 	Title  string `json:"title"`
 	Author string `json:"author"`
 	Year   int    `json:"year"`
+	// ForeignBookID lets the app request the missing format of an owned book: the
+	// request carries it back and the backend completes the existing record.
+	ForeignBookID string `json:"foreign_book_id"`
 	// Cover is the owned record's relative cover path (e.g. /MediaCover/...),
 	// which loads with the API key — so an owned search result can show real art
 	// without the login-session-gated /MediaCoverProxy lookup cover.
@@ -88,6 +91,9 @@ func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 		// Take the cover from the first record in the group that has one.
 		if g.title.Cover == "" {
 			g.title.Cover = coverOf(book)
+		}
+		if g.title.ForeignBookID == "" {
+			g.title.ForeignBookID = book.ForeignBookID
 		}
 
 		own := FormatOwnership{
@@ -150,6 +156,30 @@ func recordFormat(book chaptarr.Book) string {
 		return chaptarr.FormatOf(book.Editions[0].Format)
 	}
 	return chaptarr.FormatUnknown
+}
+
+// recordsByForeignID indexes a foreignBookId's library records by format
+// ("ebook"/"audiobook") and returns the title. Used to complete the missing
+// format of an owned book — the request carries a library foreignBookId the
+// metadata lookup can't match, so we act on the existing records instead.
+func recordsByForeignID(books []chaptarr.Book, foreignID string) (string, map[string]*chaptarr.Book) {
+	byFormat := make(map[string]*chaptarr.Book)
+	title := ""
+	for i := range books {
+		if books[i].ForeignBookID != foreignID || foreignID == "" {
+			continue
+		}
+		if title == "" {
+			title = books[i].Title
+		}
+		switch recordFormat(books[i]) {
+		case chaptarr.FormatEbook:
+			byFormat[chaptarr.FormatEbook] = &books[i]
+		case chaptarr.FormatAudiobook:
+			byFormat[chaptarr.FormatAudiobook] = &books[i]
+		}
+	}
+	return title, byFormat
 }
 
 // GetBookLibraryDigest returns the requesting user's reduced, cached Chaptarr

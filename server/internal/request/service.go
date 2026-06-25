@@ -601,7 +601,10 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		}
 	}
 	if match == nil {
-		return "", "", fmt.Errorf("book not found for foreign id %s", r.foreignID)
+		// The foreignBookId belongs to a book already in the library (owned
+		// records carry a library foreignBookId the metadata lookup can't match);
+		// complete the missing format from the existing records instead of adding.
+		return s.completeOwnedBook(client, r)
 	}
 
 	qps, err := client.GetQualityProfiles()
@@ -642,6 +645,41 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	}
 	if added == 0 {
 		return "", "", fmt.Errorf("add book failed: %w", lastErr)
+	}
+	return StatusRequested, title, nil
+}
+
+// completeOwnedBook fulfils a request whose foreignBookId is an owned library
+// record (not a current metadata id, so the lookup above couldn't match it): it
+// monitors and searches the existing record(s) for the requested format(s) to
+// fetch the missing file, rather than adding a fresh book.
+func (s *Service) completeOwnedBook(client *chaptarr.Client, r *resolvedRequest) (string, string, error) {
+	books, err := client.GetAllBooks()
+	if err != nil {
+		return "", "", fmt.Errorf("book not found for foreign id %s", r.foreignID)
+	}
+	title, byFormat := recordsByForeignID(books, r.foreignID)
+	if title == "" {
+		return "", "", fmt.Errorf("book not found for foreign id %s", r.foreignID)
+	}
+
+	var lastErr error
+	done := 0
+	for _, mediaType := range chaptarrRequestFormats(r.bookFormat) {
+		rec := byFormat[mediaType]
+		if rec == nil {
+			lastErr = fmt.Errorf("no %s edition of %q exists to complete", mediaType, title)
+			continue
+		}
+		if err := client.SetBookMonitored([]int{rec.ID}, true); err != nil {
+			lastErr = fmt.Errorf("monitor %s: %w", mediaType, err)
+			continue
+		}
+		_ = client.TriggerBookSearch([]int{rec.ID})
+		done++
+	}
+	if done == 0 {
+		return "", "", fmt.Errorf("could not complete %q: %w", title, lastErr)
 	}
 	return StatusRequested, title, nil
 }
