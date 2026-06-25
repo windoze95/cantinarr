@@ -396,10 +396,18 @@ class _BookRequestButton extends StatefulWidget {
 }
 
 class _BookRequestButtonState extends State<_BookRequestButton> {
-  BookRequestStatusDetail _detail = const BookRequestStatusDetail();
+  // The async-loaded request state (no ownership). Ownership is layered on in
+  // [_detail] on every read, so the button reflects the owned-books digest even
+  // when it loads AFTER this button was first built (the chip already does) —
+  // otherwise an owned-but-unrequested format reads as "Request", not
+  // "Request more".
+  BookRequestStatusDetail _serverDetail = const BookRequestStatusDetail();
   RequestStatus _status = RequestStatus.unavailable;
   bool _loading = true;
   bool _busy = false;
+
+  BookRequestStatusDetail get _detail =>
+      _serverDetail.withOwnership(widget.ownership);
 
   @override
   void initState() {
@@ -407,13 +415,20 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
     _check();
   }
 
+  @override
+  void didUpdateWidget(covariant _BookRequestButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If this row got reused for a different book, re-fetch its request state.
+    if (oldWidget.foreignId != widget.foreignId) {
+      _check();
+    }
+  }
+
   Future<void> _check() async {
     final detail = await widget.service.checkBookStatusDetail(widget.foreignId);
     if (!mounted) return;
     setState(() {
-      // Union request state with library ownership so an owned format is also
-      // treated as covered (unrequestable).
-      _detail = detail.withOwnership(widget.ownership);
+      _serverDetail = detail;
       _status = detail.status;
       _loading = false;
     });
