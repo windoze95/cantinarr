@@ -62,6 +62,11 @@ class OwnedTitle {
   /// the API key, so it shows real art for an owned result without the
   /// login-gated lookup cover. Empty when the record has no cached cover.
   final String cover;
+
+  /// The owned book's foreignBookId, so a surfaced owned result can request its
+  /// missing format (the backend completes the existing record). Empty when the
+  /// record has none.
+  final String foreignBookId;
   final BookOwnership ownership;
 
   const OwnedTitle({
@@ -69,16 +74,18 @@ class OwnedTitle {
     required this.author,
     this.year = 0,
     this.cover = '',
+    this.foreignBookId = '',
     required this.ownership,
   });
 
-  /// Parses one digest entry: `title`/`author`/`year`/`cover` plus the `ebook`
-  /// and `audiobook` format objects.
+  /// Parses one digest entry: `title`/`author`/`year`/`cover`/`foreign_book_id`
+  /// plus the `ebook` and `audiobook` format objects.
   factory OwnedTitle.fromJson(Map<String, dynamic> json) => OwnedTitle(
         title: json['title'] as String? ?? '',
         author: json['author'] as String? ?? '',
         year: json['year'] as int? ?? 0,
         cover: json['cover'] as String? ?? '',
+        foreignBookId: json['foreign_book_id'] as String? ?? '',
         ownership: BookOwnership(
           ebook: FormatOwnership.fromJson(
               json['ebook'] as Map<String, dynamic>?),
