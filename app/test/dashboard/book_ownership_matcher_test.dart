@@ -171,6 +171,22 @@ void main() {
       expect(o!.ebook.downloaded, isFalse);
       expect(o.ebook.monitored, isTrue);
     });
+
+    test('ownedMatchFor exposes the matched record cover', () {
+      final digest = [
+        OwnedTitle.fromJson({
+          'title': 'Ahsoka',
+          'author': 'E.K. Johnston',
+          'cover': '/MediaCover/Books/9/cover.jpg',
+          'ebook': {'downloaded': true},
+        }),
+      ];
+      final match =
+          ownedMatchFor(_result('Ahsoka', author: 'E.K. Johnston'), digest);
+      expect(match, isNotNull);
+      expect(match!.cover, '/MediaCover/Books/9/cover.jpg');
+      expect(match.ownership.ebook.downloaded, isTrue);
+    });
   });
 
   group('ownedTitlesForQuery surfaces owned books lookup missed', () {

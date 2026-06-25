@@ -183,15 +183,22 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
         : ownedTitlesForQuery(_searchedTerm, digest, _results);
     // Mark each lookup result with its ownership and float owned titles to the
     // top, preserving Chaptarr's relevance order within each bucket (don't
-    // collapse versions — the user wants to see ones they don't own).
-    final owned = <(ChaptarrBook, BookOwnership?)>[];
-    final rest = <(ChaptarrBook, BookOwnership?)>[];
+    // collapse versions — the user wants to see ones they don't own). Each row
+    // carries the cover to show: prefer the owned record's cached cover (loads
+    // with the API key) over the lookup's login-gated /MediaCoverProxy cover.
+    final owned = <(ChaptarrBook, BookOwnership?, String?)>[];
+    final rest = <(ChaptarrBook, BookOwnership?, String?)>[];
     for (final book in _results) {
-      final o = digest.isEmpty ? null : ownershipFor(book, digest);
-      ((o?.anyOwned ?? false) ? owned : rest).add((book, o));
+      final match = digest.isEmpty ? null : ownedMatchFor(book, digest);
+      final cover = (match != null && match.cover.isNotEmpty)
+          ? match.cover
+          : book.coverUrl;
+      ((match?.ownership.anyOwned ?? false) ? owned : rest)
+          .add((book, match?.ownership, cover));
     }
-    final ordered = <(ChaptarrBook, BookOwnership?)>[
-      for (final t in injected) (_ownedTitleAsBook(t), t.ownership),
+    final ordered = <(ChaptarrBook, BookOwnership?, String?)>[
+      for (final t in injected)
+        (_ownedTitleAsBook(t), t.ownership, t.cover.isNotEmpty ? t.cover : null),
       ...owned,
       ...rest,
     ];
@@ -233,7 +240,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
         ownership: ordered[i].$2,
         cover: instanceId == null
             ? null
-            : chaptarrImageSource(ref, ordered[i].$1.coverUrl, instanceId),
+            : chaptarrImageSource(ref, ordered[i].$3, instanceId),
         requestService: requestService,
       ),
     );

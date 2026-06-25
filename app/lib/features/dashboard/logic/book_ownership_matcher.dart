@@ -145,20 +145,24 @@ List<OwnedTitle> _matchingTitles(ChaptarrBook result, List<OwnedTitle> digest) {
   return out;
 }
 
-/// Decides whether the user already owns [result], by matching it against the
-/// ownership [digest]. Returns a SINGLE matching record's ownership — preferring
-/// the one whose title exactly equals the result's, else the first match — so a
-/// result's chip/gating reflects one real record rather than a blend of several
-/// (the user's separate records are surfaced as their own rows, not merged).
-/// Null when no row qualifies.
-BookOwnership? ownershipFor(ChaptarrBook result, List<OwnedTitle> digest) {
+/// The single digest row [result] matches — preferring the one whose title
+/// exactly equals the result's, else the first match (the user's separate
+/// records are surfaced as their own rows, not merged). Null when none qualify.
+/// Exposes the matched [OwnedTitle] so callers can reuse its cached cover.
+OwnedTitle? ownedMatchFor(ChaptarrBook result, List<OwnedTitle> digest) {
   final matches = _matchingTitles(result, digest);
   if (matches.isEmpty) return null;
   for (final m in matches) {
-    if (m.title == result.title) return m.ownership;
+    if (m.title == result.title) return m;
   }
-  return matches.first.ownership;
+  return matches.first;
 }
+
+/// Decides whether the user already owns [result], by matching it against the
+/// ownership [digest] — a single real record's ownership (see [ownedMatchFor]),
+/// not a blend. Null when no row qualifies.
+BookOwnership? ownershipFor(ChaptarrBook result, List<OwnedTitle> digest) =>
+    ownedMatchFor(result, digest)?.ownership;
 
 /// Owned digest titles matching the search [query] (every query token appears in
 /// the title), each kept as its own entry so the user sees and picks among their
