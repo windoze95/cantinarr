@@ -106,6 +106,24 @@ func (h *Handler) GetBookStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// GetBookLibrary returns the current user's reduced, cached Chaptarr library
+// digest (one entry per title with per-format ownership), so the app can mark
+// search results as already-owned. A user with no Chaptarr access gets an empty
+// digest, not an error.
+func (h *Handler) GetBookLibrary(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	digest, err := h.service.GetBookLibraryDigest(claims.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {

@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -58,14 +59,18 @@ type Service struct {
 	registry *instance.Registry
 	bridge   *tmdb.Bridge
 	notifier Notifier
+	// libraryCache holds reduced Chaptarr library digests keyed by instance id,
+	// so the owned-books digest doesn't refetch the whole library on every call.
+	libraryCache *cache.Cache
 }
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
 	return &Service{
-		db:       db,
-		registry: registry,
-		bridge:   bridge,
-		notifier: notifier,
+		db:           db,
+		registry:     registry,
+		bridge:       bridge,
+		notifier:     notifier,
+		libraryCache: cache.New(),
 	}
 }
 
