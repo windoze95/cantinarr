@@ -130,7 +130,7 @@ double _titleScore(ChaptarrBook result, OwnedTitle owned) {
 /// Digest rows that match [result]: title score >= [kOwnershipTitleThreshold]
 /// AND the authors match (or, when an author is missing on either side, the
 /// title score stands alone at >= 0.9). A title can have more than one matching
-/// row when its ebook and audiobook records didn't share a foreignBookId.
+/// row when the user owns several near-identically-titled records.
 List<OwnedTitle> _matchingTitles(ChaptarrBook result, List<OwnedTitle> digest) {
   final lookupAuthor = result.author?.authorName;
   final lookupAuthorEmpty = lookupAuthor == null || lookupAuthor.isEmpty;
@@ -145,37 +145,27 @@ List<OwnedTitle> _matchingTitles(ChaptarrBook result, List<OwnedTitle> digest) {
   return out;
 }
 
-/// Combines several rows' ownership: a format is owned/downloaded if it is in
-/// any of them (so split ebook/audiobook records merge into one truth).
-BookOwnership _mergeOwnership(Iterable<BookOwnership> owns) {
-  var em = false, ed = false, am = false, ad = false;
-  for (final o in owns) {
-    em = em || o.ebook.monitored;
-    ed = ed || o.ebook.downloaded;
-    am = am || o.audiobook.monitored;
-    ad = ad || o.audiobook.downloaded;
-  }
-  return BookOwnership(
-    ebook: FormatOwnership(monitored: em, downloaded: ed),
-    audiobook: FormatOwnership(monitored: am, downloaded: ad),
-  );
-}
-
 /// Decides whether the user already owns [result], by matching it against the
-/// ownership [digest]. Returns the merged ownership across every matching digest
-/// row (so a title split into separate ebook/audiobook rows still reports both),
-/// or null when no row qualifies.
+/// ownership [digest]. Returns a SINGLE matching record's ownership — preferring
+/// the one whose title exactly equals the result's, else the first match — so a
+/// result's chip/gating reflects one real record rather than a blend of several
+/// (the user's separate records are surfaced as their own rows, not merged).
+/// Null when no row qualifies.
 BookOwnership? ownershipFor(ChaptarrBook result, List<OwnedTitle> digest) {
   final matches = _matchingTitles(result, digest);
   if (matches.isEmpty) return null;
-  return _mergeOwnership(matches.map((t) => t.ownership));
+  for (final m in matches) {
+    if (m.title == result.title) return m.ownership;
+  }
+  return matches.first.ownership;
 }
 
 /// Owned digest titles matching the search [query] (every query token appears in
-/// the title) that the [lookupResults] didn't already return — deduped by
-/// normalized title+author with ownership merged. These are injected at the top
-/// of the results so a book the user owns/monitors surfaces even when Chaptarr's
-/// metadata search doesn't rank it.
+/// the title), each kept as its own entry so the user sees and picks among their
+/// distinct records — nothing is merged. Skips only a record a lookup result
+/// already lists under the exact same title (that row already carries the chip),
+/// and collapses only literally-identical titles. Injected at the top so a book
+/// the user owns/monitors surfaces even when Chaptarr's search doesn't rank it.
 List<OwnedTitle> ownedTitlesForQuery(
   String query,
   List<OwnedTitle> digest,
@@ -184,33 +174,19 @@ List<OwnedTitle> ownedTitlesForQuery(
   final queryTokens = normalizeTitleTokens(query).toSet();
   if (queryTokens.isEmpty) return const [];
 
-  final byKey = <String, List<OwnedTitle>>{};
-  final keyOrder = <String>[];
+  final lookupTitles = lookupResults.map((r) => r.title).toSet();
+  final seen = <String>{};
+  final out = <OwnedTitle>[];
   for (final owned in digest) {
     final titleTokens = normalizeTitleTokens(owned.title).toSet();
     if (titleTokens.isEmpty) continue;
     // The query must be contained in the title (a partial-name match).
     if (!queryTokens.every(titleTokens.contains)) continue;
-    // Skip when a lookup result already represents this owned title.
-    if (lookupResults.any((r) => _matchingTitles(r, [owned]).isNotEmpty)) {
-      continue;
-    }
-    final key =
-        '${titleTokens.join(' ')}|${_authorTokens(owned.author).join(' ')}';
-    if (byKey[key] == null) {
-      byKey[key] = [];
-      keyOrder.add(key);
-    }
-    byKey[key]!.add(owned);
+    // A lookup row with this exact title already shows the ownership chip.
+    if (lookupTitles.contains(owned.title)) continue;
+    // Drop only literally-identical titles, never distinct ones.
+    if (!seen.add(owned.title)) continue;
+    out.add(owned);
   }
-
-  return [
-    for (final key in keyOrder)
-      OwnedTitle(
-        title: byKey[key]!.first.title,
-        author: byKey[key]!.first.author,
-        year: byKey[key]!.first.year,
-        ownership: _mergeOwnership(byKey[key]!.map((o) => o.ownership)),
-      ),
-  ];
+  return out;
 }
