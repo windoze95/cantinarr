@@ -125,6 +125,32 @@ func TestWebLoginHandler(t *testing.T) {
 	}
 }
 
+func TestCheckProxyCover(t *testing.T) {
+	coverStatus := http.StatusInternalServerError
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/book/lookup"):
+			_, _ = w.Write([]byte(`[{"images":[{"coverType":"cover","url":"/MediaCoverProxy/abc/x.jpg"}]}]`))
+		case strings.HasPrefix(r.URL.Path, "/MediaCoverProxy"):
+			w.WriteHeader(coverStatus)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	sc := newSessionCache()
+
+	// A 500 from the proxy → not ok, with a detail message.
+	if ok, detail := sc.checkProxyCover(srv.URL, "key", "ChaptarrAuth=x"); ok || detail == "" {
+		t.Errorf("500 cover: ok=%v detail=%q, want ok=false with detail", ok, detail)
+	}
+	// A 200 → ok.
+	coverStatus = http.StatusOK
+	if ok, _ := sc.checkProxyCover(srv.URL, "key", "ChaptarrAuth=x"); !ok {
+		t.Error("200 cover: want ok=true")
+	}
+}
+
 func TestFetchCoverLoginsCachesAndReauths(t *testing.T) {
 	var logins int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

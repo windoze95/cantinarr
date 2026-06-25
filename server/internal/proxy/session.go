@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 )
 
@@ -155,6 +156,45 @@ func (sc *sessionCache) fetchWithKey(fullURL, apiKey string) (*http.Response, er
 		return nil, fmt.Errorf("cover upstream returned status %d", resp.StatusCode)
 	}
 	return resp, nil
+}
+
+// checkProxyCover samples a lookup result's /MediaCoverProxy cover and reports
+// whether it actually serves with the session [cookie] — the proxy can fail
+// server-side (e.g. an HTTP 500 when Chaptarr's metadata gives it a bad cover
+// URL) even though login succeeds. Returns ok=true when it can't sample (no
+// lookup results), so a healthy login is never reported as broken.
+func (sc *sessionCache) checkProxyCover(baseURL, apiKey, cookie string) (bool, string) {
+	results, err := chaptarr.NewClient(baseURL, apiKey).LookupBook("the")
+	if err != nil || len(results) == 0 {
+		return true, ""
+	}
+	var coverPath string
+	for _, img := range results[0].Images {
+		if img.URL != "" {
+			coverPath = img.URL
+			break
+		}
+	}
+	if coverPath == "" {
+		return true, ""
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+coverPath, nil)
+	if err != nil {
+		return true, ""
+	}
+	req.Header.Set("Cookie", cookie)
+	resp, err := sc.client.Do(req)
+	if err != nil {
+		return false, "couldn't reach the cover endpoint"
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
+	if resp.StatusCode == http.StatusOK {
+		return true, ""
+	}
+	return false, fmt.Sprintf("Chaptarr's cover proxy returned HTTP %d", resp.StatusCode)
 }
 
 // sanitizeCoverPath validates that a requested cover path is a Chaptarr cover

@@ -64,20 +64,23 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 	proxy.ServeHTTP(w, r)
 }
 
-// TestWebLogin attempts a Chaptarr forms login with the given (or, for an
-// existing instance with a blank password, the stored) web credentials and
-// reports whether it succeeded — so an admin can confirm cover fetching will
-// work. Always 200; the JSON body carries success + any error message.
+// TestWebLogin verifies cover fetching end-to-end with the given (or, for an
+// existing instance with blank fields, the stored) credentials: it performs the
+// forms login AND samples an actual /MediaCoverProxy cover, so the admin learns
+// not just that login works but whether covers really load (Chaptarr's cover
+// proxy can 500 server-side even with a valid session). Always 200; the JSON
+// body carries success/error plus cover_ok/cover_detail.
 func (h *Handler) TestWebLogin() http.HandlerFunc {
 	type request struct {
 		URL        string `json:"url"`
 		Username   string `json:"username"`
 		Password   string `json:"password"`
+		APIKey     string `json:"api_key"`
 		InstanceID string `json:"instance_id"`
 	}
-	write := func(w http.ResponseWriter, success bool, msg string) {
+	write := func(w http.ResponseWriter, body map[string]any) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"success": success, "error": msg})
+		_ = json.NewEncoder(w).Encode(body)
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req request
@@ -85,9 +88,9 @@ func (h *Handler) TestWebLogin() http.HandlerFunc {
 			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
 			return
 		}
-		url, username, password := req.URL, req.Username, req.Password
-		// Editing with a blank password: fall back to the stored credentials.
-		if password == "" && req.InstanceID != "" {
+		url, username, password, apiKey := req.URL, req.Username, req.Password, req.APIKey
+		// Editing with blank secrets: fall back to the stored credentials.
+		if (password == "" || apiKey == "") && req.InstanceID != "" {
 			if inst, _ := h.store.Get(req.InstanceID); inst != nil {
 				if url == "" {
 					url = inst.URL
@@ -95,18 +98,28 @@ func (h *Handler) TestWebLogin() http.HandlerFunc {
 				if username == "" {
 					username = inst.Username
 				}
-				password = inst.Password
+				if password == "" {
+					password = inst.Password
+				}
+				if apiKey == "" {
+					apiKey = inst.APIKey
+				}
 			}
 		}
 		if url == "" || username == "" || password == "" {
-			write(w, false, "URL, username, and password are required")
+			write(w, map[string]any{"success": false, "error": "URL, username, and password are required"})
 			return
 		}
-		if _, err := h.sessions.login(url, username, password); err != nil {
-			write(w, false, err.Error())
+		cookie, err := h.sessions.login(url, username, password)
+		if err != nil {
+			write(w, map[string]any{"success": false, "error": err.Error()})
 			return
 		}
-		write(w, true, "")
+		coverOK, coverDetail := true, ""
+		if apiKey != "" {
+			coverOK, coverDetail = h.sessions.checkProxyCover(url, apiKey, cookie)
+		}
+		write(w, map[string]any{"success": true, "cover_ok": coverOK, "cover_detail": coverDetail})
 	}
 }
 
