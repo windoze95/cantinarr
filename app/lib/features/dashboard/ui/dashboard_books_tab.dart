@@ -1,13 +1,14 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
+import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
 import '../../request/data/book_ownership.dart';
 import '../../request/data/request_service.dart';
@@ -221,6 +222,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
     // backend's /requests endpoint, not the Chaptarr proxy).
     final requestService =
         RequestService(backendDio: ref.read(backendClientProvider));
+    final instanceId = ref.read(instanceProvider).activeChaptarrInstance?.id;
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: ordered.length,
@@ -229,6 +231,9 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
       itemBuilder: (_, i) => _BookResultTile(
         book: ordered[i].$1,
         ownership: ordered[i].$2,
+        cover: instanceId == null
+            ? null
+            : chaptarrImageSource(ref, ordered[i].$1.coverUrl, instanceId),
         requestService: requestService,
       ),
     );
@@ -238,11 +243,13 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
 class _BookResultTile extends StatelessWidget {
   final ChaptarrBook book;
   final BookOwnership? ownership;
+  final ChaptarrImageSource? cover;
   final RequestService requestService;
 
   const _BookResultTile({
     required this.book,
     this.ownership,
+    this.cover,
     required this.requestService,
   });
 
@@ -265,28 +272,14 @@ class _BookResultTile extends StatelessWidget {
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: SizedBox(
-        width: 44,
-        height: 66,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: book.coverUrl != null
-              ? CachedNetworkImage(
-                  imageUrl: book.coverUrl!,
-                  fit: BoxFit.cover,
-                  placeholder: (_, __) =>
-                      Container(color: AppTheme.surfaceVariant),
-                  errorWidget: (_, __, ___) => Container(
-                    color: AppTheme.surfaceVariant,
-                    child: const Icon(Icons.menu_book,
-                        color: AppTheme.textSecondary, size: 20),
-                  ),
-                )
-              : Container(
-                  color: AppTheme.surfaceVariant,
-                  child: const Icon(Icons.menu_book,
-                      color: AppTheme.textSecondary, size: 20),
-                ),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: CachedImage(
+          url: cover?.url,
+          headers: cover?.headers,
+          width: 44,
+          height: 66,
+          icon: Icons.menu_book,
         ),
       ),
       title: Text(

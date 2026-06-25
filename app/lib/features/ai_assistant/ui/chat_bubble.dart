@@ -1,8 +1,8 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../data/ai_models.dart';
 
 /// A single chat message bubble with optional media result cards.
@@ -358,33 +358,12 @@ class _MediaResultCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (item.posterPath != null)
-                      CachedNetworkImage(
-                        imageUrl: imageUrl,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.movie_outlined,
-                                color: AppTheme.textSecondary, size: 28),
-                          ),
-                        ),
-                        errorWidget: (_, __, ___) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.broken_image_outlined,
-                                color: AppTheme.textSecondary, size: 28),
-                          ),
-                        ),
-                      )
-                    else
-                      Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.movie_outlined,
-                              color: AppTheme.textSecondary, size: 28),
-                        ),
-                      ),
+                    CachedImage(
+                      url: item.posterPath == null ? null : imageUrl,
+                      fit: BoxFit.cover,
+                      icon: Icons.movie_outlined,
+                      iconSize: 28,
+                    ),
                     // Rating badge
                     if (item.voteAverage != null && item.voteAverage! > 0)
                       Positioned(

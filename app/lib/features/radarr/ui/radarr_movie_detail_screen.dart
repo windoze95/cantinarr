@@ -1,9 +1,9 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -280,16 +280,12 @@ class _Header extends StatelessWidget {
           child: SizedBox(
             width: 100,
             height: 150,
-            child: movie.posterUrl != null
-                ? CachedNetworkImage(
-                    imageUrl: movie.posterUrl!,
-                    fit: BoxFit.cover,
-                  )
-                : Container(
-                    color: AppTheme.surfaceVariant,
-                    child: const Icon(Icons.movie,
-                        color: AppTheme.textSecondary, size: 28),
-                  ),
+            child: CachedImage(
+              url: movie.posterUrl,
+              fit: BoxFit.cover,
+              icon: Icons.movie,
+              iconSize: 28,
+            ),
           ),
         ),
         const SizedBox(width: 14),

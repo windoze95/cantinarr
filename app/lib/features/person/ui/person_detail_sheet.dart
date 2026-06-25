@@ -1,10 +1,10 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shimmer/shimmer.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../logic/person_detail_provider.dart';
@@ -187,32 +187,12 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
             child: SizedBox(
               width: 100,
               height: 100,
-              child: imageUrl.isNotEmpty
-                  ? CachedNetworkImage(
-                      imageUrl: imageUrl,
-                      fit: BoxFit.cover,
-                      placeholder: (_, __) => Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.person,
-                              color: AppTheme.textSecondary, size: 32),
-                        ),
-                      ),
-                      errorWidget: (_, __, ___) => Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.person,
-                              color: AppTheme.textSecondary, size: 32),
-                        ),
-                      ),
-                    )
-                  : Container(
-                      color: AppTheme.surfaceVariant,
-                      child: const Center(
-                        child: Icon(Icons.person,
-                            color: AppTheme.textSecondary, size: 32),
-                      ),
-                    ),
+              child: CachedImage(
+                url: imageUrl.isEmpty ? null : imageUrl,
+                fit: BoxFit.cover,
+                icon: Icons.person,
+                iconSize: 32,
+              ),
             ),
           ),
           const SizedBox(width: 14),
@@ -402,27 +382,12 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
               child: SizedBox(
                 width: 60,
                 height: 90,
-                child: credit.posterPath != null
-                    ? CachedNetworkImage(
-                        imageUrl: posterUrl,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => Container(
-                            color: AppTheme.surfaceVariant),
-                        errorWidget: (_, __, ___) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.movie_outlined,
-                                color: AppTheme.textSecondary, size: 18),
-                          ),
-                        ),
-                      )
-                    : Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.movie_outlined,
-                              color: AppTheme.textSecondary, size: 18),
-                        ),
-                      ),
+                child: CachedImage(
+                  url: credit.posterPath == null ? null : posterUrl,
+                  fit: BoxFit.cover,
+                  icon: Icons.movie_outlined,
+                  iconSize: 18,
+                ),
               ),
             ),
             const SizedBox(width: 10),

@@ -1,11 +1,12 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/chaptarr_add_payload.dart';
 import '../data/chaptarr_api_service.dart';
+import '../data/chaptarr_image.dart';
 import '../data/chaptarr_models.dart';
 import 'chaptarr_book_screen.dart';
 import 'widgets/book_status.dart';
@@ -207,6 +208,8 @@ class _ChaptarrAuthorDetailScreenState
                   const SizedBox(height: 4),
                   ..._groupedBooks().map((records) => _BookCard(
                         records: records,
+                        cover: chaptarrImageSource(
+                            ref, records.first.coverUrl, widget.instanceId),
                         togglingIds: _togglingBooks,
                         addingKeys: _addingFormats,
                         onTap: () => _openBookGroup(records),
@@ -323,6 +326,7 @@ class _AuthorSummaryCard extends StatelessWidget {
 /// format exists) or an add button (when it doesn't).
 class _BookCard extends StatelessWidget {
   final List<ChaptarrBook> records;
+  final ChaptarrImageSource? cover;
   final Set<int> togglingIds;
   final Set<String> addingKeys;
   final VoidCallback onTap;
@@ -331,6 +335,7 @@ class _BookCard extends StatelessWidget {
 
   const _BookCard({
     required this.records,
+    required this.cover,
     required this.togglingIds,
     required this.addingKeys,
     required this.onTap,
@@ -345,7 +350,6 @@ class _BookCard extends StatelessWidget {
     final fileRecord =
         records.firstWhere((r) => r.hasFile, orElse: () => primary);
     final status = bookFileStatusLine(fileRecord);
-    final anyMonitored = records.any((r) => r.monitored);
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -363,19 +367,13 @@ class _BookCard extends StatelessWidget {
               child: SizedBox(
                 width: 44,
                 height: 60,
-                child: primary.coverUrl != null
-                    ? CachedNetworkImage(
-                        imageUrl: primary.coverUrl!, fit: BoxFit.cover)
-                    : Container(
-                        color: AppTheme.surfaceVariant,
-                        child: Icon(
-                          Icons.menu_book_outlined,
-                          color: anyMonitored
-                              ? AppTheme.available
-                              : AppTheme.unavailable,
-                          size: 22,
-                        ),
-                      ),
+                child: CachedImage(
+                  url: cover?.url,
+                  headers: cover?.headers,
+                  fit: BoxFit.cover,
+                  icon: Icons.menu_book_outlined,
+                  iconSize: 22,
+                ),
               ),
             ),
             const SizedBox(width: 14),
