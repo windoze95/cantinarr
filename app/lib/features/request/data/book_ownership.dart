@@ -57,21 +57,28 @@ class OwnedTitle {
   final String title;
   final String author;
   final int year;
+
+  /// The owned record's cover path (e.g. `/MediaCover/...`), if any. Loads with
+  /// the API key, so it shows real art for an owned result without the
+  /// login-gated lookup cover. Empty when the record has no cached cover.
+  final String cover;
   final BookOwnership ownership;
 
   const OwnedTitle({
     required this.title,
     required this.author,
     this.year = 0,
+    this.cover = '',
     required this.ownership,
   });
 
-  /// Parses one digest entry: `title`/`author`/`year` plus the `ebook` and
-  /// `audiobook` format objects.
+  /// Parses one digest entry: `title`/`author`/`year`/`cover` plus the `ebook`
+  /// and `audiobook` format objects.
   factory OwnedTitle.fromJson(Map<String, dynamic> json) => OwnedTitle(
         title: json['title'] as String? ?? '',
         author: json['author'] as String? ?? '',
         year: json['year'] as int? ?? 0,
+        cover: json['cover'] as String? ?? '',
         ownership: BookOwnership(
           ebook: FormatOwnership.fromJson(
               json['ebook'] as Map<String, dynamic>?),

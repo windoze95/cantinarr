@@ -35,6 +35,9 @@ func TestReduceLibraryMergesFormatsByForeignBookID(t *testing.T) {
 			ReleaseDate:   &rel,
 			Author:        &chaptarr.AuthorContext{AuthorName: "Timothy Zahn"},
 			Statistics:    chaptarr.BookStatistics{BookFileCount: 1},
+			Images: []chaptarr.Image{
+				{CoverType: "cover", URL: "/MediaCover/Books/1/cover.jpg"},
+			},
 		},
 		{
 			ID:            2,
@@ -60,6 +63,9 @@ func TestReduceLibraryMergesFormatsByForeignBookID(t *testing.T) {
 	}
 	if !lt.Audiobook.Monitored || lt.Audiobook.Downloaded {
 		t.Errorf("audiobook = %+v, want monitored && !downloaded", lt.Audiobook)
+	}
+	if lt.Cover != "/MediaCover/Books/1/cover.jpg" {
+		t.Errorf("cover = %q, want /MediaCover/Books/1/cover.jpg", lt.Cover)
 	}
 }
 

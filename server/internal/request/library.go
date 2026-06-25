@@ -26,9 +26,13 @@ type FormatOwnership struct {
 // two) Chaptarr records that share a foreignBookId. Both Ebook and Audiobook are
 // always present; a format with no record is the zero {false,false}.
 type LibraryTitle struct {
-	Title     string          `json:"title"`
-	Author    string          `json:"author"`
-	Year      int             `json:"year"`
+	Title  string `json:"title"`
+	Author string `json:"author"`
+	Year   int    `json:"year"`
+	// Cover is the owned record's relative cover path (e.g. /MediaCover/...),
+	// which loads with the API key — so an owned search result can show real art
+	// without the login-session-gated /MediaCoverProxy lookup cover.
+	Cover     string          `json:"cover"`
 	Ebook     FormatOwnership `json:"ebook"`
 	Audiobook FormatOwnership `json:"audiobook"`
 }
@@ -81,6 +85,10 @@ func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 		if g.title.Title == "" {
 			g.title.Title = book.Title
 		}
+		// Take the cover from the first record in the group that has one.
+		if g.title.Cover == "" {
+			g.title.Cover = coverOf(book)
+		}
 
 		own := FormatOwnership{
 			Monitored:  book.Monitored,
@@ -109,6 +117,22 @@ func groupKey(book chaptarr.Book) string {
 		return book.ForeignBookID
 	}
 	return fmt.Sprintf("id:%d", book.ID)
+}
+
+// coverOf returns a book's cover image path, preferring the "cover" type, else
+// the first image with a URL.
+func coverOf(book chaptarr.Book) string {
+	for _, img := range book.Images {
+		if img.URL != "" && img.CoverType == "cover" {
+			return img.URL
+		}
+	}
+	for _, img := range book.Images {
+		if img.URL != "" {
+			return img.URL
+		}
+	}
+	return ""
 }
 
 // recordFormat resolves the single format a Chaptarr book record represents: its
