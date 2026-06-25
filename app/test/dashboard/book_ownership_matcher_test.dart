@@ -154,5 +154,62 @@ void main() {
       final result = _result('Heir to the Empire', author: 'Timothy Zahn');
       expect(ownershipFor(result, const []), isNull);
     });
+
+    test('merges ownership across split ebook/audiobook rows', () {
+      final digest = [
+        _owned('Heir to the Empire', 'Timothy Zahn', ebookDownloaded: true),
+        _owned('Heir to the Empire', 'Timothy Zahn', audiobookMonitored: true),
+      ];
+      final o = ownershipFor(
+        _result('Star Wars: Heir to the Empire', author: 'Timothy Zahn'),
+        digest,
+      );
+      expect(o, isNotNull);
+      expect(o!.ebook.downloaded, isTrue);
+      expect(o.audiobook.monitored, isTrue);
+    });
+  });
+
+  group('ownedTitlesForQuery surfaces owned books lookup missed', () {
+    final digest = [
+      _owned('Heir to the Empire', 'Timothy Zahn', ebookDownloaded: true),
+      _owned('Dune', 'Frank Herbert', ebookMonitored: true),
+    ];
+
+    test('injects an owned title matching the query but absent from lookup', () {
+      final lookup = [
+        _result('Heir of Fire', author: 'Sarah J. Maas'),
+        _result('The Heir', author: 'Kiera Cass'),
+      ];
+      final injected = ownedTitlesForQuery('heir', digest, lookup);
+      expect(injected.map((t) => t.title), ['Heir to the Empire']);
+      expect(injected.single.ownership.ebook.downloaded, isTrue);
+    });
+
+    test('does not inject a title a lookup result already represents', () {
+      final lookup = [
+        _result('Star Wars: Heir to the Empire', author: 'Timothy Zahn'),
+      ];
+      expect(ownedTitlesForQuery('heir', digest, lookup), isEmpty);
+    });
+
+    test('merges split rows into one injected entry', () {
+      final split = [
+        _owned('Heir to the Empire', 'Timothy Zahn', ebookDownloaded: true),
+        _owned('Heir to the Empire', 'Timothy Zahn', audiobookMonitored: true),
+      ];
+      final injected = ownedTitlesForQuery('heir', split, const []);
+      expect(injected.length, 1);
+      expect(injected.single.ownership.ebook.downloaded, isTrue);
+      expect(injected.single.ownership.audiobook.monitored, isTrue);
+    });
+
+    test('an empty query injects nothing', () {
+      expect(ownedTitlesForQuery('', digest, const []), isEmpty);
+    });
+
+    test('a query matching no owned title injects nothing', () {
+      expect(ownedTitlesForQuery('foundation', digest, const []), isEmpty);
+    });
   });
 }

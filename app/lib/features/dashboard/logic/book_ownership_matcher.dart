@@ -127,34 +127,90 @@ double _titleScore(ChaptarrBook result, OwnedTitle owned) {
   return stripped > kept ? stripped : kept;
 }
 
-/// Decides whether the user already owns [result], by matching it against the
-/// ownership [digest].
-///
-/// A digest row is a candidate when its [_titleScore] >= [kOwnershipTitleThreshold]
-/// AND either the authors match ([authorMatches]) or — when an author is missing
-/// on either side — the title score is high enough (>= 0.9) to stand on its own.
-/// Returns the [BookOwnership] of the highest-scoring candidate, or null when no
-/// row qualifies.
-BookOwnership? ownershipFor(ChaptarrBook result, List<OwnedTitle> digest) {
+/// Digest rows that match [result]: title score >= [kOwnershipTitleThreshold]
+/// AND the authors match (or, when an author is missing on either side, the
+/// title score stands alone at >= 0.9). A title can have more than one matching
+/// row when its ebook and audiobook records didn't share a foreignBookId.
+List<OwnedTitle> _matchingTitles(ChaptarrBook result, List<OwnedTitle> digest) {
   final lookupAuthor = result.author?.authorName;
   final lookupAuthorEmpty = lookupAuthor == null || lookupAuthor.isEmpty;
-
-  BookOwnership? best;
-  double bestScore = -1;
-
+  final out = <OwnedTitle>[];
   for (final owned in digest) {
     final score = _titleScore(result, owned);
     if (score < kOwnershipTitleThreshold) continue;
-
     final authorOk = authorMatches(lookupAuthor, owned.author) ||
         ((lookupAuthorEmpty || owned.author.isEmpty) && score >= 0.9);
-    if (!authorOk) continue;
+    if (authorOk) out.add(owned);
+  }
+  return out;
+}
 
-    if (score > bestScore) {
-      bestScore = score;
-      best = owned.ownership;
+/// Combines several rows' ownership: a format is owned/downloaded if it is in
+/// any of them (so split ebook/audiobook records merge into one truth).
+BookOwnership _mergeOwnership(Iterable<BookOwnership> owns) {
+  var em = false, ed = false, am = false, ad = false;
+  for (final o in owns) {
+    em = em || o.ebook.monitored;
+    ed = ed || o.ebook.downloaded;
+    am = am || o.audiobook.monitored;
+    ad = ad || o.audiobook.downloaded;
+  }
+  return BookOwnership(
+    ebook: FormatOwnership(monitored: em, downloaded: ed),
+    audiobook: FormatOwnership(monitored: am, downloaded: ad),
+  );
+}
+
+/// Decides whether the user already owns [result], by matching it against the
+/// ownership [digest]. Returns the merged ownership across every matching digest
+/// row (so a title split into separate ebook/audiobook rows still reports both),
+/// or null when no row qualifies.
+BookOwnership? ownershipFor(ChaptarrBook result, List<OwnedTitle> digest) {
+  final matches = _matchingTitles(result, digest);
+  if (matches.isEmpty) return null;
+  return _mergeOwnership(matches.map((t) => t.ownership));
+}
+
+/// Owned digest titles matching the search [query] (every query token appears in
+/// the title) that the [lookupResults] didn't already return — deduped by
+/// normalized title+author with ownership merged. These are injected at the top
+/// of the results so a book the user owns/monitors surfaces even when Chaptarr's
+/// metadata search doesn't rank it.
+List<OwnedTitle> ownedTitlesForQuery(
+  String query,
+  List<OwnedTitle> digest,
+  List<ChaptarrBook> lookupResults,
+) {
+  final queryTokens = normalizeTitleTokens(query).toSet();
+  if (queryTokens.isEmpty) return const [];
+
+  final byKey = <String, List<OwnedTitle>>{};
+  final keyOrder = <String>[];
+  for (final owned in digest) {
+    final titleTokens = normalizeTitleTokens(owned.title).toSet();
+    if (titleTokens.isEmpty) continue;
+    // The query must be contained in the title (a partial-name match).
+    if (!queryTokens.every(titleTokens.contains)) continue;
+    // Skip when a lookup result already represents this owned title.
+    if (lookupResults.any((r) => _matchingTitles(r, [owned]).isNotEmpty)) {
+      continue;
     }
+    final key =
+        '${titleTokens.join(' ')}|${_authorTokens(owned.author).join(' ')}';
+    if (byKey[key] == null) {
+      byKey[key] = [];
+      keyOrder.add(key);
+    }
+    byKey[key]!.add(owned);
   }
 
-  return best;
+  return [
+    for (final key in keyOrder)
+      OwnedTitle(
+        title: byKey[key]!.first.title,
+        author: byKey[key]!.first.author,
+        year: byKey[key]!.first.year,
+        ownership: _mergeOwnership(byKey[key]!.map((o) => o.ownership)),
+      ),
+  ];
 }

@@ -32,6 +32,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
   bool _searched = false;
   String? _error;
   int _searchGen = 0; // guards against superseded async results
+  String _searchedTerm = ''; // term the current _results belong to
 
   @override
   void dispose() {
@@ -82,6 +83,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
       if (!mounted || gen != _searchGen) return;
       setState(() {
         _results = books;
+        _searchedTerm = term;
         _isSearching = false;
         _searched = true;
       });
@@ -168,7 +170,32 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
         ),
       );
     }
-    if (_results.isEmpty) {
+    // What the user already owns, used to mark results, gate per-format
+    // requests, and surface owned/monitored books the metadata search missed.
+    final digest =
+        ref.watch(ownedBooksProvider).valueOrNull ?? const <OwnedTitle>[];
+    // Owned library titles matching the query that lookup didn't return — shown
+    // first as "you already have this" rows. They carry no foreignBookId, so
+    // they're informational (no Request button).
+    final injected = digest.isEmpty
+        ? const <OwnedTitle>[]
+        : ownedTitlesForQuery(_searchedTerm, digest, _results);
+    // Mark each lookup result with its ownership and float owned titles to the
+    // top, preserving Chaptarr's relevance order within each bucket (don't
+    // collapse versions — the user wants to see ones they don't own).
+    final owned = <(ChaptarrBook, BookOwnership?)>[];
+    final rest = <(ChaptarrBook, BookOwnership?)>[];
+    for (final book in _results) {
+      final o = digest.isEmpty ? null : ownershipFor(book, digest);
+      ((o?.anyOwned ?? false) ? owned : rest).add((book, o));
+    }
+    final ordered = <(ChaptarrBook, BookOwnership?)>[
+      for (final t in injected) (_ownedTitleAsBook(t), t.ownership),
+      ...owned,
+      ...rest,
+    ];
+
+    if (ordered.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -194,19 +221,6 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
     // backend's /requests endpoint, not the Chaptarr proxy).
     final requestService =
         RequestService(backendDio: ref.read(backendClientProvider));
-    // What the user already owns, to mark results and gate per-format requests.
-    final digest =
-        ref.watch(ownedBooksProvider).valueOrNull ?? const <OwnedTitle>[];
-    // Compute ownership per result and float owned titles to the top, preserving
-    // Chaptarr's relevance order within each bucket (don't collapse versions —
-    // the user wants to see ones they don't own).
-    final owned = <(ChaptarrBook, BookOwnership?)>[];
-    final rest = <(ChaptarrBook, BookOwnership?)>[];
-    for (final book in _results) {
-      final o = digest.isEmpty ? null : ownershipFor(book, digest);
-      ((o?.anyOwned ?? false) ? owned : rest).add((book, o));
-    }
-    final ordered = [...owned, ...rest];
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: ordered.length,
@@ -324,6 +338,16 @@ Widget? _ownershipChip(BookOwnership? o) {
     color: downloaded ? AppTheme.available : AppTheme.requested,
   );
 }
+
+/// A synthetic, non-requestable result for an owned library title the metadata
+/// search didn't return. The digest carries no foreignBookId, so the tile shows
+/// the ownership chip with no Request button.
+ChaptarrBook _ownedTitleAsBook(OwnedTitle t) => ChaptarrBook(
+      id: 0,
+      title: t.title,
+      author: ChaptarrAuthorContext(id: 0, authorName: t.author),
+      releaseDate: t.year > 0 ? DateTime(t.year) : null,
+    );
 
 /// A small colored pill marking that a search result is already in the library.
 class _OwnershipChip extends StatelessWidget {
