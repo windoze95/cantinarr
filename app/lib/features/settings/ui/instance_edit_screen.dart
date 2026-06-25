@@ -44,9 +44,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _isSaving = false;
   bool _isTesting = false;
   String? _testResult;
-  bool _isVerifyingLogin = false;
-  Color _webLoginColor = AppTheme.error;
-  String? _webLoginResult;
 
   static const _serviceTypes = <(String, String)>[
     ('radarr', 'Radarr'),
@@ -146,41 +143,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     setState(() {
       _isTesting = false;
       _testResult = success ? 'Connection successful!' : 'Connection failed';
-    });
-  }
-
-  Future<void> _verifyWebLogin() async {
-    setState(() {
-      _isVerifyingLogin = true;
-      _webLoginResult = null;
-    });
-    final service =
-        InstanceApiService(backendDio: ref.read(backendClientProvider));
-    final result = await service.testWebLogin(
-      url: _urlController.text.trim(),
-      username: _usernameController.text.trim(),
-      password: _passwordController.text,
-      apiKey: _apiKeyController.text.trim(),
-      instanceId: widget.isEditing ? widget.instanceId : null,
-    );
-    if (!mounted) return;
-    setState(() {
-      _isVerifyingLogin = false;
-      if (!result.success) {
-        _webLoginColor = AppTheme.error;
-        _webLoginResult =
-            'Web login failed${result.error != null ? ': ${result.error}' : ''}';
-      } else if (result.coverOk) {
-        _webLoginColor = AppTheme.available;
-        _webLoginResult = 'Web login OK — cover art loads.';
-      } else {
-        // Login works but Chaptarr's cover proxy failed (a Chaptarr-side issue).
-        _webLoginColor = AppTheme.downloading;
-        _webLoginResult =
-            'Login OK, but ${result.coverDetail ?? 'covers failed to load'}. '
-            "New-book covers won't show (a Chaptarr-side issue); owned-book "
-            'covers still do.';
-      }
     });
   }
 
@@ -452,74 +414,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // Chaptarr also takes an optional web login: its cover images are
           // served behind the web session (not the API key), so these let the
           // backend fetch search-result cover art.
-          if (_serviceType == 'chaptarr') ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppTheme.surfaceVariant,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.info_outline,
-                      size: 16, color: AppTheme.textSecondary),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Chaptarr needs both: the API key above (search, requests, '
-                      'and owned-book covers) and an optional web login below. '
-                      'Search-result cover art is served only to a logged-in web '
-                      'session — not the API key — so without the web login those '
-                      'covers stay blank.',
-                      style:
-                          TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _usernameController,
-              decoration: const InputDecoration(
-                labelText: 'Web username (optional)',
-                hintText: 'Chaptarr web login — shows cover art in search',
-              ),
-              autocorrect: false,
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _passwordController,
-              decoration: InputDecoration(
-                labelText: 'Web password (optional)',
-                hintText: widget.isEditing
-                    ? 'Leave blank to keep existing'
-                    : 'Chaptarr web login password',
-              ),
-              obscureText: true,
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: _isVerifyingLogin ? null : _verifyWebLogin,
-              icon: _isVerifyingLogin
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.login),
-              label: const Text('Verify web login'),
-            ),
-            if (_webLoginResult != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                _webLoginResult!,
-                style: TextStyle(color: _webLoginColor, fontSize: 13),
-              ),
-            ],
-          ],
           const SizedBox(height: 16),
 
           SwitchListTile(

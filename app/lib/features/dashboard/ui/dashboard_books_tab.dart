@@ -183,16 +183,16 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
         : ownedTitlesForQuery(_searchedTerm, digest, _results);
     // Mark each lookup result with its ownership and float owned titles to the
     // top, preserving Chaptarr's relevance order within each bucket (don't
-    // collapse versions — the user wants to see ones they don't own). Each row
-    // carries the cover to show: prefer the owned record's cached cover (loads
-    // with the API key) over the lookup's login-gated /MediaCoverProxy cover.
+    // collapse versions — the user wants to see ones they don't own). Only owned
+    // results carry a cover: the owned record's cached /MediaCover, which loads
+    // with the API key. Lookup (/MediaCoverProxy) covers are broken server-side
+    // in this fork, so we don't attempt them — not-yet-owned rows stay iconic.
     final owned = <(ChaptarrBook, BookOwnership?, String?)>[];
     final rest = <(ChaptarrBook, BookOwnership?, String?)>[];
     for (final book in _results) {
       final match = digest.isEmpty ? null : ownedMatchFor(book, digest);
-      final cover = (match != null && match.cover.isNotEmpty)
-          ? match.cover
-          : book.coverUrl;
+      final cover =
+          (match != null && match.cover.isNotEmpty) ? match.cover : null;
       ((match?.ownership.anyOwned ?? false) ? owned : rest)
           .add((book, match?.ownership, cover));
     }
