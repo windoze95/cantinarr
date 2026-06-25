@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -11,11 +12,12 @@ import (
 )
 
 type Handler struct {
-	store *instance.Store
+	store    *instance.Store
+	sessions *sessionCache
 }
 
 func NewHandler(store *instance.Store) *Handler {
-	return &Handler{store: store}
+	return &Handler{store: store, sessions: newSessionCache()}
 }
 
 // InstanceProxy proxies requests to a specific service instance by ID.
@@ -59,4 +61,54 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// CoverProxy streams a Chaptarr cover image. Chaptarr serves /MediaCover and
+// /MediaCoverProxy from its web layer (login-session gated), not the API key, so
+// when the instance has web credentials we fetch with a logged-in session
+// cookie; otherwise we fall back to the API-key route (/api/v1/MediaCover, which
+// only covers owned books). The image path is taken from a ?path= query param so
+// it can carry its own query string (e.g. ?lastWrite=...).
+func (h *Handler) CoverProxy() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		instanceID := chi.URLParam(r, "instanceID")
+		inst, err := h.store.Get(instanceID)
+		if err != nil {
+			http.Error(w, `{"error":"failed to get instance"}`, http.StatusInternalServerError)
+			return
+		}
+		if inst == nil {
+			http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+			return
+		}
+
+		coverPath, ok := sanitizeCoverPath(r.URL.Query().Get("path"))
+		if !ok {
+			http.Error(w, `{"error":"invalid cover path"}`, http.StatusBadRequest)
+			return
+		}
+		base := strings.TrimRight(inst.URL, "/")
+
+		var resp *http.Response
+		if inst.Username != "" && inst.Password != "" {
+			resp, err = h.sessions.fetchCover(inst, base+coverPath)
+		} else {
+			resp, err = h.sessions.fetchWithKey(base+"/api/v1"+coverPath, inst.APIKey)
+		}
+		if err != nil {
+			http.Error(w, `{"error":"cover unavailable"}`, http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		if ct := resp.Header.Get("Content-Type"); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		if cl := resp.Header.Get("Content-Length"); cl != "" {
+			w.Header().Set("Content-Length", cl)
+		}
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, resp.Body)
+	}
 }
