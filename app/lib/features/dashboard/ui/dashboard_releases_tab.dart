@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import '../../../core/network/app_image_cache.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -508,6 +509,7 @@ class _ReleaseTile extends StatelessWidget {
             ? CachedNetworkImage(
                 imageUrl: event.posterUrl!,
                 fit: BoxFit.cover,
+                cacheManager: appImageCache,
                 placeholder: (_, __) => placeholder,
                 errorWidget: (_, __, ___) => placeholder,
               )

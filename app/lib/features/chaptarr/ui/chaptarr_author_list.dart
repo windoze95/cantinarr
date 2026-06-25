@@ -1,6 +1,6 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../data/chaptarr_models.dart';
 
 /// List of Chaptarr authors with swipe-to-delete and progress indicators.
@@ -107,16 +107,11 @@ class _AuthorTile extends StatelessWidget {
         child: SizedBox(
           width: 45,
           height: 67,
-          child: author.coverUrl != null
-              ? CachedNetworkImage(
-                  imageUrl: author.coverUrl!,
-                  fit: BoxFit.cover,
-                )
-              : Container(
-                  color: AppTheme.surfaceVariant,
-                  child: const Icon(Icons.person,
-                      color: AppTheme.textSecondary, size: 20),
-                ),
+          child: CachedImage(
+            url: author.coverUrl,
+            fit: BoxFit.cover,
+            icon: Icons.person,
+          ),
         ),
       ),
       title: Text(

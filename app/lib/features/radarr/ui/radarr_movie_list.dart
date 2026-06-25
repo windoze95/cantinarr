@@ -1,6 +1,6 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../data/radarr_models.dart';
 
 /// List of Radarr movies with swipe actions.
@@ -108,16 +108,11 @@ class _MovieTile extends StatelessWidget {
         child: SizedBox(
           width: 45,
           height: 67,
-          child: movie.posterUrl != null
-              ? CachedNetworkImage(
-                  imageUrl: movie.posterUrl!,
-                  fit: BoxFit.cover,
-                )
-              : Container(
-                  color: AppTheme.surfaceVariant,
-                  child: const Icon(Icons.movie,
-                      color: AppTheme.textSecondary, size: 20),
-                ),
+          child: CachedImage(
+            url: movie.posterUrl,
+            fit: BoxFit.cover,
+            icon: Icons.movie,
+          ),
         ),
       ),
       title: Text(

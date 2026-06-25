@@ -194,16 +194,18 @@ class ChaptarrImage {
 }
 
 /// Picks a remote cover URL from a list of images, preferring `cover`/`poster`
-/// art and falling back to the first image with any remote URL.
+/// art and falling back to the first image with a URL. Returns the raw `url`
+/// field (this fork populates `url`, not `remoteUrl`) — absolute for author art,
+/// relative (`/MediaCover/...`) for book covers, which the UI resolves through
+/// the backend proxy via `chaptarrImageSource`.
 String? _pickCoverUrl(List<ChaptarrImage> images) {
+  bool hasUrl(ChaptarrImage i) => i.url != null && i.url!.isNotEmpty;
   for (final type in ['cover', 'poster']) {
-    final match = images.where((i) => i.coverType == type);
-    if (match.isNotEmpty && match.first.remoteUrl != null) {
-      return match.first.remoteUrl;
-    }
+    final match = images.where((i) => i.coverType == type && hasUrl(i));
+    if (match.isNotEmpty) return match.first.url;
   }
-  final withUrl = images.where((i) => i.remoteUrl != null);
-  return withUrl.isNotEmpty ? withUrl.first.remoteUrl : null;
+  final withUrl = images.where(hasUrl);
+  return withUrl.isNotEmpty ? withUrl.first.url : null;
 }
 
 class ChaptarrAuthorStatistics {

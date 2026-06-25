@@ -1,7 +1,9 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../config/app_config.dart';
+import '../network/app_image_cache.dart';
 import '../theme/app_theme.dart';
+import 'cached_image.dart';
 
 /// A hero-style header with backdrop, poster, title, and status.
 class MediaHeader extends StatelessWidget {
@@ -45,6 +47,7 @@ class MediaHeader extends StatelessWidget {
               child: CachedNetworkImage(
                 imageUrl: AppConfig.tmdbBackdrop(backdropPath, width: 1280),
                 fit: BoxFit.cover,
+                cacheManager: appImageCache,
               ),
             ),
           ),
@@ -65,16 +68,14 @@ class MediaHeader extends StatelessWidget {
                 child: SizedBox(
                   width: 110,
                   height: 165,
-                  child: posterPath != null
-                      ? CachedNetworkImage(
-                          imageUrl: AppConfig.tmdbPoster(posterPath),
-                          fit: BoxFit.cover,
-                        )
-                      : Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Icon(Icons.movie_outlined,
-                              color: AppTheme.textSecondary, size: 40),
-                        ),
+                  child: CachedImage(
+                    url: posterPath == null
+                        ? null
+                        : AppConfig.tmdbPoster(posterPath),
+                    fit: BoxFit.cover,
+                    icon: Icons.movie_outlined,
+                    iconSize: 40,
+                  ),
                 ),
               ),
               const SizedBox(width: 16),

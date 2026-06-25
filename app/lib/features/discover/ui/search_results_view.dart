@@ -1,9 +1,9 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shimmer/shimmer.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../person/ui/person_detail_sheet.dart';
 import '../data/tmdb_models.dart';
 
@@ -208,32 +208,12 @@ class _SearchResultTile extends StatelessWidget {
               child: SizedBox(
                 width: 50,
                 height: 50,
-                child: item.posterPath != null
-                    ? CachedNetworkImage(
-                        imageUrl: imageUrl,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.person,
-                                color: AppTheme.textSecondary, size: 18),
-                          ),
-                        ),
-                        errorWidget: (_, __, ___) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.person,
-                                color: AppTheme.textSecondary, size: 18),
-                          ),
-                        ),
-                      )
-                    : Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.person,
-                              color: AppTheme.textSecondary, size: 18),
-                        ),
-                      ),
+                child: CachedImage(
+                  url: item.posterPath == null ? null : imageUrl,
+                  fit: BoxFit.cover,
+                  icon: Icons.person,
+                  iconSize: 18,
+                ),
               ),
             ),
             const SizedBox(width: 10),
@@ -290,32 +270,12 @@ class _SearchResultTile extends StatelessWidget {
               child: SizedBox(
                 width: 50,
                 height: 75,
-                child: item.posterPath != null
-                    ? CachedNetworkImage(
-                        imageUrl: imageUrl,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.movie_outlined,
-                                color: AppTheme.textSecondary, size: 18),
-                          ),
-                        ),
-                        errorWidget: (_, __, ___) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.broken_image_outlined,
-                                color: AppTheme.textSecondary, size: 18),
-                          ),
-                        ),
-                      )
-                    : Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.movie_outlined,
-                              color: AppTheme.textSecondary, size: 18),
-                        ),
-                      ),
+                child: CachedImage(
+                  url: item.posterPath == null ? null : imageUrl,
+                  fit: BoxFit.cover,
+                  icon: Icons.movie_outlined,
+                  iconSize: 18,
+                ),
               ),
             ),
             const SizedBox(width: 10),

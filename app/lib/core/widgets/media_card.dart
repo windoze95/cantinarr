@@ -1,7 +1,7 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 import '../theme/app_theme.dart';
+import 'cached_image.dart';
 
 /// A poster card for movies/TV shows with optional status badge.
 class MediaCard extends StatelessWidget {
@@ -49,33 +49,12 @@ class MediaCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (posterPath != null)
-                      CachedNetworkImage(
-                        imageUrl: imageUrl,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.movie_outlined,
-                                color: AppTheme.textSecondary, size: 32),
-                          ),
-                        ),
-                        errorWidget: (_, __, ___) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.broken_image_outlined,
-                                color: AppTheme.textSecondary, size: 32),
-                          ),
-                        ),
-                      )
-                    else
-                      Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.movie_outlined,
-                              color: AppTheme.textSecondary, size: 32),
-                        ),
-                      ),
+                    CachedImage(
+                      url: posterPath == null ? null : imageUrl,
+                      fit: BoxFit.cover,
+                      icon: Icons.movie_outlined,
+                      iconSize: 32,
+                    ),
 
                     // Status badge
                     if (statusLabel != null)
