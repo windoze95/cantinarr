@@ -6,6 +6,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
+import '../logic/episode_selection.dart';
 import 'episode_detail_sheet.dart';
 import 'sonarr_releases_screen.dart';
 import 'sonarr_series_detail_screen.dart' show seasonLabel;
@@ -13,7 +14,12 @@ import 'widgets/episode_status.dart';
 
 /// Episode list for one season: number, title, air date and the per-episode
 /// status line (download progress / quality+size / Missing / Unaired). Tapping
-/// an episode opens its detail sheet; the magnifier runs a per-episode search.
+/// an episode opens its detail sheet; the magnifier runs an automatic
+/// per-episode search. The Automatic button's arrow (or a long-press on an
+/// episode) enters selection mode: pick episodes — All / Undownloaded / None
+/// quick-selects — and search them all automatically in one go. Interactive
+/// search only works on a single episode/season, so it is disabled while
+/// selecting.
 class SonarrSeasonScreen extends ConsumerStatefulWidget {
   final String instanceId;
   final SonarrSeries series;
@@ -37,6 +43,8 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   Map<int, SonarrQueueItem> _queueByEpisode = {};
   bool _isLoading = true;
   String? _error;
+  bool _selecting = false;
+  final Set<int> _selectedIds = {};
 
   @override
   void initState() {
@@ -69,6 +77,9 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
           for (final q in queue)
             if (q.episodeId != null) q.episodeId!: q,
         };
+        // Drop selected ids that no longer exist after a refresh.
+        final ids = {for (final e in episodes) e.id};
+        _selectedIds.retainAll(ids);
         _isLoading = false;
         _error = null;
       });
@@ -135,6 +146,54 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
     );
   }
 
+  // --- Episode selection mode ---
+
+  void _startSelecting({Iterable<int> preselect = const []}) {
+    setState(() {
+      _selecting = true;
+      _selectedIds
+        ..clear()
+        ..addAll(preselect);
+    });
+  }
+
+  void _stopSelecting() {
+    setState(() {
+      _selecting = false;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelected(SonarrEpisode episode) {
+    setState(() {
+      if (!_selectedIds.remove(episode.id)) _selectedIds.add(episode.id);
+    });
+  }
+
+  /// Entry point for the Automatic button's "Individual episodes" option:
+  /// everything aired-but-missing starts selected.
+  void _startIndividualDownloads() {
+    _startSelecting(preselect: undownloadedEpisodeIds(_episodes));
+  }
+
+  Future<void> _searchSelected() async {
+    final ids = _selectedIds.toList()..sort();
+    if (ids.isEmpty) return;
+    try {
+      await _service.searchEpisodes(ids);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(ids.length == 1
+              ? 'Searching for 1 episode…'
+              : 'Searching for ${ids.length} episodes…')));
+      _stopSelecting();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Search failed: $e')));
+    }
+  }
+
   Future<void> _openEpisode(SonarrEpisode episode) async {
     final changed = await showModalBottomSheet<bool>(
       context: context,
@@ -177,10 +236,30 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       ),
       body: Column(
         children: [
+          if (_selecting)
+            _SelectionBar(
+              selectedCount: _selectedIds.length,
+              onSelectAll: () => setState(() {
+                _selectedIds
+                  ..clear()
+                  ..addAll(_episodes.map((e) => e.id));
+              }),
+              onSelectUndownloaded: () => setState(() {
+                _selectedIds
+                  ..clear()
+                  ..addAll(undownloadedEpisodeIds(_episodes));
+              }),
+              onSelectNone: () => setState(_selectedIds.clear),
+              onClose: _stopSelecting,
+            ),
           Expanded(child: _buildBody()),
           _ActionBar(
+            selecting: _selecting,
+            selectedCount: _selectedIds.length,
             onAutomatic: _automaticSeasonSearch,
+            onAutomaticEpisodes: _startIndividualDownloads,
             onInteractive: _interactiveSeasonSearch,
+            onSearchSelected: _searchSelected,
           ),
         ],
       ),
@@ -214,8 +293,15 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
           return _EpisodeTile(
             episode: episode,
             queueItem: _queueByEpisode[episode.id],
-            onTap: () => _openEpisode(episode),
-            onSearch: () => _interactiveEpisodeSearch(episode),
+            selecting: _selecting,
+            selected: _selectedIds.contains(episode.id),
+            onTap: _selecting
+                ? () => _toggleSelected(episode)
+                : () => _openEpisode(episode),
+            onLongPress: _selecting
+                ? null
+                : () => _startSelecting(preselect: [episode.id]),
+            onSearch: () => _automaticEpisodeSearch(episode),
           );
         },
       ),
@@ -233,13 +319,19 @@ String formatEpisodeAirDate(SonarrEpisode e) {
 class _EpisodeTile extends StatelessWidget {
   final SonarrEpisode episode;
   final SonarrQueueItem? queueItem;
+  final bool selecting;
+  final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final VoidCallback onSearch;
 
   const _EpisodeTile({
     required this.episode,
     required this.queueItem,
+    required this.selecting,
+    required this.selected,
     required this.onTap,
+    required this.onLongPress,
     required this.onSearch,
   });
 
@@ -248,11 +340,28 @@ class _EpisodeTile extends StatelessWidget {
     final status = episodeStatusLine(episode, queueItem);
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (selecting) ...[
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: Checkbox(
+                  value: selected,
+                  onChanged: (_) => onTap(),
+                  activeColor: AppTheme.accent,
+                  checkColor: AppTheme.background,
+                  side: const BorderSide(color: AppTheme.textSecondary),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
             SizedBox(
               width: 28,
               child: Text(
@@ -294,11 +403,12 @@ class _EpisodeTile extends StatelessWidget {
                 ],
               ),
             ),
-            IconButton(
-              icon: const Icon(Icons.search, color: AppTheme.textSecondary),
-              tooltip: 'Search releases',
-              onPressed: onSearch,
-            ),
+            if (!selecting)
+              IconButton(
+                icon: const Icon(Icons.search, color: AppTheme.textSecondary),
+                tooltip: 'Automatic search',
+                onPressed: onSearch,
+              ),
           ],
         ),
       ),
@@ -306,11 +416,91 @@ class _EpisodeTile extends StatelessWidget {
   }
 }
 
-class _ActionBar extends StatelessWidget {
-  final VoidCallback onAutomatic;
-  final VoidCallback onInteractive;
+/// Selection-mode header: quick-selects (All / Undownloaded / None) and the
+/// close (cancel) affordance. The selected count lives in the action bar's
+/// "Search N episodes" button.
+class _SelectionBar extends StatelessWidget {
+  final int selectedCount;
+  final VoidCallback onSelectAll;
+  final VoidCallback onSelectUndownloaded;
+  final VoidCallback onSelectNone;
+  final VoidCallback onClose;
 
-  const _ActionBar({required this.onAutomatic, required this.onInteractive});
+  const _SelectionBar({
+    required this.selectedCount,
+    required this.onSelectAll,
+    required this.onSelectUndownloaded,
+    required this.onSelectNone,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final buttonStyle = TextButton.styleFrom(
+      foregroundColor: AppTheme.accent,
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+    );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: const BoxDecoration(
+        color: AppTheme.surface,
+        border: Border(bottom: BorderSide(color: AppTheme.border, width: 0.5)),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.close, color: AppTheme.textSecondary),
+            tooltip: 'Cancel selection',
+            onPressed: onClose,
+          ),
+          Expanded(
+            child: Text(
+              '$selectedCount selected',
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          TextButton(
+              onPressed: onSelectAll, style: buttonStyle,
+              child: const Text('All')),
+          TextButton(
+              onPressed: onSelectUndownloaded, style: buttonStyle,
+              child: const Text('Undownloaded')),
+          TextButton(
+              onPressed: onSelectNone, style: buttonStyle,
+              child: const Text('None')),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActionBar extends StatelessWidget {
+  final bool selecting;
+  final int selectedCount;
+  final VoidCallback onAutomatic;
+  final VoidCallback onAutomaticEpisodes;
+  final VoidCallback onInteractive;
+  final VoidCallback onSearchSelected;
+
+  const _ActionBar({
+    required this.selecting,
+    required this.selectedCount,
+    required this.onAutomatic,
+    required this.onAutomaticEpisodes,
+    required this.onInteractive,
+    required this.onSearchSelected,
+  });
+
+  ButtonStyle _buttonStyle({BorderRadius? radius}) => OutlinedButton.styleFrom(
+        side: const BorderSide(color: AppTheme.border),
+        shape: RoundedRectangleBorder(
+            borderRadius: radius ?? BorderRadius.circular(10)),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -324,32 +514,99 @@ class _ActionBar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: OutlinedButton.icon(
-              onPressed: onAutomatic,
-              icon: const Icon(Icons.search, size: 18, color: AppTheme.available),
-              label: const Text('Automatic',
-                  style: TextStyle(color: AppTheme.textPrimary)),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: AppTheme.border),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-            ),
+            child: selecting ? _buildSearchSelected() : _buildSplitAutomatic(),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: OutlinedButton.icon(
-              onPressed: onInteractive,
-              icon: const Icon(Icons.person_outline,
-                  size: 18, color: AppTheme.available),
-              label: const Text('Interactive',
+              // Interactive search targets one episode or season at a time —
+              // it can't act on a multi-selection, so disable it while
+              // selecting.
+              onPressed: selecting ? null : onInteractive,
+              icon: Icon(Icons.person_outline,
+                  size: 18,
+                  color: selecting
+                      ? AppTheme.textSecondary
+                      : AppTheme.available),
+              label: Text('Interactive',
+                  style: TextStyle(
+                      color: selecting
+                          ? AppTheme.textSecondary
+                          : AppTheme.textPrimary)),
+              style: _buttonStyle(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchSelected() {
+    final enabled = selectedCount > 0;
+    return OutlinedButton.icon(
+      onPressed: enabled ? onSearchSelected : null,
+      icon: Icon(Icons.search,
+          size: 18,
+          color: enabled ? AppTheme.available : AppTheme.textSecondary),
+      label: Text(
+        selectedCount == 1 ? 'Search 1 episode' : 'Search $selectedCount episodes',
+        style: TextStyle(
+            color: enabled ? AppTheme.textPrimary : AppTheme.textSecondary),
+      ),
+      style: _buttonStyle(),
+    );
+  }
+
+  /// Split button: the main segment runs the season-wide automatic search, the
+  /// arrow reveals "Individual episodes" (selection mode, undownloaded
+  /// preselected).
+  Widget _buildSplitAutomatic() {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: onAutomatic,
+              icon:
+                  const Icon(Icons.search, size: 18, color: AppTheme.available),
+              label: const Text('Automatic',
                   style: TextStyle(color: AppTheme.textPrimary)),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: AppTheme.border),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(vertical: 12),
+              style: _buttonStyle(
+                  radius: const BorderRadius.horizontal(
+                      left: Radius.circular(10))),
+            ),
+          ),
+          SizedBox(
+            width: 34,
+            child: MenuAnchor(
+              style: const MenuStyle(
+                backgroundColor:
+                    WidgetStatePropertyAll(AppTheme.surfaceVariant),
+              ),
+              menuChildren: [
+                MenuItemButton(
+                  leadingIcon: const Icon(Icons.checklist,
+                      size: 18, color: AppTheme.textSecondary),
+                  onPressed: onAutomaticEpisodes,
+                  child: const Text('Individual episodes',
+                      style: TextStyle(
+                          color: AppTheme.textPrimary, fontSize: 14)),
+                ),
+              ],
+              builder: (context, controller, _) => OutlinedButton(
+                onPressed: () =>
+                    controller.isOpen ? controller.close() : controller.open(),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: AppTheme.border),
+                  shape: const RoundedRectangleBorder(
+                      borderRadius:
+                          BorderRadius.horizontal(right: Radius.circular(10))),
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                ),
+                child: const Icon(Icons.arrow_drop_up,
+                    size: 20, color: AppTheme.textSecondary),
               ),
             ),
           ),
