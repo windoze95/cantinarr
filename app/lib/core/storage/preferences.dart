@@ -32,3 +32,30 @@ final requestNotificationsEnabledProvider =
     StateNotifierProvider<RequestNotificationsNotifier, bool>(
   (ref) => RequestNotificationsNotifier(),
 );
+
+const _plexGuideKey = 'plex_guide_enabled';
+
+/// Whether the "Watch on Plex" guide appears in the menu and Settings.
+/// Stored locally on the device and defaults to enabled; users who are
+/// already set up can hide it from the guide itself or from Settings.
+class PlexGuideNotifier extends StateNotifier<bool> {
+  PlexGuideNotifier() : super(true) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getBool(_plexGuideKey) ?? true;
+  }
+
+  Future<void> set(bool value) async {
+    state = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_plexGuideKey, value);
+  }
+}
+
+final plexGuideEnabledProvider =
+    StateNotifierProvider<PlexGuideNotifier, bool>(
+  (ref) => PlexGuideNotifier(),
+);

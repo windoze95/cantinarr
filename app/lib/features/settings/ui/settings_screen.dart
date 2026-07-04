@@ -238,11 +238,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           // Guides
           _SectionHeader(title: 'Guides'),
-          _SettingsTile(
-            icon: Icons.play_circle_outline,
-            title: 'Plex Setup Guide',
-            subtitle: 'How to connect Plex to your library',
-            onTap: () => context.push('/plex-guide'),
+          if (ref.watch(plexGuideEnabledProvider))
+            _SettingsTile(
+              icon: Icons.play_circle_outline,
+              title: 'Watch on Plex',
+              subtitle: 'Install Plex and start watching your requests',
+              onTap: () => context.push('/plex-guide'),
+            ),
+          SwitchListTile(
+            value: ref.watch(plexGuideEnabledProvider),
+            onChanged: (v) =>
+                ref.read(plexGuideEnabledProvider.notifier).set(v),
+            activeThumbColor: AppTheme.accent,
+            secondary: const Icon(Icons.visibility_outlined,
+                color: AppTheme.textSecondary),
+            title: const Text('Show Plex guide',
+                style: TextStyle(
+                    color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
+            subtitle: const Text(
+                'Show the Watch on Plex guide in the menu and here',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
           ),
 
           const SizedBox(height: 16),

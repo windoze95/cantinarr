@@ -43,7 +43,7 @@ import '../features/settings/ui/request_settings_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
 import '../features/settings/ui/user_request_settings_screen.dart';
 import '../features/settings/ui/users_screen.dart';
-import '../features/setup_wizard/ui/plex_setup_guide.dart';
+import '../features/setup_wizard/ui/plex_watch_guide.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
 import '../features/shell/ui/app_shell.dart';
 import '../features/sonarr/ui/sonarr_calendar_screen.dart';
@@ -524,7 +524,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/plex-guide',
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const PlexSetupGuide(),
+        builder: (_, __) => const PlexWatchGuide(),
       ),
     ],
   );
