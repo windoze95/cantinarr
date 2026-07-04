@@ -103,6 +103,33 @@ class SonarrSeries {
     if (statistics == null || statistics!.episodeCount == 0) return 0;
     return statistics!.episodeFileCount / statistics!.episodeCount;
   }
+
+  /// Episode files on disk versus every episode Sonarr knows about, across the
+  /// real (non-Specials) seasons — mirrors the server's Series.EpisodeTotals.
+  /// Use this instead of [percentComplete] for availability decisions:
+  /// percentComplete only counts monitored episodes, so a series with one
+  /// downloaded season and the rest unmonitored reads 100%. Totals include
+  /// unaired episodes, so an airing series under-reports rather than
+  /// over-reports. Falls back to the series-level statistics when Sonarr sent
+  /// no per-season breakdown.
+  ({int files, int total}) get episodeTotals {
+    var files = 0, total = 0;
+    for (final season in seasons) {
+      final stats = season.statistics;
+      if (season.seasonNumber <= 0 || stats == null) continue;
+      files += stats.episodeFileCount;
+      total += stats.totalEpisodeCount != 0
+          ? stats.totalEpisodeCount
+          : stats.episodeCount;
+    }
+    if (files == 0 && total == 0 && statistics != null) {
+      files = statistics!.episodeFileCount;
+      total = statistics!.totalEpisodeCount != 0
+          ? statistics!.totalEpisodeCount
+          : statistics!.episodeCount;
+    }
+    return (files: files, total: total);
+  }
 }
 
 /// A Sonarr tag (id + label), used by the Edit Series tag picker.

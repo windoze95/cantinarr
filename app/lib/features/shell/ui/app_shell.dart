@@ -225,29 +225,37 @@ class _AppShellState extends ConsumerState<AppShell>
     _dismissKeyboard();
   }
 
+  /// Availability chips for search results, in the requester's vocabulary
+  /// (Available / Partially Available / Requested) so they agree with what the
+  /// detail page will say — never library-manager jargon (Complete / Missing /
+  /// Unmonitored). A title that's in the library but has nothing on disk and
+  /// isn't being fetched gets no chip: to a requester it's simply not
+  /// available yet, same as a title that isn't in the library at all.
   Map<int, LibraryStatus> _buildLibraryStatus(List<MediaItem> searchResults) {
     final map = <int, LibraryStatus>{};
+
+    const available = LibraryStatus(
+      label: 'Available',
+      color: AppTheme.available,
+    );
+    const partial = LibraryStatus(
+      label: 'Partially Available',
+      color: AppTheme.requested,
+    );
+    const requested = LibraryStatus(
+      label: 'Requested',
+      color: AppTheme.requested,
+    );
 
     // Radarr: match by TMDB ID
     final movies = _radarrNotifier?.state.movies ?? [];
     for (final movie in movies) {
-      if (movie.tmdbId != null) {
-        if (movie.hasFile) {
-          map[movie.tmdbId!] = const LibraryStatus(
-            label: 'Downloaded',
-            color: AppTheme.available,
-          );
-        } else if (movie.monitored) {
-          map[movie.tmdbId!] = const LibraryStatus(
-            label: 'Missing',
-            color: AppTheme.requested,
-          );
-        } else {
-          map[movie.tmdbId!] = const LibraryStatus(
-            label: 'Unmonitored',
-            color: AppTheme.unavailable,
-          );
-        }
+      final tmdbId = movie.tmdbId;
+      if (tmdbId == null) continue;
+      if (movie.hasFile) {
+        map[tmdbId] = available;
+      } else if (movie.monitored) {
+        map[tmdbId] = requested;
       }
     }
 
@@ -260,23 +268,18 @@ class _AppShellState extends ConsumerState<AppShell>
       for (final item in searchResults) {
         if (item.mediaType == MediaType.tv && !map.containsKey(item.id)) {
           final match = titleMap[item.title.toLowerCase()];
-          if (match != null) {
-            if (match.percentComplete >= 1.0) {
-              map[item.id] = const LibraryStatus(
-                label: 'Complete',
-                color: AppTheme.available,
-              );
-            } else if (match.status == 'continuing') {
-              map[item.id] = const LibraryStatus(
-                label: 'Continuing',
-                color: AppTheme.downloading,
-              );
-            } else {
-              map[item.id] = const LibraryStatus(
-                label: 'Ended',
-                color: AppTheme.unavailable,
-              );
-            }
+          if (match == null) continue;
+          // episodeTotals, not percentComplete: percentComplete only counts
+          // monitored episodes, so a series with one downloaded season and
+          // the rest unmonitored would read "Available" while most of it is
+          // missing.
+          final (:files, :total) = match.episodeTotals;
+          if (total > 0 && files >= total) {
+            map[item.id] = available;
+          } else if (files > 0) {
+            map[item.id] = partial;
+          } else if (match.monitored) {
+            map[item.id] = requested;
           }
         }
       }
