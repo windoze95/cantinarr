@@ -52,24 +52,34 @@ func (n *Notifier) client() *Client {
 	return n.mgr.Client()
 }
 
-// NotifyUser pushes the outcome of a request decision to the requesting user.
-// Only "request_decision" events produce a notification, and only when the
-// requester has opted into that category (off by default).
+// NotifyUser pushes a per-user event to its recipient, gated on their opt-in
+// for the matching category. Two events produce a notification today:
+// "request_decision" (approval/denial outcome, off by default) and
+// "plex_invite_sent" ("check your email", fixed template, on by default).
+// Any other event type is a no-op here (WS-only).
 func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]interface{}) {
 	client := n.client()
-	if client == nil || eventType != CategoryRequestDecision {
+	if client == nil {
 		return
 	}
-	if !n.prefs.optedIn(userID, CategoryRequestDecision) {
-		return
+	switch eventType {
+	case CategoryRequestDecision:
+		if !n.prefs.optedIn(userID, CategoryRequestDecision) {
+			return
+		}
+		title, body := decisionMessage(data)
+		if title == "" {
+			return
+		}
+		n.send(client, []int64{userID}, title, body, passthrough(CategoryRequestDecision, data))
+	case CategoryPlexInviteSent:
+		if !n.prefs.optedIn(userID, CategoryPlexInviteSent) {
+			return
+		}
+		n.send(client, []int64{userID}, "Plex invite sent",
+			"Your Plex invite is on its way — check your email",
+			map[string]any{"type": CategoryPlexInviteSent})
 	}
-
-	title, body := decisionMessage(data)
-	if title == "" {
-		return
-	}
-
-	n.send(client, []int64{userID}, title, body, passthrough(CategoryRequestDecision, data))
 }
 
 // NotifyAdmins pushes an admin-scoped event to every admin opted into the
@@ -170,11 +180,13 @@ func (n *Notifier) notifyAgentActionPending(client *Client, data map[string]inte
 	n.sendWithOptions(client, recipients, "A fix needs your approval", "The assistant proposed a fix for a problem and needs you to approve it", out, opts)
 }
 
-// notifyPlexAccessRequested pushes "a user shared their Plex email, invite
-// them" to opted-in admins. The body is a FIXED template — the username and
-// email are user-controlled and never placed on the lock screen; user_id rides
-// along for tap deep-linking to the Users screen. A collapse id per user keeps
-// a user editing their email from stacking alerts.
+// notifyPlexAccessRequested pushes "a user shared their Plex email" to
+// opted-in admins. The body is one of three FIXED templates picked by the
+// invite_state enum ("" needs a manual invite, "sent" auto-invite went out,
+// "failed" auto-invite needs a retry) — the username and email are
+// user-controlled and never placed on the lock screen; user_id rides along
+// for tap deep-linking to the Users screen. A collapse id per user keeps a
+// user editing their email from stacking alerts.
 func (n *Notifier) notifyPlexAccessRequested(client *Client, data map[string]interface{}) {
 	recipients, err := n.prefs.usersOptedInto(CategoryPlexAccessRequest)
 	if err != nil {
@@ -184,6 +196,13 @@ func (n *Notifier) notifyPlexAccessRequested(client *Client, data map[string]int
 	if len(recipients) == 0 {
 		return
 	}
+	body := "Someone shared their Plex email and is waiting for an invite"
+	switch str(data["invite_state"]) {
+	case "sent":
+		body = "Someone shared their Plex email — their invite was sent automatically"
+	case "failed":
+		body = "Someone shared their Plex email — the automatic invite failed, send it from the Users screen"
+	}
 	out := map[string]any{"type": CategoryPlexAccessRequest}
 	if v, ok := data["user_id"]; ok {
 		out["user_id"] = v
@@ -192,7 +211,7 @@ func (n *Notifier) notifyPlexAccessRequested(client *Client, data map[string]int
 	if id, ok := intval(data["user_id"]); ok {
 		opts.CollapseID = fmt.Sprintf("%s:%d", CategoryPlexAccessRequest, id)
 	}
-	n.sendWithOptions(client, recipients, "Plex access request", "Someone shared their Plex email and is waiting for an invite", out, opts)
+	n.sendWithOptions(client, recipients, "Plex access request", body, out, opts)
 }
 
 // NotifyNewMovie pushes a "movie became available" alert to every user opted

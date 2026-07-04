@@ -17,6 +17,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
@@ -47,6 +48,7 @@ func NewRouter(
 	toolServer *mcp.ToolServer,
 	pushHandler *push.Handler,
 	webhookHandler *webhooks.Handler,
+	plexHandler *plex.Handler,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -145,6 +147,18 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}", authHandler.HandleDeleteUser)
 			// Send a test push to a specific user's devices (delivery diagnostics).
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/test-push", pushHandler.TestPushToUser)
+
+			// Plex integration: link the admin's Plex account (PIN flow), pick
+			// the server/libraries invites share, and send one-tap invites for
+			// a user's shared Plex email.
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex/status", plexHandler.Status)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/plex/link/begin", plexHandler.BeginLink)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/plex/link/check", plexHandler.CheckLink)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/plex/link", plexHandler.Unlink)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex/servers", plexHandler.Servers)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex/servers/{machineID}/libraries", plexHandler.Libraries)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/plex/settings", plexHandler.UpdateSettings)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/plex-invite", plexHandler.InviteUser)
 
 			// Per-user default *arr instance overrides (admin-managed). Pins which
 			// instance is a given user's default source per service type, and —

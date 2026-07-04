@@ -51,6 +51,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **Flexible requests** -- request a whole title in one tap, or pick exactly which **seasons** (or book **formats**) you want; partially-available shows surface per-season availability and a one-tap path to request the rest.
 - **Always in sync** -- availability is computed live from the arrs (never from a stale snapshot), and per-instance webhooks (copy one URL into Radarr/Sonarr > Connect) push manual imports, deletes, and adds into the app the moment they happen.
 - **Push notifications** -- APNs via a self-hosted push gateway with zero-config auto-enrollment: new-content alerts for everyone, approval/issue alerts for admins, per-user preference toggles, deep links into the right screen.
+- **Plex onboarding** -- new users request access right from the in-app guide with their Plex email. Link your Plex account once and the server invite is one tap from the Users screen -- or fully automatic, with the user pushed a "check your inbox" the moment it's sent.
 - **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
 - **Secrets encrypted at rest** -- arr API keys, download-client passwords, webhook tokens, and external credentials are AES-256-GCM encrypted in the database.
 - **Household-friendly** -- Connect links, passwordless by default, role-based access, per-user default instances. Admins manage services; users just browse and request.

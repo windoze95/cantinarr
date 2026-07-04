@@ -37,6 +37,7 @@ import '../features/radarr/ui/radarr_wanted_screen.dart';
 import '../features/settings/ui/ai_tools_screen.dart';
 import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
+import '../features/settings/ui/plex_settings_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
@@ -474,6 +475,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/devices',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, __) => const DevicesScreen(),
+      ),
+      GoRoute(
+        path: '/settings/plex',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, __) => const PlexSettingsScreen(),
       ),
       GoRoute(
         path: '/settings/notifications',

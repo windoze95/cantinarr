@@ -635,8 +635,12 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     await _authService.setPlexEmail(conn.serverUrl, conn.accessToken, trimmed);
     final user = current.user;
     if (user != null) {
+      // A new address resets the invited stamp locally too — any invite
+      // already sent went to the old email (the server does the same).
       state = AsyncData(
-        current.copyWith(user: user.copyWith(plexEmail: trimmed)),
+        current.copyWith(
+          user: user.copyWith(plexEmail: trimmed, clearPlexInvitedAt: true),
+        ),
       );
     }
   }

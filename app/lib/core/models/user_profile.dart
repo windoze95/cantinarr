@@ -15,8 +15,10 @@ class UserProfile {
   final bool passkeyEnabled;
 
   /// The email this user shared for their Plex server invite. Empty until
-  /// they submit one (from the Watch on Plex guide).
+  /// they submit one (from the Watch on Plex guide). [plexInvitedAt] is set
+  /// once Cantinarr sent their invite (one-tap or auto).
   final String plexEmail;
+  final String? plexInvitedAt;
 
   const UserProfile({
     required this.id,
@@ -27,6 +29,7 @@ class UserProfile {
     this.passwordEnabled = false,
     this.passkeyEnabled = false,
     this.plexEmail = '',
+    this.plexInvitedAt,
   });
 
   bool get isAdmin => role == 'admin';
@@ -50,9 +53,15 @@ class UserProfile {
         passwordEnabled: json['password_enabled'] as bool? ?? false,
         passkeyEnabled: json['passkey_enabled'] as bool? ?? false,
         plexEmail: json['plex_email'] as String? ?? '',
+        plexInvitedAt: json['plex_invited_at'] as String?,
       );
 
-  UserProfile copyWith({bool? hasPassword, String? plexEmail}) => UserProfile(
+  UserProfile copyWith({
+    bool? hasPassword,
+    String? plexEmail,
+    bool clearPlexInvitedAt = false,
+  }) =>
+      UserProfile(
         id: id,
         username: username,
         role: role,
@@ -61,6 +70,7 @@ class UserProfile {
         passwordEnabled: passwordEnabled,
         passkeyEnabled: passkeyEnabled,
         plexEmail: plexEmail ?? this.plexEmail,
+        plexInvitedAt: clearPlexInvitedAt ? null : plexInvitedAt,
       );
 
   Map<String, dynamic> toJson() => {
@@ -72,5 +82,6 @@ class UserProfile {
         'password_enabled': passwordEnabled,
         'passkey_enabled': passkeyEnabled,
         'plex_email': plexEmail,
+        if (plexInvitedAt != null) 'plex_invited_at': plexInvitedAt,
       };
 }

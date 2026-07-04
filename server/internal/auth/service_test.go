@@ -482,10 +482,23 @@ func TestSetPlexEmail_StoresTrimsAndReportsChange(t *testing.T) {
 		t.Fatal("identical resubmission should not report changed")
 	}
 
-	// A different address is a change again, and shows up in ListUsers.
+	// Simulate an invite having been sent to the first address.
+	if _, err := svc.db.Exec("UPDATE users SET plex_invited_at = CURRENT_TIMESTAMP WHERE id = ?", guestID); err != nil {
+		t.Fatalf("stamp invited: %v", err)
+	}
+
+	// A different address is a change again, shows up in ListUsers, and
+	// clears the invited stamp (that invite went to the old email).
 	changed, err = svc.SetPlexEmail(guestID, "corsair@example.com")
 	if err != nil || !changed {
 		t.Fatalf("expected changed update, got changed=%v err=%v", changed, err)
+	}
+	user, err = svc.GetUser(guestID)
+	if err != nil {
+		t.Fatalf("get user after change: %v", err)
+	}
+	if user.PlexInvitedAt != nil {
+		t.Fatal("changing the email must clear plex_invited_at")
 	}
 	users, err := svc.ListUsers()
 	if err != nil {

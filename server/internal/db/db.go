@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_enabled BOOLEAN NOT NULL DEFAULT 0,
     passkey_enabled BOOLEAN NOT NULL DEFAULT 0,
     plex_email TEXT NOT NULL DEFAULT '',
+    plex_invited_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -120,7 +121,8 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     new_episode      INTEGER NOT NULL DEFAULT 1,
     issue_created    INTEGER NOT NULL DEFAULT 1,
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
-    plex_access_request INTEGER NOT NULL DEFAULT 1
+    plex_access_request INTEGER NOT NULL DEFAULT 1,
+    plex_invite_sent INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS connect_tokens (
@@ -391,6 +393,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// Admins are notified when a user shares their Plex email for an
 		// invite, on by default. New on existing databases.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN plex_access_request INTEGER NOT NULL DEFAULT 1"},
+		// When Cantinarr sends the user's Plex invite (one-tap or auto), the
+		// stamp records that it went out and the user is told to check email.
+		{alter: "ALTER TABLE users ADD COLUMN plex_invited_at DATETIME"},
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN plex_invite_sent INTEGER NOT NULL DEFAULT 1"},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {

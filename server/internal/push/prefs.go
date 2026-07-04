@@ -15,6 +15,7 @@ type Prefs struct {
 	IssueCreated       bool `json:"issue_created"`
 	AgentActionPending bool `json:"agent_action_pending"`
 	PlexAccessRequest  bool `json:"plex_access_request"`
+	PlexInviteSent     bool `json:"plex_invite_sent"`
 }
 
 // Notification categories. These are the wire values used by the preferences
@@ -33,6 +34,9 @@ const (
 	// CategoryPlexAccessRequest notifies admins that a user shared their Plex
 	// email and is waiting for a server invite. Admin-scoped, on by default.
 	CategoryPlexAccessRequest = "plex_access_request"
+	// CategoryPlexInviteSent tells a user their Plex invite went out (one-tap
+	// or auto) so they know to check their inbox. User-scoped, on by default.
+	CategoryPlexInviteSent = "plex_invite_sent"
 )
 
 // defaultPrefs is the preference set applied when a user has no row. It must
@@ -46,6 +50,7 @@ var defaultPrefs = Prefs{
 	IssueCreated:       true,
 	AgentActionPending: true,
 	PlexAccessRequest:  true,
+	PlexInviteSent:     true,
 }
 
 // categoryColumn maps a category to its notification_prefs column and the
@@ -62,6 +67,7 @@ var categoryColumn = map[string]struct {
 	CategoryIssueCreated:       {"issue_created", defaultPrefs.IssueCreated},
 	CategoryAgentActionPending: {"agent_action_pending", defaultPrefs.AgentActionPending},
 	CategoryPlexAccessRequest:  {"plex_access_request", defaultPrefs.PlexAccessRequest},
+	CategoryPlexInviteSent:     {"plex_invite_sent", defaultPrefs.PlexInviteSent},
 }
 
 // PrefsStore reads and writes per-user notification preferences. It is safe to
@@ -80,10 +86,10 @@ func NewPrefsStore(db *sql.DB) *PrefsStore {
 func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 	p := defaultPrefs
 	err := s.db.QueryRow(
-		`SELECT request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending, plex_access_request
+		`SELECT request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending, plex_access_request, plex_invite_sent
 		 FROM notification_prefs WHERE user_id = ?`,
 		userID,
-	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest)
+	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent)
 	if err == sql.ErrNoRows {
 		return defaultPrefs, nil
 	}
@@ -97,8 +103,8 @@ func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 func (s *PrefsStore) Set(userID int64, p Prefs) error {
 	_, err := s.db.Exec(
 		`INSERT INTO notification_prefs
-		   (user_id, request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending, plex_access_request)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		   (user_id, request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending, plex_access_request, plex_invite_sent)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   request_decision = excluded.request_decision,
 		   request_pending  = excluded.request_pending,
@@ -106,8 +112,9 @@ func (s *PrefsStore) Set(userID int64, p Prefs) error {
 		   new_episode      = excluded.new_episode,
 		   issue_created    = excluded.issue_created,
 		   agent_action_pending = excluded.agent_action_pending,
-		   plex_access_request  = excluded.plex_access_request`,
-		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest,
+		   plex_access_request  = excluded.plex_access_request,
+		   plex_invite_sent     = excluded.plex_invite_sent`,
+		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert notification prefs: %w", err)

@@ -436,8 +436,10 @@ class UserSummary {
   final bool passkeyEnabled;
   final bool hasPendingInvite;
 
-  /// The email this user shared for their Plex server invite ('' = none yet).
+  /// The email this user shared for their Plex server invite ('' = none yet),
+  /// and when Cantinarr last sent their invite (null = never).
   final String plexEmail;
+  final String? plexInvitedAt;
 
   const UserSummary({
     required this.id,
@@ -451,6 +453,7 @@ class UserSummary {
     required this.passkeyEnabled,
     required this.hasPendingInvite,
     this.plexEmail = '',
+    this.plexInvitedAt,
   });
 
   bool get isAdmin => role == 'admin';
@@ -470,6 +473,7 @@ class UserSummary {
         passkeyEnabled: json['passkey_enabled'] as bool? ?? false,
         hasPendingInvite: json['has_pending_invite'] as bool? ?? false,
         plexEmail: json['plex_email'] as String? ?? '',
+        plexInvitedAt: json['plex_invited_at'] as String?,
       );
 }
 
