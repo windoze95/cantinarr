@@ -14,9 +14,12 @@ type User struct {
 	PasswordEnabled bool `json:"password_enabled"`
 	PasskeyEnabled  bool `json:"passkey_enabled"`
 	// PlexEmail is the email the user shared so an admin can invite them to
-	// the Plex server. Empty until the user submits one.
-	PlexEmail string    `json:"plex_email"`
-	CreatedAt time.Time `json:"created_at"`
+	// the Plex server. Empty until the user submits one. PlexInvitedAt is
+	// when Cantinarr last sent their invite (one-tap or auto) — a record of
+	// our action, not a claim about current access in Plex.
+	PlexEmail     string     `json:"plex_email"`
+	PlexInvitedAt *time.Time `json:"plex_invited_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 // UserSummary is an enriched view of a user for admin user-management screens.
@@ -34,6 +37,7 @@ type UserSummary struct {
 	PasskeyEnabled   bool         `json:"passkey_enabled"`
 	HasPendingInvite bool         `json:"has_pending_invite"`
 	PlexEmail        string       `json:"plex_email"`
+	PlexInvitedAt    *time.Time   `json:"plex_invited_at,omitempty"`
 }
 
 // UpdateUserRoleRequest changes a user's role.

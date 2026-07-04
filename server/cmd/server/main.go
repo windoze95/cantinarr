@@ -24,6 +24,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
@@ -168,9 +169,14 @@ func main() {
 	} else {
 		notifier = push.NewComposite(wsHub)
 	}
-	// The auth handler notifies admins when a user shares their Plex email
-	// (plex_access_request); wired late because the composite needs the hub.
-	authHandler.SetNotifier(notifier)
+	// Plex integration: linked-account invites (one-tap and auto). The auth
+	// handler's access-request hook routes "user shared their Plex email"
+	// through the plex service, which auto-invites when configured and
+	// notifies admins with the outcome; wired late because the composite
+	// needs the hub.
+	plexService := plex.NewService(database, cipher, plex.NewClient(), notifier, logger)
+	plexHandler := plex.NewHandler(plexService, logger)
+	authHandler.SetAccessRequestHook(plexService.OnAccessRequest)
 	requestService := request.NewService(database, registry, bridge, notifier)
 	requestHandler := request.NewHandler(requestService)
 
@@ -222,7 +228,7 @@ func main() {
 	webhookHandler := webhooks.NewHandler(instanceStore, registry, wsHub, requestService, contentNotifier)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

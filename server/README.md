@@ -133,6 +133,18 @@ DELETE /api/admin/users/{userID}
 POST   /api/admin/users/{userID}/test-push       # delivery diagnostics for one user
 GET|PUT /api/admin/users/{userID}/default-instances  # pin per-user default arr instances;
                                                      # for Chaptarr this doubles as the access grant
+POST   /api/admin/users/{userID}/plex-invite     # send the Plex invite for the user's shared email
+```
+
+### Plex invites (admin)
+```
+GET    /api/admin/plex/status              # linked account + invite config (never the token)
+POST   /api/admin/plex/link/begin          # start the PIN flow -> { pin_id, code, url }
+POST   /api/admin/plex/link/check          # poll the PIN; stores the token once approved
+DELETE /api/admin/plex/link                # unlink + forget invite settings
+GET    /api/admin/plex/servers             # linked account's owned Plex Media Servers
+GET    /api/admin/plex/servers/{machineID}/libraries  # sections for the library picker
+PUT    /api/admin/plex/settings            # server, shared libraries, auto-invite toggle
 ```
 
 ### Requests
@@ -252,7 +264,7 @@ WebSocket events:
 - `request_status_changed` -- `{ tmdb_id, media_type, status }` (queue polling **and** arr webhooks; status here is `available`, `partially_available`, `requested`, or `unavailable` -- note the longer spelling vs the REST `partial`)
 - `downloads_queue` -- full download-client queue snapshot `{ instance_id, paused, speed_bps, items }`, sent on change
 - `arr_queue_changed` -- `{ instance_id, service_type }` invalidation ping; clients refetch via REST
-- targeted events fanned out per user/admin: `request_pending`, `request_decision`, `issue_created`, `issue_updated`, `agent_action_pending`, `agent_action_decided`, `remediation_autodispatch_disabled`, `plex_access_request`
+- targeted events fanned out per user/admin: `request_pending`, `request_decision`, `issue_created`, `issue_updated`, `agent_action_pending`, `agent_action_decided`, `remediation_autodispatch_disabled`, `plex_access_request`, `plex_invite_sent`
 
 ## Architecture
 
@@ -324,9 +336,14 @@ Notification categories (per-user preferences; admin-scoped ones are enforced in
 | `new_episode` | on | everyone | new episode(s) import for a series |
 | `issue_created` | on | admins | a problem is reported/detected |
 | `agent_action_pending` | on | admins | the agent proposed a fix needing approval |
-| `plex_access_request` | on | admins | a user shared their Plex email for a server invite (collapse-keyed per user) |
+| `plex_access_request` | on | admins | a user shared their Plex email for a server invite (collapse-keyed per user; body says whether auto-invite already handled it) |
+| `plex_invite_sent` | on | requester | their Plex invite email went out (one-tap or auto) |
 
 Bodies are server-authored templates (untrusted text never hits the lock screen), sends are fire-and-forget with a 30s timeout, a 10-minute in-process dedupe window absorbs the overlap between queue polling and webhooks, and tokens the gateway reports dead are pruned automatically. Payloads carry deep-link data (`type`, `tmdb_id`/`issue_id`/`user_id`) the app routes on tap.
+
+### Plex invites
+
+Linking a Plex account (Settings > Plex Invites in the app) uses plex.tv's PIN flow: the server mints a PIN, the admin approves it in the browser, and the resulting token is stored AES-encrypted in the settings table (it never appears in any API response). With a server and libraries selected, `POST /api/admin/users/{id}/plex-invite` shares them with the user's email via plex.tv's `shared_servers` API — and with **auto-invite** on, the same happens with zero taps the moment a user shares their email from the Watch on Plex guide. A duplicate share (the account already has access) is treated as soft success. Sending an invite stamps `users.plex_invited_at` (a record of Cantinarr's action, not live Plex state) and pushes `plex_invite_sent` to the user; changing the email clears the stamp since the old invite went to the old address. The stable `X-Plex-Client-Identifier` survives unlink/relink.
 
 ### MCP server endpoint
 
@@ -390,7 +407,7 @@ SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db
 | Push | `push_tokens` (one per device), `notification_prefs` |
 | Remediation | `issues`, `issue_messages`, `agent_runs`, `agent_steps`, `agent_actions` (fingerprint-deduped) |
 | MCP OAuth | `oauth_clients`, `oauth_authorization_codes`, `oauth_refresh_tokens` |
-| Misc | `settings` (encrypted KV: JWT secret, push key, request policy), `tmdb_tvdb_cache` (30-day TTL) |
+| Misc | `settings` (encrypted KV: JWT secret, push key, request policy, Plex token + invite config), `tmdb_tvdb_cache` (30-day TTL) |
 
 ## Project Structure
 
@@ -414,6 +431,7 @@ server/
 │   ├── mcp/                  # The 26 tools, toggles, tool server (chat + MCP + agent share it)
 │   ├── mcpserver/            # MCP Streamable HTTP endpoint, prompts, agent guide (mcp-go)
 │   ├── nzbget/               # NZBGet JSON-RPC client
+│   ├── plex/                 # plex.tv PIN link + shared_servers invites (one-tap & auto)
 │   ├── proxy/                # Verbatim arr reverse proxy (read-only for users)
 │   ├── push/                 # Push gateway client, auto-enroll, prefs, notifier
 │   ├── qbittorrent/          # qBittorrent WebUI v2 client

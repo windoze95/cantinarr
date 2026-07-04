@@ -10,27 +10,26 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// AdminNotifier is the notification fan-out the handler uses for admin-scoped
-// events (currently only "plex_access_request"). Declared here so auth stays
-// free of a push dependency; *push.Composite satisfies it.
-type AdminNotifier interface {
-	NotifyAdmins(eventType string, data map[string]interface{})
-}
+// AccessRequestHook runs after a user shares a new or changed Plex email.
+// Wired by main to the plex service, which auto-invites when configured and
+// notifies admins with the outcome either way. A hook (not a notifier) so
+// auth stays free of both push and plex dependencies.
+type AccessRequestHook func(userID int64, username string)
 
 type Handler struct {
-	service  *Service
-	notifier AdminNotifier
+	service           *Service
+	accessRequestHook AccessRequestHook
 }
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
-// SetNotifier wires the admin notification fan-out after construction: the
-// composite is built later in startup than the auth handler (it needs the
-// WebSocket hub, which needs this handler's service).
-func (h *Handler) SetNotifier(n AdminNotifier) {
-	h.notifier = n
+// SetAccessRequestHook wires the Plex access-request side effect after
+// construction: the plex service is built later in startup than the auth
+// handler (it needs the notifier composite, which needs the WebSocket hub).
+func (h *Handler) SetAccessRequestHook(hook AccessRequestHook) {
+	h.accessRequestHook = hook
 }
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
@@ -347,6 +346,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		"password_enabled": user.PasswordEnabled,
 		"passkey_enabled":  user.PasskeyEnabled,
 		"plex_email":       user.PlexEmail,
+		"plex_invited_at":  user.PlexInvitedAt,
 	})
 }
 
@@ -413,11 +413,8 @@ func (h *Handler) SetPlexEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if changed && h.notifier != nil {
-		h.notifier.NotifyAdmins("plex_access_request", map[string]interface{}{
-			"user_id":  claims.UserID,
-			"username": claims.Username,
-		})
+	if changed && h.accessRequestHook != nil {
+		h.accessRequestHook(claims.UserID, claims.Username)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -27,8 +27,9 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
 
   @override
   Widget build(BuildContext context) {
-    final plexEmail =
-        ref.watch(authProvider).valueOrNull?.user?.plexEmail ?? '';
+    final user = ref.watch(authProvider).valueOrNull?.user;
+    final plexEmail = user?.plexEmail ?? '';
+    final inviteSent = user?.plexInvitedAt != null;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Watch on Plex')),
@@ -65,7 +66,7 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
             ],
           ),
           const SizedBox(height: 24),
-          _buildInviteSection(plexEmail),
+          _buildInviteSection(plexEmail, inviteSent),
           const SizedBox(height: 24),
           const _GuideSection(
             number: 4,
@@ -116,8 +117,10 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
   }
 
   /// Step 3: the interactive part. Shares the user's Plex email with the
-  /// server so admins get notified and can send the invite from Plex.
-  Widget _buildInviteSection(String plexEmail) {
+  /// server; depending on the server's setup the invite goes out
+  /// automatically or an admin sends it, and the card reflects which state
+  /// this user is in (nothing shared / waiting / invite sent).
+  Widget _buildInviteSection(String plexEmail, bool inviteSent) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -160,8 +163,13 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.check_circle,
-                              color: AppTheme.available, size: 18),
+                          Icon(
+                            inviteSent
+                                ? Icons.mark_email_read_outlined
+                                : Icons.check_circle,
+                            color: AppTheme.available,
+                            size: 18,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -175,10 +183,14 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      const Text(
-                        'Your admin has been notified — the invite will '
-                        'arrive at this address.',
-                        style: TextStyle(
+                      Text(
+                        inviteSent
+                            ? 'Your invite has been sent! Check your inbox '
+                                '(and spam) for an email from Plex, then '
+                                'continue with step 4.'
+                            : 'Your admin has been notified — the invite '
+                                'will arrive at this address.',
+                        style: const TextStyle(
                           color: AppTheme.textSecondary,
                           fontSize: 13,
                           height: 1.4,
@@ -238,6 +250,13 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
                 ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(
                   content: Text('Thanks! Your admin has been notified.'),
                 ));
+                // If the server auto-invites, the invite lands within a few
+                // seconds — re-fetch so the card flips to "check your inbox".
+                Future.delayed(const Duration(seconds: 3), () {
+                  if (mounted) {
+                    ref.read(authProvider.notifier).refreshUser();
+                  }
+                });
               }
             } catch (_) {
               setDialogState(() {

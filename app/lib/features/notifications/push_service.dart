@@ -138,8 +138,11 @@ class PushService {
         router.push('/agent-actions');
       case 'plex_access_request':
         // A user shared their Plex email — the Users screen shows it with the
-        // "Invite in Plex" action.
+        // invite actions.
         router.push('/settings/users');
+      case 'plex_invite_sent':
+        // The user's invite went out — the guide's step 4 says what to do.
+        router.push('/plex-guide');
       case 'remediation_autodispatch_disabled':
         // The circuit breaker turned auto-dispatch off — open the settings the
         // admin uses to re-enable it.

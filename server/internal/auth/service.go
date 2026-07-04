@@ -337,8 +337,10 @@ func (s *Service) SetPlexEmail(userID int64, email string) (bool, error) {
 		return false, nil
 	}
 
+	// A changed address also clears the invited stamp: any invite already
+	// sent went to the OLD email, so the user is back to "waiting".
 	if _, err := s.db.Exec(
-		"UPDATE users SET plex_email = ? WHERE id = ?",
+		"UPDATE users SET plex_email = ?, plex_invited_at = NULL WHERE id = ?",
 		email, userID,
 	); err != nil {
 		return false, fmt.Errorf("update plex email: %w", err)
@@ -695,6 +697,7 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 			u.password_enabled,
 			u.passkey_enabled,
 			u.plex_email,
+			u.plex_invited_at,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
@@ -711,12 +714,16 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 	var users []UserSummary
 	for rows.Next() {
 		var u UserSummary
+		var invitedAt sql.NullTime
 		if err := rows.Scan(
 			&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.PlexEmail,
+			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.PlexEmail, &invitedAt,
 			&u.DeviceCount, &u.HasPendingInvite,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		if invitedAt.Valid {
+			u.PlexInvitedAt = &invitedAt.Time
 		}
 		u.Permissions = PermissionsForRole(u.Role)
 		users = append(users, u)
@@ -874,6 +881,7 @@ func (s *Service) DeleteUser(actorID, userID int64) error {
 
 func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 	var u UserSummary
+	var invitedAt sql.NullTime
 	err := s.db.QueryRow(`
 		SELECT
 			u.id,
@@ -884,6 +892,7 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 			u.password_enabled,
 			u.passkey_enabled,
 			u.plex_email,
+			u.plex_invited_at,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
@@ -893,7 +902,7 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 		WHERE u.id = ?
 	`, time.Now(), userID).Scan(
 		&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.PlexEmail,
+		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.PlexEmail, &invitedAt,
 		&u.DeviceCount, &u.HasPendingInvite,
 	)
 	if err != nil {
@@ -901,6 +910,9 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 			return nil, ErrUserNotFound
 		}
 		return nil, fmt.Errorf("load user summary: %w", err)
+	}
+	if invitedAt.Valid {
+		u.PlexInvitedAt = &invitedAt.Time
 	}
 	u.Permissions = PermissionsForRole(u.Role)
 	return &u, nil
@@ -1052,22 +1064,30 @@ func userWithPermissions(user *User) User {
 
 func (s *Service) getUserByUsername(username string) (*User, error) {
 	var user User
+	var invitedAt sql.NullTime
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, created_at FROM users WHERE username = ?", username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt)
+		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, plex_invited_at, created_at FROM users WHERE username = ?", username,
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &invitedAt, &user.CreatedAt)
 	if err != nil {
 		return nil, err
+	}
+	if invitedAt.Valid {
+		user.PlexInvitedAt = &invitedAt.Time
 	}
 	return &user, nil
 }
 
 func (s *Service) getUserByID(id int64) (*User, error) {
 	var user User
+	var invitedAt sql.NullTime
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, created_at FROM users WHERE id = ?", id,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt)
+		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, plex_invited_at, created_at FROM users WHERE id = ?", id,
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &invitedAt, &user.CreatedAt)
 	if err != nil {
 		return nil, err
+	}
+	if invitedAt.Valid {
+		user.PlexInvitedAt = &invitedAt.Time
 	}
 	return &user, nil
 }

@@ -196,6 +196,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/users'),
             ),
             _SettingsTile(
+              icon: Icons.play_circle_outline,
+              title: 'Plex Invites',
+              subtitle: 'Link Plex for one-tap and automatic invites',
+              onTap: () => context.push('/settings/plex'),
+            ),
+            _SettingsTile(
               icon: Icons.link,
               title: 'Generate Connect Link',
               subtitle: 'Create a link to invite a new user',

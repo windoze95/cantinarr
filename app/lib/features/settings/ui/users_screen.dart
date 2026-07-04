@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../notifications/push_service.dart';
+import '../data/plex_admin_service.dart';
 
 /// Admin screen for managing user accounts: change roles, remove users, and
 /// see who still has an outstanding connect-link invite.
@@ -47,9 +48,30 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     }
   }
 
+  /// One-tap invite through the linked Plex account: the server shares the
+  /// configured libraries with the user's email and stamps the invite.
+  Future<void> _sendPlexInvite(UserSummary user) async {
+    try {
+      final status =
+          await ref.read(plexAdminServiceProvider).inviteUser(user.id);
+      await _loadUsers();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(status == 'already_shared'
+            ? '${user.plexEmail} already has access on Plex'
+            : 'Plex invite sent to ${user.plexEmail}'),
+      ));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:
+              Text('Plex invite failed — check the Plex Invites settings')));
+    }
+  }
+
   /// Copies the user's Plex email and opens Plex's Manage Library Access page,
-  /// where the admin pastes it into Grant Library Access. Plex offers no way
-  /// to prefill the invite, so copy-then-paste is the fastest honest flow.
+  /// where the admin pastes it into Grant Library Access. The fallback when no
+  /// Plex account is linked (Plex offers no way to prefill the invite).
   Future<void> _inviteInPlex(UserSummary user) async {
     await Clipboard.setData(ClipboardData(text: user.plexEmail));
     if (mounted) {
@@ -333,6 +355,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     }
 
     final currentUserId = ref.read(authProvider).valueOrNull?.user?.id;
+    final plexConfigured =
+        ref.watch(plexInviteConfiguredProvider).valueOrNull ?? false;
 
     return RefreshIndicator(
       onRefresh: _loadUsers,
@@ -346,10 +370,12 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           return _UserTile(
             user: user,
             isSelf: user.id == currentUserId,
+            plexInviteConfigured: plexConfigured,
             onChangeRole: (role) => _changeRole(user, role),
             onDelete: () => _deleteUser(user),
             onResendInvite: () => _resendInvite(user),
             onSendTestPush: () => _sendTestPush(user),
+            onSendPlexInvite: () => _sendPlexInvite(user),
             onInviteInPlex: () => _inviteInPlex(user),
             onRequestSettings: () => context.push(
               '/settings/users/${user.id}/request-settings',
@@ -372,10 +398,12 @@ class _UserTile extends StatelessWidget {
   const _UserTile({
     required this.user,
     required this.isSelf,
+    required this.plexInviteConfigured,
     required this.onChangeRole,
     required this.onDelete,
     required this.onResendInvite,
     required this.onSendTestPush,
+    required this.onSendPlexInvite,
     required this.onInviteInPlex,
     required this.onSetAuthMethods,
     required this.onRequestSettings,
@@ -383,10 +411,12 @@ class _UserTile extends StatelessWidget {
 
   final UserSummary user;
   final bool isSelf;
+  final bool plexInviteConfigured;
   final ValueChanged<String> onChangeRole;
   final VoidCallback onDelete;
   final VoidCallback onResendInvite;
   final VoidCallback onSendTestPush;
+  final VoidCallback onSendPlexInvite;
   final VoidCallback onInviteInPlex;
   final void Function({bool? passwordEnabled, bool? passkeyEnabled})
       onSetAuthMethods;
@@ -455,6 +485,8 @@ class _UserTile extends StatelessWidget {
               const _Tag(label: 'Passkey', color: AppTheme.textSecondary),
             if (user.plexEmail.isNotEmpty)
               _Tag(label: user.plexEmail, color: AppTheme.textSecondary),
+            if (user.plexInvitedAt != null)
+              const _Tag(label: 'Plex invite sent', color: AppTheme.available),
           ],
         ),
       ),
@@ -478,6 +510,9 @@ class _UserTile extends StatelessWidget {
             break;
           case 'test_push':
             onSendTestPush();
+            break;
+          case 'send_plex_invite':
+            onSendPlexInvite();
             break;
           case 'invite_in_plex':
             onInviteInPlex();
@@ -527,9 +562,20 @@ class _UserTile extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
             ),
           ),
-        // The user shared their Plex email: copy it and jump to Plex's
-        // sharing settings to send the actual invite.
-        if (user.plexEmail.isNotEmpty)
+        // The user shared their Plex email. With a linked Plex account the
+        // invite is one tap; otherwise fall back to copy-email-and-open-Plex.
+        if (user.plexEmail.isNotEmpty && plexInviteConfigured)
+          PopupMenuItem(
+            value: 'send_plex_invite',
+            child: ListTile(
+              leading: const Icon(Icons.send_outlined),
+              title: Text(user.plexInvitedAt != null
+                  ? 'Resend Plex invite'
+                  : 'Send Plex invite'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        if (user.plexEmail.isNotEmpty && !plexInviteConfigured)
           const PopupMenuItem(
             value: 'invite_in_plex',
             child: ListTile(

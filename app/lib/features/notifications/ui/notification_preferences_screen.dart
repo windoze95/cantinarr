@@ -227,6 +227,12 @@ class _NotificationPreferencesScreenState
           value: prefs.newEpisode,
           onChanged: (v) => _save(prefs.copyWith(newEpisode: v), prefs),
         ),
+        _toggle(
+          title: 'Plex invite sent',
+          subtitle: 'When your Plex invite email goes out',
+          value: prefs.plexInviteSent,
+          onChanged: (v) => _save(prefs.copyWith(plexInviteSent: v), prefs),
+        ),
         const SizedBox(height: 32),
       ],
     );
