@@ -1,11 +1,14 @@
 package auth
 
 import (
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/windoze95/cantinarr-server/internal/db"
 )
 
@@ -566,77 +569,206 @@ func TestHashToken_Deterministic(t *testing.T) {
 	}
 }
 
-func TestRefreshRotation_FirstUseSucceeds(t *testing.T) {
+// mintLegacyRefreshJWT reproduces a refresh token exactly as pre-opaque
+// versions issued them: an HS256 JWT with a long lifetime, bound to a device.
+func mintLegacyRefreshJWT(t *testing.T, svc *Service, user *User, deviceID string, issuedAt time.Time, lifetime time.Duration) string {
+	t.Helper()
+	claims := &Claims{
+		UserID:   user.ID,
+		Username: user.Username,
+		Role:     user.Role,
+		DeviceID: deviceID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(issuedAt.Add(lifetime)),
+			IssuedAt:  jwt.NewNumericDate(issuedAt),
+		},
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(svc.jwtSecret)
+	if err != nil {
+		t.Fatalf("sign legacy refresh token: %v", err)
+	}
+	return token
+}
+
+func TestRefresh_OpaqueTokenIsStableAndReusable(t *testing.T) {
 	svc := setupTestService(t)
 
 	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-
-	refreshResp, err := svc.Refresh(loginResp.RefreshToken)
-	if err != nil {
-		t.Fatalf("refresh: %v", err)
+	if !strings.HasPrefix(loginResp.RefreshToken, opaqueRefreshPrefix) {
+		t.Fatalf("login should issue an opaque refresh token, got %q", loginResp.RefreshToken[:10])
 	}
-	if refreshResp.AccessToken == "" || refreshResp.RefreshToken == "" {
-		t.Fatal("refresh response missing tokens")
+
+	// Refresh repeatedly with the same token: no rotation means every retry,
+	// replayed request, or parallel refresh succeeds and the token is stable.
+	for i := 0; i < 3; i++ {
+		resp, err := svc.Refresh(loginResp.RefreshToken)
+		if err != nil {
+			t.Fatalf("refresh #%d: %v", i+1, err)
+		}
+		if resp.AccessToken == "" {
+			t.Fatalf("refresh #%d: missing access token", i+1)
+		}
+		if resp.RefreshToken != loginResp.RefreshToken {
+			t.Fatalf("refresh #%d rotated the token; opaque tokens must be stable", i+1)
+		}
+		if resp.DeviceID != loginResp.DeviceID {
+			t.Fatalf("refresh #%d device = %q, want %q", i+1, resp.DeviceID, loginResp.DeviceID)
+		}
+		if _, _, err := svc.AuthenticateToken(resp.AccessToken); err != nil {
+			t.Fatalf("refresh #%d access token rejected: %v", i+1, err)
+		}
 	}
 }
 
-func TestRefreshRotation_ReplayFails(t *testing.T) {
+// TestRefresh_LegacyJWTAmnesty covers the migration contract: any legacy JWT
+// refresh token whose device is still authorized is accepted — even when its
+// baked-in expiry passed (device idle for months/years) or its store row was
+// rotated away or lost (crash before persisting, restore from backup) — and
+// the session is upgraded to a never-expiring opaque token.
+func TestRefresh_LegacyJWTAmnesty(t *testing.T) {
 	svc := setupTestService(t)
 
 	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-
-	oldRefreshToken := loginResp.RefreshToken
-
-	// JWT NumericDate has second precision; ensure the rotated token gets a
-	// different IssuedAt so it produces a distinct hash from the original.
-	time.Sleep(time.Second)
-
-	// First refresh succeeds and rotates the token
-	_, err = svc.Refresh(oldRefreshToken)
+	user, err := svc.getUserByUsername("admin")
 	if err != nil {
-		t.Fatalf("first refresh: %v", err)
+		t.Fatalf("load user: %v", err)
 	}
 
-	// Age the just-superseded token past the rotation grace window so a replay
-	// is treated as a replay rather than a benign retry.
-	if _, err := svc.db.Exec(
-		"UPDATE refresh_tokens SET superseded_at = ? WHERE token_hash = ?",
-		time.Now().Add(-2*refreshRotationGrace), hashToken(oldRefreshToken),
-	); err != nil {
-		t.Fatalf("age token: %v", err)
+	cases := []struct {
+		name     string
+		issuedAt time.Time
+		lifetime time.Duration
+	}{
+		{"active 365-day token with no store row", time.Now().Add(-time.Hour), 365 * 24 * time.Hour},
+		{"expired 30-day token idle for two years", time.Now().Add(-2 * 365 * 24 * time.Hour), 30 * 24 * time.Hour},
 	}
-
-	// Replaying the old token beyond the grace window should fail
-	if _, err := svc.Refresh(oldRefreshToken); err == nil {
-		t.Fatal("replay of rotated refresh token beyond grace should fail")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			legacy := mintLegacyRefreshJWT(t, svc, user, loginResp.DeviceID, tc.issuedAt, tc.lifetime)
+			// No refresh_tokens row exists for this token (simulates rotation
+			// races, cleanup, and backup restores); amnesty must not care.
+			resp, err := svc.Refresh(legacy)
+			if err != nil {
+				t.Fatalf("legacy refresh: %v", err)
+			}
+			if !strings.HasPrefix(resp.RefreshToken, opaqueRefreshPrefix) {
+				t.Fatal("legacy refresh should migrate to an opaque token")
+			}
+			if _, err := svc.Refresh(resp.RefreshToken); err != nil {
+				t.Fatalf("migrated opaque token rejected: %v", err)
+			}
+		})
 	}
 }
 
-// TestRefreshRotation_GraceAllowsRetry verifies that a client which fails to
-// persist the rotated token can retry with the original within the grace window
-// and stay signed in.
-func TestRefreshRotation_GraceAllowsRetry(t *testing.T) {
+// TestRefresh_RejectsNonRefreshTokens locks the amnesty gate: short-lived
+// access tokens, audience-bound (OAuth/setup) tokens, device-less tokens, and
+// forgeries must never mint a session.
+func TestRefresh_RejectsNonRefreshTokens(t *testing.T) {
 	svc := setupTestService(t)
 
 	loginResp, err := svc.Login("admin", "testpass123", "", "")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	old := loginResp.RefreshToken
-	time.Sleep(time.Second)
-
-	if _, err := svc.Refresh(old); err != nil {
-		t.Fatalf("first refresh: %v", err)
+	user, err := svc.getUserByUsername("admin")
+	if err != nil {
+		t.Fatalf("load user: %v", err)
 	}
-	// Immediate retry with the same token is within grace, so it still works.
-	if _, err := svc.Refresh(old); err != nil {
-		t.Fatalf("in-grace retry should succeed: %v", err)
+
+	// A real access token (15-minute lifetime) fails the lifetime bar.
+	if _, err := svc.Refresh(loginResp.AccessToken); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("access token as refresh: err = %v, want ErrInvalidCredentials", err)
+	}
+
+	// Device-less long-lived JWT.
+	deviceless := mintLegacyRefreshJWT(t, svc, user, "", time.Now(), 365*24*time.Hour)
+	if _, err := svc.Refresh(deviceless); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("device-less token: err = %v, want ErrInvalidCredentials", err)
+	}
+
+	// Audience-bound token (OAuth-style), long-lived and device-bound.
+	audClaims := &Claims{
+		UserID:   user.ID,
+		DeviceID: loginResp.DeviceID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{"https://example.com/mcp"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(365 * 24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+	audToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, audClaims).SignedString(svc.jwtSecret)
+	if err != nil {
+		t.Fatalf("sign audience token: %v", err)
+	}
+	if _, err := svc.Refresh(audToken); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("audience-bound token: err = %v, want ErrInvalidCredentials", err)
+	}
+
+	// Wrong signature.
+	forged, err := jwt.NewWithClaims(jwt.SigningMethodHS256, &Claims{
+		UserID:   user.ID,
+		DeviceID: loginResp.DeviceID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(365 * 24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}).SignedString([]byte("wrong-secret"))
+	if err != nil {
+		t.Fatalf("sign forged token: %v", err)
+	}
+	if _, err := svc.Refresh(forged); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("forged token: err = %v, want ErrInvalidCredentials", err)
+	}
+
+	// Unknown opaque token.
+	if _, err := svc.Refresh(opaqueRefreshPrefix + strings.Repeat("ab", 32)); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("unknown opaque token: err = %v, want ErrInvalidCredentials", err)
+	}
+}
+
+// TestRefresh_TransientFaultIsUnavailableNotRejection pins the 401/503 split:
+// when the store cannot be consulted at all, the error must be
+// ErrAuthUnavailable (handler → 503, client keeps its session), never a
+// rejection that would erase the client's tokens.
+func TestRefresh_TransientFaultIsUnavailableNotRejection(t *testing.T) {
+	svc := setupTestService(t)
+
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	svc.db.Close()
+
+	_, err = svc.Refresh(loginResp.RefreshToken)
+	if !errors.Is(err, ErrAuthUnavailable) {
+		t.Fatalf("refresh on closed DB: err = %v, want ErrAuthUnavailable", err)
+	}
+	if errors.Is(err, ErrInvalidCredentials) || errors.Is(err, ErrDeviceRevoked) {
+		t.Fatalf("transient fault must not read as a rejection: %v", err)
+	}
+}
+
+func TestGenerateTokens_FailsWhenStoreWriteFails(t *testing.T) {
+	svc := setupTestService(t)
+	user, err := svc.getUserByUsername("admin")
+	if err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+
+	svc.db.Close()
+
+	// A refresh token that was never stored would strand the device on its
+	// first refresh, so issuance must fail loudly instead.
+	if _, err := svc.generateTokens(user, "some-device"); err == nil {
+		t.Fatal("generateTokens must fail when the refresh token cannot be stored")
 	}
 }
 
@@ -652,9 +784,46 @@ func TestDeviceRevocation_InvalidatesRefreshTokens(t *testing.T) {
 		t.Fatalf("revoke device: %v", err)
 	}
 
-	// Refresh should fail after device revocation
+	// The opaque token dies with its deleted store row.
 	_, err = svc.Refresh(loginResp.RefreshToken)
-	if err == nil {
-		t.Fatal("refresh after device revocation should fail")
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("refresh after revocation: err = %v, want ErrInvalidCredentials", err)
+	}
+
+	// The legacy amnesty path must not resurrect a revoked device either.
+	user, err := svc.getUserByUsername("admin")
+	if err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	legacy := mintLegacyRefreshJWT(t, svc, user, loginResp.DeviceID, time.Now(), 365*24*time.Hour)
+	if _, err := svc.Refresh(legacy); !errors.Is(err, ErrDeviceRevoked) {
+		t.Fatalf("legacy refresh after revocation: err = %v, want ErrDeviceRevoked", err)
+	}
+}
+
+// TestAuthMiddleware_TransientFaultIs503 pins the middleware side of the
+// split: a valid access token evaluated against a broken store must yield
+// 503 (retry), not 401 (client wipes its session).
+func TestAuthMiddleware_TransientFaultIs503(t *testing.T) {
+	svc := setupTestService(t)
+
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	handler := svc.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	svc.db.Close()
+
+	req := httptest.NewRequest("GET", "/api/config", nil)
+	req.Header.Set("Authorization", "Bearer "+loginResp.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 503 {
+		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 }

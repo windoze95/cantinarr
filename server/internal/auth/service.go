@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -38,6 +39,12 @@ var (
 	ErrPasswordNotAllowed   = errors.New("password sign-in is not enabled for this account")
 	ErrPasskeyNotAllowed    = errors.New("passkeys are not enabled for this account")
 	ErrCannotModifyAdmin    = errors.New("cannot change sign-in methods for an admin")
+	// ErrAuthUnavailable marks a failure to *evaluate* credentials (DB error,
+	// signing error) as opposed to a rejection of them. Handlers must map it to
+	// a 5xx, never a 401: clients treat a 401 as "this session is dead" and
+	// erase their stored tokens, so answering a transient fault with 401 logs
+	// the user out permanently.
+	ErrAuthUnavailable = errors.New("authentication temporarily unavailable")
 )
 
 // minPasswordLength is the minimum length for an account password. It matches
@@ -45,16 +52,28 @@ var (
 const minPasswordLength = 8
 
 const (
-	// refreshTokenTTL is how long an idle session survives before it must be
-	// re-established with a fresh connect link. Each refresh issues a new token
-	// with a fresh TTL, so an actively used session effectively never expires.
-	refreshTokenTTL = 365 * 24 * time.Hour
-	// refreshRotationGrace is a short window after a refresh token is rotated
-	// during which the just-superseded token is still accepted. It prevents a
-	// client that fails to persist the rotated token (crash, dropped response)
-	// from being logged out, without leaving tokens replayable indefinitely.
-	refreshRotationGrace = 60 * time.Second
+	// opaqueRefreshPrefix marks the current refresh-token scheme: an opaque
+	// random secret validated purely against the refresh_tokens table. Device
+	// sessions built on it never expire, never rotate, and do not depend on
+	// the JWT secret — a session survives server restarts, upgrades, JWT
+	// secret changes, and any amount of idle time. The ONLY ways to end one
+	// are explicit: revoke the device or delete the user. That is the product
+	// contract for passwordless household accounts (a connect link is
+	// redeemed once; the resulting session must never silently die).
+	opaqueRefreshPrefix = "cnr1."
+
+	// legacyRefreshMinLifetime separates legacy JWT *refresh* tokens (issued
+	// with 30- or 365-day expiries by older versions) from access tokens
+	// (always 15 minutes). Only tokens minted with a lifetime above this bar
+	// are accepted on the refresh amnesty path, so a leaked short-lived
+	// access token can never be laundered into a permanent session.
+	legacyRefreshMinLifetime = 24 * time.Hour
 )
+
+// refreshNeverExpires is the expires_at sentinel stored for opaque refresh
+// tokens. The column is NOT NULL in existing databases, so "no expiry" is a
+// date the periodic cleanup can never reach.
+var refreshNeverExpires = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // passwordAllowed reports whether the account may use password sign-in. Admins
 // are always allowed so an install can never be locked out of its own server.
@@ -298,74 +317,156 @@ func (s *Service) SetPassword(userID int64, newPassword string) error {
 	return nil
 }
 
+// Refresh exchanges a refresh token for a fresh access token. This is the one
+// call that keeps a passwordless session alive, so its failure contract is
+// strict: it returns ErrInvalidCredentials / ErrDeviceRevoked ONLY when the
+// session is genuinely dead (token forged or revoked, device revoked, user
+// deleted). Every fault in *evaluating* the token wraps ErrAuthUnavailable so
+// the handler answers 503 and the client retries instead of logging out.
 func (s *Service) Refresh(refreshToken string) (*TokenResponse, error) {
-	claims, err := s.ValidateToken(refreshToken)
-	if err != nil {
-		return nil, ErrInvalidCredentials
+	if strings.HasPrefix(refreshToken, opaqueRefreshPrefix) {
+		return s.refreshOpaque(refreshToken)
 	}
+	return s.refreshLegacyJWT(refreshToken)
+}
 
-	// Verify the refresh token exists in our store (rotation check).
-	oldHash := hashToken(refreshToken)
+// refreshOpaque validates a current-scheme refresh token against the store and
+// issues a new access token. The refresh token itself is returned unchanged:
+// no rotation means there is no rotated value the client can fail to persist,
+// so a crash, a lost response, or server downtime mid-refresh can never strand
+// a device. Replay containment comes from device revocation, not rotation.
+func (s *Service) refreshOpaque(refreshToken string) (*TokenResponse, error) {
 	var (
-		storedDeviceID string
-		supersededAt   sql.NullTime
+		deviceID string
+		userID   int64
 	)
-	err = s.db.QueryRow(
-		"SELECT device_id, superseded_at FROM refresh_tokens WHERE token_hash = ?", oldHash,
-	).Scan(&storedDeviceID, &supersededAt)
-	if err != nil {
-		// Token not in store — never issued, expired and cleaned up, or replayed.
+	err := s.db.QueryRow(
+		"SELECT device_id, user_id FROM refresh_tokens WHERE token_hash = ?",
+		hashToken(refreshToken),
+	).Scan(&deviceID, &userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Never issued, or deleted by device revocation / user deletion.
 		return nil, ErrInvalidCredentials
 	}
-	if supersededAt.Valid {
-		// Already rotated. Accept it only within the grace window so a client
-		// that failed to persist the rotated token isn't logged out; beyond the
-		// window treat it as a replay.
-		if time.Since(supersededAt.Time) > refreshRotationGrace {
-			return nil, ErrInvalidCredentials
-		}
-	} else {
-		// First use: mark the token superseded (one-time use) but keep the row
-		// so a retry within the grace window still succeeds. Cleanup in
-		// generateTokens removes it once the grace window has passed.
-		_, _ = s.db.Exec(
-			"UPDATE refresh_tokens SET superseded_at = ? WHERE token_hash = ?",
-			time.Now(), oldHash,
-		)
-	}
-
-	// Check device revocation if the token has a device ID
-	if claims.DeviceID != "" {
-		var revokedAt *time.Time
-		err := s.db.QueryRow(
-			"SELECT revoked_at FROM devices WHERE id = ?", claims.DeviceID,
-		).Scan(&revokedAt)
-		if err != nil {
-			return nil, ErrInvalidCredentials
-		}
-		if revokedAt != nil {
-			return nil, ErrDeviceRevoked
-		}
-		// Update last_seen_at
-		_, _ = s.db.Exec(
-			"UPDATE devices SET last_seen_at = ? WHERE id = ?",
-			time.Now(), claims.DeviceID,
-		)
-	}
-
-	user, err := s.getUserByID(claims.UserID)
 	if err != nil {
-		return nil, ErrInvalidCredentials
+		return nil, fmt.Errorf("%w: look up refresh token: %v", ErrAuthUnavailable, err)
 	}
 
-	resp, err := s.generateTokens(user, claims.DeviceID)
+	if err := s.requireActiveDevice(deviceID, userID); err != nil {
+		return nil, err
+	}
+	user, err := s.getUserForAuth(userID)
 	if err != nil {
 		return nil, err
 	}
-	if claims.DeviceID != "" {
-		resp.DeviceID = claims.DeviceID
+
+	accessToken, err := s.signAccessToken(user, deviceID)
+	if err != nil {
+		return nil, err
 	}
+	return &TokenResponse{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		User:         userWithPermissions(user),
+		DeviceID:     deviceID,
+	}, nil
+}
+
+// refreshLegacyJWT is the amnesty path for refresh tokens issued before the
+// opaque scheme: JWTs whose 30/365-day expiry, single-use rotation, and store
+// row made sessions die from idle time, crash-vs-rotation races, restores, or
+// restarts. A legacy token is accepted when its signature verifies and its
+// device is still authorized — deliberately ignoring its baked-in expiry and
+// whether its store row was rotated or lost, because the device row is the
+// real authority and admins revoke devices, not tokens. On success the client
+// is migrated to an opaque token and never touches this path again.
+//
+// The gate is strict about what counts as a refresh token: audience-free,
+// device-bound, and minted with a multi-day lifetime. Access tokens (15 min)
+// and OAuth tokens (audience-bound) can never pass, and forgeries still fail
+// the signature check.
+func (s *Service) refreshLegacyJWT(tokenStr string) (*TokenResponse, error) {
+	parser := jwt.NewParser(
+		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithoutClaimsValidation(),
+	)
+	token, err := parser.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+		return s.jwtSecret, nil
+	})
+	if err != nil || !token.Valid {
+		return nil, ErrInvalidCredentials
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok {
+		return nil, ErrInvalidCredentials
+	}
+	if len(claims.Audience) > 0 || claims.Scope != "" || claims.DeviceID == "" {
+		return nil, ErrInvalidCredentials
+	}
+	if claims.ExpiresAt == nil || claims.IssuedAt == nil ||
+		claims.ExpiresAt.Sub(claims.IssuedAt.Time) < legacyRefreshMinLifetime {
+		return nil, ErrInvalidCredentials
+	}
+
+	if err := s.requireActiveDevice(claims.DeviceID, claims.UserID); err != nil {
+		return nil, err
+	}
+	user, err := s.getUserForAuth(claims.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Migrate: issue the opaque pair. The legacy row (if any) is left to age
+	// out via the expires_at cleanup; nothing consults it anymore.
+	resp, err := s.generateTokens(user, claims.DeviceID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
+	}
+	resp.DeviceID = claims.DeviceID
 	return resp, nil
+}
+
+// requireActiveDevice confirms the device row exists, belongs to userID, and
+// is not revoked, then bumps last_seen_at. Missing/mismatched rows are a
+// genuine rejection; query faults are ErrAuthUnavailable.
+func (s *Service) requireActiveDevice(deviceID string, userID int64) error {
+	var (
+		ownerID   int64
+		revokedAt sql.NullTime
+	)
+	err := s.db.QueryRow(
+		"SELECT user_id, revoked_at FROM devices WHERE id = ?", deviceID,
+	).Scan(&ownerID, &revokedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidCredentials
+	}
+	if err != nil {
+		return fmt.Errorf("%w: look up device: %v", ErrAuthUnavailable, err)
+	}
+	if ownerID != userID {
+		return ErrInvalidCredentials
+	}
+	if revokedAt.Valid {
+		return ErrDeviceRevoked
+	}
+	_, _ = s.db.Exec(
+		"UPDATE devices SET last_seen_at = ? WHERE id = ?",
+		time.Now(), deviceID,
+	)
+	return nil
+}
+
+// getUserForAuth loads a user for a credential check: a missing row is a
+// rejection (account deleted), any other failure is ErrAuthUnavailable.
+func (s *Service) getUserForAuth(userID int64) (*User, error) {
+	user, err := s.getUserByID(userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrInvalidCredentials
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: load user: %v", ErrAuthUnavailable, err)
+	}
+	return user, nil
 }
 
 func (s *Service) GetUser(userID int64) (*User, error) {
@@ -810,13 +911,13 @@ func (s *Service) AuthenticateTokenForAudience(tokenStr, audience string) (*Clai
 }
 
 func (s *Service) authenticateClaims(claims *Claims) (*Claims, *User, error) {
-	user, err := s.getUserByID(claims.UserID)
+	user, err := s.getUserForAuth(claims.UserID)
 	if err != nil {
-		return nil, nil, ErrInvalidCredentials
+		return nil, nil, err
 	}
 
 	if claims.DeviceID != "" {
-		if err := s.validateActiveDevice(claims); err != nil {
+		if err := s.requireActiveDevice(claims.DeviceID, claims.UserID); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -836,34 +937,11 @@ func hasAudience(claims *Claims, audience string) bool {
 	return false
 }
 
-func (s *Service) validateActiveDevice(claims *Claims) error {
-	var (
-		userID    int64
-		revokedAt sql.NullTime
-	)
-	err := s.db.QueryRow(
-		"SELECT user_id, revoked_at FROM devices WHERE id = ?",
-		claims.DeviceID,
-	).Scan(&userID, &revokedAt)
-	if err != nil {
-		return ErrInvalidCredentials
-	}
-	if userID != claims.UserID {
-		return ErrInvalidCredentials
-	}
-	if revokedAt.Valid {
-		return ErrDeviceRevoked
-	}
-	_, _ = s.db.Exec(
-		"UPDATE devices SET last_seen_at = ? WHERE id = ?",
-		time.Now(), claims.DeviceID,
-	)
-	return nil
-}
-
-func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, error) {
+// signAccessToken mints the short-lived bearer JWT. Signing failures are
+// ErrAuthUnavailable: the credential was already accepted, so failing to mint
+// its successor is a server fault, never a rejection.
+func (s *Service) signAccessToken(user *User, deviceID string) (string, error) {
 	now := time.Now()
-
 	accessClaims := &Claims{
 		UserID:   user.ID,
 		Username: user.Username,
@@ -876,39 +954,47 @@ func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, e
 	}
 	accessToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims).SignedString(s.jwtSecret)
 	if err != nil {
-		return nil, fmt.Errorf("sign access token: %w", err)
+		return "", fmt.Errorf("%w: sign access token: %v", ErrAuthUnavailable, err)
 	}
+	return accessToken, nil
+}
 
-	refreshExpiry := refreshTokenTTL
-	refreshClaims := &Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
-		DeviceID: deviceID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(refreshExpiry)),
-			IssuedAt:  jwt.NewNumericDate(now),
-		},
+// newOpaqueRefreshToken mints a current-scheme refresh token: 32 random bytes
+// behind a versioned prefix. The value is a pure bearer secret — nothing about
+// the session is derivable from it, and only its SHA-256 hash is stored.
+func newOpaqueRefreshToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate refresh token: %w", err)
 	}
-	refreshToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims).SignedString(s.jwtSecret)
+	return opaqueRefreshPrefix + hex.EncodeToString(b), nil
+}
+
+func (s *Service) generateTokens(user *User, deviceID string) (*TokenResponse, error) {
+	accessToken, err := s.signAccessToken(user, deviceID)
 	if err != nil {
-		return nil, fmt.Errorf("sign refresh token: %w", err)
+		return nil, err
 	}
 
-	// Store refresh token hash for rotation tracking
-	tokenHash := hashToken(refreshToken)
-	_, _ = s.db.Exec(
-		"INSERT INTO refresh_tokens (token_hash, device_id, user_id, expires_at) VALUES (?, ?, ?, ?)",
-		tokenHash, deviceID, user.ID, now.Add(refreshExpiry),
-	)
+	refreshToken, err := newOpaqueRefreshToken()
+	if err != nil {
+		return nil, err
+	}
 
-	// Clean up expired refresh tokens, and ones left over past the rotation
-	// grace window, periodically (best-effort).
+	// The INSERT must succeed before the token is handed out: an unstored
+	// refresh token is a session that dies on its first refresh, silently.
+	if _, err := s.db.Exec(
+		"INSERT INTO refresh_tokens (token_hash, device_id, user_id, expires_at) VALUES (?, ?, ?, ?)",
+		hashToken(refreshToken), deviceID, user.ID, refreshNeverExpires,
+	); err != nil {
+		return nil, fmt.Errorf("store refresh token: %w", err)
+	}
+
+	// Best-effort sweep of legacy rows: expired JWT-era tokens and rotation
+	// bookkeeping. Opaque rows carry the far-future sentinel and never match.
+	now := time.Now()
 	_, _ = s.db.Exec("DELETE FROM refresh_tokens WHERE expires_at < ?", now)
-	_, _ = s.db.Exec(
-		"DELETE FROM refresh_tokens WHERE superseded_at IS NOT NULL AND superseded_at < ?",
-		now.Add(-refreshRotationGrace),
-	)
+	_, _ = s.db.Exec("DELETE FROM refresh_tokens WHERE superseded_at IS NOT NULL")
 
 	return &TokenResponse{
 		AccessToken:  accessToken,

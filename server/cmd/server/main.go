@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -242,11 +243,17 @@ func newProcToken() string {
 
 // ensureJWTSecret loads the JWT secret from the settings table, or generates
 // and persists a new one. This ensures tokens survive server restarts.
+// Only a definitively-missing row may trigger generation: minting a fresh
+// secret on a transient read fault would invalidate every outstanding access
+// token, so any other error refuses to boot instead.
 func ensureJWTSecret(database *sql.DB, cipher *secrets.Cipher) (string, error) {
 	var stored string
 	err := database.QueryRow("SELECT value FROM settings WHERE key = 'jwt_secret'").Scan(&stored)
 	if err == nil {
 		return cipher.Decrypt(stored)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("read persisted secret: %w", err)
 	}
 
 	// Generate a new secret
