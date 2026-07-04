@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../auth/data/auth_service.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../data/instance_api_service.dart';
 
 /// Form for creating or editing a service instance.
@@ -47,6 +50,21 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String? _testResult;
   String? _webhookToken;
 
+  /// Fresh instance list from the server — the login-time copy in the auth
+  /// state can be stale, and both the first-of-type auto-default and the
+  /// default-takeover confirmation depend on what actually exists right now.
+  List<ServiceInstance> _instances = const [];
+  bool _instancesLoaded = false;
+
+  // User-assignment section state: all accounts, their current per-user pin
+  // for this service type (user id → instance id, possibly a sibling
+  // instance), the working selection, and the selection as last saved.
+  List<UserSummary>? _users;
+  Map<int, String> _pins = const {};
+  Set<int> _assignedUserIds = <int>{};
+  Set<int> _savedAssignedUserIds = <int>{};
+  String? _userSelectError;
+
   static const _serviceTypes = <(String, String)>[
     ('radarr', 'Radarr'),
     ('sonarr', 'Sonarr'),
@@ -79,6 +97,27 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool get _supportsDirectTest =>
       _serviceType == 'radarr' || _serviceType == 'sonarr';
 
+  bool get _isChaptarr => _serviceType == 'chaptarr';
+
+  /// Source types feed requests and dashboard statuses, so they support
+  /// per-user assignment; download clients and Tautulli are global-only.
+  bool get _supportsUserAssignment =>
+      _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
+
+  /// Chaptarr has no global default — its instances are only ever assigned
+  /// directly to users — so it always shows the user-select. The other source
+  /// types show it when this instance is NOT the global default, as a
+  /// per-user override of that default.
+  bool get _showUserSelect =>
+      _supportsUserAssignment && (_isChaptarr || !_isDefault);
+
+  String get _serviceLabel {
+    for (final t in _serviceTypes) {
+      if (t.$1 == _serviceType) return t.$2;
+    }
+    return _serviceType;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -91,6 +130,92 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _serviceType = widget.initialServiceType ?? 'radarr';
     _isDefault = widget.initialIsDefault;
     if (widget.isEditing) _loadDetails();
+    _loadDirectory();
+  }
+
+  /// Loads the fresh instance list plus the users and their current pins for
+  /// the user-assignment section.
+  Future<void> _loadDirectory() async {
+    try {
+      final service =
+          InstanceApiService(backendDio: ref.read(backendClientProvider));
+      final instancesFuture = service.listInstances();
+      final usersFuture = ref.read(authProvider.notifier).listUsers();
+      final instances = await instancesFuture;
+      final users = await usersFuture;
+      users.sort((a, b) =>
+          a.username.toLowerCase().compareTo(b.username.toLowerCase()));
+      if (!mounted) return;
+      setState(() {
+        _instances = instances;
+        _instancesLoaded = true;
+        _users = users;
+        _applyAutoDefault();
+      });
+      await _loadPins();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _userSelectError = 'Could not load users');
+    }
+  }
+
+  /// The default toggle starts ON when creating the first instance of a type —
+  /// there is nothing else the type could default to — and OFF once siblings
+  /// exist (the admin opts in explicitly, confirming the takeover on save).
+  /// Mutates state; call from within setState.
+  void _applyAutoDefault() {
+    if (widget.isEditing || !_instancesLoaded || _isChaptarr) return;
+    _isDefault = !_instances.any((i) => i.serviceType == _serviceType);
+  }
+
+  /// Fetches the per-user pins for the selected service type. The endpoint is
+  /// instance-scoped but answers for the whole type, so when creating we can
+  /// ask via any existing sibling; a type with no instances can have no pins.
+  Future<void> _loadPins() async {
+    if (!_supportsUserAssignment) return;
+    String? anchorId = widget.instanceId;
+    if (anchorId == null) {
+      for (final i in _instances) {
+        if (i.serviceType == _serviceType) {
+          anchorId = i.id;
+          break;
+        }
+      }
+    }
+    if (anchorId == null) {
+      if (!mounted) return;
+      setState(() {
+        _pins = const {};
+        _assignedUserIds = <int>{};
+        _savedAssignedUserIds = <int>{};
+      });
+      return;
+    }
+    try {
+      final service =
+          InstanceApiService(backendDio: ref.read(backendClientProvider));
+      final pins = await service.getInstanceUsers(anchorId);
+      if (!mounted) return;
+      setState(() {
+        _pins = pins;
+        _assignedUserIds = widget.isEditing
+            ? pins.entries
+                .where((e) => e.value == widget.instanceId)
+                .map((e) => e.key)
+                .toSet()
+            : <int>{};
+        _savedAssignedUserIds = Set.of(_assignedUserIds);
+        _userSelectError = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _userSelectError = 'Could not load user assignments');
+    }
+  }
+
+  void _retryDirectory() {
+    setState(() => _userSelectError = null);
+    _loadDirectory();
   }
 
   /// The config payload only carries id/type/name, so fetch the full record
@@ -179,6 +304,151 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return e.toString();
   }
 
+  /// The sibling instance currently holding the global default for the
+  /// selected type, if any (excludes the instance being edited).
+  ServiceInstance? get _currentDefaultSibling {
+    for (final i in _instances) {
+      if (i.serviceType == _serviceType &&
+          i.isDefault &&
+          i.id != widget.instanceId) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  /// Making this instance the default displaces the current one — spell out
+  /// exactly which instance the default moves from and to, and let the admin
+  /// back out, before anything is saved.
+  Future<bool> _confirmDefaultTakeover() async {
+    final sibling = _currentDefaultSibling;
+    if (!_isDefault || _isChaptarr || sibling == null) return true;
+    final label = _serviceLabel;
+    final newName = _nameController.text.trim();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Change default $label instance?'),
+        content: Text(
+          '"${sibling.name}" is currently the default $label instance. '
+          'Saving will move the default from "${sibling.name}" to "$newName": '
+          'requests and dashboard statuses for users without a per-user '
+          'instance will switch to "$newName".',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Make Default'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  bool _sameSelection(Set<int> a, Set<int> b) =>
+      a.length == b.length && a.containsAll(b);
+
+  String _instanceName(String id) {
+    for (final i in _instances) {
+      if (i.id == id) return i.name;
+    }
+    return id;
+  }
+
+  /// Per-user assignment: for Chaptarr this IS the access model (selected
+  /// users get Books through this instance); for Radarr/Sonarr it pins the
+  /// selected users to this instance as an override of the global default.
+  List<Widget> _buildUserSelect() {
+    final users = _users;
+    return [
+      const SizedBox(height: 16),
+      Text(
+        _isChaptarr ? 'Assigned Users' : 'Per-User Default',
+        style: const TextStyle(
+            color: AppTheme.textSecondary,
+            fontSize: 13,
+            fontWeight: FontWeight.w600),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        _isChaptarr
+            ? 'Chaptarr instances are assigned per user: selected users get '
+                'Books access through this instance. Unselecting a user '
+                'removes their access.'
+            : 'Selected users use this instance for requests and dashboard '
+                'statuses instead of the default $_serviceLabel instance.',
+        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+      ),
+      const SizedBox(height: 8),
+      if (_userSelectError != null)
+        Row(
+          children: [
+            Expanded(
+              child: Text(_userSelectError!,
+                  style:
+                      const TextStyle(color: AppTheme.error, fontSize: 13)),
+            ),
+            TextButton(
+              onPressed: _retryDirectory,
+              child: const Text('Retry'),
+            ),
+          ],
+        )
+      else if (users == null)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 12),
+          child: Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: AppTheme.accent),
+            ),
+          ),
+        )
+      else if (users.isEmpty)
+        const Text('No users yet.',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13))
+      else
+        ...users.map(_userTile),
+    ];
+  }
+
+  Widget _userTile(UserSummary user) {
+    final pinnedTo = _pins[user.id];
+    // Surface where the user is assigned today, so selecting them here is a
+    // visible move rather than a silent one.
+    final movingFrom = pinnedTo != null && pinnedTo != widget.instanceId
+        ? _instanceName(pinnedTo)
+        : null;
+    return CheckboxListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      controlAffinity: ListTileControlAffinity.leading,
+      activeColor: AppTheme.accent,
+      title: Text(user.username,
+          style: const TextStyle(color: AppTheme.textPrimary)),
+      subtitle: movingFrom != null
+          ? Text('Currently assigned to "$movingFrom"',
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12))
+          : null,
+      value: _assignedUserIds.contains(user.id),
+      onChanged: (checked) => setState(() {
+        if (checked == true) {
+          _assignedUserIds.add(user.id);
+        } else {
+          _assignedUserIds.remove(user.id);
+        }
+      }),
+    );
+  }
+
   Future<void> _save() async {
     final validationError = _validate();
     if (validationError != null) {
@@ -187,8 +457,21 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       );
       return;
     }
+    if (!await _confirmDefaultTakeover()) return;
+    if (!mounted) return;
 
     setState(() => _isSaving = true);
+
+    // Chaptarr never carries the global default flag (the server enforces
+    // this too); its instances are only assigned per user below.
+    final isDefault = !_isChaptarr && _isDefault;
+    // Apply assignments only when the section is visible and the selection
+    // actually changed — a hidden section must never silently rewrite pins.
+    final applyAssignments = _showUserSelect &&
+        _userSelectError == null &&
+        _users != null &&
+        !_sameSelection(_assignedUserIds, _savedAssignedUserIds);
+    final assignedIds = _assignedUserIds.toList()..sort();
 
     try {
       final backendDio = ref.read(backendClientProvider);
@@ -202,25 +485,60 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           apiKey: _apiKeyController.text.trim(),
           username: _usernameController.text.trim(),
           password: _passwordController.text,
-          isDefault: _isDefault,
+          isDefault: isDefault,
         );
-      } else {
-        await service.createInstance(
-          serviceType: _serviceType,
-          name: _nameController.text.trim(),
-          url: _urlController.text.trim(),
-          apiKey: _apiKeyController.text.trim(),
-          username: _usernameController.text.trim(),
-          password: _passwordController.text,
-          isDefault: _isDefault,
-        );
+        if (applyAssignments) {
+          try {
+            await service.updateInstanceUsers(widget.instanceId!, assignedIds);
+          } catch (e) {
+            // The instance itself saved; stay here so Save can retry the
+            // assignments (re-updating the instance is idempotent).
+            setState(() => _isSaving = false);
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                    content: Text('Instance saved, but assigning users '
+                        'failed: ${_errorMessage(e)}')),
+              );
+            }
+            return;
+          }
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Instance updated')),
+          );
+          context.pop(true); // Return true to signal refresh needed
+        }
+        return;
       }
 
+      final created = await service.createInstance(
+        serviceType: _serviceType,
+        name: _nameController.text.trim(),
+        url: _urlController.text.trim(),
+        apiKey: _apiKeyController.text.trim(),
+        username: _usernameController.text.trim(),
+        password: _passwordController.text,
+        isDefault: isDefault,
+      );
+      // The instance exists now, so a failed assignment must not re-run
+      // create: surface it and let the admin retry from the edit screen.
+      String? assignmentError;
+      if (applyAssignments) {
+        try {
+          await service.updateInstanceUsers(created.id, assignedIds);
+        } catch (e) {
+          assignmentError = _errorMessage(e);
+        }
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text(
-                  widget.isEditing ? 'Instance updated' : 'Instance created')),
+              content: Text(assignmentError == null
+                  ? 'Instance created'
+                  : 'Instance created, but assigning users failed: '
+                      '$assignmentError — edit the instance to retry')),
         );
         context.pop(true); // Return true to signal refresh needed
       }
@@ -362,7 +680,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 setState(() {
                   _serviceType = value;
                   _testResult = null;
+                  // The selection and pins belong to the previous type.
+                  _pins = const {};
+                  _assignedUserIds = <int>{};
+                  _savedAssignedUserIds = <int>{};
+                  _applyAutoDefault();
                 });
+                _loadPins();
               },
             ),
             const SizedBox(height: 24),
@@ -442,21 +766,26 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // backend fetch search-result cover art.
           const SizedBox(height: 16),
 
-          SwitchListTile(
-            title: const Text('Default Instance',
-                style: TextStyle(color: AppTheme.textPrimary)),
-            subtitle: Text(
-                _isDownloadClient
-                    ? 'Use this as the default download client'
-                    : (_serviceType == 'tautulli'
-                        ? 'Use this as the default Tautulli instance'
-                        : 'Use this as the default for media requests'),
-                style: const TextStyle(
-                    color: AppTheme.textSecondary, fontSize: 13)),
-            value: _isDefault,
-            onChanged: (value) => setState(() => _isDefault = value),
-            activeTrackColor: AppTheme.accent,
-          ),
+          // Chaptarr has no global default: its instances are assigned
+          // directly to users below instead.
+          if (!_isChaptarr)
+            SwitchListTile(
+              title: const Text('Default Instance',
+                  style: TextStyle(color: AppTheme.textPrimary)),
+              subtitle: Text(
+                  _isDownloadClient
+                      ? 'Use this as the default download client'
+                      : (_serviceType == 'tautulli'
+                          ? 'Use this as the default Tautulli instance'
+                          : 'Use this as the default for media requests'),
+                  style: const TextStyle(
+                      color: AppTheme.textSecondary, fontSize: 13)),
+              value: _isDefault,
+              onChanged: (value) => setState(() => _isDefault = value),
+              activeTrackColor: AppTheme.accent,
+            ),
+
+          if (_showUserSelect) ..._buildUserSelect(),
 
           const SizedBox(height: 24),
 

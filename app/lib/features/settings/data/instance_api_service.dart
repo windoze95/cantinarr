@@ -70,6 +70,27 @@ class InstanceApiService {
     await _dio.delete('/api/instances/$id');
   }
 
+  /// Per-user default pins for this instance's service type, keyed by user id.
+  /// The pinned id may be a sibling instance of the same type, so the edit
+  /// screen can show who is currently assigned where.
+  Future<Map<int, String>> getInstanceUsers(String id) async {
+    final resp = await _dio.get('/api/instances/$id/users');
+    final pins = <int, String>{};
+    for (final row in (resp.data as List<dynamic>? ?? const [])) {
+      final map = row as Map<String, dynamic>;
+      pins[(map['user_id'] as num).toInt()] = map['instance_id'] as String;
+    }
+    return pins;
+  }
+
+  /// Pin this instance as the per-user default for exactly [userIds]: listed
+  /// users are pinned here (moving off a sibling instance if needed); users
+  /// previously pinned here but not listed revert to the global default (for
+  /// Chaptarr, they lose access).
+  Future<void> updateInstanceUsers(String id, List<int> userIds) async {
+    await _dio.put('/api/instances/$id/users', data: {'user_ids': userIds});
+  }
+
   /// Test connection to a service URL.
   Future<bool> testConnection(String url, String apiKey) async {
     try {

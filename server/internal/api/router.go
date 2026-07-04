@@ -290,6 +290,12 @@ func NewRouter(
 				r.Post("/instances", instanceHandler.Create)
 				r.Put("/instances/{instanceID}", instanceHandler.Update)
 				r.Delete("/instances/{instanceID}", instanceHandler.Delete)
+				// Instance-centric view of user_default_instances (the static
+				// "users" segment wins over the proxy wildcard below): which
+				// users are pinned to which instance of this instance's service
+				// type, and (PUT) assign this instance to an exact set of users.
+				r.Get("/instances/{instanceID}/users", instanceHandler.GetInstanceUsers)
+				r.Put("/instances/{instanceID}/users", instanceHandler.UpdateInstanceUsers)
 			})
 
 			// Instance proxy — forward to specific instance. Read-only
