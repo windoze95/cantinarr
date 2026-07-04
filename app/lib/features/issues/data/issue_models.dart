@@ -109,10 +109,17 @@ class Issue {
   /// A short scope label for list/thread subtitles:
   /// "S2·E4" / "Season 2" / "Movie".
   String get scopeLabel {
-    if (!isTv) return 'Movie';
-    if (seasonNumber <= 0) return 'Series';
-    if (episodeNumber <= 0) return 'Season $seasonNumber';
-    return 'S$seasonNumber·E$episodeNumber';
+    if (isTv) {
+      if (seasonNumber <= 0) return 'Series';
+      if (episodeNumber <= 0) return 'Season $seasonNumber';
+      return 'S$seasonNumber·E$episodeNumber';
+    }
+    if (mediaType.isNotEmpty && mediaType != 'movie') {
+      // 'book', or an off-contract value from an older server (auto issues
+      // once stored the *arr service type here) — never claim "Movie".
+      return '${mediaType[0].toUpperCase()}${mediaType.substring(1)}';
+    }
+    return 'Movie';
   }
 
   factory Issue.fromJson(Map<String, dynamic> json) => Issue(

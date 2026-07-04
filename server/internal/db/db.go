@@ -207,7 +207,7 @@ CREATE TABLE IF NOT EXISTS issues (
     reporter_id INTEGER REFERENCES users(id),  -- NULL for auto-detected
     tmdb_id INTEGER NOT NULL,
     tvdb_id INTEGER,
-    media_type TEXT NOT NULL,                   -- 'movie' | 'tv'
+    media_type TEXT NOT NULL,                   -- 'movie' | 'tv' | 'book'
     title TEXT NOT NULL DEFAULT '',
     season_number INTEGER NOT NULL DEFAULT 0,   -- TV scope (0 = whole series / movie)
     episode_number INTEGER NOT NULL DEFAULT 0,  -- TV scope (0 = whole season / movie)
@@ -409,6 +409,22 @@ func Open(dbPath string) (*sql.DB, error) {
 	); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("clear chaptarr default flags: %w", err)
+	}
+
+	// Auto-detected issues used to store the *arr service type in media_type
+	// (e.g. 'sonarr'), which clients rendered under the fallback "Movie" label.
+	// Normalize legacy rows to the 'movie'|'tv'|'book' contract. Runs every
+	// boot; idempotent and the table is tiny.
+	if _, err := db.Exec(
+		`UPDATE issues SET media_type = CASE media_type
+			WHEN 'sonarr' THEN 'tv'
+			WHEN 'radarr' THEN 'movie'
+			WHEN 'chaptarr' THEN 'book'
+		 END
+		 WHERE media_type IN ('sonarr', 'radarr', 'chaptarr')`,
+	); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("normalize issue media types: %w", err)
 	}
 
 	return db, nil
