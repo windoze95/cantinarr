@@ -114,3 +114,90 @@ func TestNormalizeSeasonNumbers(t *testing.T) {
 		t.Errorf("normalizeSeasonNumbers = %v, want %v", got, want)
 	}
 }
+
+// TestScopeSeasonNumbers expands the coarse scopes against a series' real
+// seasons, excluding Specials.
+func TestScopeSeasonNumbers(t *testing.T) {
+	series := &sonarr.Series{
+		Seasons: []sonarr.SeasonResource{
+			{SeasonNumber: 3},
+			{SeasonNumber: 0},
+			{SeasonNumber: 1},
+			{SeasonNumber: 2},
+		},
+	}
+	cases := []struct {
+		scope string
+		want  []int
+	}{
+		{SeasonScopeAll, []int{1, 2, 3}},
+		{SeasonScopeFirst, []int{1}},
+		{SeasonScopeLatest, []int{3}},
+		{"", []int{1, 2, 3}}, // unknown scope behaves like all
+	}
+	for _, c := range cases {
+		if got := scopeSeasonNumbers(series, c.scope); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("scopeSeasonNumbers(%q) = %v, want %v", c.scope, got, c.want)
+		}
+	}
+	if got := scopeSeasonNumbers(&sonarr.Series{}, SeasonScopeAll); got != nil {
+		t.Errorf("scopeSeasonNumbers(no seasons) = %v, want nil", got)
+	}
+}
+
+// TestSeasonHasAllFiles prefers totalEpisodeCount so an in-progress season
+// (aired episodes all downloaded, more announced) still counts as incomplete.
+func TestSeasonHasAllFiles(t *testing.T) {
+	series := &sonarr.Series{
+		Seasons: []sonarr.SeasonResource{
+			{SeasonNumber: 1, Statistics: &sonarr.SeasonStatistics{EpisodeFileCount: 10, EpisodeCount: 10, TotalEpisodeCount: 10}},
+			{SeasonNumber: 2, Statistics: &sonarr.SeasonStatistics{EpisodeFileCount: 2, EpisodeCount: 2, TotalEpisodeCount: 10}},
+			{SeasonNumber: 3, Statistics: &sonarr.SeasonStatistics{EpisodeFileCount: 4, EpisodeCount: 4}},
+			{SeasonNumber: 4},
+		},
+	}
+	cases := []struct {
+		season int
+		want   bool
+	}{
+		{1, true},
+		// The trap season from the reported bug: 2 files, 2 tracked episodes
+		// (percent reads 100) but 10 known episodes -> incomplete.
+		{2, false},
+		{3, true},  // no totalEpisodeCount reported -> fall back to episodeCount
+		{4, false}, // no statistics at all
+		{9, false}, // unknown season
+	}
+	for _, c := range cases {
+		if got := seasonHasAllFiles(series, c.season); got != c.want {
+			t.Errorf("seasonHasAllFiles(season %d) = %v, want %v", c.season, got, c.want)
+		}
+	}
+}
+
+// TestSeasonSelection builds the explicit-season add payload: every known
+// season present with monitored set only for the chosen ones (Specials stay
+// unmonitored unless chosen), plus defensive entries for chosen seasons the
+// lookup didn't list.
+func TestSeasonSelection(t *testing.T) {
+	known := []sonarr.SeasonResource{
+		{SeasonNumber: 0, Monitored: true}, // lookup flags must not leak through
+		{SeasonNumber: 1, Monitored: true},
+		{SeasonNumber: 2},
+	}
+	got := seasonSelection(known, []int{2, 7})
+	want := map[int]bool{0: false, 1: false, 2: true, 7: true}
+	if len(got) != len(want) {
+		t.Fatalf("seasonSelection returned %d seasons, want %d: %+v", len(got), len(want), got)
+	}
+	for _, ss := range got {
+		mon, ok := want[ss.SeasonNumber]
+		if !ok {
+			t.Errorf("unexpected season %d in selection", ss.SeasonNumber)
+			continue
+		}
+		if ss.Monitored != mon {
+			t.Errorf("season %d monitored = %v, want %v", ss.SeasonNumber, ss.Monitored, mon)
+		}
+	}
+}

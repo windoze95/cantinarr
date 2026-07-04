@@ -132,9 +132,9 @@ type CreateRequest struct {
 	SeasonScope      string `json:"season_scope"`
 	QualityProfileID int    `json:"quality_profile_id"`
 	// Seasons is an optional explicit list of season numbers (TV only). When
-	// present & non-empty it takes the seasonpass code path (monitor exactly
-	// these seasons), overriding the coarse SeasonScope. Empty/absent keeps the
-	// existing season_scope behavior.
+	// present & non-empty exactly these seasons are monitored (additively for a
+	// series already in the library), overriding the coarse SeasonScope.
+	// Empty/absent keeps the existing season_scope behavior.
 	Seasons []int `json:"seasons,omitempty"`
 }
 
@@ -274,8 +274,8 @@ type resolvedRequest struct {
 	seasonScope      string
 	qualityProfileID int
 	// seasonNumbers, when non-empty, is an explicit set of seasons to monitor
-	// via the seasonpass path (overrides seasonScope). It round-trips through
-	// the approval flow by being JSON-encoded into the season_scope column.
+	// (overrides seasonScope). It round-trips through the approval flow by
+	// being JSON-encoded into the season_scope column.
 	seasonNumbers []int
 }
 
@@ -463,7 +463,8 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	// scope when season choice is allowed: it's normalized, captured on the
 	// resolved request, and JSON-encoded into seasonScope so it persists through
 	// the (pending -> approve) flow in the existing season_scope column. The
-	// addSeries path then routes it to seasonpass instead of addOptions.Monitor.
+	// addSeries path then monitors exactly those seasons instead of using the
+	// coarse addOptions.Monitor enum.
 	if req.MediaType == "tv" {
 		resolved.seasonScope = eff.SeasonScope
 		if req.SeasonScope != "" && eff.AllowSeasonChoice && validSeasonScope(req.SeasonScope) {
@@ -759,11 +760,21 @@ func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
 
 	existing, err := radarrClient.GetMovieByTMDB(r.tmdbID)
 	if err == nil && existing != nil {
-		status := StatusRequested
 		if existing.HasFile {
-			status = StatusAvailable
+			return StatusAvailable, existing.Title, nil
 		}
-		return status, existing.Title, nil
+		// The movie is in Radarr without a file. If it isn't monitored Radarr
+		// will never grab it, so a fresh request revives it (monitor + search)
+		// instead of reporting "requested" while nothing would ever happen.
+		if !existing.Monitored {
+			if err := radarrClient.SetMoviesMonitored([]int{existing.ID}, true); err != nil {
+				return "", "", fmt.Errorf("monitor movie failed: %w", err)
+			}
+			// Best-effort: with the movie monitored again, RSS will still pick
+			// it up even if this immediate search fails.
+			_ = radarrClient.TriggerMoviesSearch([]int{existing.ID})
+		}
+		return StatusRequested, existing.Title, nil
 	}
 
 	lookup, err := radarrClient.LookupByTMDB(r.tmdbID)
@@ -830,18 +841,12 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 			// existing monitor set (without unmonitoring what's already there) and
 			// kick off a per-season search.
 			if len(r.seasonNumbers) > 0 {
-				if err := s.monitorAndSearchSeasons(sonarrClient, existing, r.seasonNumbers, false); err != nil {
+				if err := s.monitorAndSearchSeasons(sonarrClient, existing, r.seasonNumbers); err != nil {
 					return "", "", err
 				}
 				return StatusRequested, existing.Title, nil
 			}
-			status := StatusRequested
-			if existing.Statistics != nil && existing.Statistics.PercentOfEpisodes >= 100 {
-				status = StatusAvailable
-			} else if existing.Statistics != nil && existing.Statistics.EpisodeFileCount > 0 {
-				status = StatusPartial
-			}
-			return status, existing.Title, nil
+			return s.requestExistingSeries(sonarrClient, existing, r)
 		}
 	}
 
@@ -887,24 +892,19 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 		SeasonFolder:     true,
 	}
 
-	// Explicit season list: Sonarr's add-series API has no field for an
-	// arbitrary set of season numbers (addOptions.Monitor is a single enum), so
-	// a "seasons: [...]" DTO would be silently ignored. Add the series
-	// unmonitored with no search, then drive the exact selection via seasonpass
-	// + a per-season search. The coarse season_scope path below stays the
-	// default for everyone who doesn't pick specific seasons.
+	// Explicit season list: Sonarr's addOptions.monitor enum has no "these
+	// specific seasons" value, but the add payload's seasons[].monitored flags
+	// survive the add and its async metadata refresh, and Sonarr applies
+	// episode monitoring from them (and runs the missing-episode search) once
+	// the refresh completes. Adding unmonitored and fixing monitoring up
+	// afterwards is NOT safe here: the refresh applies addOptions.monitor
+	// asynchronously and would race with — and overwrite — any immediate
+	// follow-up monitoring calls.
 	if len(r.seasonNumbers) > 0 {
-		addReq.AddOptions.SearchForMissingEpisodes = false
-		addReq.AddOptions.Monitor = "none"
+		addReq.Seasons = seasonSelection(lookup.Seasons, r.seasonNumbers)
+		addReq.AddOptions.SearchForMissingEpisodes = true
 		if err := sonarrClient.AddSeries(addReq); err != nil {
 			return "", "", fmt.Errorf("add series failed: %w", err)
-		}
-		added, err := sonarrClient.GetSeriesByTVDB(tvdbID)
-		if err != nil || added == nil {
-			return "", "", fmt.Errorf("add series failed: could not re-read added series for seasonpass: %w", err)
-		}
-		if err := s.monitorAndSearchSeasons(sonarrClient, added, r.seasonNumbers, true); err != nil {
-			return "", "", err
 		}
 		return StatusRequested, lookup.Title, nil
 	}
@@ -918,47 +918,217 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 	return StatusRequested, lookup.Title, nil
 }
 
-// monitorAndSearchSeasons monitors exactly (or, when exclusive is false,
-// additionally) the chosen seasons on an existing Sonarr series via seasonpass,
-// then triggers a SeasonSearch for each chosen season. When exclusive is true
-// the chosen seasons are monitored and every other real season is unmonitored;
-// when false the chosen seasons are added to whatever is already monitored
-// (used for "request more seasons" on a series already in the library). Season
-// 0 / Specials is never touched unless explicitly chosen.
-func (s *Service) monitorAndSearchSeasons(client *sonarr.Client, series *sonarr.Series, seasons []int, exclusive bool) error {
-	chosen := make(map[int]bool, len(seasons))
-	for _, n := range seasons {
-		chosen[n] = true
-	}
-	monitored := make(map[int]bool, len(series.Seasons))
-	for _, s := range series.Seasons {
-		switch {
-		case chosen[s.SeasonNumber]:
-			monitored[s.SeasonNumber] = true
-		case exclusive && s.SeasonNumber > 0:
-			// Exclusive selection: unmonitor other real seasons (leave Specials).
-			monitored[s.SeasonNumber] = false
-		default:
-			// Non-exclusive: preserve the season's current monitored state.
-			monitored[s.SeasonNumber] = s.Monitored
-		}
-	}
-	// Include any chosen season Sonarr didn't list (defensive; normally all
-	// seasons are present once the series is added).
-	for n := range chosen {
-		if _, ok := monitored[n]; !ok {
-			monitored[n] = true
-		}
-	}
-	if err := client.SetSeasonsViaSeasonPass(series.ID, monitored); err != nil {
-		return fmt.Errorf("set seasons failed: %w", err)
+// monitorAndSearchSeasons additively monitors the chosen seasons on an existing
+// Sonarr series ("request more seasons"), then triggers a SeasonSearch for each
+// chosen season. Seasons that aren't chosen keep their current monitored state;
+// a deliberate re-request of the same seasons re-searches them.
+func (s *Service) monitorAndSearchSeasons(client *sonarr.Client, series *sonarr.Series, seasons []int) error {
+	if _, err := s.monitorSeasons(client, series, seasons); err != nil {
+		return err
 	}
 	for _, n := range seasons {
 		// Best-effort: a failed per-season search shouldn't undo the monitor
-		// change. Sonarr will still pick up monitored seasons on its next cycle.
+		// change. Sonarr will still pick up monitored episodes on its next cycle.
 		_ = client.TriggerSeasonSearch(series.ID, n)
 	}
 	return nil
+}
+
+// monitorSeasons makes sure the series itself, the chosen seasons, and the
+// chosen seasons' episodes are all monitored, preserving the monitored state of
+// everything else. It returns the chosen seasons where anything actually had to
+// change, so callers can decide what deserves a fresh search.
+//
+// The per-episode pass matters: Sonarr's series update only syncs episode
+// monitoring for seasons whose flag CHANGES, so a season already flagged
+// monitored can still hold unmonitored episodes that no search would ever grab.
+func (s *Service) monitorSeasons(client *sonarr.Client, series *sonarr.Series, seasons []int) (changed []int, err error) {
+	flags := make(map[int]bool, len(series.Seasons)+len(seasons))
+	for _, ss := range series.Seasons {
+		flags[ss.SeasonNumber] = ss.Monitored
+	}
+	flagChanged := make(map[int]bool, len(seasons))
+	for _, n := range seasons {
+		if !flags[n] {
+			flagChanged[n] = true
+		}
+		flags[n] = true
+	}
+	if err := client.UpdateSeriesMonitoring(series.ID, true, flags); err != nil {
+		return nil, fmt.Errorf("set seasons failed: %w", err)
+	}
+	for _, n := range seasons {
+		episodes, err := client.GetEpisodes(series.ID, n)
+		if err != nil {
+			return nil, fmt.Errorf("load season %d episodes: %w", n, err)
+		}
+		ids := make([]int, 0, len(episodes))
+		for _, e := range episodes {
+			if !e.Monitored {
+				ids = append(ids, e.ID)
+			}
+		}
+		if err := client.SetEpisodesMonitored(ids, true); err != nil {
+			return nil, fmt.Errorf("monitor season %d episodes: %w", n, err)
+		}
+		if len(ids) > 0 || flagChanged[n] || !series.Monitored {
+			changed = append(changed, n)
+		}
+	}
+	return changed, nil
+}
+
+// requestExistingSeries fulfills a coarse-scope request for a series Sonarr
+// already tracks. Returning the current availability without touching Sonarr
+// (the old behavior) made re-requesting a dormant series — unmonitored, or
+// monitored with unmonitored episodes — a silent no-op that could even report
+// "available", since Sonarr's percentOfEpisodes only counts monitored episodes.
+// Instead, apply the scope additively to the seasons that are still missing
+// files, and search only the seasons where something actually changed so
+// repeated requests don't spam the indexers.
+func (s *Service) requestExistingSeries(client *sonarr.Client, existing *sonarr.Series, r *resolvedRequest) (string, string, error) {
+	if r.seasonScope == SeasonScopePilot {
+		if err := s.monitorPilot(client, existing); err != nil {
+			return "", "", err
+		}
+		return StatusRequested, existing.Title, nil
+	}
+	var incomplete []int
+	for _, n := range scopeSeasonNumbers(existing, r.seasonScope) {
+		if !seasonHasAllFiles(existing, n) {
+			incomplete = append(incomplete, n)
+		}
+	}
+	if len(incomplete) > 0 {
+		changed, err := s.monitorSeasons(client, existing, incomplete)
+		if err != nil {
+			return "", "", err
+		}
+		if len(changed) > 0 {
+			for _, n := range changed {
+				// Best-effort, same as monitorAndSearchSeasons.
+				_ = client.TriggerSeasonSearch(existing.ID, n)
+			}
+			return StatusRequested, existing.Title, nil
+		}
+	}
+	status := StatusRequested
+	if existing.Statistics != nil && existing.Statistics.PercentOfEpisodes >= 100 {
+		status = StatusAvailable
+	} else if existing.Statistics != nil && existing.Statistics.EpisodeFileCount > 0 {
+		status = StatusPartial
+	}
+	return status, existing.Title, nil
+}
+
+// monitorPilot makes sure S1E1 of an existing series is monitored and searched.
+// The pilot scope is episode-level, so it can't be expressed as season
+// monitoring; matching Sonarr's own pilot handling, the season flag is left
+// alone (Sonarr deliberately doesn't monitor season 1 for a pilot-only add).
+func (s *Service) monitorPilot(client *sonarr.Client, series *sonarr.Series) error {
+	first := 0
+	for _, ss := range series.Seasons {
+		if ss.SeasonNumber > 0 && (first == 0 || ss.SeasonNumber < first) {
+			first = ss.SeasonNumber
+		}
+	}
+	if first == 0 {
+		return fmt.Errorf("series has no seasons to request")
+	}
+	episodes, err := client.GetEpisodes(series.ID, first)
+	if err != nil {
+		return fmt.Errorf("load season %d episodes: %w", first, err)
+	}
+	for _, e := range episodes {
+		if e.EpisodeNumber != 1 {
+			continue
+		}
+		if e.HasFile {
+			return nil
+		}
+		if !series.Monitored {
+			if err := client.UpdateSeriesMonitoring(series.ID, true, nil); err != nil {
+				return fmt.Errorf("monitor series failed: %w", err)
+			}
+		}
+		if !e.Monitored {
+			if err := client.SetEpisodesMonitored([]int{e.ID}, true); err != nil {
+				return fmt.Errorf("monitor pilot episode: %w", err)
+			}
+		}
+		_ = client.TriggerEpisodeSearch([]int{e.ID})
+		return nil
+	}
+	return fmt.Errorf("pilot episode not found")
+}
+
+// scopeSeasonNumbers expands a coarse season scope to concrete season numbers
+// against the series' real (non-Specials) seasons. The pilot scope is handled
+// separately because it's episode-level.
+func scopeSeasonNumbers(series *sonarr.Series, scope string) []int {
+	real := make([]int, 0, len(series.Seasons))
+	for _, ss := range series.Seasons {
+		if ss.SeasonNumber > 0 {
+			real = append(real, ss.SeasonNumber)
+		}
+	}
+	sort.Ints(real)
+	if len(real) == 0 {
+		return nil
+	}
+	switch scope {
+	case SeasonScopeFirst:
+		return real[:1]
+	case SeasonScopeLatest:
+		return real[len(real)-1:]
+	default: // all
+		return real
+	}
+}
+
+// seasonHasAllFiles reports whether a season already has a file for every
+// episode Sonarr knows about. It prefers totalEpisodeCount (which includes
+// unaired episodes) so an in-progress season still counts as incomplete and a
+// request for it keeps it monitored.
+func seasonHasAllFiles(series *sonarr.Series, seasonNumber int) bool {
+	for _, ss := range series.Seasons {
+		if ss.SeasonNumber != seasonNumber {
+			continue
+		}
+		if ss.Statistics == nil {
+			return false
+		}
+		total := ss.Statistics.TotalEpisodeCount
+		if total == 0 {
+			total = ss.Statistics.EpisodeCount
+		}
+		return total > 0 && ss.Statistics.EpisodeFileCount >= total
+	}
+	return false
+}
+
+// seasonSelection builds the seasons array for an explicit-season add: every
+// season Sonarr's lookup knows about, monitored only when chosen (Specials stay
+// unmonitored unless explicitly chosen). Chosen seasons the lookup doesn't list
+// are included defensively so a stale metadata season list can't silently drop
+// part of the request.
+func seasonSelection(known []sonarr.SeasonResource, chosen []int) []sonarr.SeasonResource {
+	chosenSet := make(map[int]bool, len(chosen))
+	for _, n := range chosen {
+		chosenSet[n] = true
+	}
+	out := make([]sonarr.SeasonResource, 0, len(known)+len(chosen))
+	seen := make(map[int]bool, len(known))
+	for _, ss := range known {
+		seen[ss.SeasonNumber] = true
+		out = append(out, sonarr.SeasonResource{SeasonNumber: ss.SeasonNumber, Monitored: chosenSet[ss.SeasonNumber]})
+	}
+	for _, n := range chosen {
+		if !seen[n] {
+			out = append(out, sonarr.SeasonResource{SeasonNumber: n, Monitored: true})
+		}
+	}
+	return out
 }
 
 // GetStatus reports a title's availability against the GLOBAL default instance
@@ -1113,6 +1283,9 @@ func (s *Service) getTVStatus(userID int64, tmdbID int) (*StatusResponse, error)
 	var tvdbID int
 	err := s.db.QueryRow("SELECT tvdb_id FROM tmdb_tvdb_cache WHERE tmdb_id = ?", tmdbID).Scan(&tvdbID)
 	if err != nil || tvdbID == 0 {
+		if s.bridge == nil {
+			return &StatusResponse{Status: StatusUnavailable}, nil
+		}
 		bridgeResult, err := s.bridge.ResolveTVDBID(tmdbID)
 		if err != nil {
 			return &StatusResponse{Status: StatusUnavailable}, nil
@@ -1254,7 +1427,7 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	}
 	r.bookFormat = normalizeBookFormat(r.bookFormat)
 	// An explicit season list was stored as JSON in season_scope; decode it so
-	// approval replays the seasonpass path the requester chose.
+	// approval replays the explicit season selection the requester chose.
 	r.seasonNumbers = decodeSeasonNumbers(r.seasonScope)
 	return &r, status, nil
 }

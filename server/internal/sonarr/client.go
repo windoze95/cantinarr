@@ -28,23 +28,30 @@ func NewClient(baseURL, apiKey string) *Client {
 }
 
 type Series struct {
-	ID             int    `json:"id"`
-	Title          string `json:"title"`
-	TvdbID         int    `json:"tvdbId"`
-	TmdbID         int    `json:"tmdbId"`
-	Year           int    `json:"year"`
-	Monitored      bool   `json:"monitored"`
-	RootFolderPath string `json:"rootFolderPath,omitempty"`
-	Statistics     *struct {
-		EpisodeFileCount  int     `json:"episodeFileCount"`
-		EpisodeCount      int     `json:"episodeCount"`
-		TotalEpisodeCount int     `json:"totalEpisodeCount"`
-		SizeOnDisk        int64   `json:"sizeOnDisk"`
-		PercentOfEpisodes float64 `json:"percentOfEpisodes"`
-	} `json:"statistics,omitempty"`
+	ID             int               `json:"id"`
+	Title          string            `json:"title"`
+	TvdbID         int               `json:"tvdbId"`
+	TmdbID         int               `json:"tmdbId"`
+	Year           int               `json:"year"`
+	Monitored      bool              `json:"monitored"`
+	RootFolderPath string            `json:"rootFolderPath,omitempty"`
+	Statistics     *SeriesStatistics `json:"statistics,omitempty"`
 	// Seasons carries Sonarr's per-season monitoring + statistics, used to
 	// drive per-season availability in the request UI.
 	Seasons []SeasonResource `json:"seasons,omitempty"`
+}
+
+// SeriesStatistics is the series-wide episode rollup Sonarr returns on a
+// series. Episode counts only cover monitored episodes (plus ones with files),
+// so PercentOfEpisodes reads 100 for a series whose few monitored episodes are
+// all downloaded — availability checks that must not be fooled by partial
+// monitoring should use TotalEpisodeCount.
+type SeriesStatistics struct {
+	EpisodeFileCount  int     `json:"episodeFileCount"`
+	EpisodeCount      int     `json:"episodeCount"`
+	TotalEpisodeCount int     `json:"totalEpisodeCount"`
+	SizeOnDisk        int64   `json:"sizeOnDisk"`
+	PercentOfEpisodes float64 `json:"percentOfEpisodes"`
 }
 
 // SeasonResource is one entry of a series' seasons[] array: its number, whether
@@ -83,6 +90,9 @@ type LookupResult struct {
 		CoverType string `json:"coverType"`
 		RemoteURL string `json:"remoteUrl"`
 	} `json:"images"`
+	// Seasons is the season list Sonarr's metadata knows for the series, used
+	// to seed per-season monitored flags on an explicit-season add.
+	Seasons []SeasonResource `json:"seasons"`
 }
 
 type AddSeriesRequest struct {
@@ -93,11 +103,17 @@ type AddSeriesRequest struct {
 	RootFolderPath   string `json:"rootFolderPath"`
 	Monitored        bool   `json:"monitored"`
 	SeasonFolder     bool   `json:"seasonFolder"`
-	AddOptions       struct {
+	// Seasons carries explicit per-season monitored flags applied at add time.
+	// Sonarr keeps them through its add + metadata refresh, so this is the
+	// reliable way to add a series watching an arbitrary set of seasons; leave
+	// AddOptions.Monitor empty when using it (Sonarr then monitors episodes to
+	// match the season flags).
+	Seasons    []SeasonResource `json:"seasons,omitempty"`
+	AddOptions struct {
 		SearchForMissingEpisodes bool `json:"searchForMissingEpisodes"`
 		// Monitor is Sonarr's monitor scope applied at add time: one of
 		// all/future/missing/existing/firstSeason/lastSeason/pilot/none.
-		// Empty means Sonarr's default (all).
+		// Empty means episode monitoring follows the seasons[].monitored flags.
 		Monitor string `json:"monitor,omitempty"`
 	} `json:"addOptions"`
 }
@@ -279,28 +295,69 @@ func (c *Client) AddSeries(addReq *AddSeriesRequest) error {
 	return nil
 }
 
-// SetSeasonsViaSeasonPass monitors exactly the seasons whose entry in monitored
-// is true and unmonitors the rest, via Sonarr's /seasonpass endpoint. This is
-// the only way to honor an arbitrary set of season numbers: addSeries's
-// AddOptions.Monitor is a single enum (all/firstSeason/...) with no field for an
-// explicit list. monitoringOptions.monitor is "none" so Sonarr applies our
-// per-season flags verbatim instead of overriding them with a scope.
-func (c *Client) SetSeasonsViaSeasonPass(seriesID int, monitored map[int]bool) error {
-	seasons := make([]map[string]any, 0, len(monitored))
-	for seasonNumber, isMonitored := range monitored {
-		seasons = append(seasons, map[string]any{
-			"seasonNumber": seasonNumber,
-			"monitored":    isMonitored,
-		})
+// UpdateSeriesMonitoring sets a series' monitored flag and the monitored flag
+// of each season present in seasonMonitored (seasons absent from the map keep
+// their current flag). It round-trips the full series JSON (GET → patch → PUT)
+// so no fields Sonarr requires are dropped. Sonarr's series update also syncs
+// episode monitoring for any season whose flag CHANGES — but only for those, so
+// callers that need episodes of an already-monitored season watched must set
+// them explicitly via SetEpisodesMonitored.
+//
+// Deliberately NOT implemented with /seasonpass: that endpoint requires a
+// monitoringOptions.monitor scope, and every scope rewrites episode monitoring
+// series-wide ("none" even unmonitors the series and every episode in it).
+func (c *Client) UpdateSeriesMonitoring(seriesID int, seriesMonitored bool, seasonMonitored map[int]bool) error {
+	var raw map[string]json.RawMessage
+	if err := c.do("GET", fmt.Sprintf("/api/v3/series/%d", seriesID), nil, &raw); err != nil {
+		return fmt.Errorf("sonarr get series: %w", err)
 	}
-	payload := map[string]any{
-		"series": []map[string]any{
-			{"id": seriesID, "seasons": seasons},
-		},
-		"monitoringOptions": map[string]any{"monitor": "none"},
+	monitored, err := json.Marshal(seriesMonitored)
+	if err != nil {
+		return fmt.Errorf("encode monitored flag: %w", err)
 	}
-	if err := c.do("POST", "/api/v3/seasonpass", payload, nil); err != nil {
-		return fmt.Errorf("sonarr seasonpass: %w", err)
+	raw["monitored"] = monitored
+	if seasonsRaw, ok := raw["seasons"]; ok {
+		var seasons []map[string]json.RawMessage
+		if err := json.Unmarshal(seasonsRaw, &seasons); err != nil {
+			return fmt.Errorf("decode series seasons: %w", err)
+		}
+		for _, season := range seasons {
+			if season == nil {
+				continue
+			}
+			var num int
+			if err := json.Unmarshal(season["seasonNumber"], &num); err != nil {
+				continue
+			}
+			if want, ok := seasonMonitored[num]; ok {
+				flag, err := json.Marshal(want)
+				if err != nil {
+					return fmt.Errorf("encode season monitored flag: %w", err)
+				}
+				season["monitored"] = flag
+			}
+		}
+		patched, err := json.Marshal(seasons)
+		if err != nil {
+			return fmt.Errorf("encode series seasons: %w", err)
+		}
+		raw["seasons"] = patched
+	}
+	if err := c.do("PUT", fmt.Sprintf("/api/v3/series/%d", seriesID), raw, nil); err != nil {
+		return fmt.Errorf("sonarr update series: %w", err)
+	}
+	return nil
+}
+
+// SetEpisodesMonitored sets the monitored flag on the given episodes. A no-op
+// for an empty id list.
+func (c *Client) SetEpisodesMonitored(episodeIDs []int, monitored bool) error {
+	if len(episodeIDs) == 0 {
+		return nil
+	}
+	body := map[string]any{"episodeIds": episodeIDs, "monitored": monitored}
+	if err := c.do("PUT", "/api/v3/episode/monitor", body, nil); err != nil {
+		return fmt.Errorf("sonarr set episodes monitored: %w", err)
 	}
 	return nil
 }

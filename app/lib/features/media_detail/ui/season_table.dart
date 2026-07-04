@@ -8,7 +8,7 @@ import '../../request/logic/request_provider.dart';
 /// with a checkbox, "Season N", an "x/y eps" availability count, and a status
 /// badge. Already-available seasons are shown checked + disabled. Quick
 /// All / First / Latest chips bulk-select. Submitting sends the chosen season
-/// numbers to the request service (the server's seasonpass path).
+/// numbers to the request service.
 ///
 /// The table reads live per-season status from [notifier] and drives its
 /// submit through it, so it stays in sync with the request button above it.
@@ -20,12 +20,20 @@ class SeasonTable extends StatefulWidget {
   final String? title;
   final int? tvdbId;
 
+  /// Whether the current user may pick specific seasons (the server's
+  /// can_choose_season option). When false the table is status-only — no
+  /// checkboxes, chips, or submit button — because the server ignores an
+  /// explicit season list from a user who isn't allowed to choose, which would
+  /// make the picker a silent no-op.
+  final bool canRequest;
+
   const SeasonTable({
     super.key,
     required this.seasons,
     required this.notifier,
     this.title,
     this.tvdbId,
+    this.canRequest = true,
   });
 
   @override
@@ -107,7 +115,8 @@ class _SeasonTableState extends State<SeasonTable> {
       listenable: widget.notifier,
       builder: (context, _) {
         final seasons = _realSeasons;
-        final hasSelectable = _selectableNumbers.isNotEmpty;
+        final hasSelectable =
+            widget.canRequest && _selectableNumbers.isNotEmpty;
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(
@@ -140,6 +149,7 @@ class _SeasonTableState extends State<SeasonTable> {
                         status: _statusBySeason[seasons[i].seasonNumber],
                         selected: _selected.contains(seasons[i].seasonNumber),
                         available: _isAvailable(seasons[i].seasonNumber),
+                        selectable: widget.canRequest,
                         onChanged: (v) => _toggle(seasons[i].seasonNumber, v),
                       ),
                     ],
@@ -195,6 +205,7 @@ class _SeasonRow extends StatelessWidget {
   final RequestSeasonStatus? status;
   final bool selected;
   final bool available;
+  final bool selectable;
   final ValueChanged<bool?> onChanged;
 
   const _SeasonRow({
@@ -202,6 +213,7 @@ class _SeasonRow extends StatelessWidget {
     required this.status,
     required this.selected,
     required this.available,
+    required this.selectable,
     required this.onChanged,
   });
 
@@ -211,18 +223,21 @@ class _SeasonRow extends StatelessWidget {
     // user's selection.
     final checked = available || selected;
     return InkWell(
-      onTap: available ? null : () => onChanged(!selected),
+      onTap: (!selectable || available) ? null : () => onChanged(!selected),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Row(
           children: [
-            Checkbox(
-              value: checked,
-              onChanged: available ? null : onChanged,
-              activeColor: AppTheme.accent,
-              checkColor: Colors.white,
-              side: const BorderSide(color: AppTheme.textSecondary),
-            ),
+            if (selectable)
+              Checkbox(
+                value: checked,
+                onChanged: available ? null : onChanged,
+                activeColor: AppTheme.accent,
+                checkColor: Colors.white,
+                side: const BorderSide(color: AppTheme.textSecondary),
+              )
+            else
+              const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
