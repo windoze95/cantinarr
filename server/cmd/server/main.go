@@ -30,6 +30,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
+	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
 
@@ -211,8 +212,13 @@ func main() {
 	defer apiCache.Close()
 	discoverHandler := discover.NewHandler(creds, apiCache)
 
+	// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook): pushes
+	// out-of-band library changes (manual imports, deletes) into the same WS
+	// events and content pushes the queue-poll witness emits.
+	webhookHandler := webhooks.NewHandler(instanceStore, registry, wsHub, requestService, contentNotifier)
+
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

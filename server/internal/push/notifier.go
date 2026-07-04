@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,12 @@ type Notifier struct {
 	db     *sql.DB
 	prefs  *PrefsStore
 	logger *slog.Logger
+
+	// recentContent dedupes new-content alerts: the queue-poll witness and the
+	// arr webhook receiver can both report the same import, and a season pack
+	// arrives as one webhook per episode file. Keyed by content identity.
+	recentMu      sync.Mutex
+	recentContent map[string]time.Time
 }
 
 // NewNotifier builds a push notifier over the push Manager. A nil manager (or
@@ -182,6 +189,9 @@ func (n *Notifier) notifyNewContent(category, mediaType, title, body, mediaTitle
 	if client == nil || mediaTitle == "" {
 		return
 	}
+	if !n.claimContentAlert(category, mediaType, mediaTitle, tmdbID) {
+		return
+	}
 	recipients, err := n.prefs.usersOptedInto(category)
 	if err != nil {
 		n.logger.Error("push: resolve new-content recipients", "err", err, "category", category)
@@ -198,6 +208,35 @@ func (n *Notifier) notifyNewContent(category, mediaType, title, body, mediaTitle
 	n.sendWithOptions(client, recipients, title, body, data, SendOptions{
 		CollapseID: fmt.Sprintf("%s:%d", category, tmdbID),
 	})
+}
+
+// contentAlertWindow is how long a new-content alert suppresses repeats of the
+// same content: long enough to absorb a season pack's per-file webhooks plus
+// the queue poll re-witnessing the same import, short enough that tonight's
+// episode still alerts after last week's.
+const contentAlertWindow = 10 * time.Minute
+
+// claimContentAlert reports whether this content alert should send, recording
+// it so duplicates within contentAlertWindow are dropped. The key includes the
+// title so unresolved ids (tmdbID 0) never collapse different content.
+func (n *Notifier) claimContentAlert(category, mediaType, title string, tmdbID int) bool {
+	key := fmt.Sprintf("%s|%s|%d|%s", category, mediaType, tmdbID, title)
+	now := time.Now()
+	n.recentMu.Lock()
+	defer n.recentMu.Unlock()
+	for k, t := range n.recentContent {
+		if now.Sub(t) > contentAlertWindow {
+			delete(n.recentContent, k)
+		}
+	}
+	if _, dup := n.recentContent[key]; dup {
+		return false
+	}
+	if n.recentContent == nil {
+		n.recentContent = make(map[string]time.Time)
+	}
+	n.recentContent[key] = now
+	return true
 }
 
 // send dispatches a notification in the background with panic recovery, so a

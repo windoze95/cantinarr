@@ -23,6 +23,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/web"
+	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
 
@@ -45,6 +46,7 @@ func NewRouter(
 	credHandler *credentials.Handler,
 	toolServer *mcp.ToolServer,
 	pushHandler *push.Handler,
+	webhookHandler *webhooks.Handler,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -90,6 +92,11 @@ func NewRouter(
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		})
+
+		// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook). No session:
+		// the per-instance webhook token is the auth (query param or the webhook
+		// form's basic-auth password).
+		r.Post("/webhooks/arr/{instanceID}", webhookHandler.HandleArr)
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
 		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)

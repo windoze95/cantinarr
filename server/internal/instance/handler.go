@@ -29,15 +29,18 @@ var allowedServiceTypes = map[string]bool{
 }
 
 // instanceResponse is the JSON shape returned to clients — API keys and
-// passwords are write-only.
+// passwords are write-only. WebhookToken is readable (admin-only routes serve
+// this shape): the admin needs it verbatim to paste the webhook URL into the
+// arr's Connect settings.
 type instanceResponse struct {
-	ID          string `json:"id"`
-	ServiceType string `json:"service_type"`
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	Username    string `json:"username,omitempty"`
-	IsDefault   bool   `json:"is_default"`
-	SortOrder   int    `json:"sort_order"`
+	ID           string `json:"id"`
+	ServiceType  string `json:"service_type"`
+	Name         string `json:"name"`
+	URL          string `json:"url"`
+	Username     string `json:"username,omitempty"`
+	IsDefault    bool   `json:"is_default"`
+	SortOrder    int    `json:"sort_order"`
+	WebhookToken string `json:"webhook_token,omitempty"`
 }
 
 func toResponse(inst *Instance) instanceResponse {
@@ -72,10 +75,22 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := make([]instanceResponse, 0, len(instances))
 	for _, inst := range instances {
-		resp = append(resp, toResponse(&inst))
+		resp = append(resp, h.withWebhookToken(toResponse(&inst)))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// withWebhookToken attaches the webhook token to arr instances (issuing one on
+// first read) so the settings UI can present a ready-to-paste webhook URL.
+func (h *Handler) withWebhookToken(resp instanceResponse) instanceResponse {
+	if resp.ServiceType != "radarr" && resp.ServiceType != "sonarr" {
+		return resp
+	}
+	if token, err := h.store.WebhookToken(resp.ID); err == nil {
+		resp.WebhookToken = token
+	}
+	return resp
 }
 
 // Create adds a new service instance.
@@ -111,7 +126,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(toResponse(&inst))
+	json.NewEncoder(w).Encode(h.withWebhookToken(toResponse(&inst)))
 }
 
 // Update modifies an existing service instance.
@@ -168,7 +183,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	h.registry.InvalidateClient(instanceID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(toResponse(&inst))
+	json.NewEncoder(w).Encode(h.withWebhookToken(toResponse(&inst)))
 }
 
 // Delete removes a service instance.

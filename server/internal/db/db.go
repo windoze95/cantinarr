@@ -379,6 +379,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// AI remediation (Wave 3): admins are notified when the agent proposes a
 		// fix that needs approval, on by default. New on existing databases.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN agent_action_pending INTEGER NOT NULL DEFAULT 1"},
+		// Arr webhook receiver: per-instance bearer token for Sonarr/Radarr
+		// Connect→Webhook callbacks. Empty = not yet issued; generated lazily
+		// on first read (instance.Store.WebhookToken) and encrypted at rest.
+		{alter: "ALTER TABLE service_instances ADD COLUMN webhook_token TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {

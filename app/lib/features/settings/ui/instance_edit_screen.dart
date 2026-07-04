@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/network/backend_client.dart';
@@ -44,6 +45,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _isSaving = false;
   bool _isTesting = false;
   String? _testResult;
+  String? _webhookToken;
 
   static const _serviceTypes = <(String, String)>[
     ('radarr', 'Radarr'),
@@ -111,6 +113,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        _webhookToken = details['webhook_token'] as String?;
       });
     } catch (_) {
       // Best-effort prefill; the form still works with manual entry.
@@ -273,6 +276,29 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         );
       }
     }
+  }
+
+  /// The ready-to-paste webhook URL for this arr instance: the app's backend
+  /// base + the webhook route + the per-instance token the details fetch
+  /// returned. Null until the token loads (or for non-arr services).
+  String? get _webhookUrl {
+    final token = _webhookToken;
+    final id = widget.instanceId;
+    if (token == null || token.isEmpty || id == null) return null;
+    final base = ref
+        .read(backendClientProvider)
+        .options
+        .baseUrl
+        .replaceAll(RegExp(r'/+$'), '');
+    return '$base/api/webhooks/arr/$id?token=$token';
+  }
+
+  Future<void> _copyWebhookUrl(String url) async {
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Webhook URL copied')),
+    );
   }
 
   String get _urlHint {
@@ -491,6 +517,57 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   )
                 : Text(widget.isEditing ? 'Save Changes' : 'Add Instance'),
           ),
+
+          // Webhook setup (Radarr/Sonarr, editing only): without it, changes
+          // made directly in the arr are only caught on the next poll or
+          // refresh trigger; with it they reach Cantinarr instantly.
+          if (_webhookUrl != null) ...[
+            const SizedBox(height: 32),
+            const Text('Instant updates',
+                style: TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(
+              'Paste this URL into ${_serviceType == 'sonarr' ? 'Sonarr' : 'Radarr'} '
+              '→ Settings → Connect → Webhook (method POST) so imports, deletes '
+              'and adds made directly in ${_serviceType == 'sonarr' ? 'Sonarr' : 'Radarr'} '
+              'reach Cantinarr the moment they happen.',
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceVariant,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _webhookUrl!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy,
+                        size: 18, color: AppTheme.textSecondary),
+                    tooltip: 'Copy webhook URL',
+                    onPressed: () => _copyWebhookUrl(_webhookUrl!),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
