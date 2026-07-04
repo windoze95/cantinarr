@@ -46,6 +46,8 @@ class _FakeAdapter implements HttpClientAdapter {
       if (path.endsWith('/series/7')) response = _rawSeries;
       if (path.endsWith('/qualityprofile')) response = _profiles;
       if (path.endsWith('/tag')) response = _tags;
+      if (path.endsWith('/episode')) response = <dynamic>[];
+      if (path.endsWith('/queue')) response = {'records': <dynamic>[]};
     }
     return ResponseBody.fromString(
       jsonEncode(response),
@@ -295,6 +297,18 @@ void main() {
       await tester.pumpAndSettle();
       return fake.adapter;
     }
+
+    testWidgets('the All Seasons card drills into the all-episodes view',
+        (tester) async {
+      await pumpDetail(tester);
+
+      await tester.tap(find.text('All Seasons'));
+      await tester.pumpAndSettle();
+
+      // The season screen opened in all-seasons mode (empty fixture list).
+      expect(find.text('No episodes'), findsOneWidget);
+      expect(find.text('All Seasons'), findsOneWidget);
+    });
 
     testWidgets('long-pressing a season offers automatic season search',
         (tester) async {

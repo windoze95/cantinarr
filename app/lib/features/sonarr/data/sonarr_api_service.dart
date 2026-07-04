@@ -116,6 +116,26 @@ class SonarrApiService {
     });
   }
 
+  /// Sets the monitored flag on the given episodes.
+  Future<void> setEpisodesMonitored(
+    List<int> episodeIds, {
+    required bool monitored,
+  }) async {
+    if (episodeIds.isEmpty) return;
+    await _dio.put('$_basePath/episode/monitor', data: {
+      'episodeIds': episodeIds,
+      'monitored': monitored,
+    });
+  }
+
+  /// Deletes downloaded episode files from disk (bulk).
+  Future<void> deleteEpisodeFiles(List<int> episodeFileIds) async {
+    if (episodeFileIds.isEmpty) return;
+    await _dio.delete('$_basePath/episodefile/bulk', data: {
+      'episodeFileIds': episodeFileIds,
+    });
+  }
+
   Future<List<Map<String, dynamic>>> getQueue() async {
     final resp = await _dio.get('$_basePath/queue',
         queryParameters: {'includeSeries': true, 'pageSize': 50});

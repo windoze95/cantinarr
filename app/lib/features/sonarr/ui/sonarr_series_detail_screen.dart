@@ -130,6 +130,18 @@ class _SonarrSeriesDetailScreenState
     );
   }
 
+  /// Every episode across all seasons, grouped by season headers.
+  void _openAllSeasons() {
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (_) => SonarrSeasonScreen(
+          instanceId: widget.instanceId,
+          series: _series,
+        ),
+      ),
+    );
+  }
+
   void _toast(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -261,7 +273,7 @@ class _SonarrSeriesDetailScreenState
                 children: [
                   if (_error != null)
                     ErrorBanner(message: _error!, onRetry: _load),
-                  _AllSeasonsCard(series: _series),
+                  _AllSeasonsCard(series: _series, onTap: _openAllSeasons),
                   const SizedBox(height: 4),
                   ...seasons.map((s) => _SeasonCard(
                         season: s,
@@ -315,42 +327,47 @@ class _AvailabilityLine extends StatelessWidget {
 
 class _AllSeasonsCard extends StatelessWidget {
   final SonarrSeries series;
-  const _AllSeasonsCard({required this.series});
+  final VoidCallback onTap;
+  const _AllSeasonsCard({required this.series, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final stats = series.statistics;
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.border, width: 0.5),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('All Seasons',
-                    style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold)),
-                if (stats != null && stats.sizeOnDisk > 0) ...[
-                  const SizedBox(height: 4),
-                  Text(stats.sizeFormatted,
-                      style: const TextStyle(
-                          color: AppTheme.textSecondary, fontSize: 13)),
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.border, width: 0.5),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('All Seasons',
+                      style: TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold)),
+                  if (stats != null && stats.sizeOnDisk > 0) ...[
+                    const SizedBox(height: 4),
+                    Text(stats.sizeFormatted,
+                        style: const TextStyle(
+                            color: AppTheme.textSecondary, fontSize: 13)),
+                  ],
+                  const SizedBox(height: 6),
+                  _AvailabilityLine(stats: stats),
                 ],
-                const SizedBox(height: 6),
-                _AvailabilityLine(stats: stats),
-              ],
+              ),
             ),
-          ),
-        ],
+            const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+          ],
+        ),
       ),
     );
   }

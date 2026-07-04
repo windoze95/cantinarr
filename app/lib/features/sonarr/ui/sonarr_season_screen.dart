@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/action_sheet.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
@@ -12,24 +13,25 @@ import 'sonarr_releases_screen.dart';
 import 'sonarr_series_detail_screen.dart' show seasonLabel;
 import 'widgets/episode_status.dart';
 
-/// Episode list for one season: number, title, air date and the per-episode
-/// status line (download progress / quality+size / Missing / Unaired). Tapping
-/// an episode opens its detail sheet; the magnifier runs an automatic
-/// per-episode search. The Automatic button's arrow (or a long-press on an
-/// episode) enters selection mode: pick episodes — All / Undownloaded / None
-/// quick-selects — and search them all automatically in one go. Interactive
-/// search only works on a single episode/season, so it is disabled while
-/// selecting.
+/// Episode list for one season — or the whole series when [seasonNumber] is
+/// null ("All Seasons", grouped by season headers). Tapping an episode opens
+/// its detail sheet; the magnifier runs an automatic per-episode search;
+/// long-pressing one opens its action menu (searches, select, monitor toggle,
+/// delete file). The Automatic button's arrow enters selection mode — pick
+/// episodes with All / Undownloaded / None quick-selects, then search them all
+/// at once or delete their downloaded files.
 class SonarrSeasonScreen extends ConsumerStatefulWidget {
   final String instanceId;
   final SonarrSeries series;
-  final int seasonNumber;
+
+  /// The season to show, or null for every season in the series.
+  final int? seasonNumber;
 
   const SonarrSeasonScreen({
     super.key,
     required this.instanceId,
     required this.series,
-    required this.seasonNumber,
+    this.seasonNumber,
   });
 
   @override
@@ -45,6 +47,11 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   String? _error;
   bool _selecting = false;
   final Set<int> _selectedIds = {};
+
+  bool get _allSeasons => widget.seasonNumber == null;
+
+  String get _title =>
+      _allSeasons ? 'All Seasons' : seasonLabel(widget.seasonNumber!);
 
   @override
   void initState() {
@@ -70,7 +77,9 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       final episodes = await episodesFuture;
       final queue = await queueFuture;
       if (!mounted) return;
-      episodes.sort((a, b) => b.episodeNumber.compareTo(a.episodeNumber));
+      episodes.sort((a, b) => b.seasonNumber != a.seasonNumber
+          ? b.seasonNumber.compareTo(a.seasonNumber)
+          : b.episodeNumber.compareTo(a.episodeNumber));
       setState(() {
         _episodes = episodes;
         _queueByEpisode = {
@@ -92,26 +101,68 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
     }
   }
 
-  Future<void> _automaticSeasonSearch() async {
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Season scope: SeasonSearch for one season, SeriesSearch (monitored
+  /// episodes) for All Seasons.
+  Future<void> _automaticSearch() async {
     try {
-      await _service.searchSeason(widget.series.id, widget.seasonNumber);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Searching for ${seasonLabel(widget.seasonNumber)}…')));
+      if (_allSeasons) {
+        await _service.searchSeries(widget.series.id);
+        _toast('Searching for monitored episodes of ${widget.series.title}…');
+      } else {
+        await _service.searchSeason(widget.series.id, widget.seasonNumber!);
+        _toast('Searching for ${seasonLabel(widget.seasonNumber!)}…');
+      }
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Search failed: $e')));
+      _toast('Search failed: $e');
     }
   }
 
-  void _interactiveSeasonSearch() {
+  /// Interactive search is season-scoped; in All Seasons mode pick the season
+  /// first.
+  Future<void> _interactiveSearch() async {
+    var seasonNumber = widget.seasonNumber;
+    if (seasonNumber == null) {
+      final seasons = [...widget.series.seasons]
+        ..sort((a, b) => a.seasonNumber.compareTo(b.seasonNumber));
+      if (seasons.isEmpty) {
+        _toast('No seasons available');
+        return;
+      }
+      seasonNumber = await showDialog<int>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          backgroundColor: AppTheme.surface,
+          title: const Text('Select Season'),
+          children: seasons
+              .map((s) => SimpleDialogOption(
+                    onPressed: () => Navigator.pop(ctx, s.seasonNumber),
+                    child: Text(
+                      seasonLabel(s.seasonNumber),
+                      style: TextStyle(
+                        color: s.monitored
+                            ? AppTheme.textPrimary
+                            : AppTheme.textSecondary,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ))
+              .toList(),
+        ),
+      );
+      if (seasonNumber == null || !mounted) return;
+    }
     Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(
         builder: (_) => SonarrReleasesScreen(
           instanceId: widget.instanceId,
           seriesId: widget.series.id,
-          seasonNumber: widget.seasonNumber,
+          seasonNumber: seasonNumber!,
           seriesTitle: widget.series.title,
         ),
       ),
@@ -121,13 +172,9 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   Future<void> _automaticEpisodeSearch(SonarrEpisode episode) async {
     try {
       await _service.searchEpisodes([episode.id]);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Searching for ${episode.seasonEpisodeLabel}…')));
+      _toast('Searching for ${episode.seasonEpisodeLabel}…');
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Search failed: $e')));
+      _toast('Search failed: $e');
     }
   }
 
@@ -137,13 +184,102 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
         builder: (_) => SonarrReleasesScreen(
           instanceId: widget.instanceId,
           seriesId: widget.series.id,
-          seasonNumber: widget.seasonNumber,
+          seasonNumber: episode.seasonNumber,
           seriesTitle: widget.series.title,
           episodeId: episode.id,
           episodeLabel: episode.seasonEpisodeLabel,
         ),
       ),
     );
+  }
+
+  /// Long-press menu for one episode.
+  Future<void> _showEpisodeMenu(SonarrEpisode episode) async {
+    final title = episode.title != null && episode.title!.isNotEmpty
+        ? '${episode.seasonEpisodeLabel} • ${episode.title}'
+        : episode.seasonEpisodeLabel;
+    final action = await showActionSheet<String>(
+      context,
+      title: title,
+      actions: [
+        const SheetAction('automatic', Icons.search, 'Automatic Search'),
+        const SheetAction(
+            'interactive', Icons.manage_search, 'Interactive Search'),
+        const SheetAction('select', Icons.checklist, 'Select Episodes'),
+        SheetAction(
+            'monitor',
+            episode.monitored ? Icons.bookmark_border : Icons.bookmark,
+            episode.monitored ? 'Unmonitor Episode' : 'Monitor Episode'),
+        if (episode.hasFile)
+          const SheetAction('delete', Icons.delete_outline, 'Delete File',
+              color: AppTheme.error),
+      ],
+    );
+    if (action == null || !mounted) return;
+    switch (action) {
+      case 'automatic':
+        _automaticEpisodeSearch(episode);
+      case 'interactive':
+        _interactiveEpisodeSearch(episode);
+      case 'select':
+        _startSelecting(preselect: [episode.id]);
+      case 'monitor':
+        try {
+          await _service.setEpisodesMonitored([episode.id],
+              monitored: !episode.monitored);
+          _toast(episode.monitored
+              ? 'Unmonitored ${episode.seasonEpisodeLabel}'
+              : 'Monitoring ${episode.seasonEpisodeLabel}');
+          _load();
+        } catch (e) {
+          _toast('Could not change monitoring: $e');
+        }
+      case 'delete':
+        _confirmDeleteFiles([episode]);
+    }
+  }
+
+  /// Confirms then deletes the downloaded files of [episodes] (those that
+  /// have one). Used by the episode menu and the selection-mode Delete button.
+  Future<void> _confirmDeleteFiles(List<SonarrEpisode> episodes) async {
+    final withFiles = [
+      for (final e in episodes)
+        if (e.hasFile && e.episodeFileId > 0) e,
+    ];
+    if (withFiles.isEmpty) return;
+    final what = withFiles.length == 1
+        ? 'the downloaded file for ${withFiles.single.seasonEpisodeLabel}'
+        : '${withFiles.length} downloaded files';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('Delete Files'),
+        content: Text('Delete $what from disk?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.error),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _service
+          .deleteEpisodeFiles([for (final e in withFiles) e.episodeFileId]);
+      _toast(withFiles.length == 1
+          ? 'Deleted 1 file'
+          : 'Deleted ${withFiles.length} files');
+      if (_selecting) _stopSelecting();
+      _load();
+    } catch (e) {
+      _toast('Delete failed: $e');
+    }
   }
 
   // --- Episode selection mode ---
@@ -176,21 +312,24 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
     _startSelecting(preselect: undownloadedEpisodeIds(_episodes));
   }
 
+  List<SonarrEpisode> get _selectedEpisodes =>
+      [for (final e in _episodes) if (_selectedIds.contains(e.id)) e];
+
+  /// Selected episodes that actually have a file on disk (deletable).
+  int get _selectedFileCount =>
+      _selectedEpisodes.where((e) => e.hasFile && e.episodeFileId > 0).length;
+
   Future<void> _searchSelected() async {
     final ids = _selectedIds.toList()..sort();
     if (ids.isEmpty) return;
     try {
       await _service.searchEpisodes(ids);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(ids.length == 1
-              ? 'Searching for 1 episode…'
-              : 'Searching for ${ids.length} episodes…')));
+      _toast(ids.length == 1
+          ? 'Searching for 1 episode…'
+          : 'Searching for ${ids.length} episodes…');
       _stopSelecting();
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Search failed: $e')));
+      _toast('Search failed: $e');
     }
   }
 
@@ -221,7 +360,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
         title: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(seasonLabel(widget.seasonNumber)),
+            Text(_title),
             Text(
               widget.series.title,
               style: const TextStyle(
@@ -256,10 +395,12 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
           _ActionBar(
             selecting: _selecting,
             selectedCount: _selectedIds.length,
-            onAutomatic: _automaticSeasonSearch,
+            selectedFileCount: _selectedFileCount,
+            onAutomatic: _automaticSearch,
             onAutomaticEpisodes: _startIndividualDownloads,
-            onInteractive: _interactiveSeasonSearch,
+            onInteractive: _interactiveSearch,
             onSearchSelected: _searchSelected,
+            onDeleteSelected: () => _confirmDeleteFiles(_selectedEpisodes),
           ),
         ],
       ),
@@ -280,16 +421,32 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 16)),
       );
     }
+
+    // In All Seasons mode a header row precedes each season's episodes.
+    final rows = <Object>[];
+    int? lastSeason;
+    for (final e in _episodes) {
+      if (_allSeasons && e.seasonNumber != lastSeason) {
+        rows.add(e.seasonNumber);
+        lastSeason = e.seasonNumber;
+      }
+      rows.add(e);
+    }
+
     return RefreshIndicator(
       onRefresh: _load,
       color: AppTheme.accent,
       child: ListView.separated(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _episodes.length,
-        separatorBuilder: (_, __) =>
-            const Divider(color: AppTheme.border, height: 1),
+        itemCount: rows.length,
+        separatorBuilder: (_, index) =>
+            rows[index] is int || rows[index + 1] is int
+                ? const SizedBox.shrink()
+                : const Divider(color: AppTheme.border, height: 1),
         itemBuilder: (context, index) {
-          final episode = _episodes[index];
+          final row = rows[index];
+          if (row is int) return _SeasonHeader(seasonNumber: row);
+          final episode = row as SonarrEpisode;
           return _EpisodeTile(
             episode: episode,
             queueItem: _queueByEpisode[episode.id],
@@ -298,9 +455,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
             onTap: _selecting
                 ? () => _toggleSelected(episode)
                 : () => _openEpisode(episode),
-            onLongPress: _selecting
-                ? null
-                : () => _startSelecting(preselect: [episode.id]),
+            onLongPress: _selecting ? null : () => _showEpisodeMenu(episode),
             onSearch: () => _automaticEpisodeSearch(episode),
           );
         },
@@ -314,6 +469,31 @@ String formatEpisodeAirDate(SonarrEpisode e) {
       (e.airDate != null ? DateTime.tryParse(e.airDate!) : null);
   if (dt == null) return 'TBA';
   return DateFormat('MMMM d, yyyy').format(dt);
+}
+
+/// "Season N" divider used in All Seasons mode.
+class _SeasonHeader extends StatelessWidget {
+  final int seasonNumber;
+  const _SeasonHeader({required this.seasonNumber});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(seasonLabel(seasonNumber),
+              style: const TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Container(width: 44, height: 2, color: AppTheme.accent),
+        ],
+      ),
+    );
+  }
 }
 
 class _EpisodeTile extends StatelessWidget {
@@ -464,13 +644,16 @@ class _SelectionBar extends StatelessWidget {
             ),
           ),
           TextButton(
-              onPressed: onSelectAll, style: buttonStyle,
+              onPressed: onSelectAll,
+              style: buttonStyle,
               child: const Text('All')),
           TextButton(
-              onPressed: onSelectUndownloaded, style: buttonStyle,
+              onPressed: onSelectUndownloaded,
+              style: buttonStyle,
               child: const Text('Undownloaded')),
           TextButton(
-              onPressed: onSelectNone, style: buttonStyle,
+              onPressed: onSelectNone,
+              style: buttonStyle,
               child: const Text('None')),
         ],
       ),
@@ -481,18 +664,22 @@ class _SelectionBar extends StatelessWidget {
 class _ActionBar extends StatelessWidget {
   final bool selecting;
   final int selectedCount;
+  final int selectedFileCount;
   final VoidCallback onAutomatic;
   final VoidCallback onAutomaticEpisodes;
   final VoidCallback onInteractive;
   final VoidCallback onSearchSelected;
+  final VoidCallback onDeleteSelected;
 
   const _ActionBar({
     required this.selecting,
     required this.selectedCount,
+    required this.selectedFileCount,
     required this.onAutomatic,
     required this.onAutomaticEpisodes,
     required this.onInteractive,
     required this.onSearchSelected,
+    required this.onDeleteSelected,
   });
 
   ButtonStyle _buttonStyle({BorderRadius? radius}) => OutlinedButton.styleFrom(
@@ -518,26 +705,21 @@ class _ActionBar extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: OutlinedButton.icon(
-              // Interactive search targets one episode or season at a time —
-              // it can't act on a multi-selection, so disable it while
-              // selecting.
-              onPressed: selecting ? null : onInteractive,
-              icon: Icon(Icons.person_outline,
-                  size: 18,
-                  color: selecting
-                      ? AppTheme.textSecondary
-                      : AppTheme.available),
-              label: Text('Interactive',
-                  style: TextStyle(
-                      color: selecting
-                          ? AppTheme.textSecondary
-                          : AppTheme.textPrimary)),
-              style: _buttonStyle(),
-            ),
+            child: selecting ? _buildDeleteSelected() : _buildInteractive(),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildInteractive() {
+    return OutlinedButton.icon(
+      onPressed: onInteractive,
+      icon: const Icon(Icons.person_outline,
+          size: 18, color: AppTheme.available),
+      label: const Text('Interactive',
+          style: TextStyle(color: AppTheme.textPrimary)),
+      style: _buttonStyle(),
     );
   }
 
@@ -549,9 +731,30 @@ class _ActionBar extends StatelessWidget {
           size: 18,
           color: enabled ? AppTheme.available : AppTheme.textSecondary),
       label: Text(
-        selectedCount == 1 ? 'Search 1 episode' : 'Search $selectedCount episodes',
+        selectedCount == 1
+            ? 'Search 1 episode'
+            : 'Search $selectedCount episodes',
         style: TextStyle(
             color: enabled ? AppTheme.textPrimary : AppTheme.textSecondary),
+      ),
+      style: _buttonStyle(),
+    );
+  }
+
+  /// Deletes the downloaded files among the selected episodes; enabled only
+  /// when the selection contains at least one file.
+  Widget _buildDeleteSelected() {
+    final enabled = selectedFileCount > 0;
+    return OutlinedButton.icon(
+      onPressed: enabled ? onDeleteSelected : null,
+      icon: Icon(Icons.delete_outline,
+          size: 18, color: enabled ? AppTheme.error : AppTheme.textSecondary),
+      label: Text(
+        selectedFileCount == 1
+            ? 'Delete 1 file'
+            : 'Delete $selectedFileCount files',
+        style: TextStyle(
+            color: enabled ? AppTheme.error : AppTheme.textSecondary),
       ),
       style: _buttonStyle(),
     );
