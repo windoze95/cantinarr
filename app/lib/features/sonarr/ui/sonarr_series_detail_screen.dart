@@ -1,15 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/action_sheet.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
+import 'edit_series_screen.dart';
+import 'series_actions.dart';
+import 'sonarr_releases_screen.dart';
 import 'sonarr_season_screen.dart';
 
 /// Series detail: an "All Seasons" summary plus a per-season list with
 /// availability and monitor toggles. Tapping a season drills into its
-/// episodes. Mirrors LunaSea's Series Details > Seasons view.
+/// episodes; long-pressing one offers Automatic/Interactive season search.
+/// The app bar carries external links, Edit Series, and the series action
+/// menu. Mirrors LunaSea's Series Details > Seasons view.
 class SonarrSeriesDetailScreen extends ConsumerStatefulWidget {
   final String instanceId;
   final SonarrSeries series;
@@ -123,6 +130,99 @@ class _SonarrSeriesDetailScreenState
     );
   }
 
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Long-press menu for a season: automatic or interactive season search.
+  Future<void> _showSeasonActions(SonarrSeason season) async {
+    final action = await showActionSheet<String>(
+      context,
+      title: seasonLabel(season.seasonNumber),
+      actions: const [
+        SheetAction('automatic', Icons.search, 'Automatic Search'),
+        SheetAction('interactive', Icons.manage_search, 'Interactive Search'),
+      ],
+    );
+    if (action == null || !mounted) return;
+    switch (action) {
+      case 'automatic':
+        try {
+          await _service.searchSeason(_series.id, season.seasonNumber);
+          _toast('Searching for ${seasonLabel(season.seasonNumber)}…');
+        } catch (e) {
+          _toast('Search failed: $e');
+        }
+      case 'interactive':
+        Navigator.of(context, rootNavigator: true).push(
+          MaterialPageRoute(
+            builder: (_) => SonarrReleasesScreen(
+              instanceId: widget.instanceId,
+              seriesId: _series.id,
+              seasonNumber: season.seasonNumber,
+              seriesTitle: _series.title,
+            ),
+          ),
+        );
+    }
+  }
+
+  Future<void> _openEdit() async {
+    final saved = await Navigator.of(context, rootNavigator: true).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => EditSeriesScreen(
+          instanceId: widget.instanceId,
+          series: _series,
+        ),
+      ),
+    );
+    if (saved == true && mounted) _load();
+  }
+
+  void _showSeriesMenu() {
+    showSeriesActions(
+      context,
+      service: _service,
+      instanceId: widget.instanceId,
+      series: _series,
+      onChanged: _load,
+      onRemoved: () {
+        if (mounted) Navigator.of(context).pop();
+      },
+    );
+  }
+
+  /// External sites for this series; entries appear only when the matching id
+  /// is known.
+  Future<void> _openLinks() async {
+    final links = <SheetAction<String>>[
+      if ((_series.imdbId ?? '').isNotEmpty)
+        SheetAction('https://www.imdb.com/title/${_series.imdbId}',
+            Icons.movie_outlined, 'IMDb'),
+      if ((_series.tvdbId ?? 0) > 0)
+        SheetAction('https://thetvdb.com/?tab=series&id=${_series.tvdbId}',
+            Icons.live_tv_outlined, 'TheTVDB'),
+      if ((_series.tmdbId ?? 0) > 0)
+        SheetAction('https://www.themoviedb.org/tv/${_series.tmdbId}',
+            Icons.theaters_outlined, 'TMDB'),
+      if ((_series.tvdbId ?? 0) > 0)
+        SheetAction(
+            'https://trakt.tv/search/tvdb/${_series.tvdbId}?id_type=show',
+            Icons.track_changes_outlined,
+            'Trakt'),
+    ];
+    if (links.isEmpty) {
+      _toast('No external links available');
+      return;
+    }
+    final url =
+        await showActionSheet<String>(context, title: _series.title, actions: links);
+    if (url == null) return;
+    launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
   @override
   Widget build(BuildContext context) {
     final seasons = [..._series.seasons]
@@ -135,9 +235,19 @@ class _SonarrSeriesDetailScreenState
         title: Text(_series.title, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh, color: AppTheme.textPrimary),
-            tooltip: 'Refresh',
-            onPressed: _isLoading ? null : _load,
+            icon: const Icon(Icons.link, color: AppTheme.textPrimary),
+            tooltip: 'External links',
+            onPressed: _openLinks,
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, color: AppTheme.textPrimary),
+            tooltip: 'Edit series',
+            onPressed: _openEdit,
+          ),
+          IconButton(
+            icon: const Icon(Icons.more_vert, color: AppTheme.textPrimary),
+            tooltip: 'Series actions',
+            onPressed: _showSeriesMenu,
           ),
         ],
       ),
@@ -157,6 +267,7 @@ class _SonarrSeriesDetailScreenState
                         season: s,
                         busy: _togglingSeasons.contains(s.seasonNumber),
                         onTap: () => _openSeason(s),
+                        onLongPress: () => _showSeasonActions(s),
                         onToggleMonitored: () => _toggleSeasonMonitored(s),
                       )),
                   if (seasons.isEmpty && !_isLoading)
@@ -249,12 +360,14 @@ class _SeasonCard extends StatelessWidget {
   final SonarrSeason season;
   final bool busy;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
   final VoidCallback onToggleMonitored;
 
   const _SeasonCard({
     required this.season,
     required this.busy,
     required this.onTap,
+    required this.onLongPress,
     required this.onToggleMonitored,
   });
 
@@ -263,6 +376,7 @@ class _SeasonCard extends StatelessWidget {
     final stats = season.statistics;
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         padding: const EdgeInsets.all(14),

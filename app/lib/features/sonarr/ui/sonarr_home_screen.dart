@@ -7,6 +7,7 @@ import '../../../core/widgets/error_banner.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/sonarr_series_provider.dart';
+import 'series_actions.dart';
 import 'sonarr_releases_screen.dart';
 import 'sonarr_series_detail_screen.dart';
 import 'sonarr_series_list.dart';
@@ -64,16 +65,35 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
     }
   }
 
-  void _openSeries(SonarrSeries show) {
+  Future<void> _openSeries(SonarrSeries show) async {
     final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
     if (instanceId == null) return;
-    Navigator.of(context, rootNavigator: true).push(
+    await Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(
         builder: (_) => SonarrSeriesDetailScreen(
           instanceId: instanceId,
           series: show,
         ),
       ),
+    );
+    // The detail screen can edit or remove the series; refresh on return.
+    _notifier?.loadSeries();
+  }
+
+  /// Long-press menu: search monitored / edit / refresh / remove / monitor.
+  void _showSeriesActions(SonarrSeries show) {
+    final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
+    if (instanceId == null) return;
+    showSeriesActions(
+      context,
+      service: SonarrApiService(
+        backendDio: ref.read(backendClientProvider),
+        instanceId: instanceId,
+      ),
+      instanceId: instanceId,
+      series: show,
+      onChanged: () => _notifier?.loadSeries(),
+      onRemoved: () => _notifier?.loadSeries(),
     );
   }
 
@@ -239,6 +259,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                         onSearch: _triggerAutomaticSearch,
                         onInteractiveSearch: _openInteractiveSearch,
                         onOpen: _openSeries,
+                        onLongPress: _showSeriesActions,
                       ),
                     ),
             ),

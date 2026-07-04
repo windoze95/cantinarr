@@ -4,16 +4,19 @@ class SonarrSeries {
   final String title;
   final int? tvdbId;
   final int? tmdbId;
+  final String? imdbId;
   final int? year;
   final String? overview;
   final String? titleSlug;
   final bool monitored;
+  final bool seasonFolder;
   final String? path;
   final String seriesType;
   final List<SonarrImage> images;
   final SonarrStatistics? statistics;
   final String? status;
   final int qualityProfileId;
+  final List<int> tags;
   final List<SonarrSeason> seasons;
 
   const SonarrSeries({
@@ -21,16 +24,19 @@ class SonarrSeries {
     required this.title,
     this.tvdbId,
     this.tmdbId,
+    this.imdbId,
     this.year,
     this.overview,
     this.titleSlug,
     this.monitored = true,
+    this.seasonFolder = true,
     this.path,
     this.seriesType = 'standard',
     this.images = const [],
     this.statistics,
     this.status,
     this.qualityProfileId = 0,
+    this.tags = const [],
     this.seasons = const [],
   });
 
@@ -39,10 +45,12 @@ class SonarrSeries {
         title: json['title'] as String? ?? 'Untitled',
         tvdbId: json['tvdbId'] as int?,
         tmdbId: json['tmdbId'] as int?,
+        imdbId: json['imdbId'] as String?,
         year: json['year'] as int?,
         overview: json['overview'] as String?,
         titleSlug: json['titleSlug'] as String?,
         monitored: json['monitored'] as bool? ?? true,
+        seasonFolder: json['seasonFolder'] as bool? ?? true,
         path: json['path'] as String?,
         seriesType: json['seriesType'] as String? ?? 'standard',
         images: (json['images'] as List<dynamic>?)
@@ -55,6 +63,7 @@ class SonarrSeries {
             : null,
         status: json['status'] as String?,
         qualityProfileId: json['qualityProfileId'] as int? ?? 0,
+        tags: (json['tags'] as List<dynamic>?)?.cast<int>() ?? const [],
         seasons: (json['seasons'] as List<dynamic>?)
                 ?.map((s) => SonarrSeason.fromJson(s as Map<String, dynamic>))
                 .toList() ??
@@ -66,14 +75,17 @@ class SonarrSeries {
         'title': title,
         'tvdbId': tvdbId,
         'tmdbId': tmdbId,
+        'imdbId': imdbId,
         'year': year,
         'overview': overview,
         'titleSlug': titleSlug,
         'monitored': monitored,
+        'seasonFolder': seasonFolder,
         'path': path,
         'seriesType': seriesType,
         'images': images.map((i) => i.toJson()).toList(),
         'qualityProfileId': qualityProfileId,
+        'tags': tags,
         'seasons': seasons.map((s) => s.toJson()).toList(),
       };
 
@@ -91,6 +103,19 @@ class SonarrSeries {
     if (statistics == null || statistics!.episodeCount == 0) return 0;
     return statistics!.episodeFileCount / statistics!.episodeCount;
   }
+}
+
+/// A Sonarr tag (id + label), used by the Edit Series tag picker.
+class SonarrTag {
+  final int id;
+  final String label;
+
+  const SonarrTag({required this.id, required this.label});
+
+  factory SonarrTag.fromJson(Map<String, dynamic> json) => SonarrTag(
+        id: json['id'] as int? ?? 0,
+        label: json['label'] as String? ?? '',
+      );
 }
 
 class SonarrImage {

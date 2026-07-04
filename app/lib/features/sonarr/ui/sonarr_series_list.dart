@@ -4,12 +4,15 @@ import '../../../core/widgets/cached_image.dart';
 import '../data/sonarr_models.dart';
 
 /// List of Sonarr series with swipe-to-delete and progress indicators.
+/// Long-pressing a tile opens the series action sheet when [onLongPress] is
+/// wired.
 class SonarrSeriesList extends StatelessWidget {
   final List<SonarrSeries> series;
   final void Function(int id) onDelete;
   final void Function(int id) onSearch;
   final void Function(SonarrSeries show)? onInteractiveSearch;
   final void Function(SonarrSeries show)? onOpen;
+  final void Function(SonarrSeries show)? onLongPress;
   final bool embedded;
 
   const SonarrSeriesList({
@@ -19,6 +22,7 @@ class SonarrSeriesList extends StatelessWidget {
     required this.onSearch,
     this.onInteractiveSearch,
     this.onOpen,
+    this.onLongPress,
     this.embedded = false,
   });
 
@@ -57,6 +61,7 @@ class SonarrSeriesList extends StatelessWidget {
                 ? () => onInteractiveSearch!(show)
                 : null,
             onOpen: onOpen != null ? () => onOpen!(show) : null,
+            onLongPress: onLongPress != null ? () => onLongPress!(show) : null,
           ),
         );
       },
@@ -90,12 +95,14 @@ class _SeriesTile extends StatelessWidget {
   final VoidCallback onSearch;
   final VoidCallback? onInteractiveSearch;
   final VoidCallback? onOpen;
+  final VoidCallback? onLongPress;
 
   const _SeriesTile({
     required this.show,
     required this.onSearch,
     this.onInteractiveSearch,
     this.onOpen,
+    this.onLongPress,
   });
 
   @override
@@ -105,6 +112,7 @@ class _SeriesTile extends StatelessWidget {
 
     return ListTile(
       onTap: onOpen,
+      onLongPress: onLongPress,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(6),

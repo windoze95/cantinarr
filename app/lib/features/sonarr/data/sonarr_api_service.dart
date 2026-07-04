@@ -92,6 +92,14 @@ class SonarrApiService {
     });
   }
 
+  /// Asks Sonarr to refresh a series' metadata and rescan its files.
+  Future<void> refreshSeries(int seriesId) async {
+    await _dio.post('$_basePath/command', data: {
+      'name': 'RefreshSeries',
+      'seriesId': seriesId,
+    });
+  }
+
   Future<void> searchSeason(int seriesId, int seasonNumber) async {
     await _dio.post('$_basePath/command', data: {
       'name': 'SeasonSearch',
@@ -286,6 +294,30 @@ class SonarrApiService {
       }
     }
     await _dio.put('$_basePath/series/$seriesId', data: series);
+  }
+
+  /// Updates a handful of series fields. Sonarr's series PUT expects the whole
+  /// resource, so the current series JSON is fetched raw, the given fields are
+  /// merged in, and everything else is sent back unchanged. Admin only (proxy
+  /// requires instances:manage).
+  Future<void> updateSeriesFields(
+      int seriesId, Map<String, dynamic> fields) async {
+    final resp = await _dio.get('$_basePath/series/$seriesId');
+    final series = Map<String, dynamic>.from(resp.data as Map);
+    series.addAll(fields);
+    await _dio.put('$_basePath/series/$seriesId', data: series);
+  }
+
+  /// Toggles monitoring for a whole series (seasons/episodes untouched).
+  Future<void> setSeriesMonitored(int seriesId, {required bool monitored}) =>
+      updateSeriesFields(seriesId, {'monitored': monitored});
+
+  /// Lists the instance's tags (id + label).
+  Future<List<SonarrTag>> getTags() async {
+    final resp = await _dio.get('$_basePath/tag');
+    return (resp.data as List<dynamic>)
+        .map((t) => SonarrTag.fromJson(t as Map<String, dynamic>))
+        .toList();
   }
 
   // --- Import Doctor (admin; proxy requires instances:manage) ---
