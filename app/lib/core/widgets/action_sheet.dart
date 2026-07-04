@@ -22,48 +22,51 @@ Future<T?> showActionSheet<T>(
   return showModalBottomSheet<T>(
     context: context,
     backgroundColor: Colors.transparent,
-    builder: (ctx) => Container(
-      decoration: const BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).padding.bottom + 8),
-      // Scrolls when the actions don't fit the sheet's max height (short or
-      // landscape screens) instead of overflowing.
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.textSecondary,
-                borderRadius: BorderRadius.circular(2),
+    // A Material (not a decorated Container) so the ListTiles' ink splashes
+    // paint on it instead of being hidden behind the background color.
+    builder: (ctx) => Material(
+      color: AppTheme.surface,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).padding.bottom + 8),
+        // Scrolls when the actions don't fit the sheet's max height (short or
+        // landscape screens) instead of overflowing.
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.textSecondary,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
-              child: Text(
-                title,
-                style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 17,
-                    fontWeight: FontWeight.bold),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-            ...actions.map((a) => ListTile(
-                  leading: Icon(a.icon, color: a.color ?? AppTheme.accent),
-                  title: Text(a.label,
-                      style: TextStyle(
-                          color: a.color ?? AppTheme.textPrimary,
-                          fontSize: 15)),
-                  onTap: () => Navigator.pop(ctx, a.value),
-                )),
-          ],
+              ...actions.map((a) => ListTile(
+                    leading: Icon(a.icon, color: a.color ?? AppTheme.accent),
+                    title: Text(a.label,
+                        style: TextStyle(
+                            color: a.color ?? AppTheme.textPrimary,
+                            fontSize: 15)),
+                    onTap: () => Navigator.pop(ctx, a.value),
+                  )),
+            ],
+          ),
         ),
       ),
     ),

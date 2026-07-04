@@ -196,8 +196,7 @@ class _EditSeriesScreenState extends ConsumerState<EditSeriesScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
             child: const Text('Set'),
@@ -230,15 +229,13 @@ class _EditSeriesScreenState extends ConsumerState<EditSeriesScreen> {
                     children: tags
                         .map((t) => CheckboxListTile(
                               value: selection.contains(t.id),
-                              onChanged: (v) => setDialogState(() =>
-                                  v == true
-                                      ? selection.add(t.id)
-                                      : selection.remove(t.id)),
+                              onChanged: (v) => setDialogState(() => v == true
+                                  ? selection.add(t.id)
+                                  : selection.remove(t.id)),
                               title: Text(t.label,
                                   style: const TextStyle(fontSize: 14)),
                               contentPadding: EdgeInsets.zero,
-                              controlAffinity:
-                                  ListTileControlAffinity.leading,
+                              controlAffinity: ListTileControlAffinity.leading,
                               activeColor: AppTheme.accent,
                             ))
                         .toList(),
@@ -290,8 +287,8 @@ class _EditSeriesScreenState extends ConsumerState<EditSeriesScreen> {
                   value: _monitored,
                   onChanged: (v) => setState(() => _monitored = v),
                   title: const Text('Monitored',
-                      style: TextStyle(
-                          color: AppTheme.textPrimary, fontSize: 15)),
+                      style:
+                          TextStyle(color: AppTheme.textPrimary, fontSize: 15)),
                   activeTrackColor: AppTheme.accent,
                 ),
               ),
@@ -300,8 +297,8 @@ class _EditSeriesScreenState extends ConsumerState<EditSeriesScreen> {
                   value: _seasonFolder,
                   onChanged: (v) => setState(() => _seasonFolder = v),
                   title: const Text('Use Season Folders',
-                      style: TextStyle(
-                          color: AppTheme.textPrimary, fontSize: 15)),
+                      style:
+                          TextStyle(color: AppTheme.textPrimary, fontSize: 15)),
                   activeTrackColor: AppTheme.accent,
                 ),
               ),
@@ -315,7 +312,8 @@ class _EditSeriesScreenState extends ConsumerState<EditSeriesScreen> {
               _SettingCard(
                 child: _PickerTile(
                   title: 'Series Type',
-                  value: _seriesType[0].toUpperCase() + _seriesType.substring(1),
+                  value:
+                      _seriesType[0].toUpperCase() + _seriesType.substring(1),
                   onTap: _pickSeriesType,
                 ),
               ),
@@ -342,8 +340,7 @@ class _EditSeriesScreenState extends ConsumerState<EditSeriesScreen> {
               12, 10, 12, 10 + MediaQuery.of(context).padding.bottom),
           decoration: const BoxDecoration(
             color: AppTheme.surface,
-            border:
-                Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
+            border: Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
           ),
           child: SizedBox(
             width: double.infinity,
@@ -379,14 +376,19 @@ class _SettingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A Material (not a decorated Container) so the tiles' ink splashes paint
+    // on the card instead of being hidden behind the background color.
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      decoration: BoxDecoration(
+      child: Material(
         color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.border, width: 0.5),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: AppTheme.border, width: 0.5),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: child,
       ),
-      child: child,
     );
   }
 }
