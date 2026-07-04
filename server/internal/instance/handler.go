@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -266,6 +267,77 @@ func (h *Handler) UpdateUserDefaultInstances(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(defaults)
+}
+
+// instanceUserPin is one user's per-user default row within a service type,
+// as served by the instance-centric assignment endpoints.
+type instanceUserPin struct {
+	UserID     int64  `json:"user_id"`
+	InstanceID string `json:"instance_id"`
+}
+
+// writeInstanceUsers responds with every per-user default pin for the service
+// type — not just the addressed instance — so the admin UI can also show which
+// users are currently pinned to a sibling instance.
+func (h *Handler) writeInstanceUsers(w http.ResponseWriter, serviceType string) {
+	pins, err := h.store.ListTypeUserDefaults(serviceType)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	resp := make([]instanceUserPin, 0, len(pins))
+	for userID, instanceID := range pins {
+		resp = append(resp, instanceUserPin{UserID: userID, InstanceID: instanceID})
+	}
+	sort.Slice(resp, func(i, j int) bool { return resp[i].UserID < resp[j].UserID })
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// GetInstanceUsers returns the per-user default pins for the addressed
+// instance's service type (admin-only).
+func (h *Handler) GetInstanceUsers(w http.ResponseWriter, r *http.Request) {
+	instanceID := chi.URLParam(r, "instanceID")
+	serviceType, err := h.store.ServiceTypeOf(instanceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if serviceType == "" {
+		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+		return
+	}
+	h.writeInstanceUsers(w, serviceType)
+}
+
+// UpdateInstanceUsers pins the addressed instance as the per-user default for
+// exactly the posted user ids (admin-only). Users previously pinned to this
+// instance but absent from the list revert to the global default (for
+// chaptarr: access revoked). Returns the updated pins for the service type.
+func (h *Handler) UpdateInstanceUsers(w http.ResponseWriter, r *http.Request) {
+	instanceID := chi.URLParam(r, "instanceID")
+	serviceType, err := h.store.ServiceTypeOf(instanceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if serviceType == "" {
+		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+		return
+	}
+	var body struct {
+		UserIDs []int64 `json:"user_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if err := h.store.SetInstanceUsers(instanceID, body.UserIDs); err != nil {
+		// Covers unknown user ids too (the user_id foreign key rejects them).
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	h.writeInstanceUsers(w, serviceType)
 }
 
 // validateRequiredFields enforces per-service-type required fields.

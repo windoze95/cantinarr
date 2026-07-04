@@ -400,5 +400,16 @@ func Open(dbPath string) (*sql.DB, error) {
 		}
 	}
 
+	// Chaptarr has no global default — instances are granted per user — but
+	// older versions let the flag be set. Zero any legacy rows so the
+	// admin/AI fallback (GetDefault) resolves purely by sort order. Runs every
+	// boot; idempotent and the table is tiny.
+	if _, err := db.Exec(
+		"UPDATE service_instances SET is_default = 0 WHERE service_type = 'chaptarr' AND is_default = 1",
+	); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("clear chaptarr default flags: %w", err)
+	}
+
 	return db, nil
 }

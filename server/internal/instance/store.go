@@ -112,22 +112,58 @@ func (s *Store) Get(id string) (*Instance, error) {
 	return &inst, nil
 }
 
+// normalizeDefault applies the service-type default rules before persisting:
+// Chaptarr has no global default — its instances are granted per user — so the
+// flag is forced off for it.
+func normalizeDefault(inst *Instance) {
+	if inst.ServiceType == "chaptarr" {
+		inst.IsDefault = false
+	}
+}
+
+// clearSiblingDefaults keeps at most one default per service type: saving an
+// instance as default flips the flag off on every other instance of that type,
+// within the caller's transaction.
+func clearSiblingDefaults(tx *sql.Tx, inst *Instance) error {
+	if !inst.IsDefault {
+		return nil
+	}
+	if _, err := tx.Exec(
+		"UPDATE service_instances SET is_default = 0 WHERE service_type = ? AND id <> ?",
+		inst.ServiceType, inst.ID,
+	); err != nil {
+		return fmt.Errorf("clear previous default: %w", err)
+	}
+	return nil
+}
+
 // Create inserts a new instance and returns it with a generated ID.
 func (s *Store) Create(inst *Instance) error {
 	if inst.ID == "" {
 		inst.ID = inst.ServiceType + "-" + uuid.New().String()[:8]
 	}
 	inst.CreatedAt = time.Now()
+	normalizeDefault(inst)
 
 	apiKey, password, err := s.encryptSecrets(inst)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("create instance: %w", err)
+	}
+	defer tx.Rollback()
+	if err := clearSiblingDefaults(tx, inst); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
 		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.CreatedAt,
-	)
-	if err != nil {
+	); err != nil {
+		return fmt.Errorf("create instance: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("create instance: %w", err)
 	}
 	return nil
@@ -139,16 +175,34 @@ func (s *Store) Update(inst *Instance) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.db.Exec(
-		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ? WHERE id = ?",
-		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.ID,
-	)
+	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("update instance: %w", err)
 	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
+	defer tx.Rollback()
+	// The stored service type is authoritative (it is immutable and the
+	// caller's copy may be unset); the default rules key off it.
+	err = tx.QueryRow(
+		"SELECT service_type FROM service_instances WHERE id = ?", inst.ID,
+	).Scan(&inst.ServiceType)
+	if err == sql.ErrNoRows {
 		return fmt.Errorf("instance not found: %s", inst.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("update instance: %w", err)
+	}
+	normalizeDefault(inst)
+	if err := clearSiblingDefaults(tx, inst); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ? WHERE id = ?",
+		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.ID,
+	); err != nil {
+		return fmt.Errorf("update instance: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("update instance: %w", err)
 	}
 	return nil
 }
@@ -227,11 +281,13 @@ func (s *Store) Delete(id string) error {
 	return nil
 }
 
-// GetDefault returns the default instance for a service type.
+// GetDefault returns the default instance for a service type. Create/Update
+// keep at most one default per type; the ORDER BY makes the pick deterministic
+// for legacy rows written before that invariant existed.
 func (s *Store) GetDefault(serviceType string) (*Instance, error) {
 	var inst Instance
 	err := s.db.QueryRow(
-		"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? AND is_default = 1 LIMIT 1",
+		"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? AND is_default = 1 ORDER BY sort_order LIMIT 1",
 		serviceType,
 	).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
 	if err == sql.ErrNoRows {
@@ -316,6 +372,85 @@ func (s *Store) SetUserDefault(userID int64, serviceType, instanceID string) err
 	)
 	if err != nil {
 		return fmt.Errorf("set user default instance: %w", err)
+	}
+	return nil
+}
+
+// ListTypeUserDefaults returns every per-user default row for a service type
+// as a user id → pinned instance id map, so the instance admin UI can show who
+// is assigned to this instance and who is pinned to a sibling.
+func (s *Store) ListTypeUserDefaults(serviceType string) (map[int64]string, error) {
+	rows, err := s.db.Query(
+		"SELECT user_id, instance_id FROM user_default_instances WHERE service_type = ?",
+		serviceType,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list user defaults for type: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64]string)
+	for rows.Next() {
+		var userID int64
+		var instanceID string
+		if err := rows.Scan(&userID, &instanceID); err != nil {
+			return nil, fmt.Errorf("scan user default for type: %w", err)
+		}
+		out[userID] = instanceID
+	}
+	return out, rows.Err()
+}
+
+// ServiceTypeOf returns the stored service type for an instance id, or ""
+// when the instance does not exist. Unlike Get it never touches the encrypted
+// secret columns, so it works even for rows with undecryptable credentials.
+func (s *Store) ServiceTypeOf(instanceID string) (string, error) {
+	var serviceType string
+	err := s.db.QueryRow(
+		"SELECT service_type FROM service_instances WHERE id = ?", instanceID,
+	).Scan(&serviceType)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get instance service type: %w", err)
+	}
+	return serviceType, nil
+}
+
+// SetInstanceUsers pins instanceID as the per-user default for exactly
+// userIDs: listed users are pinned to it (moving off a sibling instance if
+// needed), and users previously pinned to THIS instance but absent from the
+// list revert to the global default (for chaptarr: access revoked). Pins to
+// sibling instances are otherwise untouched.
+func (s *Store) SetInstanceUsers(instanceID string, userIDs []int64) error {
+	serviceType, err := s.ServiceTypeOf(instanceID)
+	if err != nil {
+		return err
+	}
+	if serviceType == "" {
+		return fmt.Errorf("instance not found: %s", instanceID)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("set instance users: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
+		"DELETE FROM user_default_instances WHERE instance_id = ?", instanceID,
+	); err != nil {
+		return fmt.Errorf("set instance users: %w", err)
+	}
+	for _, userID := range userIDs {
+		if _, err := tx.Exec(
+			"INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, ?, ?) "+
+				"ON CONFLICT(user_id, service_type) DO UPDATE SET instance_id = excluded.instance_id",
+			userID, serviceType, instanceID,
+		); err != nil {
+			return fmt.Errorf("pin instance for user %d: %w", userID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("set instance users: %w", err)
 	}
 	return nil
 }
