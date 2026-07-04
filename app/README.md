@@ -1,78 +1,115 @@
 # Cantinarr Flutter App
 
-The mobile and web client for [Cantinarr](https://github.com/windoze95/cantinarr) -- a frictionless media request app for Plex and Jellyfin households.
+The client for [Cantinarr](https://github.com/windoze95/cantinarr) -- a frictionless media request app for Plex and Jellyfin households.
 
-Built with Flutter for iOS, Android, and web. Features a dark-first design with TMDB-powered discovery, one-tap requests, Trakt-powered trending, and an AI assistant -- all backed by the Cantinarr server.
+Built with Flutter; iOS and web are the shipping targets (web is embedded in the server binary). One dark, warm-gold "cantina" theme, TMDB/Trakt-powered discovery, one-tap requests with approvals, deep *arr control, books, an AI assistant, and push notifications -- all through the Cantinarr backend, which is the only API the app talks to.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                  Cantinarr App                       │
+│                   Cantinarr App                      │
 │                                                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
-│  │ Discover │  │  Movies  │  │ TV Shows │  Assistant │
-│  │  (TMDB)  │  │ (Radarr) │  │ (Sonarr) │  (Claude) │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘     │     │
-│       │              │             │           │     │
-│       ▼              ▼             ▼           ▼     │
-│   TMDB API      ┌─────────────────────────────┐     │
-│   Trakt API     │   Cantinarr Backend         │     │
-│   (direct)      │   (auth, requests, arr, AI) │     │
-│                 └─────────────────────────────┘     │
+│  Dashboard · Requests · Movies · TV · Books ·        │
+│  Downloads · Tautulli · Issues · AI · Settings       │
+│                        │                             │
+│                        ▼                             │
+│         ┌─────────────────────────────────┐          │
+│         │       Cantinarr Backend         │          │
+│         │  REST + SSE + WebSocket + push  │          │
+│         │ (discovery, requests, arr proxy,│          │
+│         │   AI, issues, auth -- all keys  │          │
+│         │        stay server-side)        │          │
+│         └─────────────────────────────────┘          │
+│                                                      │
+│  (images load from the TMDB CDN; no API key needed)  │
 └──────────────────────────────────────────────────────┘
 ```
 
 ## Design
 
-Dark-first UI with warm gold accents, designed for couch browsing.
+A single dark-first theme with warm gold accents, designed for couch browsing. Sheets and setting cards paint on a Material surface so ink effects render correctly everywhere.
 
 | Color | Hex | Usage |
 |---|---|---|
-| Accent | `#E5A00D` | Gold -- buttons, active states, brand |
-| Background | `#0F0F1A` | Near-black canvas |
-| Surface | `#1A1A2E` | Cards, nav, sheets |
-| Text Primary | `#F0F0F0` | Headings, body |
-| Text Secondary | `#9E9EB8` | Labels, hints |
-| Available | `#4CAF50` | Green -- on server |
-| Requested | `#FFA726` | Orange -- pending |
+| Accent | `#E5A00D` | Warm gold -- buttons, active states, brand |
+| Background | `#0F0A04` | Warm near-black canvas |
+| Surface | `#1C1510` | Cards, nav, sheets |
+| Surface variant | `#2A1F14` | Elevated tiles |
+| Text primary | `#F0F0F0` | Headings, body |
+| Text secondary | `#9E918A` | Labels, hints |
+| Available | `#4CAF50` | Green -- on the server |
+| Requested | `#FFA726` | Amber -- pending/requested |
 | Downloading | `#42A5F5` | Blue -- in progress |
+| Unavailable | `#757575` | Grey |
 
 ## Features
 
-### Discovery
-- **TMDB-powered browsing** -- trending, popular, top rated, upcoming, now playing
-- **Trakt integration** -- trending by actual watch activity, community-curated lists, calendar for upcoming episodes
-- **Multi-search** -- movies, TV shows, and people in one search bar
-- **Rich detail screens** -- cast, trailers, seasons, episode lists, recommendations
-- **Filter & discover** -- by genre, year, watch providers, rating
+### Discovery & search
+- **TMDB + Trakt rows** -- trending, popular movies/TV, top rated, upcoming; all proxied through the backend so keys stay server-side (poster/backdrop images load straight from the TMDB CDN).
+- **Ever-present search bar** -- debounced multi-search from anywhere in the shell. Results carry **requester-vocabulary availability chips** (Available / Partially Available / Requested -- never arr jargon), matched against the user's default library and kept fresh via WebSocket pings.
+- **Search-to-AI hand-off** -- a query that looks like a question (or returns nothing) lights up an AI affordance; the chat opens inline in the shell and shares one conversation with the full-screen assistant.
+
+### Dashboard
+- **Movies / TV tabs** -- discovery rows plus live library rows from the user's default instances: Downloading Soon, Recently Downloaded, Airing Next.
+- **Releases tab** -- a unified movie + episode release timeline with list and month-calendar views.
+- **Books tab** -- appears only for users with a Chaptarr grant: owned-aware book search with per-format request buttons (see Books).
 
 ### Requests
-- **One-tap requesting** -- tap a button, the server handles everything
-- **Season-level choice** -- request a whole show or pick exactly which seasons; partially-available shows show per-season availability and a one-tap path to request the rest
-- **No TVDB headaches** -- the backend's ID bridge translates TMDB IDs to TVDB IDs transparently
-- **Real-time status** -- WebSocket-powered download progress, live status updates
+- **One-tap requesting** with status-aware labels: Request → Pending (awaiting approval) → Requested → Downloading → **Watch Now**; partially-available shows get **Request More**, which jumps to the season picker.
+- **Season-level choice** -- per-season availability, multi-select, "Request N seasons"; shown only to users the admin has allowed to choose (others inherit the default scope).
+- **Book formats** -- request the eBook, the Audiobook, or both; formats already owned or requested are disabled with their status shown.
+- **Live status** -- request state and download progress update in real time over WebSocket, including changes made directly in the arrs (webhooks).
 
-### Radarr / Sonarr management
-- **Drill-down** -- open the library into a movie's detail, or a series → season → episode, with per-item download progress, quality/size, history, and messages
-- **Interactive search** -- per-episode and per-movie release search and grab
-- **Import Doctor** -- diagnose why a download is stuck and apply one-click fixes (manual/force import, remove + blocklist + re-search, hand-off, rescan)
-- **Status indicators** -- available (green), requested (orange), downloading (blue), unavailable (grey)
+### Movies & TV management (admin)
+- **Drill-down** -- library → movie detail, or series → season → episode, with per-item download progress, quality/size, history, and messages, proxied verbatim to Radarr/Sonarr API v3.
+- **Sonarr episode power tools** -- long-press action menus, episode **multi-select with batch search** (quick-select All / Undownloaded), batch **delete files**, an **All Seasons** view, per-season/series monitor toggles, **Edit Series** (profile, type, path, tags, season folders), and external links (IMDb/TheTVDB/TMDB/Trakt).
+- **Interactive release search** -- per-episode, per-season, per-movie, and per-book: live indexer results with smart sorting, seeders/leechers, and rejection reasons; tap to grab.
+- **Import Doctor** -- any stuck queue item explains itself in plain English with the raw arr messages shown for transparency, then offers ordered one-click fixes (manual/force import with candidates preview, remove, blocklist + re-search, category hand-off, rescan). One shared rule engine drives Sonarr, Radarr, and Chaptarr, mirrored from the server's classifier.
 
-### AI Assistant
-- **Multi-provider AI chat** -- ask for recommendations, check availability, make requests via conversation
-- **SSE streaming** -- responses appear incrementally, not all-at-once
-- **Server-side tools** -- the AI can search TMDB, check your server, and make requests on your behalf
+### Books (Chaptarr)
+- **Per-format everything** -- a title's ebook and audiobook are separate records; the author page shows two bookmark toggles per book (tap an empty one to add + search the missing format).
+- **Owned-aware search** -- library titles are injected into lookup results and floated to the top with Downloaded / In Library chips; distinct records are never merged.
+- **Full module** -- library with author drill-down, queue with Import Doctor, history, and wanted (missing / cutoff unmet).
+
+### Downloads & Tautulli (admin)
+- **Unified download queue** across SABnzbd, qBittorrent, NZBGet, and Transmission: pause/resume all or per item, remove (optionally with data), speeds, ETAs -- live via WebSocket snapshots.
+- **Tautulli** -- current Plex streams with quality/transcode badges, watch history, and top-stats.
+
+### Issues & AI remediation
+- **Report a problem** -- on any available title (admin-toggleable), scoped to a movie, series, or season; category chips plus free text.
+- **Issue threads** -- a chat-style thread per issue where the reporter, admins, and the AI agent converse; the agent's questions flip the issue to "Needs your reply".
+- **Agent fixes** -- proposed mutations render as safety-critical approval cards (typed summaries, quoted parameters, rationale as passive text); admins approve or deny inline or from a grouped queue, and every run has a read-only audit timeline with step ledger and cost.
+- **Live badges** -- Approvals / Issues / Agent fixes counts in the drawer, kept current over WebSocket.
+
+### AI assistant
+- **Multi-provider chat** (Anthropic, OpenAI, or Gemini -- server-configured) with SSE streaming, visible tool activity, and a poster carousel for results.
+- **Server-side tools** -- the assistant searches, checks availability, and requests on your behalf; admins can triage queues conversationally.
+- **One session everywhere** -- the inline shell chat and `/assistant` share the same conversation (30-minute idle expiry).
+
+### Notifications (iOS)
+- **Native APNs push** via a `MethodChannel` -- no Firebase. Tokens register with the backend per device; taps deep-link to the right screen (detail page, approvals, issue thread...).
+- **Per-category preferences** -- request decisions, new movies, new episodes, and admin-only categories (new requests, issues, agent fixes), plus a test-push diagnostic.
+
+### Settings
+- **Instances** (admin) -- add/edit all eight service types; test connections; set the global default (single-default invariant with takeover confirmation) or per-user default pins; assign users to a Chaptarr instance (the Books access grant); copy the per-instance **webhook URL** for Radarr/Sonarr > Connect.
+- **Users** (admin) -- roles, connect links / re-invites / device links, per-user password & passkey enablement (disabling is a real revoke), per-user request settings (tri-state inherit/on/off + default instances), test push.
+- **Request policy** (admin) -- global require-approval, season choice + default scope, quality choice + default profiles.
+- **Devices** (admin) -- every connected device with hardware model, last-seen, "This device" badge, and revoke.
+- **Credentials** (admin, write-only) -- TMDB, Trakt, and AI provider keys + provider/model selection.
+- **AI tools** (admin) -- per-tool toggles for chat + MCP, and a one-hour debug-logging switch.
+- **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, autonomy tier, provider/model, and run budgets.
+- **Notifications, Passkeys, Password** -- self-service (passkey/password screens appear when admin-enabled).
 
 ### Auth
-- **Server URL + login** -- point at your Cantinarr server, enter credentials
-- **Passkeys** -- native app passkey creation/sign-in on associated iOS, Android, and Windows deployments, with browser setup fallback
-- **Connect links** -- new users connect via a one-time link from their admin
-- **Automatic session restore** -- JWT stored in secure storage, auto-refreshes on 401
+- **Connect links** -- open one and the account connects instantly (`cantinarr://connect` deep links on iOS); passwordless by default with a long-lived, auto-refreshing session.
+- **First-run setup** -- the auth screen walks through server URL → admin account creation → an optional passkey offer.
+- **Passkeys & passwords** -- native passkey sign-in on associated deployments (iOS/Android/Windows platform plugins, browser fallback), password login where enabled.
+- **Session resilience** -- the session survives transport failures and VPN flaps; only a genuine 401 clears it. There is deliberately no logout button -- admins revoke devices server-side.
 
 ## Getting Started
 
 ### Prerequisites
-- Flutter SDK 3.2+
-- A running [Cantinarr server](../server/) instance
+- Flutter (stable channel), Dart SDK 3.3+
+- A running [Cantinarr server](../server/)
 
 ### Run the app
 ```bash
@@ -81,177 +118,105 @@ flutter pub get
 flutter run
 ```
 
-Native iOS passkeys require iOS 16+, the app build to include the Associated Domains entitlement for the server domain (`webcredentials:your.domain`), and the server to publish an AASA file containing the app's `TeamID.BundleID`. Android passkeys require the server to publish Digital Asset Links for the app package and signing certificate fingerprint. See the server README for the deployment environment variables.
+Native iOS passkeys require iOS 16+, the Associated Domains entitlement for the server domain (`webcredentials:your.domain`), and the server publishing an AASA file with the app's `TeamID.BundleID`. Push requires the APNs entitlement (production) and a push-gateway-enabled server. See the [server README](../server/README.md#configuration) for the deployment env vars.
 
 ### Build for web (embedded in server)
 ```bash
 flutter build web --release
-# Output in build/web/ -- copied into the Go binary during Docker build
+# Output in build/web/ -- copied into the Go binary during the Docker build (or `make`)
 ```
 
 ## Architecture
 
-The app follows a **feature-first** structure with clear separation between data, logic, and UI layers. State management uses [Riverpod](https://riverpod.dev/) throughout.
+Feature-first structure with data / logic / ui layers per feature. State is Riverpod with hand-written providers and hand-rolled `fromJson` models throughout -- no codegen. The backend is the only API surface:
 
-### Data Flow
-
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   Screens   │────>│  Providers   │────>│  Services   │
-│   (UI)      │<────│  (Logic)     │<────│  (Data)     │
-└─────────────┘     └──────────────┘     └─────────────┘
-                                               │
-                                    ┌──────────┴──────────┐
-                                    │                     │
-                              Direct APIs          Backend API
-                              (TMDB, Trakt)        (Auth, Requests,
-                                                    Arr, AI, WS)
-```
-
-### What talks to what
-
-| Feature | Data Source | Why |
+| Concern | Data source | Why |
 |---|---|---|
-| Browse & search | TMDB API (direct) | Speed -- one hop, CDN images, client IP rate limits |
-| Trending & lists | Trakt API (direct) | Real watch data, community curation |
-| Requests | Backend `/api/requests` | Server handles TMDB-to-TVDB bridging |
-| Movie management | Backend `/api/radarr/*` | API keys stay on server |
-| TV management | Backend `/api/sonarr/*` | API keys stay on server |
-| AI chat | Backend `/api/ai/chat` | Anthropic key + tool execution on server |
-| Real-time events | Backend `/api/ws` | WebSocket for download progress |
-| Auth | Backend `/api/auth/*` | JWT tokens |
-| Config | Backend `/api/config` | TMDB key, Trakt ID, available services |
+| Discovery, search, media detail | Backend `/api/discover`, `/api/media`, `/api/trakt` | TMDB/Trakt keys stay server-side |
+| Poster/backdrop images | TMDB CDN (direct) + one shared tuned image cache | CDN images need no key |
+| Requests & approvals | Backend `/api/requests`, `/api/admin/requests` | ID bridging + policy live server-side |
+| Arr management | Backend `/api/instances/{id}/api/v3` (verbatim proxy) | API keys never reach devices; reads allowed for users, writes admin-only |
+| Books | Backend proxy to Chaptarr (Readarr API v1) | Per-user grant enforced server-side |
+| AI chat | Backend `/api/ai/chat` (SSE) | Provider keys + tool execution server-side |
+| Realtime | Backend `/api/ws` | Queue snapshots, status pings, badges |
+| Push | Native APNs token → backend → push gateway | No Firebase |
+
+Realtime consumption is provider-based: a raw event stream fans out into typed, auto-disposing providers (`downloads_queue`, `arr_queue_changed`, `request_status_changed`, `request_decision`, `issue_*`, `agent_action_*`, `remediation_autodispatch_disabled`); screens pair WS pings with silent refetch and a polling fallback, so a dead socket degrades gracefully.
 
 ## Project Structure
 
 ```
-app/
-├── lib/
-│   ├── main.dart                              # Entry point
-│   ├── app.dart                               # MaterialApp with Riverpod
-│   │
-│   ├── core/
-│   │   ├── config/app_config.dart             # Constants, TMDB image URLs
-│   │   ├── models/
-│   │   │   ├── backend_connection.dart        # Server URL, JWT, services
-│   │   │   └── user_profile.dart              # User ID, name, role
-│   │   ├── network/
-│   │   │   ├── backend_client.dart            # Authenticated Dio instance
-│   │   │   ├── backend_auth_interceptor.dart  # Auto JWT refresh on 401
-│   │   │   └── websocket_client.dart          # Real-time events, auto-reconnect
-│   │   ├── storage/
-│   │   │   ├── secure_storage.dart            # Encrypted JWT + server URL
-│   │   │   └── preferences.dart               # SharedPreferences provider
-│   │   ├── theme/app_theme.dart               # Dark-first design system
-│   │   └── widgets/                           # Shared UI components
-│   │       ├── media_card.dart                # Poster card with shimmer
-│   │       ├── media_header.dart              # Backdrop + gradient header
-│   │       ├── horizontal_item_row.dart       # Scrollable media row
-│   │       ├── shimmer_loading.dart           # Loading placeholders
-│   │       ├── search_bar.dart                # Debounced search input
-│   │       └── error_banner.dart              # Dismissible error display
-│   │
-│   ├── features/
-│   │   ├── auth/                              # Login & registration
-│   │   │   ├── data/auth_service.dart         # Login, register, refresh, config
-│   │   │   ├── logic/auth_provider.dart       # Session state (AsyncNotifier)
-│   │   │   └── ui/
-│   │   │       ├── login_screen.dart          # Server URL + credentials
-│   │   │
-│   │   ├── discover/                          # Browse & search
-│   │   │   ├── data/
-│   │   │   │   ├── tmdb_api_service.dart      # TMDB API v3 client
-│   │   │   │   ├── tmdb_models.dart           # MediaItem, MovieDetail, TVDetail
-│   │   │   │   ├── trakt_api_service.dart     # Trakt API v2 client
-│   │   │   │   └── trakt_models.dart          # TraktItem, TraktList
-│   │   │   ├── logic/
-│   │   │   │   ├── discover_provider.dart     # Category state management
-│   │   │   │   └── paged_loader.dart          # Infinite scroll pagination
-│   │   │   └── ui/
-│   │   │       ├── discover_screen.dart       # Main browse screen
-│   │   │       ├── category_row.dart          # Horizontal category row
-│   │   │       ├── filter_sheet.dart          # Genre/year/provider filters
-│   │   │       └── search_results_view.dart   # Search results grid
-│   │   │
-│   │   ├── media_detail/                      # Movie & TV detail screens
-│   │   │   ├── logic/media_detail_provider.dart
-│   │   │   └── ui/
-│   │   │       ├── media_detail_screen.dart   # Full detail with backdrop
-│   │   │       ├── season_table.dart          # Per-season availability + request
-│   │   │       └── trailer_player.dart        # YouTube trailer embed
-│   │   │
-│   │   ├── request/                           # Media requesting
-│   │   │   ├── data/request_service.dart      # Backend request API calls
-│   │   │   ├── logic/request_provider.dart    # Per-item request state
-│   │   │   └── ui/
-│   │   │       ├── request_button.dart        # One-tap request button
-│   │   │       └── request_status_sheet.dart  # Status detail sheet
-│   │   │
-│   │   ├── radarr/                            # Movie management (admin)
-│   │   │   ├── data/
-│   │   │   │   ├── radarr_api_service.dart    # Proxied via backend
-│   │   │   │   └── radarr_models.dart
-│   │   │   ├── logic/radarr_movies_provider.dart
-│   │   │   └── ui/
-│   │   │       ├── radarr_home_screen.dart
-│   │   │       └── radarr_movie_list.dart
-│   │   │
-│   │   ├── sonarr/                            # TV management (admin)
-│   │   │   ├── data/
-│   │   │   │   ├── sonarr_api_service.dart    # Proxied via backend
-│   │   │   │   └── sonarr_models.dart
-│   │   │   ├── logic/sonarr_series_provider.dart
-│   │   │   └── ui/
-│   │   │       ├── sonarr_home_screen.dart
-│   │   │       └── sonarr_series_list.dart
-│   │   │
-│   │   ├── ai_assistant/                      # AI chat
-│   │   │   ├── data/
-│   │   │   │   ├── ai_chat_service.dart       # SSE streaming from backend
-│   │   │   │   └── ai_models.dart             # ChatMessage, ChatRole
-│   │   │   ├── logic/ai_chat_provider.dart    # Chat state + streaming
-│   │   │   └── ui/
-│   │   │       ├── ai_chat_screen.dart
-│   │   │       └── chat_bubble.dart
-│   │   │
-│   │   ├── settings/ui/settings_screen.dart   # Server info, account, logout
-│   │   ├── setup_wizard/ui/                   # First-run setup
-│   │   └── shell/ui/app_shell.dart            # Bottom nav + drawer
-│   │
-│   └── navigation/app_router.dart             # GoRouter with auth guard
-│
-├── pubspec.yaml
-└── test/
+app/lib/
+├── main.dart / app.dart          # Entry, MaterialApp, deep-link listener
+├── core/
+│   ├── config/                   # Timeouts, debounce, TMDB image URL helpers
+│   ├── models/                   # BackendConnection, UserProfile, AppModule
+│   ├── network/                  # Dio client + JWT refresh interceptor, WS client,
+│   │                             #   shared image cache (1000 objects / 30-day stale)
+│   ├── providers/                # Realtime event fan-out, instances, modules
+│   ├── storage/                  # Secure tokens + stable device identity, prefs
+│   ├── theme/                    # The cantina design system
+│   └── widgets/                  # MediaCard, StatusPill, InstanceDropdown, sheets...
+├── features/
+│   ├── auth/                     # Auth screen (setup/login/connect), passkeys, session
+│   ├── ai_assistant/             # SSE chat, tool activity, media carousel
+│   ├── chaptarr/                 # Books module: library/queue/history/wanted + doctor
+│   ├── dashboard/                # Movies/TV/Releases/Books home tabs
+│   ├── discover/                 # Discovery rows + multi-search (backend-proxied)
+│   ├── downloads/                # Unified download-client queue + history
+│   ├── issues/                   # Report-a-problem, threads, agent approvals + audit
+│   ├── media_detail/             # Detail screens, season table, request surface
+│   ├── notifications/            # APNs registration, prefs, deep-link routing
+│   ├── person/                   # Cast/crew detail sheet
+│   ├── radarr/                   # Movie management: library/queue/history/wanted/calendar
+│   ├── request/                  # Request buttons, options sheet, status sheet
+│   ├── settings/                 # Everything under Settings (see Features)
+│   ├── setup_wizard/             # Static onboarding walkthrough + Plex guide
+│   ├── shell/                    # App shell: drawer, search bar, inline AI
+│   ├── sonarr/                   # TV management + episode tools + import doctor engine
+│   └── tautulli/                 # Plex activity/history/stats
+└── navigation/app_router.dart    # GoRouter: shell + module tab shells + guards
 ```
+
+## Navigation
+
+An outer shell (drawer + persistent search bar; permanent rail on wide screens) hosts per-module bottom-tab shells:
+
+| Module | Tabs | Access |
+|---|---|---|
+| `/dashboard` | Movies · TV · Releases · Books¹ | everyone |
+| `/radarr` | Library · Queue · History · Wanted · Calendar | admin |
+| `/sonarr` | Library · Queue · History · Wanted · Calendar | admin |
+| `/chaptarr` | Library · Queue · History · Wanted | admin |
+| `/downloads` | Queue · History | admin |
+| `/tautulli` | Activity · History · Stats | admin |
+
+¹ Books appears only with a Chaptarr grant.
+
+Full-screen routes: `/login`, `/assistant`, `/detail/:type/:id`, `/approvals`, `/issues`, `/issues/:id`, `/agent-actions`, `/agent-runs/:id`, `/settings/...`, `/plex-guide`, `/setup`.
+
+The router guard redirects unauthenticated users to `/login` and bounces non-admins from management modules to `/dashboard/movies`. Modules with multiple instances get an instance selector in the drawer/app bar.
 
 ## Key Dependencies
 
 | Package | Purpose |
 |---|---|
-| `flutter_riverpod` | State management |
-| `go_router` | Declarative routing with auth redirects |
-| `dio` | HTTP client with interceptors |
-| `cached_network_image` | Image caching for TMDB posters |
-| `flutter_secure_storage` | Encrypted JWT storage |
-| `web_socket_channel` | Real-time backend events |
-| `shimmer` | Loading placeholder animations |
-| `flutter_animate` | UI transitions and effects |
-| `equatable` | Value equality for models |
+| `flutter_riverpod` | State management (hand-written providers) |
+| `go_router` | Shell + stateful tab-shell routing with guards |
+| `dio` | HTTP client with auth/refresh interceptor |
+| `web_socket_channel` | Realtime backend events |
+| `cached_network_image` + `flutter_cache_manager` | Tuned shared image cache |
+| `flutter_secure_storage` / `shared_preferences` | Tokens + device id / lightweight prefs |
+| `passkeys_ios` / `passkeys_android` / `passkeys_windows` | Native WebAuthn |
+| `app_links` | `cantinarr://` connect-link deep linking |
+| `url_launcher` | External links (trailers, IMDb/TVDB/TMDB/Trakt) |
+| `device_info_plus` / `package_info_plus` | Device naming, version display |
+| `shimmer`, `intl`, `uuid` | Loading placeholders, formatting, ids |
 
-## Navigation
+## Platforms & CI
 
-Four-tab bottom navigation with GoRouter:
-
-| Tab | Path | Screen | Data Source |
-|---|---|---|---|
-| Discover | `/discover` | Browse & search | TMDB + Trakt |
-| Movies | `/radarr` | Radarr library + movie detail | Backend proxy |
-| TV Shows | `/sonarr` | Sonarr library + season/episode drill-down | Backend proxy |
-| Assistant | `/assistant` | AI chat | Backend SSE |
-
-Full-screen routes: `/detail/:type/:id`, `/settings`, `/login`
-
-Auth guard redirects unauthenticated users to `/login`. Authenticated users on `/login` redirect to `/discover`.
+- **iOS** and **web** are the shipping targets. Web is built in CI and embedded in the server image; iOS auto-deploys to TestFlight on `main` (manual signing via repo secrets). Android/macOS/Windows/Linux directories are unbuilt scaffolding.
+- CI runs `flutter analyze --no-fatal-infos`, `flutter test`, and `flutter build web --release` on every PR.
 
 ## License
 

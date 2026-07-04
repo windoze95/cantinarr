@@ -40,3 +40,7 @@ app/pubspec.lock
 *.db
 *.db-wal
 *.db-shm
+
+# Demo deployment material (TLS origin certs/keys live here — never commit)
+demo/
+*.pem
