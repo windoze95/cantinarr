@@ -58,5 +58,11 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 			req.Header.Set("X-Api-Key", apiKey)
 		},
 	}
+	// The /api router pre-sets Content-Type: application/json on every
+	// response, and ReverseProxy appends the upstream's header rather than
+	// replacing it. Browsers merge the duplicates into a value Flutter web
+	// can't parse as JSON, so drop the default and let the upstream header
+	// through verbatim.
+	w.Header().Del("Content-Type")
 	proxy.ServeHTTP(w, r)
 }
