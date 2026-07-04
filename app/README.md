@@ -87,18 +87,18 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 
 ### Notifications (iOS)
 - **Native APNs push** via a `MethodChannel` -- no Firebase. Tokens register with the backend per device; taps deep-link to the right screen (detail page, approvals, issue thread...).
-- **Per-category preferences** -- request decisions, new movies, new episodes, and admin-only categories (new requests, issues, agent fixes), plus a test-push diagnostic.
+- **Per-category preferences** -- request decisions, new movies, new episodes, and admin-only categories (new requests, issues, agent fixes, Plex access requests), plus a test-push diagnostic.
 
 ### Settings
 - **Instances** (admin) -- add/edit all eight service types; test connections; set the global default (single-default invariant with takeover confirmation) or per-user default pins; assign users to a Chaptarr instance (the Books access grant); assigning a user pinned to a sibling instance asks for confirmation before removing them from it; copy the per-instance **webhook URL** for Radarr/Sonarr > Connect.
-- **Users** (admin) -- roles, connect links / re-invites / device links, per-user password & passkey enablement (disabling is a real revoke), per-user request settings (tri-state inherit/on/off + default instances), test push.
+- **Users** (admin) -- roles, connect links / re-invites / device links, per-user password & passkey enablement (disabling is a real revoke), per-user request settings (tri-state inherit/on/off + default instances), test push. Shows each user's shared Plex email with an **Invite in Plex…** action (copies the address, opens Plex's Manage Library Access page).
 - **Request policy** (admin) -- global require-approval, season choice + default scope, quality choice + default profiles.
 - **Devices** (admin) -- every connected device with hardware model, last-seen, "This device" badge, and revoke.
 - **Credentials** (admin, write-only) -- TMDB, Trakt, and AI provider keys + provider/model selection.
 - **AI tools** (admin) -- per-tool toggles for chat + MCP, and a one-hour debug-logging switch.
 - **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, autonomy tier, provider/model, and run budgets.
 - **Notifications, Passkeys, Password** -- self-service (passkey/password screens appear when admin-enabled).
-- **Watch on Plex guide** -- requester-focused walkthrough (install the Plex app, sign in, accept the invite, start watching); hideable from the guide itself or via a Settings toggle that also removes it from the menu.
+- **Watch on Plex guide** -- requester-focused walkthrough (install the Plex app, sign in, accept the invite, start watching) with a **Request your invite** step: the user shares their Plex email and admins get a push pointing at the Users screen. Hideable from the guide itself or via a Settings toggle that also removes it from the menu.
 
 ### Auth
 - **Connect links** -- open one and the account connects instantly (`cantinarr://connect` deep links on iOS); passwordless by default with a long-lived, auto-refreshing session.

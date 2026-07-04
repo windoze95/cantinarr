@@ -114,6 +114,7 @@ POST   /api/auth/passkey/login/begin|finish   # public: WebAuthn login
 POST   /api/auth/passkey/setup/begin|finish   # public: passkey setup via short-lived link
 GET    /api/auth/me                        # user: profile + permissions
 POST   /api/auth/password                  # user: set password (admin-enabled users only)
+POST   /api/auth/plex-email                # user: share the email for a Plex invite (notifies admins on change)
 POST   /api/auth/passkey/register/begin|finish  # user: add passkey (admin-enabled only)
 POST   /api/auth/passkey/setup-link        # user: mint a browser passkey-setup URL
 GET    /api/auth/passkeys                  # user: list own passkeys
@@ -251,7 +252,7 @@ WebSocket events:
 - `request_status_changed` -- `{ tmdb_id, media_type, status }` (queue polling **and** arr webhooks; status here is `available`, `partially_available`, `requested`, or `unavailable` -- note the longer spelling vs the REST `partial`)
 - `downloads_queue` -- full download-client queue snapshot `{ instance_id, paused, speed_bps, items }`, sent on change
 - `arr_queue_changed` -- `{ instance_id, service_type }` invalidation ping; clients refetch via REST
-- targeted events fanned out per user/admin: `request_pending`, `request_decision`, `issue_created`, `issue_updated`, `agent_action_pending`, `agent_action_decided`, `remediation_autodispatch_disabled`
+- targeted events fanned out per user/admin: `request_pending`, `request_decision`, `issue_created`, `issue_updated`, `agent_action_pending`, `agent_action_decided`, `remediation_autodispatch_disabled`, `plex_access_request`
 
 ## Architecture
 
@@ -323,8 +324,9 @@ Notification categories (per-user preferences; admin-scoped ones are enforced in
 | `new_episode` | on | everyone | new episode(s) import for a series |
 | `issue_created` | on | admins | a problem is reported/detected |
 | `agent_action_pending` | on | admins | the agent proposed a fix needing approval |
+| `plex_access_request` | on | admins | a user shared their Plex email for a server invite (collapse-keyed per user) |
 
-Bodies are server-authored templates (untrusted text never hits the lock screen), sends are fire-and-forget with a 30s timeout, a 10-minute in-process dedupe window absorbs the overlap between queue polling and webhooks, and tokens the gateway reports dead are pruned automatically. Payloads carry deep-link data (`type`, `tmdb_id`/`issue_id`) the app routes on tap.
+Bodies are server-authored templates (untrusted text never hits the lock screen), sends are fire-and-forget with a 30s timeout, a 10-minute in-process dedupe window absorbs the overlap between queue polling and webhooks, and tokens the gateway reports dead are pruned automatically. Payloads carry deep-link data (`type`, `tmdb_id`/`issue_id`/`user_id`) the app routes on tap.
 
 ### MCP server endpoint
 

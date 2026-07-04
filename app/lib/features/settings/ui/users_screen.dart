@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -44,6 +45,27 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  /// Copies the user's Plex email and opens Plex's Manage Library Access page,
+  /// where the admin pastes it into Grant Library Access. Plex offers no way
+  /// to prefill the invite, so copy-then-paste is the fastest honest flow.
+  Future<void> _inviteInPlex(UserSummary user) async {
+    await Clipboard.setData(ClipboardData(text: user.plexEmail));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Copied ${user.plexEmail} — paste it into Grant Library Access',
+          ),
+        ),
+      );
+    }
+    await launchUrl(
+      Uri.parse(
+          'https://app.plex.tv/desktop/#!/settings/manage-library-access'),
+      mode: LaunchMode.externalApplication,
+    );
   }
 
   Future<void> _changeRole(UserSummary user, String newRole) async {
@@ -328,6 +350,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             onDelete: () => _deleteUser(user),
             onResendInvite: () => _resendInvite(user),
             onSendTestPush: () => _sendTestPush(user),
+            onInviteInPlex: () => _inviteInPlex(user),
             onRequestSettings: () => context.push(
               '/settings/users/${user.id}/request-settings',
               extra: user.username,
@@ -353,6 +376,7 @@ class _UserTile extends StatelessWidget {
     required this.onDelete,
     required this.onResendInvite,
     required this.onSendTestPush,
+    required this.onInviteInPlex,
     required this.onSetAuthMethods,
     required this.onRequestSettings,
   });
@@ -363,6 +387,7 @@ class _UserTile extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onResendInvite;
   final VoidCallback onSendTestPush;
+  final VoidCallback onInviteInPlex;
   final void Function({bool? passwordEnabled, bool? passkeyEnabled})
       onSetAuthMethods;
   final VoidCallback onRequestSettings;
@@ -428,6 +453,8 @@ class _UserTile extends StatelessWidget {
               const _Tag(label: 'Password', color: AppTheme.textSecondary),
             if (user.passkeyEnabled)
               const _Tag(label: 'Passkey', color: AppTheme.textSecondary),
+            if (user.plexEmail.isNotEmpty)
+              _Tag(label: user.plexEmail, color: AppTheme.textSecondary),
           ],
         ),
       ),
@@ -451,6 +478,9 @@ class _UserTile extends StatelessWidget {
             break;
           case 'test_push':
             onSendTestPush();
+            break;
+          case 'invite_in_plex':
+            onInviteInPlex();
             break;
           case 'request_settings':
             onRequestSettings();
@@ -494,6 +524,17 @@ class _UserTile extends StatelessWidget {
                     ? 'New invite link'
                     : (_needsInvite ? 'Re-invite' : 'Issue device link'),
               ),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        // The user shared their Plex email: copy it and jump to Plex's
+        // sharing settings to send the actual invite.
+        if (user.plexEmail.isNotEmpty)
+          const PopupMenuItem(
+            value: 'invite_in_plex',
+            child: ListTile(
+              leading: Icon(Icons.play_circle_outline),
+              title: Text('Invite in Plex…'),
               contentPadding: EdgeInsets.zero,
             ),
           ),

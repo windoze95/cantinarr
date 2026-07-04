@@ -168,6 +168,9 @@ func main() {
 	} else {
 		notifier = push.NewComposite(wsHub)
 	}
+	// The auth handler notifies admins when a user shares their Plex email
+	// (plex_access_request); wired late because the composite needs the hub.
+	authHandler.SetNotifier(notifier)
 	requestService := request.NewService(database, registry, bridge, notifier)
 	requestHandler := request.NewHandler(requestService)
 

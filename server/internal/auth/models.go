@@ -11,9 +11,12 @@ type User struct {
 	// PasswordEnabled / PasskeyEnabled are admin-controlled policy: whether the
 	// account may create a password / register a passkey. Both default off for
 	// new users so the default sign-in is a connect link.
-	PasswordEnabled bool      `json:"password_enabled"`
-	PasskeyEnabled  bool      `json:"passkey_enabled"`
-	CreatedAt       time.Time `json:"created_at"`
+	PasswordEnabled bool `json:"password_enabled"`
+	PasskeyEnabled  bool `json:"passkey_enabled"`
+	// PlexEmail is the email the user shared so an admin can invite them to
+	// the Plex server. Empty until the user submits one.
+	PlexEmail string    `json:"plex_email"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // UserSummary is an enriched view of a user for admin user-management screens.
@@ -30,6 +33,7 @@ type UserSummary struct {
 	PasswordEnabled  bool         `json:"password_enabled"`
 	PasskeyEnabled   bool         `json:"passkey_enabled"`
 	HasPendingInvite bool         `json:"has_pending_invite"`
+	PlexEmail        string       `json:"plex_email"`
 }
 
 // UpdateUserRoleRequest changes a user's role.
@@ -117,6 +121,12 @@ type SetupRequest struct {
 // SetPasswordRequest sets or replaces the authenticated user's password.
 type SetPasswordRequest struct {
 	Password string `json:"password"`
+}
+
+// SetPlexEmailRequest sets or replaces the email the authenticated user wants
+// their Plex invite sent to.
+type SetPlexEmailRequest struct {
+	Email string `json:"email"`
 }
 
 type AuthStatusResponse struct {

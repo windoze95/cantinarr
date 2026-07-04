@@ -10,12 +10,27 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// AdminNotifier is the notification fan-out the handler uses for admin-scoped
+// events (currently only "plex_access_request"). Declared here so auth stays
+// free of a push dependency; *push.Composite satisfies it.
+type AdminNotifier interface {
+	NotifyAdmins(eventType string, data map[string]interface{})
+}
+
 type Handler struct {
-	service *Service
+	service  *Service
+	notifier AdminNotifier
 }
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+// SetNotifier wires the admin notification fan-out after construction: the
+// composite is built later in startup than the auth handler (it needs the
+// WebSocket hub, which needs this handler's service).
+func (h *Handler) SetNotifier(n AdminNotifier) {
+	h.notifier = n
 }
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
@@ -331,6 +346,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		"has_password":     user.PasswordHash != "",
 		"password_enabled": user.PasswordEnabled,
 		"passkey_enabled":  user.PasskeyEnabled,
+		"plex_email":       user.PlexEmail,
 	})
 }
 
@@ -363,6 +379,45 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		}
 		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// SetPlexEmail stores the email the authenticated user wants their Plex invite
+// sent to, and — when the address is new or changed — notifies admins so they
+// can send the invite from Plex.
+func (h *Handler) SetPlexEmail(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	var req SetPlexEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	changed, err := h.service.SetPlexEmail(claims.UserID, req.Email)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidPlexEmail):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "enter a valid email address"})
+		case errors.Is(err, ErrUserNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		}
+		return
+	}
+
+	if changed && h.notifier != nil {
+		h.notifier.NotifyAdmins("plex_access_request", map[string]interface{}{
+			"user_id":  claims.UserID,
+			"username": claims.Username,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

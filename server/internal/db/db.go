@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'user',
     password_enabled BOOLEAN NOT NULL DEFAULT 0,
     passkey_enabled BOOLEAN NOT NULL DEFAULT 0,
+    plex_email TEXT NOT NULL DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -118,7 +119,8 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     new_movie        INTEGER NOT NULL DEFAULT 1,
     new_episode      INTEGER NOT NULL DEFAULT 1,
     issue_created    INTEGER NOT NULL DEFAULT 1,
-    agent_action_pending INTEGER NOT NULL DEFAULT 1
+    agent_action_pending INTEGER NOT NULL DEFAULT 1,
+    plex_access_request INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS connect_tokens (
@@ -383,6 +385,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		// Connect→Webhook callbacks. Empty = not yet issued; generated lazily
 		// on first read (instance.Store.WebhookToken) and encrypted at rest.
 		{alter: "ALTER TABLE service_instances ADD COLUMN webhook_token TEXT NOT NULL DEFAULT ''"},
+		// Plex access requests: the email a user shares so an admin can invite
+		// them to the Plex server. Empty = not yet shared.
+		{alter: "ALTER TABLE users ADD COLUMN plex_email TEXT NOT NULL DEFAULT ''"},
+		// Admins are notified when a user shares their Plex email for an
+		// invite, on by default. New on existing databases.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN plex_access_request INTEGER NOT NULL DEFAULT 1"},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {

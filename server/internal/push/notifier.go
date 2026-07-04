@@ -93,6 +93,8 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		n.notifyIssueCreated(client, data)
 	case CategoryAgentActionPending:
 		n.notifyAgentActionPending(client, data)
+	case CategoryPlexAccessRequest:
+		n.notifyPlexAccessRequested(client, data)
 	}
 }
 
@@ -166,6 +168,31 @@ func (n *Notifier) notifyAgentActionPending(client *Client, data map[string]inte
 		opts.Badge = &count
 	}
 	n.sendWithOptions(client, recipients, "A fix needs your approval", "The assistant proposed a fix for a problem and needs you to approve it", out, opts)
+}
+
+// notifyPlexAccessRequested pushes "a user shared their Plex email, invite
+// them" to opted-in admins. The body is a FIXED template — the username and
+// email are user-controlled and never placed on the lock screen; user_id rides
+// along for tap deep-linking to the Users screen. A collapse id per user keeps
+// a user editing their email from stacking alerts.
+func (n *Notifier) notifyPlexAccessRequested(client *Client, data map[string]interface{}) {
+	recipients, err := n.prefs.usersOptedInto(CategoryPlexAccessRequest)
+	if err != nil {
+		n.logger.Error("push: resolve plex_access_request recipients", "err", err)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	out := map[string]any{"type": CategoryPlexAccessRequest}
+	if v, ok := data["user_id"]; ok {
+		out["user_id"] = v
+	}
+	var opts SendOptions
+	if id, ok := intval(data["user_id"]); ok {
+		opts.CollapseID = fmt.Sprintf("%s:%d", CategoryPlexAccessRequest, id)
+	}
+	n.sendWithOptions(client, recipients, "Plex access request", "Someone shared their Plex email and is waiting for an invite", out, opts)
 }
 
 // NotifyNewMovie pushes a "movie became available" alert to every user opted

@@ -18,7 +18,7 @@ func TestPrefsGetDefaultsForMissingRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	want := Prefs{RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, IssueCreated: true, AgentActionPending: true}
+	want := Prefs{RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true}
 	if got != want {
 		t.Errorf("default prefs = %+v, want %+v", got, want)
 	}
@@ -32,7 +32,7 @@ func TestPrefsSetThenGet(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
 
 	store := NewPrefsStore(database)
-	want := Prefs{RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true}
+	want := Prefs{RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true, PlexAccessRequest: true}
 	if err := store.Set(1, want); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
