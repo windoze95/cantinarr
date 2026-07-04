@@ -141,6 +141,18 @@ func seriesAvailabilityStatus(a seriesAvailability, found bool) string {
 	return status
 }
 
+// InvalidateAvailabilityDigests drops the cached movie/series availability
+// digests for one instance so the next status or history read refetches.
+// Called by the arr webhook receiver when the library changes out-of-band
+// (imports, deletes, adds done directly in the arr).
+func (s *Service) InvalidateAvailabilityDigests(instanceID string) {
+	if s.libraryCache == nil || instanceID == "" {
+		return
+	}
+	s.libraryCache.Delete("movie-availability:" + instanceID)
+	s.libraryCache.Delete("series-availability:" + instanceID)
+}
+
 // getRadarrWithID resolves the same Radarr client as getRadarr but also
 // returns the instance id it resolved to, for cache keying.
 func (s *Service) getRadarrWithID(userID int64) (*radarr.Client, string) {

@@ -45,6 +45,13 @@ func (c *Cache) Set(key string, data []byte, ttl time.Duration) {
 	c.entries[key] = entry{data: data, expiresAt: time.Now().Add(ttl)}
 }
 
+// Delete removes a key immediately, regardless of its TTL.
+func (c *Cache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
+}
+
 // Close stops the eviction goroutine.
 func (c *Cache) Close() {
 	close(c.stop)

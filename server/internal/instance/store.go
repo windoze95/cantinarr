@@ -1,7 +1,9 @@
 package instance
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"time"
@@ -149,6 +151,61 @@ func (s *Store) Update(inst *Instance) error {
 		return fmt.Errorf("instance not found: %s", inst.ID)
 	}
 	return nil
+}
+
+// WebhookToken returns the instance's webhook bearer token, generating and
+// persisting one on first use (which also backfills instances that predate the
+// column). The token authorizes the arrs' Connect→Webhook callbacks — those
+// requests carry no user session, so the token IS the auth. Encrypted at rest
+// like the other instance secrets.
+func (s *Store) WebhookToken(id string) (string, error) {
+	var stored string
+	err := s.db.QueryRow(
+		"SELECT webhook_token FROM service_instances WHERE id = ?", id,
+	).Scan(&stored)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("instance not found: %s", id)
+	}
+	if err != nil {
+		return "", fmt.Errorf("get webhook token: %w", err)
+	}
+	if stored != "" {
+		token, err := s.cipher.Decrypt(stored)
+		if err != nil {
+			return "", fmt.Errorf("decrypt webhook token for %s (wrong encryption key?): %w", id, err)
+		}
+		return token, nil
+	}
+
+	token, err := newWebhookToken()
+	if err != nil {
+		return "", err
+	}
+	encrypted, err := s.cipher.Encrypt(token)
+	if err != nil {
+		return "", fmt.Errorf("encrypt webhook token: %w", err)
+	}
+	// Claim only the empty slot; a concurrent first read may have won.
+	res, err := s.db.Exec(
+		"UPDATE service_instances SET webhook_token = ? WHERE id = ? AND webhook_token = ''",
+		encrypted, id,
+	)
+	if err != nil {
+		return "", fmt.Errorf("store webhook token: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return token, nil
+	}
+	// Lost the race: return the winner's token.
+	return s.WebhookToken(id)
+}
+
+func newWebhookToken() (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate webhook token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // Delete removes an instance by ID.
