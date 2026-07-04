@@ -413,6 +413,20 @@ func (c *Client) GrabRelease(guid string, indexerID int) error {
 	return nil
 }
 
+// SetMoviesMonitored sets the monitored flag on the given movies via Radarr's
+// bulk movie editor, which applies only the fields present in the payload (no
+// full-object round-trip needed).
+func (c *Client) SetMoviesMonitored(movieIDs []int, monitored bool) error {
+	if len(movieIDs) == 0 {
+		return nil
+	}
+	body := map[string]any{"movieIds": movieIDs, "monitored": monitored}
+	if err := c.do("PUT", "/api/v3/movie/editor", body, nil); err != nil {
+		return fmt.Errorf("radarr set movies monitored: %w", err)
+	}
+	return nil
+}
+
 // triggerCommand posts a command payload to Radarr's command endpoint.
 func (c *Client) triggerCommand(payload map[string]any) error {
 	if err := c.do("POST", "/api/v3/command", payload, nil); err != nil {

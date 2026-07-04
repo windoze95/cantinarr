@@ -43,6 +43,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// per-season picker.
   final GlobalKey _seasonsKey = GlobalKey();
 
+  /// The request option set the server allows this user (season/quality
+  /// choice). Loaded once for TV so the season picker can hide its request
+  /// affordances when the user may not choose seasons — the server ignores an
+  /// explicit season list from such users, so offering the picker would be a
+  /// silent no-op.
+  RequestOptions? _requestOptions;
+
   @override
   void initState() {
     super.initState();
@@ -61,7 +68,16 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
     _detailNotifier.load();
     _requestNotifier.checkStatus();
+    if (widget.mediaType == MediaType.tv) {
+      _requestNotifier.fetchOptions().then((opts) {
+        if (mounted && opts != null) setState(() => _requestOptions = opts);
+      });
+    }
   }
+
+  /// Whether the user may pick specific seasons. Defaults to true (the
+  /// server's out-of-the-box global setting) until the options load.
+  bool get _canChooseSeasons => _requestOptions?.canChooseSeason ?? true;
 
   @override
   Widget build(BuildContext context) {
@@ -304,6 +320,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                         notifier: _requestNotifier,
                         title: state.title,
                         tvdbId: state.tvDetail?.externalIds?.tvdbId,
+                        canRequest: _canChooseSeasons,
                       ),
                     ],
 
@@ -358,12 +375,20 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   Future<void> _onRequest() async {
     final s = _detailNotifier.state;
 
+    final options = await _requestNotifier.fetchOptions();
+    if (options != null && mounted) {
+      setState(() => _requestOptions = options);
+    }
+
     // A partially-available show: "Request More" drops the user into the
     // per-season picker below rather than the coarse season-scope sheet, so
-    // they can choose exactly which missing seasons to add.
+    // they can choose exactly which missing seasons to add. Users who may not
+    // choose seasons fall through to the coarse flow instead (the server
+    // applies their default season scope to the missing seasons).
     if (widget.mediaType == MediaType.tv &&
         _requestNotifier.state.status == RequestStatus.partial &&
-        s.seasons.isNotEmpty) {
+        s.seasons.isNotEmpty &&
+        (options?.canChooseSeason ?? true)) {
       _scrollToSeasons();
       return;
     }
@@ -371,7 +396,6 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final title = s.title;
     final tvdbId = s.tvDetail?.externalIds?.tvdbId;
 
-    final options = await _requestNotifier.fetchOptions();
     String? seasonScope;
     int? qualityProfileId;
     if (options != null && options.hasChoices) {

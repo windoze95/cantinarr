@@ -350,9 +350,9 @@ class RequestService {
       };
       if (title != null) body['title'] = title;
       if (tvdbId != null && tvdbId != 0) body['tvdb_id'] = tvdbId;
-      // An explicit season list routes the server to the seasonpass path
-      // (monitor exactly these seasons). It takes precedence over season_scope,
-      // so only send the coarse scope when no explicit list was chosen.
+      // An explicit season list makes the server monitor exactly these
+      // seasons. It takes precedence over season_scope, so only send the
+      // coarse scope when no explicit list was chosen.
       if (seasons != null && seasons.isNotEmpty) {
         body['seasons'] = seasons;
       } else if (seasonScope != null) {
