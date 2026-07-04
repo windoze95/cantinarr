@@ -625,6 +625,22 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
   }
 
+  /// Share or update the email this user wants their Plex invite sent to.
+  /// The server notifies admins when the address is new or changed.
+  Future<void> setPlexEmail(String email) async {
+    final current = state.valueOrNull;
+    final conn = current?.connection;
+    if (current == null || conn == null) throw Exception('Not authenticated');
+    final trimmed = email.trim();
+    await _authService.setPlexEmail(conn.serverUrl, conn.accessToken, trimmed);
+    final user = current.user;
+    if (user != null) {
+      state = AsyncData(
+        current.copyWith(user: user.copyWith(plexEmail: trimmed)),
+      );
+    }
+  }
+
   /// Generate a connect link for a new user (admin only).
   Future<ConnectTokenResponse> generateConnectToken(String name) async {
     final conn = state.valueOrNull?.connection;

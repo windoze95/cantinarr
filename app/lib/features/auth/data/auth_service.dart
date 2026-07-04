@@ -115,6 +115,21 @@ class AuthService {
     );
   }
 
+  /// Share or update the email the user wants their Plex invite sent to.
+  /// The server notifies admins when the address is new or changed.
+  Future<void> setPlexEmail(
+    String serverUrl,
+    String accessToken,
+    String email,
+  ) async {
+    final dio = _createDio(serverUrl);
+    await dio.post(
+      '/api/auth/plex-email',
+      data: {'email': email},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
   /// Fetch server configuration (TMDB key, available services, etc.).
   Future<ServerConfig> fetchConfig(
     String serverUrl,
@@ -421,6 +436,9 @@ class UserSummary {
   final bool passkeyEnabled;
   final bool hasPendingInvite;
 
+  /// The email this user shared for their Plex server invite ('' = none yet).
+  final String plexEmail;
+
   const UserSummary({
     required this.id,
     required this.username,
@@ -432,6 +450,7 @@ class UserSummary {
     required this.passwordEnabled,
     required this.passkeyEnabled,
     required this.hasPendingInvite,
+    this.plexEmail = '',
   });
 
   bool get isAdmin => role == 'admin';
@@ -450,6 +469,7 @@ class UserSummary {
         passwordEnabled: json['password_enabled'] as bool? ?? false,
         passkeyEnabled: json['passkey_enabled'] as bool? ?? false,
         hasPendingInvite: json['has_pending_invite'] as bool? ?? false,
+        plexEmail: json['plex_email'] as String? ?? '',
       );
 }
 

@@ -453,6 +453,89 @@ func TestSetPassword_RequiresEnabled(t *testing.T) {
 	}
 }
 
+func TestSetPlexEmail_StoresTrimsAndReportsChange(t *testing.T) {
+	svc := setupTestService(t)
+	guestID := inviteGuest(t, svc)
+
+	changed, err := svc.SetPlexEmail(guestID, "  pirate@example.com ")
+	if err != nil {
+		t.Fatalf("set plex email: %v", err)
+	}
+	if !changed {
+		t.Fatal("first submission should report changed")
+	}
+
+	user, err := svc.GetUser(guestID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if user.PlexEmail != "pirate@example.com" {
+		t.Fatalf("expected trimmed email, got %q", user.PlexEmail)
+	}
+
+	// Resubmitting the same address is a no-op so admins aren't re-notified.
+	changed, err = svc.SetPlexEmail(guestID, "pirate@example.com")
+	if err != nil {
+		t.Fatalf("resubmit plex email: %v", err)
+	}
+	if changed {
+		t.Fatal("identical resubmission should not report changed")
+	}
+
+	// A different address is a change again, and shows up in ListUsers.
+	changed, err = svc.SetPlexEmail(guestID, "corsair@example.com")
+	if err != nil || !changed {
+		t.Fatalf("expected changed update, got changed=%v err=%v", changed, err)
+	}
+	users, err := svc.ListUsers()
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	found := false
+	for _, u := range users {
+		if u.ID == guestID {
+			found = true
+			if u.PlexEmail != "corsair@example.com" {
+				t.Fatalf("ListUsers plex email = %q", u.PlexEmail)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("guest missing from ListUsers")
+	}
+}
+
+func TestSetPlexEmail_RejectsInvalid(t *testing.T) {
+	svc := setupTestService(t)
+	guestID := inviteGuest(t, svc)
+
+	for _, bad := range []string{
+		"",
+		"   ",
+		"no-at-sign",
+		"@nothing-before",
+		"nothing-after@",
+		"has space@example.com",
+		strings.Repeat("a", 250) + "@example.com",
+	} {
+		if _, err := svc.SetPlexEmail(guestID, bad); err != ErrInvalidPlexEmail {
+			t.Fatalf("email %q: expected ErrInvalidPlexEmail, got %v", bad, err)
+		}
+	}
+
+	user, err := svc.GetUser(guestID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if user.PlexEmail != "" {
+		t.Fatalf("rejected emails must not be stored, got %q", user.PlexEmail)
+	}
+
+	if _, err := svc.SetPlexEmail(999999, "ok@example.com"); err != ErrUserNotFound {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
 func TestSetUserAuthMethods_EnableAndRevokePassword(t *testing.T) {
 	svc := setupTestService(t)
 	guestID := inviteGuest(t, svc)

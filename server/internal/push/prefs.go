@@ -14,6 +14,7 @@ type Prefs struct {
 	NewEpisode         bool `json:"new_episode"`
 	IssueCreated       bool `json:"issue_created"`
 	AgentActionPending bool `json:"agent_action_pending"`
+	PlexAccessRequest  bool `json:"plex_access_request"`
 }
 
 // Notification categories. These are the wire values used by the preferences
@@ -29,6 +30,9 @@ const (
 	// CategoryAgentActionPending notifies admins that the AI agent proposed a fix
 	// awaiting their approval. Admin-scoped, on by default.
 	CategoryAgentActionPending = "agent_action_pending"
+	// CategoryPlexAccessRequest notifies admins that a user shared their Plex
+	// email and is waiting for a server invite. Admin-scoped, on by default.
+	CategoryPlexAccessRequest = "plex_access_request"
 )
 
 // defaultPrefs is the preference set applied when a user has no row. It must
@@ -41,6 +45,7 @@ var defaultPrefs = Prefs{
 	NewEpisode:         true,
 	IssueCreated:       true,
 	AgentActionPending: true,
+	PlexAccessRequest:  true,
 }
 
 // categoryColumn maps a category to its notification_prefs column and the
@@ -56,6 +61,7 @@ var categoryColumn = map[string]struct {
 	CategoryNewEpisode:         {"new_episode", defaultPrefs.NewEpisode},
 	CategoryIssueCreated:       {"issue_created", defaultPrefs.IssueCreated},
 	CategoryAgentActionPending: {"agent_action_pending", defaultPrefs.AgentActionPending},
+	CategoryPlexAccessRequest:  {"plex_access_request", defaultPrefs.PlexAccessRequest},
 }
 
 // PrefsStore reads and writes per-user notification preferences. It is safe to
@@ -74,10 +80,10 @@ func NewPrefsStore(db *sql.DB) *PrefsStore {
 func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 	p := defaultPrefs
 	err := s.db.QueryRow(
-		`SELECT request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending
+		`SELECT request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending, plex_access_request
 		 FROM notification_prefs WHERE user_id = ?`,
 		userID,
-	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.IssueCreated, &p.AgentActionPending)
+	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest)
 	if err == sql.ErrNoRows {
 		return defaultPrefs, nil
 	}
@@ -91,16 +97,17 @@ func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 func (s *PrefsStore) Set(userID int64, p Prefs) error {
 	_, err := s.db.Exec(
 		`INSERT INTO notification_prefs
-		   (user_id, request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		   (user_id, request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending, plex_access_request)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   request_decision = excluded.request_decision,
 		   request_pending  = excluded.request_pending,
 		   new_movie        = excluded.new_movie,
 		   new_episode      = excluded.new_episode,
 		   issue_created    = excluded.issue_created,
-		   agent_action_pending = excluded.agent_action_pending`,
-		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.IssueCreated, p.AgentActionPending,
+		   agent_action_pending = excluded.agent_action_pending,
+		   plex_access_request  = excluded.plex_access_request`,
+		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert notification prefs: %w", err)
@@ -128,9 +135,10 @@ func (s *PrefsStore) usersOptedInto(category string) ([]int64, error) {
 		 WHERE COALESCE(p.%s, %d) = 1`,
 		col.column, def,
 	)
-	// Admin-scoped categories: only admins act on pending requests, issues, or
-	// agent-action approvals.
-	if category == CategoryRequestPending || category == CategoryIssueCreated || category == CategoryAgentActionPending {
+	// Admin-scoped categories: only admins act on pending requests, issues,
+	// agent-action approvals, or Plex access requests.
+	if category == CategoryRequestPending || category == CategoryIssueCreated ||
+		category == CategoryAgentActionPending || category == CategoryPlexAccessRequest {
 		query += " AND u.role = 'admin'"
 	}
 

@@ -39,6 +39,7 @@ var (
 	ErrPasswordNotAllowed   = errors.New("password sign-in is not enabled for this account")
 	ErrPasskeyNotAllowed    = errors.New("passkeys are not enabled for this account")
 	ErrCannotModifyAdmin    = errors.New("cannot change sign-in methods for an admin")
+	ErrInvalidPlexEmail     = errors.New("invalid email address")
 	// ErrAuthUnavailable marks a failure to *evaluate* credentials (DB error,
 	// signing error) as opposed to a rejection of them. Handlers must map it to
 	// a 5xx, never a 401: clients treat a 401 as "this session is dead" and
@@ -315,6 +316,44 @@ func (s *Service) SetPassword(userID int64, newPassword string) error {
 		return fmt.Errorf("update password: %w", err)
 	}
 	return nil
+}
+
+// SetPlexEmail stores the email the user wants their Plex invite sent to and
+// reports whether it actually changed, so callers can skip re-notifying admins
+// when a user resubmits the same address. Validation is deliberately shallow
+// (shape + length): the address is only ever displayed to an admin who pastes
+// it into Plex, never used for delivery by us.
+func (s *Service) SetPlexEmail(userID int64, email string) (bool, error) {
+	email = strings.TrimSpace(email)
+	if !plexEmailValid(email) {
+		return false, ErrInvalidPlexEmail
+	}
+
+	user, err := s.getUserByID(userID)
+	if err != nil {
+		return false, ErrUserNotFound
+	}
+	if user.PlexEmail == email {
+		return false, nil
+	}
+
+	if _, err := s.db.Exec(
+		"UPDATE users SET plex_email = ? WHERE id = ?",
+		email, userID,
+	); err != nil {
+		return false, fmt.Errorf("update plex email: %w", err)
+	}
+	return true, nil
+}
+
+// plexEmailValid is a shape check, not RFC validation: something@something
+// with no spaces, short enough for a users-table column.
+func plexEmailValid(email string) bool {
+	if email == "" || len(email) > 254 || strings.ContainsAny(email, " \t\n") {
+		return false
+	}
+	at := strings.Index(email, "@")
+	return at > 0 && at < len(email)-1
 }
 
 // Refresh exchanges a refresh token for a fresh access token. This is the one
@@ -655,6 +694,7 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 			u.password_hash != '' AS has_password,
 			u.password_enabled,
 			u.passkey_enabled,
+			u.plex_email,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
@@ -673,7 +713,7 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 		var u UserSummary
 		if err := rows.Scan(
 			&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled,
+			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.PlexEmail,
 			&u.DeviceCount, &u.HasPendingInvite,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
@@ -843,6 +883,7 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 			u.password_hash != '' AS has_password,
 			u.password_enabled,
 			u.passkey_enabled,
+			u.plex_email,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
@@ -852,7 +893,7 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 		WHERE u.id = ?
 	`, time.Now(), userID).Scan(
 		&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled,
+		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.PlexEmail,
 		&u.DeviceCount, &u.HasPendingInvite,
 	)
 	if err != nil {
@@ -1012,8 +1053,8 @@ func userWithPermissions(user *User) User {
 func (s *Service) getUserByUsername(username string) (*User, error) {
 	var user User
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, created_at FROM users WHERE username = ?", username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.CreatedAt)
+		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, created_at FROM users WHERE username = ?", username,
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1023,8 +1064,8 @@ func (s *Service) getUserByUsername(username string) (*User, error) {
 func (s *Service) getUserByID(id int64) (*User, error) {
 	var user User
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, created_at FROM users WHERE id = ?", id,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.CreatedAt)
+		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, created_at FROM users WHERE id = ?", id,
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

@@ -136,6 +136,10 @@ class PushService {
       case 'agent_action_pending':
         // A fix needs approval — go straight to the agent approval queue.
         router.push('/agent-actions');
+      case 'plex_access_request':
+        // A user shared their Plex email — the Users screen shows it with the
+        // "Invite in Plex" action.
+        router.push('/settings/users');
       case 'remediation_autodispatch_disabled':
         // The circuit breaker turned auto-dispatch off — open the settings the
         // admin uses to re-enable it.

@@ -14,6 +14,10 @@ class UserProfile {
   final bool passwordEnabled;
   final bool passkeyEnabled;
 
+  /// The email this user shared for their Plex server invite. Empty until
+  /// they submit one (from the Watch on Plex guide).
+  final String plexEmail;
+
   const UserProfile({
     required this.id,
     required this.username,
@@ -22,6 +26,7 @@ class UserProfile {
     this.hasPassword,
     this.passwordEnabled = false,
     this.passkeyEnabled = false,
+    this.plexEmail = '',
   });
 
   bool get isAdmin => role == 'admin';
@@ -44,9 +49,10 @@ class UserProfile {
         hasPassword: json['has_password'] as bool?,
         passwordEnabled: json['password_enabled'] as bool? ?? false,
         passkeyEnabled: json['passkey_enabled'] as bool? ?? false,
+        plexEmail: json['plex_email'] as String? ?? '',
       );
 
-  UserProfile copyWith({bool? hasPassword}) => UserProfile(
+  UserProfile copyWith({bool? hasPassword, String? plexEmail}) => UserProfile(
         id: id,
         username: username,
         role: role,
@@ -54,6 +60,7 @@ class UserProfile {
         hasPassword: hasPassword ?? this.hasPassword,
         passwordEnabled: passwordEnabled,
         passkeyEnabled: passkeyEnabled,
+        plexEmail: plexEmail ?? this.plexEmail,
       );
 
   Map<String, dynamic> toJson() => {
@@ -64,5 +71,6 @@ class UserProfile {
         if (hasPassword != null) 'has_password': hasPassword,
         'password_enabled': passwordEnabled,
         'passkey_enabled': passkeyEnabled,
+        'plex_email': plexEmail,
       };
 }

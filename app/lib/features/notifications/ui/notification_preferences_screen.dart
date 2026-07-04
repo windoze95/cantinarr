@@ -187,13 +187,34 @@ class _NotificationPreferencesScreenState
           value: prefs.requestDecision,
           onChanged: (v) => _save(prefs.copyWith(requestDecision: v), prefs),
         ),
-        if (isAdmin)
+        if (isAdmin) ...[
           _toggle(
             title: 'New requests to review',
             subtitle: 'When someone submits a request needing approval',
             value: prefs.requestPending,
             onChanged: (v) => _save(prefs.copyWith(requestPending: v), prefs),
           ),
+          _toggle(
+            title: 'Problem reports',
+            subtitle: 'When someone reports a problem with their media',
+            value: prefs.issueCreated,
+            onChanged: (v) => _save(prefs.copyWith(issueCreated: v), prefs),
+          ),
+          _toggle(
+            title: 'Fixes awaiting approval',
+            subtitle: 'When the assistant proposes a fix that needs approval',
+            value: prefs.agentActionPending,
+            onChanged: (v) =>
+                _save(prefs.copyWith(agentActionPending: v), prefs),
+          ),
+          _toggle(
+            title: 'Plex access requests',
+            subtitle: 'When someone shares their Plex email for an invite',
+            value: prefs.plexAccessRequest,
+            onChanged: (v) =>
+                _save(prefs.copyWith(plexAccessRequest: v), prefs),
+          ),
+        ],
         _toggle(
           title: 'New movie available',
           subtitle: 'When a movie finishes downloading',

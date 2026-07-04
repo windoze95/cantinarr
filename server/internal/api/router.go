@@ -120,6 +120,7 @@ func NewRouter(
 				r.Use(authService.AuthMiddleware)
 				r.Get("/me", authHandler.Me)
 				r.With(authLimiter.Middleware).Post("/password", authHandler.SetPassword)
+				r.With(authLimiter.Middleware).Post("/plex-email", authHandler.SetPlexEmail)
 
 				// Passkey registration (authenticated)
 				r.Post("/passkey/register/begin", authHandler.BeginPasskeyRegistration)
