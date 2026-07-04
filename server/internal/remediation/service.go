@@ -186,9 +186,22 @@ func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueReque
 // returns created=false. A terminal (closed) issue does not block a genuinely
 // new recurrence: once closed_at is set the partial unique index no longer
 // guards that key, so the same download re-failing later opens a fresh issue.
-func (s *Service) OpenAutoIssue(scope, instanceID, downloadID string, d arr.Diagnosis) (created bool, id int64) {
+func (s *Service) OpenAutoIssue(serviceType, instanceID, downloadID string, d arr.Diagnosis) (created bool, id int64) {
 	sum := sha256.Sum256([]byte(instanceID + "|" + downloadID + "|" + d.Problem))
 	dedupeKey := hex.EncodeToString(sum[:])
+
+	// The poller hands us the *service* type, but media_type on an issues row is
+	// the client-facing 'movie'|'tv' contract — storing it raw made clients fall
+	// back to a "Movie" label on Sonarr issues.
+	mediaType := serviceType
+	switch serviceType {
+	case "radarr":
+		mediaType = "movie"
+	case "sonarr":
+		mediaType = "tv"
+	case "chaptarr":
+		mediaType = "book"
+	}
 
 	res, err := s.db.Exec(
 		`INSERT INTO issues
@@ -197,7 +210,7 @@ func (s *Service) OpenAutoIssue(scope, instanceID, downloadID string, d arr.Diag
 		 WHERE NOT EXISTS (
 			SELECT 1 FROM issues WHERE dedupe_key = ? AND closed_at IS NULL
 		 )`,
-		SourceAuto, IssueOpen, scope, 0, d.Problem, sqlNullStr(instanceID), sqlNullStr(downloadID), d.Transparency, dedupeKey,
+		SourceAuto, IssueOpen, mediaType, 0, d.Problem, sqlNullStr(instanceID), sqlNullStr(downloadID), d.Transparency, dedupeKey,
 		dedupeKey,
 	)
 	if err != nil {

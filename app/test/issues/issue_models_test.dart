@@ -60,6 +60,25 @@ void main() {
       expect(movie.scopeLabel, 'Movie');
       expect(movie.status, IssueStatus.resolved);
     });
+
+    test('never claims "Movie" for a non-movie media_type', () {
+      // An older server's auto issues stored the *arr service type here.
+      final offContract = Issue.fromJson({
+        'id': 9,
+        'media_type': 'sonarr',
+        'status': 'open',
+        'tmdb_id': 0,
+      });
+      expect(offContract.scopeLabel, 'Sonarr');
+
+      final book = Issue.fromJson({
+        'id': 10,
+        'media_type': 'book',
+        'status': 'open',
+        'tmdb_id': 0,
+      });
+      expect(book.scopeLabel, 'Book');
+    });
   });
 
   group('RemediationSettings', () {

@@ -88,6 +88,34 @@ func TestAutoDispatcherOpensExactlyOneIssueAcrossPolls(t *testing.T) {
 	}
 }
 
+// TestOpenAutoIssueStoresMediaTypeNotServiceType pins the wire contract: the
+// poller reports the *service* type, but the stored media_type must be the
+// client-facing 'movie'|'tv' value (a raw "sonarr" made clients render the
+// fallback "Movie" label on TV issues).
+func TestOpenAutoIssueStoresMediaTypeNotServiceType(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	enableAutoDispatch(t, svc, 5)
+	ad := NewAutoDispatcher(svc)
+
+	d := stalledDiagnosis()
+	ad.OpenAutoIssue("sonarr", "inst1", "tvHash", d)
+	ad.OpenAutoIssue("radarr", "inst1", "movieHash", d)
+	drainJobs(svc)
+
+	for downloadID, want := range map[string]string{"tvHash": "tv", "movieHash": "movie"} {
+		var got string
+		if err := svc.db.QueryRow(
+			"SELECT media_type FROM issues WHERE source = ? AND download_id = ?",
+			SourceAuto, downloadID,
+		).Scan(&got); err != nil {
+			t.Fatalf("read media_type for %s: %v", downloadID, err)
+		}
+		if got != want {
+			t.Fatalf("media_type for %s = %q, want %q", downloadID, got, want)
+		}
+	}
+}
+
 // TestCloseAutoIssueResolvesRecoveredDownload proves that when the poller stops
 // flagging a download, the matching open auto issue is resolved and closed.
 func TestCloseAutoIssueResolvesRecoveredDownload(t *testing.T) {
