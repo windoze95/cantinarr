@@ -19,7 +19,8 @@ class DashboardTvTab extends ConsumerStatefulWidget {
   ConsumerState<DashboardTvTab> createState() => _DashboardTvTabState();
 }
 
-class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
+class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
+    with WidgetsBindingObserver {
   List<SonarrSeries> _recentlyDownloaded = [];
   List<SonarrSeries> _airingNext = [];
   bool _isLoadingLibrary = false;
@@ -27,10 +28,27 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(tvDiscoverProvider.notifier).bootstrap();
       _loadLibraryPreview();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The library may have changed while the app was backgrounded (downloads
+    // finishing, an admin working directly in the arr) — otherwise these rows
+    // only refresh on pull-to-refresh and this tab is the landing screen.
+    if (state == AppLifecycleState.resumed && !_isLoadingLibrary) {
+      _loadLibraryPreview();
+    }
   }
 
   Future<void> _loadLibraryPreview() async {

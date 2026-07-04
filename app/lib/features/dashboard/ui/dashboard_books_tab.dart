@@ -477,7 +477,16 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
           _isCovered(BookRequestFormat.audiobook));
 
   String get _buttonText {
-    if (!_requestable) return _status.buttonLabel; // both formats covered
+    if (!_requestable) {
+      // Both formats covered. Books don't use the movie/TV available labels
+      // ("Watch Now"): a fulfilled request is simply downloaded, and a
+      // partially fulfilled one is still on its way.
+      return switch (_status) {
+        RequestStatus.available => 'Downloaded',
+        RequestStatus.partial => 'Requested',
+        _ => _status.buttonLabel,
+      };
+    }
     final anyCovered = _isCovered(BookRequestFormat.ebook) ||
         _isCovered(BookRequestFormat.audiobook);
     return anyCovered ? 'Request more' : _status.buttonLabel;

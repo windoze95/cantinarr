@@ -78,10 +78,10 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
     );
   }
 
-  void _openMovie(RadarrMovie movie) {
+  Future<void> _openMovie(RadarrMovie movie) async {
     final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
     if (instanceId == null) return;
-    Navigator.of(context, rootNavigator: true).push(
+    await Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(
         builder: (_) => RadarrMovieDetailScreen(
           instanceId: instanceId,
@@ -89,6 +89,8 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
         ),
       ),
     );
+    // The detail screen can edit or remove the movie; refresh on return.
+    _notifier?.loadMovies();
   }
 
   @override
