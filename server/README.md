@@ -29,7 +29,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 - **Books via Chaptarr** -- A Readarr-API (v1) books module with per-format (ebook/audiobook) monitoring, requesting, and library awareness. Chaptarr access is granted per user by an admin.
 - **Automatic ID bridging** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then title+year search. Results cached in SQLite for 30 days.
 - **Availability computed live** -- Request status is derived from the arrs' real episode/file state (never from a stale snapshot or monitored-only stats), refreshed by queue polling and instant arr webhooks.
-- **Connect link auth, passwordless by default** -- Admins generate connect links; sessions are long-lived JWTs that refresh on use. Passwords and passkeys (WebAuthn, incl. native iOS/Android/Windows) are admin-gated per user.
+- **Connect link auth, passwordless by default** -- Admins generate connect links; redeeming one starts a permanent device session (an opaque refresh token validated against the DB -- never expires, never rotates, independent of the JWT secret) that mints 15-minute access JWTs. Sessions end only by device revocation or user deletion. Passwords and passkeys (WebAuthn, incl. native iOS/Android/Windows) are admin-gated per user.
 - **AI assistant + remediation agent** -- Anthropic, OpenAI, or Gemini-powered chat with server-side tool execution, plus an autonomous investigation agent that diagnoses reported/detected media problems and proposes fixes an admin approves.
 - **MCP server** -- The same 26 tools exposed at `/mcp` (Streamable HTTP) with full OAuth: discovery metadata, dynamic client registration, PKCE, browser/passkey login, rotating refresh tokens.
 - **Import Doctor** -- Plain-English diagnosis of stuck downloads with one-click fixes (manual/force import, remove+blocklist+re-search, category hand-off, rescan), shared by the app, the AI assistant, and MCP.
@@ -83,7 +83,7 @@ Optional env vars for deployment tuning (a `.env` file next to the binary is aut
 |---|---|---|
 | `CANTINARR_PORT` | `8585` | HTTP listen port |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
-| `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for JWT signing (persisted encrypted when auto-generated) |
+| `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for signing short-lived access tokens (persisted encrypted when auto-generated). Opaque device-session refresh tokens do not depend on it, so changing it never signs devices out |
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
 | `CANTINARR_AI_PROVIDER` | `anthropic` | Fallback AI provider when none is saved in the admin UI (`anthropic`, `openai`, `gemini`) |
 | `CANTINARR_AI_MODEL` | provider default | Fallback model when none is saved in the admin UI |
@@ -108,7 +108,7 @@ Auth levels: **public**, **user** (any signed-in account), **admin**. Public aut
 GET    /api/auth/status                    # public: is setup complete, login methods
 POST   /api/auth/setup                     # public: first-run admin account creation
 POST   /api/auth/login                     # public: { username, password } -> tokens
-POST   /api/auth/refresh                   # public: rotate refresh token
+POST   /api/auth/refresh                   # public: mint access token (refresh token is stable; legacy JWT refresh tokens migrate to the opaque scheme; 401 only on genuine revocation, 503 on transient faults)
 POST   /api/auth/connect                   # public: redeem a connect-link token -> session
 POST   /api/auth/passkey/login/begin|finish   # public: WebAuthn login
 POST   /api/auth/passkey/setup/begin|finish   # public: passkey setup via short-lived link

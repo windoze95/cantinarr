@@ -175,6 +175,111 @@ void main() {
       expect(state.isAuthenticated, isFalse);
       expect(storage[StorageKeys.refreshToken], isNull);
     });
+
+    test('enters the app degraded (not login) when config fails after a '
+        'successful refresh', () async {
+      final storage = tokensOnlyStorage();
+      final container = makeContainer(
+        storage,
+        _FakeAuthService(
+          refreshResult: freshResp,
+          configError: DioException(
+            requestOptions: RequestOptions(path: '/api/config'),
+            type: DioExceptionType.badResponse,
+            response: Response(
+              requestOptions: RequestOptions(path: '/api/config'),
+              statusCode: 401,
+            ),
+          ),
+        ),
+      );
+
+      final state = await container.read(authProvider.future);
+      expect(state.isAuthenticated, isTrue,
+          reason: 'the server just accepted the refresh token — a config '
+              'failure (even a 401) must never end the session');
+      expect(state.isReconnecting, isTrue);
+      expect(storage[StorageKeys.refreshToken], 'new-refresh');
+    });
+  });
+
+  group('config failures with a cached snapshot', () {
+    test('keeps the session on cached config when the config fetch fails',
+        () async {
+      final storage = snapshotStorage();
+      final container = makeContainer(
+        storage,
+        _FakeAuthService(
+          refreshResult: freshResp,
+          configError: DioException(
+            requestOptions: RequestOptions(path: '/api/config'),
+            type: DioExceptionType.connectionError,
+          ),
+        ),
+      );
+
+      await container.read(authProvider.future);
+      await _pumpUntil(() =>
+          storage[StorageKeys.jwt] == 'new-access'); // refresh persisted
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+
+      final s = container.read(authProvider).valueOrNull!;
+      expect(s.isAuthenticated, isTrue);
+      expect(s.connection?.services.radarr, isTrue,
+          reason: 'falls back to the snapshot config');
+      expect(s.connection?.accessToken, 'new-access',
+          reason: 'fresh tokens ride on the cached config');
+      expect(storage[StorageKeys.sessionUser], isNotNull);
+    });
+  });
+
+  group('unreadable secure storage (locked keychain at launch)', () {
+    test('never treats a blocked read as logged out, and restores once '
+        'storage is readable again', () async {
+      final storage = snapshotStorage();
+      // First read throws (prewarmed launch while locked); later reads work.
+      final blocked = _BlockedStorage(storage, failingReads: 1);
+      final container = ProviderContainer(overrides: [
+        storageServiceProvider.overrideWithValue(blocked),
+        authServiceProvider.overrideWithValue(
+            _FakeAuthService(refreshResult: freshResp, config: config)),
+      ]);
+      addTearDown(container.dispose);
+
+      final initial = await container.read(authProvider.future);
+      expect(initial.isAuthenticated, isFalse,
+          reason: 'no session can be shown yet — storage is unreadable');
+      expect(storage[StorageKeys.refreshToken], 'old-refresh',
+          reason: 'blocked storage must never be cleared');
+
+      // The user foregrounds the app (device now unlocked).
+      container.read(authProvider.notifier).reconnectNow();
+      await _pumpUntil(() =>
+          container.read(authProvider).valueOrNull?.isAuthenticated == true);
+
+      final restored = container.read(authProvider).valueOrNull!;
+      expect(restored.user?.username, 'tester');
+    });
+
+    test('falls back to the backup refresh token when the primary is missing',
+        () async {
+      final storage = snapshotStorage();
+      storage.remove(StorageKeys.refreshToken);
+      storage[StorageKeys.refreshTokenBackup] = 'old-refresh';
+      final container = makeContainer(
+        storage,
+        _FakeAuthService(refreshResult: freshResp, config: config),
+      );
+
+      final optimistic = await container.read(authProvider.future);
+      expect(optimistic.isAuthenticated, isTrue);
+      await _pumpUntil(() {
+        final s = container.read(authProvider).valueOrNull;
+        return s != null && !s.isReconnecting;
+      });
+      expect(storage[StorageKeys.refreshToken], isNotNull,
+          reason: 'the primary key is healed from the backup');
+    });
   });
 }
 
@@ -211,16 +316,43 @@ class _FakeStorage implements StorageService {
 
   @override
   Future<void> delete({required String key}) async => _data.remove(key);
+
+  @override
+  Future<void> hardenAuthKeys() async {}
+}
+
+/// Storage whose reads throw for a while before working — models a locked
+/// keychain during an iOS prewarmed/background launch that becomes readable
+/// once the device is unlocked.
+class _BlockedStorage extends _FakeStorage {
+  _BlockedStorage(super.data, {required this.failingReads});
+
+  int failingReads;
+
+  @override
+  Future<String?> read({required String key}) async {
+    if (failingReads > 0) {
+      failingReads--;
+      throw Exception('keychain unavailable (locked)');
+    }
+    return super.read(key: key);
+  }
 }
 
 /// Fake [AuthService] that returns a canned refresh result or throws a chosen
 /// error, so restore can be driven through every branch without the network.
 class _FakeAuthService extends AuthService {
-  _FakeAuthService({this.refreshResult, this.refreshError, this.config});
+  _FakeAuthService({
+    this.refreshResult,
+    this.refreshError,
+    this.config,
+    this.configError,
+  });
 
   final AuthResponse? refreshResult;
   final Object? refreshError;
   final ServerConfig? config;
+  final Object? configError;
   int refreshCalls = 0;
 
   @override
@@ -233,6 +365,8 @@ class _FakeAuthService extends AuthService {
 
   @override
   Future<ServerConfig> fetchConfig(String serverUrl, String accessToken) async {
+    final error = configError;
+    if (error != null) throw error;
     return config ??
         const ServerConfig(serverName: 'Home', services: AvailableServices());
   }

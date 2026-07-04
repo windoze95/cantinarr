@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import '../config/app_config.dart';
 
 /// Dio interceptor that handles JWT authentication and automatic token refresh.
 ///
@@ -81,7 +82,12 @@ class BackendAuthInterceptor extends Interceptor {
     final completer = _refreshCompleter = Completer<bool>();
 
     try {
-      final dio = Dio();
+      // A dedicated client with explicit timeouts: a hung refresh would
+      // otherwise block every queued 401 retry behind the shared completer.
+      final dio = Dio(BaseOptions(
+        connectTimeout: AppConfig.requestTimeout,
+        receiveTimeout: AppConfig.requestTimeout,
+      ));
       final serverUrl = getServerUrl();
       final refreshToken = getRefreshToken();
 

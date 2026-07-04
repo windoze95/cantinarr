@@ -250,7 +250,7 @@ func (s *Service) RefreshOAuthToken(clientID, refreshToken, resource string) (*O
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
-	if err := s.validateActiveDevice(&Claims{UserID: stored.UserID, DeviceID: stored.DeviceID}); err != nil {
+	if err := s.requireActiveDevice(stored.DeviceID, stored.UserID); err != nil {
 		return nil, err
 	}
 

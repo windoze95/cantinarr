@@ -131,7 +131,7 @@ Optional server env vars for deployment tuning:
 |---|---|---|
 | `CANTINARR_PORT` | `8585` | HTTP listen port |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
-| `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for JWT signing |
+| `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for signing short-lived access tokens. Device sessions do not depend on it: changing it never signs anyone out |
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
 | `CANTINARR_AI_PROVIDER` | `anthropic` | Fallback AI provider when none is saved in the admin UI |
 | `CANTINARR_AI_MODEL` | provider default | Fallback model when none is saved in the admin UI |
@@ -145,7 +145,7 @@ Optional server env vars for deployment tuning:
 
 Native app passkeys require a public HTTPS server domain associated with the app (AASA for Apple, Digital Asset Links for Android). Browser passkey setup remains available when native association isn't possible. See [`server/README.md`](server/README.md#configuration) for details.
 
-By default, users are passwordless and passkeyless: a connect link starts a long-lived session that refreshes automatically (an idle session lasts a year and every use extends it), so household members never deal with credentials. Admins grant a password and/or passkey per user from **Settings > Users** when a user needs one. A password is what authorizes MCP clients on deployments served over plain HTTP, where passkeys are unavailable (WebAuthn requires a secure context). Disabling a method is a real revoke -- it clears the stored password or deletes the user's passkeys. To recover access, an admin issues a fresh connect link.
+By default, users are passwordless and passkeyless: a connect link starts a permanent device session, so household members never deal with credentials. A session never expires -- not from idle time, server restarts, upgrades, or secret rotation -- and ends only when an admin revokes the device (**Settings > Devices**) or deletes the user. Admins grant a password and/or passkey per user from **Settings > Users** when a user needs one. A password is what authorizes MCP clients on deployments served over plain HTTP, where passkeys are unavailable (WebAuthn requires a secure context). Disabling a method is a real revoke -- it clears the stored password or deletes the user's passkeys. To recover access, an admin issues a fresh connect link.
 
 ## How It Works
 

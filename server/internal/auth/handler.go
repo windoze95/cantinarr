@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -56,11 +57,18 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.Refresh(req.RefreshToken)
 	if err != nil {
-		if errors.Is(err, ErrDeviceRevoked) {
+		// 401 is reserved for a genuine rejection: clients erase their stored
+		// session on it. Every other failure (DB hiccup, signing fault) is a
+		// 503 so the client keeps the token and retries later.
+		switch {
+		case errors.Is(err, ErrDeviceRevoked):
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "device has been revoked"})
-			return
+		case errors.Is(err, ErrInvalidCredentials):
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid refresh token"})
+		default:
+			log.Printf("auth: refresh answered 503 (client will retry, session kept): %v", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporarily unavailable, retry shortly"})
 		}
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid refresh token"})
 		return
 	}
 

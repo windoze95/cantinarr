@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -39,6 +40,13 @@ func (s *Service) AuthMiddleware(next http.Handler) http.Handler {
 
 		claims, user, err := s.AuthenticateToken(token)
 		if err != nil {
+			// A fault while evaluating the token (DB error) must not read as a
+			// rejection: clients treat 401 as "session dead". Answer 503 so
+			// they retry with the same credentials.
+			if errors.Is(err, ErrAuthUnavailable) {
+				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+				return
+			}
 			http.Error(w, `{"error":"invalid or expired token"}`, http.StatusUnauthorized)
 			return
 		}

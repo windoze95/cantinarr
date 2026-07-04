@@ -402,7 +402,7 @@ func (s *Service) CreatePasskeySetupToken(userID int64, deviceID string) (string
 	if deviceID == "" {
 		return "", time.Time{}, ErrInvalidCredentials
 	}
-	if err := s.validateActiveDevice(&Claims{UserID: user.ID, DeviceID: deviceID}); err != nil {
+	if err := s.requireActiveDevice(deviceID, user.ID); err != nil {
 		return "", time.Time{}, err
 	}
 	now := time.Now()
@@ -437,7 +437,7 @@ func (s *Service) BeginPasskeySetup(token string, r *http.Request) (interface{},
 	if claims.DeviceID == "" {
 		return nil, "", ErrInvalidCredentials
 	}
-	if err := s.validateActiveDevice(claims); err != nil {
+	if err := s.requireActiveDevice(claims.DeviceID, claims.UserID); err != nil {
 		return nil, "", err
 	}
 	return s.BeginPasskeyRegistration(claims.UserID, r)
@@ -454,7 +454,7 @@ func (s *Service) FinishPasskeySetup(token, sessionID, credentialName string, r 
 	if claims.DeviceID == "" {
 		return ErrInvalidCredentials
 	}
-	if err := s.validateActiveDevice(claims); err != nil {
+	if err := s.requireActiveDevice(claims.DeviceID, claims.UserID); err != nil {
 		return err
 	}
 	return s.FinishPasskeyRegistration(claims.UserID, sessionID, credentialName, r)
