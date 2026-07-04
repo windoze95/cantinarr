@@ -90,7 +90,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 - **Per-category preferences** -- request decisions, new movies, new episodes, and admin-only categories (new requests, issues, agent fixes), plus a test-push diagnostic.
 
 ### Settings
-- **Instances** (admin) -- add/edit all eight service types; test connections; set the global default (single-default invariant with takeover confirmation) or per-user default pins; assign users to a Chaptarr instance (the Books access grant); copy the per-instance **webhook URL** for Radarr/Sonarr > Connect.
+- **Instances** (admin) -- add/edit all eight service types; test connections; set the global default (single-default invariant with takeover confirmation) or per-user default pins; assign users to a Chaptarr instance (the Books access grant); assigning a user pinned to a sibling instance asks for confirmation before removing them from it; copy the per-instance **webhook URL** for Radarr/Sonarr > Connect.
 - **Users** (admin) -- roles, connect links / re-invites / device links, per-user password & passkey enablement (disabling is a real revoke), per-user request settings (tri-state inherit/on/off + default instances), test push.
 - **Request policy** (admin) -- global require-approval, season choice + default scope, quality choice + default profiles.
 - **Devices** (admin) -- every connected device with hardware model, last-seen, "This device" badge, and revoke.

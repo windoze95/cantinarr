@@ -360,6 +360,68 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return id;
   }
 
+  /// Selected users who are currently pinned to a sibling instance, grouped
+  /// by that sibling's name. Saving moves them off it — for Chaptarr that
+  /// also moves their Books access.
+  Map<String, List<String>> get _pendingUserMoves {
+    final moves = <String, List<String>>{};
+    for (final user in _users ?? const <UserSummary>[]) {
+      if (!_assignedUserIds.contains(user.id)) continue;
+      final pinnedTo = _pins[user.id];
+      if (pinnedTo == null || pinnedTo == widget.instanceId) continue;
+      moves.putIfAbsent(_instanceName(pinnedTo), () => []).add(user.username);
+    }
+    return moves;
+  }
+
+  static String _joinNames(List<String> names) {
+    if (names.length == 1) return names.first;
+    return '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+  }
+
+  /// Assigning a user who is pinned to a sibling instance removes them there
+  /// — spell out exactly who is removed from which instance, and let the
+  /// admin back out, before anything is saved.
+  Future<bool> _confirmUserMoves() async {
+    final moves = _pendingUserMoves;
+    if (moves.isEmpty) return true;
+    final newName = _nameController.text.trim();
+    final total = moves.values.fold<int>(0, (n, names) => n + names.length);
+    final String description;
+    if (moves.length == 1) {
+      final entry = moves.entries.first;
+      description = 'This removes ${_joinNames(entry.value)} from '
+          '"${entry.key}" and assigns them to "$newName".';
+    } else {
+      final lines = moves.entries
+          .map((e) => '• ${_joinNames(e.value)} — from "${e.key}"')
+          .join('\n');
+      description = 'This removes $total users from their current instances '
+          'and assigns them to "$newName":\n\n$lines';
+    }
+    final note = _isChaptarr
+        ? 'Their Books access will come from "$newName" instead.'
+        : 'Their requests and dashboard statuses will use "$newName" instead.';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Reassign $total user${total == 1 ? '' : 's'}?'),
+        content: Text('$description\n\n$note'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Reassign'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
   /// Per-user assignment: for Chaptarr this IS the access model (selected
   /// users get Books through this instance); for Radarr/Sonarr it pins the
   /// selected users to this instance as an override of the global default.
@@ -460,8 +522,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     if (!await _confirmDefaultTakeover()) return;
     if (!mounted) return;
 
-    setState(() => _isSaving = true);
-
     // Chaptarr never carries the global default flag (the server enforces
     // this too); its instances are only assigned per user below.
     final isDefault = !_isChaptarr && _isDefault;
@@ -472,6 +532,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _users != null &&
         !_sameSelection(_assignedUserIds, _savedAssignedUserIds);
     final assignedIds = _assignedUserIds.toList()..sort();
+    // Pulling users off a sibling instance needs the same explicit sign-off
+    // as a default takeover.
+    if (applyAssignments && !await _confirmUserMoves()) return;
+    if (!mounted) return;
+
+    setState(() => _isSaving = true);
 
     try {
       final backendDio = ref.read(backendClientProvider);

@@ -281,7 +281,27 @@ void main() {
 
     await tester.tap(find.widgetWithText(CheckboxListTile, 'bob'));
     await tester.pumpAndSettle();
+
+    // Moving bob off the sibling asks for confirmation naming who moves from
+    // where; cancelling aborts the save entirely.
     await tester.tap(find.widgetWithText(ElevatedButton, 'Save Changes'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reassign 1 user?'), findsOneWidget);
+    expect(
+      find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining(
+              'removes bob from "Main Radarr" and assigns them to "Radarr B"')),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(adapter.requests.where((r) => r.method == 'PUT'), isEmpty);
+
+    // Confirming applies both the instance update and the reassignment.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Save Changes'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reassign'));
     await tester.pumpAndSettle();
 
     expect(
@@ -293,6 +313,73 @@ void main() {
         (r) => r.method == 'PUT' && r.path == '/api/instances/radarr-b/users');
     expect(putUsers.body, {
       'user_ids': [2]
+    });
+  });
+
+  testWidgets('assigning a user pinned to a sibling Chaptarr instance confirms the move',
+      (tester) async {
+    final adapter = _FakeAdapter(
+      instances: [
+        {
+          'id': 'chaptarr-a',
+          'service_type': 'chaptarr',
+          'name': 'Books A',
+          'url': 'http://books-a',
+          'is_default': false,
+          'sort_order': 0,
+        },
+      ],
+      pins: [
+        {'user_id': 1, 'instance_id': 'chaptarr-a'},
+      ],
+    );
+    await _pumpEdit(tester,
+        adapter: adapter, users: [_user(1, 'alice'), _user(2, 'bob')]);
+
+    // Switch the service type to Chaptarr.
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Chaptarr').last);
+    await tester.pumpAndSettle();
+
+    await _fillForm(tester, 'Books B');
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'alice'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+
+    // Alice is pinned to Books A, so creating must confirm the removal and
+    // spell out where her Books access lands; cancelling creates nothing.
+    expect(find.text('Reassign 1 user?'), findsOneWidget);
+    expect(
+      find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining(
+              'removes alice from "Books A" and assigns them to "Books B"')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining(
+              'Books access will come from "Books B" instead')),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(adapter.requests.where((r) => r.method == 'POST'), isEmpty);
+
+    // Confirming creates the instance and moves alice to it.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reassign'));
+    await tester.pumpAndSettle();
+    final post = adapter.requests.singleWhere((r) => r.method == 'POST');
+    expect(post.body['service_type'], 'chaptarr');
+    final putUsers = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' && r.path == '/api/instances/chaptarr-new/users');
+    expect(putUsers.body, {
+      'user_ids': [1]
     });
   });
 }
