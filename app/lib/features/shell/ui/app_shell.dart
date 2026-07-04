@@ -10,6 +10,7 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/module_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
+import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/search_bar.dart';
 import '../../../core/widgets/shimmer_border.dart';
@@ -975,14 +976,15 @@ class _AppShellState extends ConsumerState<AppShell>
 
           const Divider(color: AppTheme.border),
 
-          _DrawerItem(
-            icon: Icons.play_circle_outline,
-            title: 'Plex Setup Guide',
-            onTap: () {
-              if (isOverlay) Navigator.pop(context);
-              context.push('/plex-guide');
-            },
-          ),
+          if (ref.watch(plexGuideEnabledProvider))
+            _DrawerItem(
+              icon: Icons.play_circle_outline,
+              title: 'Watch on Plex',
+              onTap: () {
+                if (isOverlay) Navigator.pop(context);
+                context.push('/plex-guide');
+              },
+            ),
           _DrawerItem(
             icon: Icons.settings,
             title: 'Settings',

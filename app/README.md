@@ -98,6 +98,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 - **AI tools** (admin) -- per-tool toggles for chat + MCP, and a one-hour debug-logging switch.
 - **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, autonomy tier, provider/model, and run budgets.
 - **Notifications, Passkeys, Password** -- self-service (passkey/password screens appear when admin-enabled).
+- **Watch on Plex guide** -- requester-focused walkthrough (install the Plex app, sign in, accept the invite, start watching); hideable from the guide itself or via a Settings toggle that also removes it from the menu.
 
 ### Auth
 - **Connect links** -- open one and the account connects instantly (`cantinarr://connect` deep links on iOS); passwordless by default with a long-lived, auto-refreshing session.
