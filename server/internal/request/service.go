@@ -1180,11 +1180,14 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType string) (*St
 }
 
 // GetUserBookStatus reports a user's request state for a book, keyed by the
-// Readarr foreignBookId (books have no tmdb_id). Status is the collapsed
-// (latest) request_log state (pending / denied / requested); BookFormats breaks
-// it down per format so the dashboard can still offer the other format after one
-// is requested. A stored "both" request covers both ebook and audiobook. Deeper
-// library availability + download progress are shown in the Books module itself.
+// Readarr foreignBookId (books have no tmdb_id). Status starts from the
+// collapsed (latest) request_log state (pending / denied / requested), then
+// live ownership is overlaid: a requested format whose file has since landed
+// in Chaptarr reads available (request_log is never updated, so without the
+// overlay a fulfilled request would read "requested" forever). BookFormats
+// breaks it down per format so the dashboard can still offer the other format
+// after one is requested. A stored "both" request covers both ebook and
+// audiobook.
 func (s *Service) GetUserBookStatus(userID int64, foreignID string) (*StatusResponse, error) {
 	rows, err := s.db.Query(
 		"SELECT COALESCE(book_format, 'both'), status FROM request_log WHERE user_id = ? AND foreign_id = ? AND media_type = 'book' ORDER BY requested_at DESC, id DESC",
@@ -1217,16 +1220,61 @@ func (s *Service) GetUserBookStatus(userID int64, foreignID string) (*StatusResp
 		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
 
+	// Overlay live ownership: a format whose file is on disk reads available.
+	// Upgrade-only (absence proves nothing — see overlayLiveStatuses), and a
+	// pending format keeps showing pending so the approval flow stays visible.
+	if index, ok := s.bookOwnershipIndex(userID); ok {
+		if title, found := index[foreignID]; found {
+			for f, st := range formats {
+				if st == StatusPending {
+					continue
+				}
+				if bookFormatDownloaded(title, f) {
+					formats[f] = StatusAvailable
+				}
+			}
+		}
+	}
+
 	resp := &StatusResponse{BookFormats: formats}
-	switch collapsed {
-	case StatusPending:
+	switch {
+	case collapsed == StatusPending:
 		resp.Status = StatusPending
-	case StatusDenied:
+	case allBookFormatsAre(formats, StatusAvailable):
+		resp.Status = StatusAvailable
+	case anyBookFormatIs(formats, StatusAvailable):
+		resp.Status = StatusPartial
+	case collapsed == StatusDenied:
 		resp.Status = StatusDenied
 	default:
 		resp.Status = StatusRequested
 	}
 	return resp, nil
+}
+
+// allBookFormatsAre reports whether every requested format carries [status];
+// false for an empty map (no requested formats means nothing to fulfill).
+func allBookFormatsAre(formats map[string]string, status string) bool {
+	if len(formats) == 0 {
+		return false
+	}
+	for _, st := range formats {
+		if st != status {
+			return false
+		}
+	}
+	return true
+}
+
+// anyBookFormatIs reports whether at least one requested format carries
+// [status].
+func anyBookFormatIs(formats map[string]string, status string) bool {
+	for _, st := range formats {
+		if st == status {
+			return true
+		}
+	}
+	return false
 }
 
 // expandBookFormat maps a stored book_format to the concrete formats it covers:
@@ -1423,9 +1471,24 @@ func seasonStatuses(series *sonarr.Series) []SeasonStatus {
 	return out
 }
 
+// historyRow carries a request_log row through the live-status overlay: the
+// user-facing RequestLog plus the lookup keys the overlay needs but the
+// response doesn't expose.
+type historyRow struct {
+	log        RequestLog
+	tvdbID     int
+	foreignID  string
+	bookFormat string
+}
+
+// GetRequests returns the user's request history with each row's status
+// recomputed from the live arr libraries, so the list tracks reality instead
+// of the point-in-time snapshot request_log stores (nothing ever updates those
+// rows — a "requested" title that Sonarr has long since imported, or that an
+// admin deleted directly in the arr, would otherwise read wrong forever).
 func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	rows, err := s.db.Query(
-		"SELECT tmdb_id, media_type, title, status, COALESCE(deny_reason, ''), requested_at FROM request_log WHERE user_id = ? ORDER BY requested_at DESC",
+		"SELECT tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), media_type, title, status, COALESCE(deny_reason, ''), requested_at FROM request_log WHERE user_id = ? ORDER BY requested_at DESC",
 		userID,
 	)
 	if err != nil {
@@ -1433,15 +1496,164 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	}
 	defer rows.Close()
 
-	var requests []RequestLog
+	var history []historyRow
 	for rows.Next() {
-		var r RequestLog
-		if err := rows.Scan(&r.TmdbID, &r.MediaType, &r.Title, &r.Status, &r.DenyReason, &r.RequestedAt); err != nil {
+		var r historyRow
+		if err := rows.Scan(&r.log.TmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.log.MediaType, &r.log.Title, &r.log.Status, &r.log.DenyReason, &r.log.RequestedAt); err != nil {
 			return nil, fmt.Errorf("scan request: %w", err)
 		}
-		requests = append(requests, r)
+		history = append(history, r)
 	}
-	return requests, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	s.overlayLiveStatuses(userID, history)
+
+	requests := make([]RequestLog, len(history))
+	for i := range history {
+		requests[i] = history[i].log
+	}
+	return requests, nil
+}
+
+// overlayLiveStatuses recomputes each history row's status from the live arr
+// libraries (via the short-lived per-instance digests, fetched at most once
+// per media kind). Precedence mirrors GetUserStatus: pending always shows
+// as-is (the title isn't in the arr yet); denied is kept unless the title has
+// since landed anyway. Movie/TV rows match by reliable ids, so a title gone
+// from the library reads unavailable; book rows only upgrade to available or
+// partial — a request's foreign id doesn't always match a library record, so
+// absence proves nothing. Rows keep their stored status when the user's arr
+// source can't be reached.
+func (s *Service) overlayLiveStatuses(userID int64, history []historyRow) {
+	var (
+		movies               map[int]movieAvailability
+		moviesOK, moviesDone bool
+		series               map[int]seriesAvailability
+		seriesOK, seriesDone bool
+		books                map[string]LibraryTitle
+		booksOK, booksDone   bool
+	)
+
+	for i := range history {
+		row := &history[i]
+		if row.log.Status == StatusPending {
+			continue
+		}
+
+		live := ""
+		switch row.log.MediaType {
+		case "movie":
+			if !moviesDone {
+				movies, moviesOK = s.movieAvailabilityDigest(userID)
+				moviesDone = true
+			}
+			if !moviesOK {
+				continue
+			}
+			a, found := movies[row.log.TmdbID]
+			live = movieAvailabilityStatus(a, found)
+
+		case "tv":
+			if !seriesDone {
+				series, seriesOK = s.seriesAvailabilityDigest(userID)
+				seriesDone = true
+			}
+			if !seriesOK {
+				continue
+			}
+			tvdbID := row.tvdbID
+			if tvdbID == 0 {
+				// Older rows predate the tvdb_id column; the id mapping cache
+				// usually still knows the title from request time.
+				_ = s.db.QueryRow("SELECT tvdb_id FROM tmdb_tvdb_cache WHERE tmdb_id = ?", row.log.TmdbID).Scan(&tvdbID)
+				if tvdbID == 0 {
+					continue
+				}
+			}
+			a, found := series[tvdbID]
+			live = seriesAvailabilityStatus(a, found)
+
+		case "book":
+			if row.foreignID == "" {
+				continue
+			}
+			if !booksDone {
+				books, booksOK = s.bookOwnershipIndex(userID)
+				booksDone = true
+			}
+			if !booksOK {
+				continue
+			}
+			title, found := books[row.foreignID]
+			if !found {
+				continue
+			}
+			live = bookAvailabilityStatus(title, row.bookFormat)
+			if live == "" {
+				continue // nothing downloaded: upgrade-only, keep stored
+			}
+
+		default:
+			continue
+		}
+
+		if row.log.Status == StatusDenied && live == StatusUnavailable {
+			continue
+		}
+		row.log.Status = live
+	}
+}
+
+// bookOwnershipIndex returns the user's book library digest indexed by
+// foreignBookId. ok is false when the digest couldn't be fetched (no access
+// resolves to an empty digest, which is a valid — always-missing — index).
+func (s *Service) bookOwnershipIndex(userID int64) (map[string]LibraryTitle, bool) {
+	digest, err := s.GetBookLibraryDigest(userID)
+	if err != nil || digest == nil {
+		return nil, false
+	}
+	index := make(map[string]LibraryTitle, len(digest.Titles))
+	for _, t := range digest.Titles {
+		if t.ForeignBookID != "" {
+			index[t.ForeignBookID] = t
+		}
+	}
+	return index, true
+}
+
+// bookAvailabilityStatus reports how much of a stored book request the library
+// now fulfills: available when every requested format has a file, partial when
+// some do, "" when none do (callers treat "" as no evidence, not absence).
+func bookAvailabilityStatus(t LibraryTitle, bookFormat string) string {
+	formats := expandBookFormat(bookFormat)
+	downloaded := 0
+	for _, f := range formats {
+		if bookFormatDownloaded(t, f) {
+			downloaded++
+		}
+	}
+	switch {
+	case downloaded == len(formats):
+		return StatusAvailable
+	case downloaded > 0:
+		return StatusPartial
+	default:
+		return ""
+	}
+}
+
+// bookFormatDownloaded reports whether a concrete format ("ebook"/"audiobook")
+// of a library title has a file on disk.
+func bookFormatDownloaded(t LibraryTitle, format string) bool {
+	switch format {
+	case BookFormatEbook:
+		return t.Ebook.Downloaded
+	case BookFormatAudiobook:
+		return t.Audiobook.Downloaded
+	}
+	return false
 }
 
 // ListPending returns the admin approval queue (oldest first).

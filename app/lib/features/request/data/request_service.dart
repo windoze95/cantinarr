@@ -104,12 +104,15 @@ class BookRequestStatusDetail {
   }
 
   /// Short reason a [format] is covered, for the request sheet: a request status
-  /// label, else "Downloaded" when the file is present, else null.
+  /// label, else "Downloaded" when the file is present, else null. An
+  /// available (fulfilled) request also reads "Downloaded" — the movie/TV
+  /// available label ("Available on Plex") makes no sense for a book.
   String? coverageLabel(BookRequestFormat format) {
     if (!isCovered(format)) return null;
     final reqKey =
         format == BookRequestFormat.both ? BookRequestFormat.ebook : format;
     final s = formats[reqKey];
+    if (s == RequestStatus.available) return 'Downloaded';
     if (s != null &&
         s != RequestStatus.denied &&
         s != RequestStatus.unavailable) {

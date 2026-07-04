@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,7 +7,9 @@ import '../../../core/models/app_module.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
+import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/module_provider.dart';
+import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/search_bar.dart';
 import '../../../core/widgets/shimmer_border.dart';
@@ -38,13 +42,21 @@ class AppShell extends ConsumerStatefulWidget {
 }
 
 class _AppShellState extends ConsumerState<AppShell>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
   final _chatScrollController = ScrollController();
   RadarrMoviesNotifier? _radarrNotifier;
   SonarrSeriesNotifier? _sonarrNotifier;
+
+  /// When the search-chip library snapshot was last (re)loaded, for throttling
+  /// the passive refresh triggers.
+  DateTime? _lastLibraryLoad;
+  Timer? _libraryRefreshDebounce;
+
+  /// Floor between passive snapshot refreshes (search focus, app resume).
+  static const _libraryRefreshThrottle = Duration(seconds: 30);
 
   // Search bar collapse on scroll (mobile)
   late final AnimationController _searchBarAnim;
@@ -85,7 +97,22 @@ class _AppShellState extends ConsumerState<AppShell>
       vsync: this,
       duration: const Duration(milliseconds: 3000),
     );
+    WidgetsBinding.instance.addObserver(this);
+    _searchFocusNode.addListener(_onSearchFocusChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _initLibraries());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The libraries may have changed while the app was backgrounded (downloads
+    // finishing, an admin working directly in the arrs) — re-pull the chips'
+    // snapshot.
+    if (state == AppLifecycleState.resumed) _refreshLibraries();
+  }
+
+  void _onSearchFocusChanged() {
+    // About to search: make sure the chips aren't serving a stale snapshot.
+    if (_searchFocusNode.hasFocus) _refreshLibraries();
   }
 
   void _initLibraries() {
@@ -110,6 +137,46 @@ class _AppShellState extends ConsumerState<AppShell>
       _sonarrNotifier!.addListener(_onLibraryChanged);
       _sonarrNotifier!.loadSeries();
     }
+
+    _lastLibraryLoad = DateTime.now();
+  }
+
+  void _disposeLibraries() {
+    _radarrNotifier?.removeListener(_onLibraryChanged);
+    _sonarrNotifier?.removeListener(_onLibraryChanged);
+    _radarrNotifier = null;
+    _sonarrNotifier = null;
+  }
+
+  /// Re-pulls the search-chip library snapshot (see [_buildLibraryStatus]),
+  /// which is otherwise loaded once per session and would drift whenever the
+  /// libraries change without this app's involvement. Passive triggers are
+  /// throttled by [_libraryRefreshThrottle]; [force] callers (websocket pings,
+  /// a submitted request, an instance change) signal a real change and skip it.
+  void _refreshLibraries({bool force = false}) {
+    if (_radarrNotifier == null && _sonarrNotifier == null) {
+      // Login-time init found no default instances; the connection may carry
+      // some now (e.g. an admin granted one mid-session).
+      _initLibraries();
+      return;
+    }
+    final now = DateTime.now();
+    if (!force &&
+        _lastLibraryLoad != null &&
+        now.difference(_lastLibraryLoad!) < _libraryRefreshThrottle) {
+      return;
+    }
+    _lastLibraryLoad = now;
+    _radarrNotifier?.loadMovies();
+    _sonarrNotifier?.loadSeries();
+  }
+
+  /// Coalesces bursts of websocket pings into a single snapshot refresh.
+  void _scheduleLibraryRefresh() {
+    _libraryRefreshDebounce?.cancel();
+    _libraryRefreshDebounce = Timer(const Duration(seconds: 3), () {
+      if (mounted) _refreshLibraries(force: true);
+    });
   }
 
   void _onLibraryChanged() {
@@ -322,20 +389,43 @@ class _AppShellState extends ConsumerState<AppShell>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _libraryRefreshDebounce?.cancel();
     _searchBarAnim.dispose();
     _aiModeAnim.dispose();
     _shimmerRotationAnim.dispose();
     _chatScrollController.dispose();
     _setAiChatNotifier(null);
-    _radarrNotifier?.removeListener(_onLibraryChanged);
-    _sonarrNotifier?.removeListener(_onLibraryChanged);
+    _disposeLibraries();
     _searchController.dispose();
+    _searchFocusNode.removeListener(_onSearchFocusChanged);
     _searchFocusNode.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    // Keep the search-chip snapshot tracking reality: refresh on library-
+    // affecting websocket pings and submitted requests, and rebuild the
+    // notifiers when the user's default instances change (they're pinned to
+    // an instance id at construction).
+    ref.listen(libraryChangedEventsProvider, (_, next) {
+      if (next.hasValue) _scheduleLibraryRefresh();
+    });
+    ref.listen(libraryRefreshTickProvider, (prev, next) {
+      if (prev != next) _refreshLibraries(force: true);
+    });
+    ref.listen(
+        authProvider.select((a) => (
+              a.valueOrNull?.connection?.defaultRadarrInstance?.id,
+              a.valueOrNull?.connection?.defaultSonarrInstance?.id,
+            )), (prev, next) {
+      if (prev != next) {
+        _disposeLibraries();
+        _initLibraries();
+      }
+    });
+
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);
     final hasAi =

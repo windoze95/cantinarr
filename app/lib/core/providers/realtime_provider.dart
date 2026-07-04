@@ -46,6 +46,20 @@ final arrQueueChangedProvider =
       e.data['service_type'] == key.serviceType);
 });
 
+/// Pings that can change what the search availability chips should say: a
+/// witnessed download finishing (`request_status_changed`), an *arr queue
+/// changing shape (`arr_queue_changed`, any instance), or a decision on one
+/// of the user's own requests (`request_decision`). The shell re-pulls its
+/// library snapshot on any of these so chips track downloads that finish
+/// while the app is open.
+final libraryChangedEventsProvider = StreamProvider.autoDispose<WsEvent>((ref) {
+  final events = ref.watch(realtimeEventsProvider);
+  return events.where((e) =>
+      e.type == 'request_status_changed' ||
+      e.type == 'arr_queue_changed' ||
+      e.type == 'request_decision');
+});
+
 /// Approval decisions for the current user's own requests
 /// (`request_decision` events). The backend pushes these only to the
 /// requesting user, carrying `decision` ('approved'|'denied'), `title`,

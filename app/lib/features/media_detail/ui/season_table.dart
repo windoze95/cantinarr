@@ -27,6 +27,10 @@ class SeasonTable extends StatefulWidget {
   /// make the picker a silent no-op.
   final bool canRequest;
 
+  /// Called after a season request is accepted, so the caller can nudge
+  /// stale-by-design surfaces (the shell's search-chip snapshot).
+  final VoidCallback? onRequested;
+
   const SeasonTable({
     super.key,
     required this.seasons,
@@ -34,6 +38,7 @@ class SeasonTable extends StatefulWidget {
     this.title,
     this.tvdbId,
     this.canRequest = true,
+    this.onRequested,
   });
 
   @override
@@ -103,6 +108,7 @@ class _SeasonTableState extends State<SeasonTable> {
       seasons: seasons,
     );
     if (!mounted) return;
+    if (widget.notifier.state.error == null) widget.onRequested?.call();
     // Clear the local selection; the request button + badges reflect the new
     // state from the refreshed status.
     setState(() => _selected.clear());

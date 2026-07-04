@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
@@ -321,6 +322,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                         title: state.title,
                         tvdbId: state.tvDetail?.externalIds?.tvdbId,
                         canRequest: _canChooseSeasons,
+                        onRequested: _bumpLibraryRefresh,
                       ),
                     ],
 
@@ -417,6 +419,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       seasonScope: seasonScope,
       qualityProfileId: qualityProfileId,
     );
+    if (mounted && _requestNotifier.state.error == null) _bumpLibraryRefresh();
+  }
+
+  /// Tell the shell its search-chip library snapshot just went stale (the arr
+  /// library changed under it), so the requested title reads "Requested" on
+  /// the next search.
+  void _bumpLibraryRefresh() {
+    ref.read(libraryRefreshTickProvider.notifier).state++;
   }
 
   /// Reporting is offered only once the title is at least partially in the
