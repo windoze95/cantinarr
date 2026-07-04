@@ -820,7 +820,10 @@ func (s *ToolServer) getLibrary(input json.RawMessage) (*ToolResult, error) {
 				if !sr.Monitored {
 					continue
 				}
-				if sr.Statistics != nil && sr.Statistics.PercentOfEpisodes >= 100 {
+				// Skip only truly complete series. percentOfEpisodes would
+				// also skip incomplete series whose few monitored episodes
+				// are all downloaded (it only counts monitored episodes).
+				if files, total := sr.EpisodeTotals(); total > 0 && files >= total {
 					continue
 				}
 			case "unmonitored":
@@ -850,8 +853,8 @@ func (s *ToolServer) getLibrary(input json.RawMessage) (*ToolResult, error) {
 				fmt.Fprintf(&sb, ", TMDB %d", sr.TmdbID)
 			}
 			sb.WriteString("]")
-			if sr.Statistics != nil {
-				fmt.Fprintf(&sb, " — %d/%d episodes", sr.Statistics.EpisodeFileCount, sr.Statistics.EpisodeCount)
+			if files, total := sr.EpisodeTotals(); total > 0 || files > 0 {
+				fmt.Fprintf(&sb, " — %d/%d episodes", files, total)
 			}
 			if !sr.Monitored {
 				sb.WriteString(" — unmonitored")

@@ -1012,11 +1012,14 @@ func (s *Service) requestExistingSeries(client *sonarr.Client, existing *sonarr.
 			return StatusRequested, existing.Title, nil
 		}
 	}
-	status := StatusRequested
-	if existing.Statistics != nil && existing.Statistics.PercentOfEpisodes >= 100 {
-		status = StatusAvailable
-	} else if existing.Statistics != nil && existing.Statistics.EpisodeFileCount > 0 {
-		status = StatusPartial
+	// Nothing needed to change: report honest completeness (never Sonarr's
+	// monitored-only percentOfEpisodes; see getTVStatus).
+	files, total := existing.EpisodeTotals()
+	status, _ := statusFromCompletion(sonarr.Completion{Files: files, Aired: total}, existing.Monitored)
+	if status == StatusUnavailable {
+		// The series is in Sonarr and this request just (re)confirmed it;
+		// nothing on disk yet still reads as an accepted request.
+		status = StatusRequested
 	}
 	return status, existing.Title, nil
 }
@@ -1298,31 +1301,101 @@ func (s *Service) getTVStatus(userID int64, tmdbID int) (*StatusResponse, error)
 		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
 
+	// Derive availability from the real episode list: "available" strictly
+	// means every aired episode has a file. Sonarr's percentOfEpisodes (and
+	// its season episodeCount) only count monitored episodes, so a series with
+	// two monitored, downloaded episodes and the rest unmonitored would read
+	// 100% / "available" while most of it is missing.
+	if episodes, epErr := sonarrClient.GetAllEpisodes(series.ID); epErr == nil {
+		completion, bySeason := sonarr.SeriesCompletion(episodes, time.Now())
+		status, progress := statusFromCompletion(completion, series.Monitored)
+		return &StatusResponse{
+			Status:   status,
+			Progress: progress,
+			Seasons:  seasonStatusesFromCompletion(series, bySeason),
+		}, nil
+	}
+
+	// Fallback (episode fetch failed): season-statistics totals. Stricter than
+	// the aired-aware path — unaired episodes count as missing — but still
+	// immune to the monitored-episodes-only skew.
 	seasons := seasonStatuses(series)
-
-	if series.Statistics != nil {
-		if series.Statistics.PercentOfEpisodes >= 100 {
-			return &StatusResponse{Status: StatusAvailable, Progress: 1.0, Seasons: seasons}, nil
-		}
-		if series.Statistics.EpisodeFileCount > 0 {
-			progress := series.Statistics.PercentOfEpisodes / 100.0
-			return &StatusResponse{Status: StatusPartial, Progress: progress, Seasons: seasons}, nil
-		}
-	}
-
-	if series.Monitored {
-		return &StatusResponse{Status: StatusRequested, Progress: 0, Seasons: seasons}, nil
-	}
-
-	return &StatusResponse{Status: StatusUnavailable, Seasons: seasons}, nil
+	files, total := series.EpisodeTotals()
+	status, progress := statusFromCompletion(sonarr.Completion{Files: files, Aired: total}, series.Monitored)
+	return &StatusResponse{Status: status, Progress: progress, Seasons: seasons}, nil
 }
 
-// seasonStatuses builds the per-season availability breakdown for a series from
-// its seasons[].statistics. Season 0 / Specials is excluded to match the rest
-// of the app (the TMDB SeasonGrid filters it out too). Each season's status
-// mirrors the title vocabulary, derived from file counts + monitoring (queue
-// isn't consulted here, matching the title-level TV derivation, which keeps
-// status checks to a single Sonarr call).
+// statusFromCompletion maps on-disk completeness (plus the series' monitored
+// flag) onto the request status vocabulary: complete → available, anything on
+// disk → partial (the button offers "Request More"), nothing on disk →
+// requested when monitored, else unavailable.
+func statusFromCompletion(c sonarr.Completion, monitored bool) (string, float64) {
+	switch {
+	case c.Complete():
+		return StatusAvailable, 1.0
+	case c.Files > 0:
+		progress := 0.0
+		if c.Aired > 0 {
+			progress = float64(c.Files) / float64(c.Aired)
+		}
+		return StatusPartial, progress
+	case monitored:
+		return StatusRequested, 0
+	default:
+		return StatusUnavailable, 0
+	}
+}
+
+// seasonStatusesFromCompletion builds the per-season availability breakdown
+// from real episode counts (see SeriesCompletion). EpisodeCount is the aired
+// (obtainable) episode count, so the app's "x/y eps" label reflects true
+// completeness. Season 0 / Specials is excluded to match the rest of the app.
+func seasonStatusesFromCompletion(series *sonarr.Series, bySeason map[int]sonarr.Completion) []SeasonStatus {
+	monitored := make(map[int]bool, len(series.Seasons))
+	numbers := make([]int, 0, len(series.Seasons)+len(bySeason))
+	for _, s := range series.Seasons {
+		monitored[s.SeasonNumber] = s.Monitored
+		numbers = append(numbers, s.SeasonNumber)
+	}
+	// Include seasons that have episodes but are missing from series.Seasons
+	// (defensive; normally the seasons array covers them all).
+	for n := range bySeason {
+		if _, ok := monitored[n]; !ok {
+			numbers = append(numbers, n)
+		}
+	}
+	sort.Ints(numbers)
+
+	out := make([]SeasonStatus, 0, len(numbers))
+	for _, n := range numbers {
+		if n <= 0 {
+			continue // skip Specials
+		}
+		c := bySeason[n]
+		status, progress := statusFromCompletion(c, monitored[n])
+		out = append(out, SeasonStatus{
+			SeasonNumber:     n,
+			EpisodeFileCount: c.Files,
+			EpisodeCount:     c.Aired,
+			Status:           status,
+			Progress:         progress,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// seasonStatuses builds the per-season availability breakdown for a series
+// from its seasons[].statistics — the fallback when the episode list couldn't
+// be fetched (see seasonStatusesFromCompletion for the primary path). Season
+// totals use totalEpisodeCount, NOT episodeCount: Sonarr's episodeCount only
+// counts monitored episodes, which is exactly the skew that made half-empty
+// seasons read "available". totalEpisodeCount includes unaired episodes, so
+// this fallback under-reports availability for airing seasons rather than
+// over-reporting it. Season 0 / Specials is excluded to match the rest of the
+// app (the TMDB SeasonGrid filters it out too).
 func seasonStatuses(series *sonarr.Series) []SeasonStatus {
 	if series == nil || len(series.Seasons) == 0 {
 		return nil
@@ -1334,18 +1407,14 @@ func seasonStatuses(series *sonarr.Series) []SeasonStatus {
 		}
 		ss := SeasonStatus{SeasonNumber: s.SeasonNumber, Status: StatusUnavailable}
 		if s.Statistics != nil {
-			ss.EpisodeFileCount = s.Statistics.EpisodeFileCount
-			ss.EpisodeCount = s.Statistics.EpisodeCount
-			switch {
-			case s.Statistics.EpisodeCount > 0 && s.Statistics.EpisodeFileCount >= s.Statistics.EpisodeCount:
-				ss.Status = StatusAvailable
-				ss.Progress = 1.0
-			case s.Statistics.EpisodeFileCount > 0:
-				ss.Status = StatusPartial
-				ss.Progress = float64(s.Statistics.EpisodeFileCount) / float64(s.Statistics.EpisodeCount)
-			case s.Monitored:
-				ss.Status = StatusRequested
+			total := s.Statistics.TotalEpisodeCount
+			if total == 0 {
+				total = s.Statistics.EpisodeCount
 			}
+			ss.EpisodeFileCount = s.Statistics.EpisodeFileCount
+			ss.EpisodeCount = total
+			ss.Status, ss.Progress = statusFromCompletion(
+				sonarr.Completion{Files: s.Statistics.EpisodeFileCount, Aired: total}, s.Monitored)
 		} else if s.Monitored {
 			ss.Status = StatusRequested
 		}

@@ -670,6 +670,90 @@ func (c *Client) GetEpisodes(seriesID, seasonNumber int) ([]Episode, error) {
 	return episodes, nil
 }
 
+// GetAllEpisodes lists every episode of a series across all seasons.
+func (c *Client) GetAllEpisodes(seriesID int) ([]Episode, error) {
+	var episodes []Episode
+	path := fmt.Sprintf("/api/v3/episode?seriesId=%d", seriesID)
+	if err := c.do("GET", path, nil, &episodes); err != nil {
+		return nil, fmt.Errorf("sonarr episodes: %w", err)
+	}
+	return episodes, nil
+}
+
+// Completion is an on-disk completeness rollup: how many episodes have files
+// versus how many are actually obtainable right now ("aired": released, or
+// already on disk). Unaired episodes are excluded on purpose — a fully
+// caught-up airing series is complete for availability purposes, while an
+// ended series with gaps is not, regardless of what is monitored.
+type Completion struct {
+	Files int
+	Aired int
+}
+
+// Complete reports whether every obtainable episode has a file.
+func (c Completion) Complete() bool {
+	return c.Aired > 0 && c.Files >= c.Aired
+}
+
+// SeriesCompletion aggregates an episode list into a series-wide completion
+// plus a per-season breakdown. Specials (season 0) are excluded from the
+// series-wide rollup but still reported per-season. Prefer this over
+// Statistics.PercentOfEpisodes for availability decisions: percentOfEpisodes
+// only counts monitored episodes, so a series with two monitored, downloaded
+// episodes and everything else unmonitored reads 100%.
+func SeriesCompletion(episodes []Episode, now time.Time) (series Completion, bySeason map[int]Completion) {
+	bySeason = make(map[int]Completion)
+	for _, e := range episodes {
+		aired := e.HasFile || (e.AirDateUtc != nil && !e.AirDateUtc.After(now))
+		c := bySeason[e.SeasonNumber]
+		if aired {
+			c.Aired++
+		}
+		if e.HasFile {
+			c.Files++
+		}
+		bySeason[e.SeasonNumber] = c
+		if e.SeasonNumber > 0 {
+			if aired {
+				series.Aired++
+			}
+			if e.HasFile {
+				series.Files++
+			}
+		}
+	}
+	return series, bySeason
+}
+
+// EpisodeTotals returns how many episodes are on disk versus every episode
+// Sonarr knows about (aired or not, monitored or not) across the series' real
+// (non-Specials) seasons, from the season statistics already present on the
+// series. Cheaper than SeriesCompletion (no episode fetch) but stricter: a
+// caught-up airing series counts as incomplete because unaired episodes are
+// included. Falls back to the series-level statistics when Sonarr sent no
+// per-season breakdown.
+func (s *Series) EpisodeTotals() (files, total int) {
+	for _, season := range s.Seasons {
+		if season.SeasonNumber <= 0 || season.Statistics == nil {
+			continue
+		}
+		files += season.Statistics.EpisodeFileCount
+		t := season.Statistics.TotalEpisodeCount
+		if t == 0 {
+			t = season.Statistics.EpisodeCount
+		}
+		total += t
+	}
+	if files == 0 && total == 0 && s.Statistics != nil {
+		files = s.Statistics.EpisodeFileCount
+		total = s.Statistics.TotalEpisodeCount
+		if total == 0 {
+			total = s.Statistics.EpisodeCount
+		}
+	}
+	return files, total
+}
+
 // ManualImportRejection is a single reason Sonarr would not auto-import a file,
 // plus whether the rejection is permanent (a force import will likely still
 // fail) or temporary.

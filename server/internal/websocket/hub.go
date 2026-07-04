@@ -802,9 +802,21 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 					log.Printf("websocket: get completed sonarr series %d: %v", seriesID, err)
 					continue
 				}
+				// "available" strictly means every aired episode has a file.
+				// Sonarr's percentOfEpisodes only counts monitored episodes,
+				// so it reads 100 for a series that's mostly unmonitored and
+				// missing — which would flip request buttons green over this
+				// broadcast for incomplete series.
 				status := "available"
-				if series.Statistics != nil && series.Statistics.PercentOfEpisodes < 100 {
-					status = "partially_available"
+				if episodes, err := client.GetAllEpisodes(seriesID); err == nil {
+					if completion, _ := sonarr.SeriesCompletion(episodes, time.Now()); !completion.Complete() {
+						status = "partially_available"
+					}
+				} else {
+					files, total := series.EpisodeTotals()
+					if total == 0 || files < total {
+						status = "partially_available"
+					}
 				}
 				h.Broadcast(Event{
 					Type: "request_status_changed",
