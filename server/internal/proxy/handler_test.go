@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -74,5 +75,60 @@ func TestInstanceProxyForwardsChaptarrLookup(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("Dune")) {
 		t.Errorf("response not passed through verbatim: %s", body)
+	}
+}
+
+// TestInstanceProxySingleContentType guards against duplicated Content-Type
+// headers. The /api router pre-sets "application/json" on every response via
+// middleware.SetHeader, and ReverseProxy *appends* the upstream's own header
+// rather than replacing it. Browsers merge duplicates into
+// "application/json, application/json; charset=utf-8", which Dio on Flutter
+// web can't recognize as JSON — every arr screen in the web app then fails
+// with a TypeError while native clients (which pick one value) work fine.
+func TestInstanceProxySingleContentType(t *testing.T) {
+	const upstreamContentType = "application/json; charset=utf-8"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", upstreamContentType)
+		_, _ = w.Write([]byte(`[{"title":"Attack of the Clones"}]`))
+	}))
+	defer upstream.Close()
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x42}, 32))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	store := instance.NewStore(database, cipher)
+	inst := &instance.Instance{
+		ServiceType: "radarr",
+		Name:        "Movies",
+		URL:         upstream.URL,
+		APIKey:      "secret-key",
+	}
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+
+	r := chi.NewRouter()
+	// Same default the real /api router applies to every response.
+	r.Use(middleware.SetHeader("Content-Type", "application/json"))
+	r.HandleFunc("/api/instances/{instanceID}/*", NewHandler(store).InstanceProxy())
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/instances/" + inst.ID + "/api/v3/movie")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	got := resp.Header.Values("Content-Type")
+	if len(got) != 1 || got[0] != upstreamContentType {
+		t.Errorf("Content-Type = %q, want exactly [%q]", got, upstreamContentType)
 	}
 }
