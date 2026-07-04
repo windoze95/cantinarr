@@ -12,6 +12,71 @@ func seasonStats(fileCount, epCount int) *sonarr.SeasonStatistics {
 	return &sonarr.SeasonStatistics{EpisodeFileCount: fileCount, EpisodeCount: epCount}
 }
 
+// TestStatusFromCompletion maps completeness onto the request status
+// vocabulary, including the reported trap: a series whose few monitored
+// episodes are all downloaded must read partial, not available.
+func TestStatusFromCompletion(t *testing.T) {
+	cases := []struct {
+		name      string
+		c         sonarr.Completion
+		monitored bool
+		want      string
+	}{
+		{"complete", sonarr.Completion{Files: 4, Aired: 4}, true, StatusAvailable},
+		{"trap: files < aired stays partial even when monitored subset is done", sonarr.Completion{Files: 2, Aired: 4}, true, StatusPartial},
+		{"partial while unmonitored (action optional)", sonarr.Completion{Files: 2, Aired: 4}, false, StatusPartial},
+		{"nothing on disk, monitored", sonarr.Completion{Files: 0, Aired: 4}, true, StatusRequested},
+		{"nothing on disk, unmonitored", sonarr.Completion{Files: 0, Aired: 4}, false, StatusUnavailable},
+		{"nothing aired yet, monitored", sonarr.Completion{}, true, StatusRequested},
+	}
+	for _, c := range cases {
+		if got, _ := statusFromCompletion(c.c, c.monitored); got != c.want {
+			t.Errorf("%s: status = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestSeasonStatusesFromCompletion builds season rows from real episode
+// counts: Specials dropped, x/y = files/aired, unknown seasons tolerated.
+func TestSeasonStatusesFromCompletion(t *testing.T) {
+	series := &sonarr.Series{
+		Seasons: []sonarr.SeasonResource{
+			{SeasonNumber: 0, Monitored: true},
+			{SeasonNumber: 1, Monitored: true},
+			{SeasonNumber: 2, Monitored: false},
+		},
+	}
+	bySeason := map[int]sonarr.Completion{
+		0: {Files: 1, Aired: 1},
+		1: {Files: 2, Aired: 4},
+		3: {Files: 5, Aired: 5}, // not in series.Seasons (defensive)
+	}
+	got := seasonStatusesFromCompletion(series, bySeason)
+	want := map[int]struct {
+		status string
+		files  int
+		eps    int
+	}{
+		1: {StatusPartial, 2, 4},
+		2: {StatusUnavailable, 0, 0},
+		3: {StatusAvailable, 5, 5},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d seasons, want %d (Specials excluded): %+v", len(got), len(want), got)
+	}
+	for _, ss := range got {
+		w, ok := want[ss.SeasonNumber]
+		if !ok {
+			t.Errorf("unexpected season %d", ss.SeasonNumber)
+			continue
+		}
+		if ss.Status != w.status || ss.EpisodeFileCount != w.files || ss.EpisodeCount != w.eps {
+			t.Errorf("season %d = %s %d/%d, want %s %d/%d",
+				ss.SeasonNumber, ss.Status, ss.EpisodeFileCount, ss.EpisodeCount, w.status, w.files, w.eps)
+		}
+	}
+}
+
 // TestSeasonStatuses covers the per-season status derivation: Specials are
 // dropped, and each real season's status maps from its file counts + monitoring
 // onto the title status vocabulary.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // TestUpdateSeriesMonitoring asserts the series update round-trip: the full
@@ -174,5 +175,83 @@ func TestAddSeriesCarriesSeasons(t *testing.T) {
 	}
 	if _, ok := opts["monitor"]; ok {
 		t.Errorf("addOptions.monitor = %v, want omitted for an explicit-season add", opts["monitor"])
+	}
+}
+
+// TestSeriesCompletion covers the aired-aware completeness rollup: unaired
+// episodes don't count against completeness, Specials are excluded from the
+// series-wide numbers, and monitoring plays no role at all.
+func TestSeriesCompletion(t *testing.T) {
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-24 * time.Hour)
+	future := now.Add(24 * time.Hour)
+	episodes := []Episode{
+		// Specials: on disk, must not count toward the series rollup.
+		{ID: 1, SeasonNumber: 0, HasFile: true, AirDateUtc: &past},
+		// S1: the reported trap — 2 downloaded, 2 aired-but-missing
+		// (unmonitored, irrelevant here), 1 unaired.
+		{ID: 11, SeasonNumber: 1, HasFile: true, AirDateUtc: &past, Monitored: true},
+		{ID: 12, SeasonNumber: 1, HasFile: true, AirDateUtc: &past, Monitored: true},
+		{ID: 13, SeasonNumber: 1, AirDateUtc: &past},
+		{ID: 14, SeasonNumber: 1, AirDateUtc: &past},
+		{ID: 15, SeasonNumber: 1, AirDateUtc: &future},
+		// S2: fully unaired (also one with no air date at all = treated unaired).
+		{ID: 21, SeasonNumber: 2, AirDateUtc: &future},
+		{ID: 22, SeasonNumber: 2},
+		// S3: file present despite a future air date (early release) counts
+		// as obtainable.
+		{ID: 31, SeasonNumber: 3, HasFile: true, AirDateUtc: &future},
+	}
+
+	series, bySeason := SeriesCompletion(episodes, now)
+	if series.Files != 3 || series.Aired != 5 {
+		t.Errorf("series completion = %d/%d, want 3/5", series.Files, series.Aired)
+	}
+	if series.Complete() {
+		t.Error("series with aired episodes missing files must not be complete")
+	}
+	if c := bySeason[1]; c.Files != 2 || c.Aired != 4 || c.Complete() {
+		t.Errorf("season 1 completion = %+v, want 2/4 incomplete", c)
+	}
+	if c := bySeason[2]; c.Files != 0 || c.Aired != 0 || c.Complete() {
+		t.Errorf("season 2 completion = %+v, want 0/0 incomplete", c)
+	}
+	if c := bySeason[3]; !c.Complete() {
+		t.Errorf("season 3 completion = %+v, want complete (early release)", c)
+	}
+	if c := bySeason[0]; c.Files != 1 {
+		t.Errorf("season 0 completion = %+v, want its own per-season entry", c)
+	}
+
+	// A caught-up airing series (all aired downloaded, more announced) IS
+	// complete.
+	caughtUp := []Episode{
+		{ID: 1, SeasonNumber: 1, HasFile: true, AirDateUtc: &past},
+		{ID: 2, SeasonNumber: 1, AirDateUtc: &future},
+	}
+	if c, _ := SeriesCompletion(caughtUp, now); !c.Complete() {
+		t.Errorf("caught-up airing series = %+v, want complete", c)
+	}
+}
+
+// TestEpisodeTotals covers the statistics-based fallback totals: real seasons
+// only, totalEpisodeCount preferred over the monitored-skewed episodeCount,
+// series-level statistics only when no per-season breakdown exists.
+func TestEpisodeTotals(t *testing.T) {
+	s := &Series{
+		Seasons: []SeasonResource{
+			{SeasonNumber: 0, Statistics: &SeasonStatistics{EpisodeFileCount: 9, TotalEpisodeCount: 9}},
+			{SeasonNumber: 1, Statistics: &SeasonStatistics{EpisodeFileCount: 2, EpisodeCount: 2, TotalEpisodeCount: 4}},
+			{SeasonNumber: 2, Statistics: &SeasonStatistics{EpisodeFileCount: 3, EpisodeCount: 3}},
+			{SeasonNumber: 3},
+		},
+	}
+	if files, total := s.EpisodeTotals(); files != 5 || total != 7 {
+		t.Errorf("EpisodeTotals = %d/%d, want 5/7 (specials excluded, total preferred)", files, total)
+	}
+
+	fallback := &Series{Statistics: &SeriesStatistics{EpisodeFileCount: 2, EpisodeCount: 2, TotalEpisodeCount: 12}}
+	if files, total := fallback.EpisodeTotals(); files != 2 || total != 12 {
+		t.Errorf("EpisodeTotals fallback = %d/%d, want 2/12", files, total)
 	}
 }
