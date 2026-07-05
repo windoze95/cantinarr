@@ -32,9 +32,24 @@ platform :android do
       aab: "../../build/app/outputs/bundle/release/app-release.aab",
       json_key: ENV["PLAY_JSON_KEY_PATH"],
       skip_upload_metadata: true,
-      skip_upload_changelogs: true,
+      skip_upload_changelogs: false,
       skip_upload_images: true,
       skip_upload_screenshots: true,
+    )
+  end
+
+  desc "Push the Play listing (copy + graphics), no binary"
+  lane :listing do
+    upload_to_play_store(
+      package_name: PACKAGE_NAME,
+      track: ENV["PLAY_TRACK"] || "beta",
+      json_key: ENV["PLAY_JSON_KEY_PATH"],
+      skip_upload_aab: true,
+      skip_upload_apk: true,
+      skip_upload_changelogs: true,
+      skip_upload_metadata: false,
+      skip_upload_images: false,
+      skip_upload_screenshots: false,
     )
   end
 end

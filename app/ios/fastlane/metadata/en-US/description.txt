@@ -1,0 +1,35 @@
+Cantinarr is the companion app for a Cantinarr server — a self-hosted media request and library manager for households that run their own media setup with Radarr, Sonarr, or Chaptarr behind it.
+
+You need a Cantinarr server to use this app. The server is open source and runs as a single Docker container; setup instructions are on GitHub.
+
+FOR YOUR HOUSEHOLD
+
+Everyone you share the server with gets a clean way to find and request things:
+
+• Browse trending and popular movies and shows, powered by TMDB and Trakt
+• Search everything from one bar, with plain availability labels: Available, Requested, Downloading
+• Request in one tap, or pick exactly which seasons (or book formats) you want
+• Watch download progress live, and get a push notification when your request is approved and when it's ready
+• Something wrong with a file? Report a problem right on the title and the server's AI agent can investigate
+• Ask the built-in AI assistant what to watch tonight (if your admin has connected a provider)
+
+No accounts to create and no passwords to remember: your admin sends a connect link, you open it, you're in. Passkey and password sign-in are there when an admin enables them.
+
+FOR ADMINS
+
+The management side goes as deep as you want:
+
+• Approve or deny requests from the queue or straight from the push notification, with per-user policies for seasons and quality
+• Drill into Radarr and Sonarr: series → season → episode, batch searches, Edit Series, interactive release search
+• One download queue across SABnzbd, qBittorrent, NZBGet, and Transmission
+• Import Doctor: stuck downloads explain themselves in plain English, with one-click fixes
+• See what's playing through Tautulli — active streams, history, top stats
+• Plex invites, a guided setup checklist, per-user defaults, and device management
+
+Works on iPhone and iPad, with a sidebar layout on bigger screens.
+
+PRIVACY
+
+The app talks only to your own server. API keys stay server-side, availability is computed live from your services, and there are no ads, analytics, or tracking. Poster art loads from the TMDB image CDN.
+
+Cantinarr is open source (AGPL-3.0): https://github.com/windoze95/cantinarr

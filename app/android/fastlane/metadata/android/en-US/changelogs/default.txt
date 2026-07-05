@@ -1,0 +1,1 @@
+First beta. Browse and request movies, shows, and books from your Cantinarr server; admins get approvals, live queues, deep Radarr/Sonarr control, and the Import Doctor.

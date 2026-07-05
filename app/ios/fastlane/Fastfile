@@ -38,4 +38,63 @@ platform :ios do
       skip_waiting_for_build_processing: true,
     )
   end
+
+  desc "Push App Store metadata + screenshots (no binary)"
+  lane :metadata do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
+      key_content: Base64.decode64(ENV["APP_STORE_CONNECT_API_KEY_B64"]),
+      is_key_content_base64: false,
+    )
+
+    deliver(
+      api_key: api_key,
+      app_identifier: "codes.julian.cantinarr",
+      app_version: ENV["APP_VERSION"],
+      metadata_path: "./fastlane/metadata",
+      screenshots_path: "./fastlane/screenshots",
+      skip_binary_upload: true,
+      overwrite_screenshots: true,
+      run_precheck_before_submit: false,
+      force: true,
+    )
+  end
+
+  desc "Submit the latest TestFlight build of APP_VERSION for App Store review"
+  lane :release do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
+      key_content: Base64.decode64(ENV["APP_STORE_CONNECT_API_KEY_B64"]),
+      is_key_content_base64: false,
+    )
+
+    version = ENV["APP_VERSION"]
+    build = latest_testflight_build_number(
+      api_key: api_key,
+      app_identifier: "codes.julian.cantinarr",
+      version: version,
+      initial_build_number: 0,
+    )
+    UI.user_error!("No TestFlight build found for #{version}") if build.to_i <= 0
+
+    deliver(
+      api_key: api_key,
+      app_identifier: "codes.julian.cantinarr",
+      app_version: version,
+      build_number: build.to_s,
+      submit_for_review: true,
+      automatic_release: false,
+      phased_release: true,
+      skip_binary_upload: true,
+      skip_metadata: true,
+      skip_screenshots: true,
+      run_precheck_before_submit: false,
+      force: true,
+      submission_information: {
+        add_id_info_uses_idfa: false,
+      },
+    )
+  end
 end
