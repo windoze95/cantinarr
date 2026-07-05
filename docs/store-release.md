@@ -133,17 +133,23 @@ steps below must be done in the UI.
 
 ### One-time App Store Connect setup (human)
 
-1. App Privacy (App Store Connect → the app → App Privacy): answer "do you collect data" → **No**
+1. App Review contact: App Store Connect → the app → App Information / the version's App Review
+   section → set contact first/last name, email, and **phone number** (Apple requires the phone;
+   that's why it isn't committed to the repo — creating review details via the API without it
+   fails, see fastlane#20538, so the listing sync deliberately leaves review details to the
+   console). Paste the standing note: the app is an open-source client for a self-hosted server,
+   and a demo server URL + connect link are provided before each submission.
+2. App Privacy (App Store Connect → the app → App Privacy): answer "do you collect data" → **No**
    → the label becomes "Data Not Collected". Rationale if asked: the app has no developer backend,
    no analytics/ads/crash SDKs; it talks only to the user's own self-hosted server, and poster art
    comes from the TMDB CDN as plain image requests.
-2. Age rating questionnaire: all descriptors None, gambling No, unrestricted web access No
+3. Age rating questionnaire: all descriptors None, gambling No, unrestricted web access No
    (the in-app web view is scoped to auth/help flows). Strictly accurate result is 4+; setting
    "Mature/Suggestive Themes: Infrequent/Mild" → **12+** is the conservative choice for an app
    that displays TMDB artwork for arbitrary titles, and is what comparable media managers use.
-3. Content rights: the app shows third-party content (TMDB metadata/artwork) → confirm you have
+4. Content rights: the app shows third-party content (TMDB metadata/artwork) → confirm you have
    the rights (TMDB public API terms; attribution included in the listing copy).
-4. App availability + price (free), and App Review notes: reviewers need a reachable Cantinarr
+5. App availability + price (free), and App Review notes: reviewers need a reachable Cantinarr
    server — paste the demo server URL and a fresh connect link into the review notes before every
    submission.
 
