@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/plex_admin_service.dart';
 
@@ -151,8 +152,8 @@ class _PlexSettingsScreenState extends ConsumerState<PlexSettingsScreen> {
         _linkUrl = null;
       });
       ref.invalidate(plexInviteConfiguredProvider);
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Plex account linked!')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Plex account linked!')));
       await _load();
     } catch (_) {
       if (!silent && mounted) {
@@ -206,8 +207,8 @@ class _PlexSettingsScreenState extends ConsumerState<PlexSettingsScreen> {
 
   Future<void> _save() async {
     if (_machineId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pick a server first')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Pick a server first')));
       return;
     }
     setState(() => _saving = true);
@@ -237,23 +238,24 @@ class _PlexSettingsScreenState extends ConsumerState<PlexSettingsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Plex Invites')),
-      body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_error!,
-                          style: const TextStyle(color: AppTheme.error)),
-                      const SizedBox(height: 12),
-                      ElevatedButton(
-                          onPressed: _load, child: const Text('Retry')),
-                    ],
-                  ),
-                )
-              : _buildBody(),
+      body: CenteredContent(
+          child: _loading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : _error != null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_error!,
+                              style: const TextStyle(color: AppTheme.error)),
+                          const SizedBox(height: 12),
+                          ElevatedButton(
+                              onPressed: _load, child: const Text('Retry')),
+                        ],
+                      ),
+                    )
+                  : _buildBody()),
     );
   }
 

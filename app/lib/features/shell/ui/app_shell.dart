@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
@@ -30,13 +31,19 @@ import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
 import '../logic/shell_search_provider.dart';
 
-/// The root shell widget with persistent search bar and drawer.
-/// Each module provides its own bottom nav via inner StatefulShellRoutes.
+/// The root shell widget with persistent search bar and navigation chrome.
+/// On mobile/tablet that chrome is a hamburger drawer plus per-module bottom
+/// navs (inner StatefulShellRoutes); on desktop it is a persistent sidebar
+/// whose active module expands into its pages, replacing the bottom nav.
 class AppShell extends ConsumerStatefulWidget {
+  /// Current location inside the shell (e.g. `/radarr/queue`), used to
+  /// highlight the active module and page in the desktop sidebar.
+  final String currentPath;
   final Widget child;
 
   const AppShell({
     super.key,
+    required this.currentPath,
     required this.child,
   });
 
@@ -358,11 +365,16 @@ class _AppShellState extends ConsumerState<AppShell>
     return map;
   }
 
-  bool _isMobile(BuildContext context) =>
-      MediaQuery.sizeOf(context).shortestSide < 600;
-
-  bool _isDesktop(BuildContext context) =>
-      MediaQuery.sizeOf(context).width >= 900;
+  /// Module owning [path], or null for paths outside the module shells.
+  static ModuleType? _moduleTypeForPath(String path) {
+    if (path.startsWith('/dashboard')) return ModuleType.dashboard;
+    if (path.startsWith('/radarr')) return ModuleType.radarr;
+    if (path.startsWith('/sonarr')) return ModuleType.sonarr;
+    if (path.startsWith('/chaptarr')) return ModuleType.chaptarr;
+    if (path.startsWith('/downloads')) return ModuleType.downloads;
+    if (path.startsWith('/tautulli')) return ModuleType.tautulli;
+    return null;
+  }
 
   bool _handleScrollNotification(ScrollNotification notification) {
     final atTop =
@@ -446,16 +458,18 @@ class _AppShellState extends ConsumerState<AppShell>
     // Users waiting for a Plex invite — drives the drawer "Plex invites"
     // entry (only shown while someone waits) and the hamburger dot.
     final plexInvitesWaiting = ref.watch(plexInvitesWaitingProvider);
-    final menuBadgeCount =
-        pendingApprovals + openIssues + pendingAgentActions + plexInvitesWaiting;
+    final menuBadgeCount = pendingApprovals +
+        openIssues +
+        pendingAgentActions +
+        plexInvitesWaiting;
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
     final libraryStatus = searchState.isSearching && showSearchResults
         ? _buildLibraryStatus(searchState.searchResults)
         : const <int, LibraryStatus>{};
 
-    final mobile = _isMobile(context);
-    final desktop = _isDesktop(context);
+    final mobile = AppBreakpoints.isMobile(context);
+    final desktop = AppBreakpoints.isDesktop(context);
 
     // Drive animations from state changes
     _onSearchModeChanged(searchState.searchMode);
@@ -503,10 +517,18 @@ class _AppShellState extends ConsumerState<AppShell>
       ),
     );
 
-    // Top bar: hamburger + search on non-desktop, just search on desktop
+    // Top bar: hamburger + search on non-desktop; on desktop just the search
+    // bar, capped to a readable width (the results overlay centers to match).
     Widget topBar;
     if (desktop) {
-      topBar = searchBar;
+      topBar = Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            maxWidth: AppBreakpoints.readableContentWidth,
+          ),
+          child: searchBar,
+        ),
+      );
     } else {
       topBar = Row(
         children: [
@@ -671,7 +693,7 @@ class _AppShellState extends ConsumerState<AppShell>
       return Row(
         children: [
           SizedBox(
-            width: 280,
+            width: AppBreakpoints.sidebarWidth,
             child: Material(
               color: AppTheme.surface,
               child: _buildDrawerContent(context, isOverlay: false),
@@ -747,54 +769,62 @@ class _AppShellState extends ConsumerState<AppShell>
                     ),
                   ),
 
-                  // Chat messages
+                  // Chat messages: full-width scroll surface with the
+                  // transcript column capped for readability on desktop.
                   Expanded(
                     child: GestureDetector(
                       behavior: HitTestBehavior.translucent,
                       onTap: _dismissKeyboard,
-                      child: ListView.builder(
-                        controller: _chatScrollController,
-                        keyboardDismissBehavior:
-                            ScrollViewKeyboardDismissBehavior.onDrag,
-                        padding: const EdgeInsets.all(16),
-                        itemCount: messages.length +
-                            (isLoading &&
-                                    (messages.isEmpty ||
-                                        messages.last.role !=
-                                            ChatRole.assistant)
-                                ? 1
-                                : 0),
-                        itemBuilder: (context, index) {
-                          if (index >= messages.length) {
-                            return const _TypingIndicator();
-                          }
-                          // Skip the initial welcome message
-                          final msg = messages[index];
-                          if (index == 0 && msg.role == ChatRole.assistant) {
-                            return const SizedBox.shrink();
-                          }
-                          final isLast = index == messages.length - 1;
-                          return ChatBubble(
-                            message: msg,
-                            onRetry: isLast && msg.errorText != null
-                                ? _aiChatNotifier?.retryLast
-                                : null,
-                          );
-                        },
-                      ),
+                      child: LayoutBuilder(builder: (context, constraints) {
+                        final hPad = AppBreakpoints.centeredContentPadding(
+                          constraints.maxWidth,
+                        );
+                        return ListView.builder(
+                          controller: _chatScrollController,
+                          keyboardDismissBehavior:
+                              ScrollViewKeyboardDismissBehavior.onDrag,
+                          padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 16),
+                          itemCount: messages.length +
+                              (isLoading &&
+                                      (messages.isEmpty ||
+                                          messages.last.role !=
+                                              ChatRole.assistant)
+                                  ? 1
+                                  : 0),
+                          itemBuilder: (context, index) {
+                            if (index >= messages.length) {
+                              return const _TypingIndicator();
+                            }
+                            // Skip the initial welcome message
+                            final msg = messages[index];
+                            if (index == 0 && msg.role == ChatRole.assistant) {
+                              return const SizedBox.shrink();
+                            }
+                            final isLast = index == messages.length - 1;
+                            return ChatBubble(
+                              message: msg,
+                              onRetry: isLast && msg.errorText != null
+                                  ? _aiChatNotifier?.retryLast
+                                  : null,
+                            );
+                          },
+                        );
+                      }),
                     ),
                   ),
 
                   // Error
                   if (chatState?.error != null)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 4),
-                      child: Text(
-                        chatState!.error!,
-                        style: const TextStyle(
-                            color: AppTheme.error, fontSize: 12),
-                        maxLines: 2,
+                    CenteredContent(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        child: Text(
+                          chatState!.error!,
+                          style: const TextStyle(
+                              color: AppTheme.error, fontSize: 12),
+                          maxLines: 2,
+                        ),
                       ),
                     ),
 
@@ -816,15 +846,22 @@ class _AppShellState extends ConsumerState<AppShell>
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
                     child: SafeArea(
                       top: false,
-                      child: CantinarrSearchBar(
-                        controller: _searchController,
-                        focusNode: _searchFocusNode,
-                        hintText: 'Ask about movies, shows...',
-                        aiEnabled: true,
-                        multiline: true,
-                        onSend: _sendAiMessage,
-                        onChanged: (_) => setState(() {}),
-                        onClear: _exitAiMode,
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxWidth: AppBreakpoints.readableContentWidth,
+                          ),
+                          child: CantinarrSearchBar(
+                            controller: _searchController,
+                            focusNode: _searchFocusNode,
+                            hintText: 'Ask about movies, shows...',
+                            aiEnabled: true,
+                            multiline: true,
+                            onSend: _sendAiMessage,
+                            onChanged: (_) => setState(() {}),
+                            onClear: _exitAiMode,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -848,6 +885,12 @@ class _AppShellState extends ConsumerState<AppShell>
     final moduleState = ref.watch(moduleProvider);
     final instanceState = ref.watch(instanceProvider);
     final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    // Highlight the module that owns the current route; fall back to the
+    // last drawer selection for locations outside the module shells.
+    final pathModule = _moduleTypeForPath(widget.currentPath);
+    final hasChaptarrService =
+        ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
+            false;
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
     final openIssues = ref.watch(openIssuesProvider);
     final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
@@ -953,20 +996,25 @@ class _AppShellState extends ConsumerState<AppShell>
             const Divider(color: AppTheme.border),
           ],
 
-          // Scrollable module navigation items
+          // Scrollable module navigation items. On desktop the active module
+          // also expands into its pages — those replace the module shell's
+          // bottom nav there. The mobile drawer stays modules-only because
+          // the bottom nav covers page switching.
           Expanded(
             child: ListView(
               padding: EdgeInsets.zero,
               children: moduleState.modules.asMap().entries.map((entry) {
                 final module = entry.value;
-                final isActive = entry.key == moduleState.activeIndex;
+                final isActive = pathModule != null
+                    ? module.type == pathModule
+                    : entry.key == moduleState.activeIndex;
                 final selectorInstances = isAdmin
                     ? _instancesForModule(instanceState, module.type)
                     : const <ServiceInstance>[];
                 final activeInstance =
                     _activeInstanceForModule(instanceState, module.type);
 
-                return _DrawerItem(
+                final item = _DrawerItem(
                   icon: module.icon,
                   title: module.label,
                   selected: isActive,
@@ -1006,6 +1054,25 @@ class _AppShellState extends ConsumerState<AppShell>
                           );
                     }
                   },
+                );
+
+                final pages = !isOverlay && isActive
+                    ? modulePagesFor(module.type,
+                        includeBooks: hasChaptarrService)
+                    : const <ModulePage>[];
+                if (pages.isEmpty) return item;
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    item,
+                    for (final page in pages)
+                      _DrawerSubItem(
+                        page: page,
+                        selected: widget.currentPath == page.route,
+                        onTap: () => context.go(page.route),
+                      ),
+                  ],
                 );
               }).toList(),
             ),
@@ -1161,6 +1228,47 @@ class _DrawerItem extends StatelessWidget {
         ),
       ),
       trailing: badgeCount > 0 ? _CountPill(count: badgeCount) : trailing,
+      selected: selected,
+      selectedTileColor: AppTheme.accent.withValues(alpha: 0.08),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      onTap: onTap,
+    );
+  }
+}
+
+/// A page entry nested under the active module in the desktop sidebar —
+/// the desktop counterpart of one bottom-nav tab.
+class _DrawerSubItem extends StatelessWidget {
+  final ModulePage page;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _DrawerSubItem({
+    required this.page,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      contentPadding: const EdgeInsets.only(left: 36, right: 16),
+      minLeadingWidth: 0,
+      horizontalTitleGap: 14,
+      leading: Icon(
+        selected ? page.activeIcon : page.icon,
+        size: 20,
+        color: selected ? AppTheme.accent : AppTheme.textSecondary,
+      ),
+      title: Text(
+        page.label,
+        style: TextStyle(
+          fontSize: 14,
+          color: selected ? AppTheme.accent : AppTheme.textPrimary,
+          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+        ),
+      ),
       selected: selected,
       selectedTileColor: AppTheme.accent.withValues(alpha: 0.08),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
@@ -146,7 +147,8 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
           ],
         ),
       ),
-      body: Column(
+      body: CenteredContent(
+          child: Column(
         children: [
           Expanded(child: _buildBody()),
           _ActionBar(
@@ -154,7 +156,7 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
             onInteractive: _interactiveSearch,
           ),
         ],
-      ),
+      )),
     );
   }
 

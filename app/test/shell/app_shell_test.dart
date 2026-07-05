@@ -34,7 +34,8 @@ void main() {
       initialLocation: '/dashboard/movies',
       routes: [
         ShellRoute(
-          builder: (context, state, child) => AppShell(child: child),
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
           routes: [
             GoRoute(
               path: '/dashboard/movies',
@@ -96,7 +97,8 @@ void main() {
       initialLocation: '/dashboard/movies',
       routes: [
         ShellRoute(
-          builder: (context, state, child) => AppShell(child: child),
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
           routes: [
             GoRoute(
               path: '/dashboard/movies',
@@ -154,7 +156,8 @@ void main() {
       initialLocation: '/dashboard/movies',
       routes: [
         ShellRoute(
-          builder: (context, state, child) => AppShell(child: child),
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
           routes: [
             GoRoute(
               path: '/dashboard/movies',

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
@@ -264,7 +265,7 @@ class _EditSeriesScreenState extends ConsumerState<EditSeriesScreen> {
         backgroundColor: AppTheme.background,
         title: const Text('Edit Series'),
       ),
-      body: _buildBody(),
+      body: CenteredContent(child: _buildBody()),
     );
   }
 

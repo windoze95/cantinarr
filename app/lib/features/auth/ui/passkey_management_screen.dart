@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/auth_service.dart';
 import '../logic/auth_provider.dart';
@@ -100,22 +101,24 @@ class _PasskeyManagementScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Passkeys')),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_error!,
-                          style: const TextStyle(color: AppTheme.error)),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                          onPressed: _loadPasskeys, child: const Text('Retry')),
-                    ],
-                  ),
-                )
-              : _buildList(),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _error != null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_error!,
+                              style: const TextStyle(color: AppTheme.error)),
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                              onPressed: _loadPasskeys,
+                              child: const Text('Retry')),
+                        ],
+                      ),
+                    )
+                  : _buildList()),
       floatingActionButton: FloatingActionButton(
         onPressed: _addPasskey,
         backgroundColor: AppTheme.accent,

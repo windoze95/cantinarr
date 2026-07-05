@@ -110,67 +110,72 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         child: Center(
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Logo
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(20),
-                  child: Image.asset(
-                    'assets/logo.png',
-                    width: 72,
-                    height: 72,
-                    fit: BoxFit.cover,
+            // Login card: full-width buttons would otherwise stretch the
+            // column across a desktop window.
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Logo
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    child: Image.asset(
+                      'assets/logo.png',
+                      width: 72,
+                      height: 72,
+                      fit: BoxFit.cover,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Cantinarr',
-                  style: TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Cantinarr',
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  showPasskeyOffer ? 'Secure your account' : _subtitle,
-                  style: const TextStyle(
-                      color: AppTheme.textSecondary, fontSize: 15),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 40),
+                  const SizedBox(height: 4),
+                  Text(
+                    showPasskeyOffer ? 'Secure your account' : _subtitle,
+                    style: const TextStyle(
+                        color: AppTheme.textSecondary, fontSize: 15),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 40),
 
-                // Post-setup passkey offer takes priority
-                if (showPasskeyOffer)
-                  const _PasskeyOfferView()
-                else
-                  // View-specific content
-                  switch (_view) {
-                    _AuthView.serverUrl => _ServerUrlView(
-                        controller: _serverUrlController,
-                        isLoading: _isCheckingServer,
-                        error: _serverError,
-                        onCheck: _checkServer,
-                        onConnectLink: _showConnectLink,
-                      ),
-                    _AuthView.setup => _SetupView(
-                        serverUrl: _serverUrlController.text.trim(),
-                        serverStatus: _serverStatus!,
-                        onBack: _backToServerUrl,
-                      ),
-                    _AuthView.login => _LoginView(
-                        serverUrl: _serverUrlController.text.trim(),
-                        serverStatus: _serverStatus,
-                        onBack: _backToServerUrl,
-                        onConnectLink: _showConnectLink,
-                      ),
-                    _AuthView.connectLink => _ConnectLinkView(
-                        controller: _linkController,
-                        onBack: _backToServerUrl,
-                      ),
-                  },
-              ],
+                  // Post-setup passkey offer takes priority
+                  if (showPasskeyOffer)
+                    const _PasskeyOfferView()
+                  else
+                    // View-specific content
+                    switch (_view) {
+                      _AuthView.serverUrl => _ServerUrlView(
+                          controller: _serverUrlController,
+                          isLoading: _isCheckingServer,
+                          error: _serverError,
+                          onCheck: _checkServer,
+                          onConnectLink: _showConnectLink,
+                        ),
+                      _AuthView.setup => _SetupView(
+                          serverUrl: _serverUrlController.text.trim(),
+                          serverStatus: _serverStatus!,
+                          onBack: _backToServerUrl,
+                        ),
+                      _AuthView.login => _LoginView(
+                          serverUrl: _serverUrlController.text.trim(),
+                          serverStatus: _serverStatus,
+                          onBack: _backToServerUrl,
+                          onConnectLink: _showConnectLink,
+                        ),
+                      _AuthView.connectLink => _ConnectLinkView(
+                          controller: _linkController,
+                          onBack: _backToServerUrl,
+                        ),
+                    },
+                ],
+              ),
             ),
           ),
         ),

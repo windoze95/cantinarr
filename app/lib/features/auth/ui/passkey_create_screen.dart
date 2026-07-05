@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/passkey_service.dart';
 import '../logic/auth_provider.dart';
@@ -123,7 +124,8 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Create Passkey')),
-      body: SafeArea(
+      body: CenteredContent(
+          child: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
@@ -180,7 +182,7 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
             ],
           ],
         ),
-      ),
+      )),
     );
   }
 

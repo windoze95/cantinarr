@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
@@ -134,27 +135,28 @@ class _UserRequestSettingsScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text('User Settings — ${widget.username}')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : _error != null && _global == null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!,
-                            style: const TextStyle(color: AppTheme.error),
-                            textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                            onPressed: _load, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
-                )
-              : _buildBody(),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : _error != null && _global == null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_error!,
+                                style: const TextStyle(color: AppTheme.error),
+                                textAlign: TextAlign.center),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
+                                onPressed: _load, child: const Text('Retry')),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _buildBody()),
     );
   }
 

@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/models/app_module.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/instance_dropdown.dart';
+import '../../../core/widgets/module_scaffold.dart';
 
-/// Chaptarr module shell with bottom nav: Library | Queue | History | Wanted.
-/// Calendar is intentionally omitted (books have no air schedule). Shows the
+/// Chaptarr module shell: Library | Queue | History | Wanted.
+/// Calendar is intentionally omitted (books have no air schedule). Pages
+/// render as a bottom nav on mobile and sidebar items on desktop. Shows the
 /// instance dropdown in the header when 2+ instances exist.
 class ChaptarrModuleShell extends ConsumerWidget {
   final int currentIndex;
@@ -23,7 +26,7 @@ class ChaptarrModuleShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final instanceState = ref.watch(instanceProvider);
 
-    return Scaffold(
+    return ModuleScaffold(
       appBar: instanceState.chaptarrInstances.length > 1
           ? AppBar(
               title: InstanceDropdown(
@@ -37,38 +40,10 @@ class ChaptarrModuleShell extends ConsumerWidget {
               elevation: 0,
             )
           : null,
-      body: child,
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
-        ),
-        child: BottomNavigationBar(
-          currentIndex: currentIndex,
-          onTap: onTabChanged,
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.menu_book_outlined),
-              activeIcon: Icon(Icons.menu_book),
-              label: 'Library',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.downloading_outlined),
-              activeIcon: Icon(Icons.downloading),
-              label: 'Queue',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.history_outlined),
-              activeIcon: Icon(Icons.history),
-              label: 'History',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.warning_amber_outlined),
-              activeIcon: Icon(Icons.warning_amber),
-              label: 'Wanted',
-            ),
-          ],
-        ),
-      ),
+      pages: modulePagesFor(ModuleType.chaptarr),
+      currentIndex: currentIndex,
+      onTabChanged: onTabChanged,
+      child: child,
     );
   }
 }

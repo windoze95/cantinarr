@@ -55,6 +55,12 @@ class AppTheme {
           unselectedItemColor: textSecondary,
           type: BottomNavigationBarType.fixed,
         ),
+        // Modal bottom sheets cap at the Material 3 standard width so they
+        // present as centered sheets on desktop instead of spanning the
+        // window; phone layouts are narrower than the cap and unaffected.
+        bottomSheetTheme: const BottomSheetThemeData(
+          constraints: BoxConstraints(maxWidth: 640),
+        ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: surfaceVariant,

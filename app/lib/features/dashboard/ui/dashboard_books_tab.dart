@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
@@ -198,7 +199,11 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
     }
     final ordered = <(ChaptarrBook, BookOwnership?, String?)>[
       for (final t in injected)
-        (_ownedTitleAsBook(t), t.ownership, t.cover.isNotEmpty ? t.cover : null),
+        (
+          _ownedTitleAsBook(t),
+          t.ownership,
+          t.cover.isNotEmpty ? t.cover : null
+        ),
       ...owned,
       ...rest,
     ];
@@ -230,20 +235,28 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
     final requestService =
         RequestService(backendDio: ref.read(backendClientProvider));
     final instanceId = ref.read(instanceProvider).activeChaptarrInstance?.id;
-    return ListView.separated(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: ordered.length,
-      separatorBuilder: (_, __) =>
-          const Divider(height: 1, color: AppTheme.border),
-      itemBuilder: (_, i) => _BookResultTile(
-        book: ordered[i].$1,
-        ownership: ordered[i].$2,
-        cover: instanceId == null
-            ? null
-            : chaptarrImageSource(ref, ordered[i].$3, instanceId),
-        requestService: requestService,
-      ),
-    );
+    // Full-width scroll surface; the result column is capped and centered so
+    // rows stay readable on desktop widths.
+    return LayoutBuilder(builder: (context, constraints) {
+      final hPad = AppBreakpoints.centeredContentPadding(
+        constraints.maxWidth,
+        minPadding: 0,
+      );
+      return ListView.separated(
+        padding: EdgeInsets.fromLTRB(hPad, 8, hPad, 8),
+        itemCount: ordered.length,
+        separatorBuilder: (_, __) =>
+            const Divider(height: 1, color: AppTheme.border),
+        itemBuilder: (_, i) => _BookResultTile(
+          book: ordered[i].$1,
+          ownership: ordered[i].$2,
+          cover: instanceId == null
+              ? null
+              : chaptarrImageSource(ref, ordered[i].$3, instanceId),
+          requestService: requestService,
+        ),
+      );
+    });
   }
 }
 
@@ -472,9 +485,8 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
   bool _isCovered(BookRequestFormat f) => _detail.isCovered(f);
 
   /// Requestable while at least one of ebook/audiobook hasn't been requested.
-  bool get _requestable =>
-      !(_isCovered(BookRequestFormat.ebook) &&
-          _isCovered(BookRequestFormat.audiobook));
+  bool get _requestable => !(_isCovered(BookRequestFormat.ebook) &&
+      _isCovered(BookRequestFormat.audiobook));
 
   String get _buttonText {
     if (!_requestable) {
@@ -631,7 +643,8 @@ class _FormatChoiceTile extends StatelessWidget {
     return ListTile(
       enabled: !covered,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-      leading: Icon(icon, color: covered ? AppTheme.textSecondary : AppTheme.accent),
+      leading:
+          Icon(icon, color: covered ? AppTheme.textSecondary : AppTheme.accent),
       title: Text(
         choice.label,
         style: TextStyle(

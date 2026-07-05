@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -220,124 +221,128 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('API Credentials')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_error!,
-                          style: const TextStyle(color: AppTheme.error)),
-                      const SizedBox(height: 12),
-                      ElevatedButton(
-                          onPressed: _loadStatus, child: const Text('Retry')),
-                    ],
-                  ),
-                )
-              : ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    const Text(
-                      'Credentials are write-only. Enter a new value to set or replace.',
-                      style: TextStyle(
-                          color: AppTheme.textSecondary, fontSize: 13),
-                    ),
-                    const SizedBox(height: 24),
-                    _AISelectionSection(
-                      providers: _status?.ai.providers ?? const [],
-                      selectedProvider: _selectedProvider,
-                      selectedModel: _selectedModel,
-                      customModelValue: _customModelValue,
-                      customModelController: _customModelController,
-                      isSelectedProviderConfigured: _status?.isConfigured(
-                            _providerFor(
-                                  _selectedProvider,
-                                  _status?.ai.providers ?? const [],
-                                )?.credentialKey ??
-                                'anthropic_key',
-                          ) ??
-                          false,
-                      onProviderChanged: _selectProvider,
-                      onModelChanged: (value) =>
-                          setState(() => _selectedModel = value),
-                    ),
-                    const SizedBox(height: 24),
-                    _CredentialSection(
-                      title: 'TMDB',
-                      description: 'Required for media discovery and search',
-                      isConfigured:
-                          _status?.isConfigured('tmdb_access_token') ?? false,
-                      controller: _tmdbController,
-                      hint: 'TMDB access token',
-                      onDelete: () =>
-                          _deleteCredential('tmdb_access_token', 'TMDB'),
-                    ),
-                    const SizedBox(height: 20),
-                    _CredentialSection(
-                      title: 'Anthropic (AI)',
-                      description: 'Claude model provider',
-                      isConfigured:
-                          _status?.isConfigured('anthropic_key') ?? false,
-                      controller: _anthropicController,
-                      hint: 'Anthropic API key',
-                      onDelete: () =>
-                          _deleteCredential('anthropic_key', 'Anthropic'),
-                    ),
-                    if (_status?.ai.providers.isNotEmpty ?? false) ...[
-                      const SizedBox(height: 20),
-                      _CredentialSection(
-                        title: 'OpenAI (AI)',
-                        description: 'GPT model provider',
-                        isConfigured:
-                            _status?.isConfigured('openai_key') ?? false,
-                        controller: _openAIController,
-                        hint: 'OpenAI API key',
-                        onDelete: () =>
-                            _deleteCredential('openai_key', 'OpenAI'),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : _error != null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_error!,
+                              style: const TextStyle(color: AppTheme.error)),
+                          const SizedBox(height: 12),
+                          ElevatedButton(
+                              onPressed: _loadStatus,
+                              child: const Text('Retry')),
+                        ],
                       ),
-                      const SizedBox(height: 20),
-                      _CredentialSection(
-                        title: 'Google Gemini (AI)',
-                        description: 'Gemini model provider',
-                        isConfigured:
-                            _status?.isConfigured('gemini_key') ?? false,
-                        controller: _geminiController,
-                        hint: 'Gemini API key',
-                        onDelete: () =>
-                            _deleteCredential('gemini_key', 'Google Gemini'),
-                      ),
-                    ],
-                    const SizedBox(height: 20),
-                    _CredentialSection(
-                      title: 'Trakt',
-                      description:
-                          'Enhances discovery with trending and popular lists',
-                      isConfigured:
-                          _status?.isConfigured('trakt_client_id') ?? false,
-                      controller: _traktIdController,
-                      hint: 'Trakt client ID',
-                      onDelete: () =>
-                          _deleteCredential('trakt_client_id', 'Trakt'),
-                    ),
-                    const SizedBox(height: 32),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _isSaving ? null : _save,
-                        child: _isSaving
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Text('Save'),
-                      ),
-                    ),
-                  ],
-                ),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: [
+                        const Text(
+                          'Credentials are write-only. Enter a new value to set or replace.',
+                          style: TextStyle(
+                              color: AppTheme.textSecondary, fontSize: 13),
+                        ),
+                        const SizedBox(height: 24),
+                        _AISelectionSection(
+                          providers: _status?.ai.providers ?? const [],
+                          selectedProvider: _selectedProvider,
+                          selectedModel: _selectedModel,
+                          customModelValue: _customModelValue,
+                          customModelController: _customModelController,
+                          isSelectedProviderConfigured: _status?.isConfigured(
+                                _providerFor(
+                                      _selectedProvider,
+                                      _status?.ai.providers ?? const [],
+                                    )?.credentialKey ??
+                                    'anthropic_key',
+                              ) ??
+                              false,
+                          onProviderChanged: _selectProvider,
+                          onModelChanged: (value) =>
+                              setState(() => _selectedModel = value),
+                        ),
+                        const SizedBox(height: 24),
+                        _CredentialSection(
+                          title: 'TMDB',
+                          description:
+                              'Required for media discovery and search',
+                          isConfigured:
+                              _status?.isConfigured('tmdb_access_token') ??
+                                  false,
+                          controller: _tmdbController,
+                          hint: 'TMDB access token',
+                          onDelete: () =>
+                              _deleteCredential('tmdb_access_token', 'TMDB'),
+                        ),
+                        const SizedBox(height: 20),
+                        _CredentialSection(
+                          title: 'Anthropic (AI)',
+                          description: 'Claude model provider',
+                          isConfigured:
+                              _status?.isConfigured('anthropic_key') ?? false,
+                          controller: _anthropicController,
+                          hint: 'Anthropic API key',
+                          onDelete: () =>
+                              _deleteCredential('anthropic_key', 'Anthropic'),
+                        ),
+                        if (_status?.ai.providers.isNotEmpty ?? false) ...[
+                          const SizedBox(height: 20),
+                          _CredentialSection(
+                            title: 'OpenAI (AI)',
+                            description: 'GPT model provider',
+                            isConfigured:
+                                _status?.isConfigured('openai_key') ?? false,
+                            controller: _openAIController,
+                            hint: 'OpenAI API key',
+                            onDelete: () =>
+                                _deleteCredential('openai_key', 'OpenAI'),
+                          ),
+                          const SizedBox(height: 20),
+                          _CredentialSection(
+                            title: 'Google Gemini (AI)',
+                            description: 'Gemini model provider',
+                            isConfigured:
+                                _status?.isConfigured('gemini_key') ?? false,
+                            controller: _geminiController,
+                            hint: 'Gemini API key',
+                            onDelete: () => _deleteCredential(
+                                'gemini_key', 'Google Gemini'),
+                          ),
+                        ],
+                        const SizedBox(height: 20),
+                        _CredentialSection(
+                          title: 'Trakt',
+                          description:
+                              'Enhances discovery with trending and popular lists',
+                          isConfigured:
+                              _status?.isConfigured('trakt_client_id') ?? false,
+                          controller: _traktIdController,
+                          hint: 'Trakt client ID',
+                          onDelete: () =>
+                              _deleteCredential('trakt_client_id', 'Trakt'),
+                        ),
+                        const SizedBox(height: 32),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: _isSaving ? null : _save,
+                            child: _isSaving
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  )
+                                : const Text('Save'),
+                          ),
+                        ),
+                      ],
+                    )),
     );
   }
 }

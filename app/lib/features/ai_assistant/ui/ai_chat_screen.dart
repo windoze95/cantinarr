@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
 import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
@@ -92,30 +93,34 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
           ),
           title: const Text('AI Assistant'),
         ),
-        body: const Center(
+        body: Center(
           child: Padding(
-            padding: EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.smart_toy_outlined,
-                    size: 64, color: AppTheme.accent),
-                SizedBox(height: 16),
-                Text(
-                  'AI Assistant',
-                  style: TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
+            padding: const EdgeInsets.all(32),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: const Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.smart_toy_outlined,
+                      size: 64, color: AppTheme.accent),
+                  SizedBox(height: 16),
+                  Text(
+                    'AI Assistant',
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ),
-                SizedBox(height: 12),
-                Text(
-                  'The AI assistant is not configured on this server. Ask your server admin to set up an AI provider.',
-                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 15),
-                  textAlign: TextAlign.center,
-                ),
-              ],
+                  SizedBox(height: 12),
+                  Text(
+                    'The AI assistant is not configured on this server. Ask your server admin to set up an AI provider.',
+                    style:
+                        TextStyle(color: AppTheme.textSecondary, fontSize: 15),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -154,17 +159,22 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTap: _dismissKeyboard,
-              child: Builder(builder: (context) {
+              child: LayoutBuilder(builder: (context, constraints) {
                 // Only show the typing indicator before the assistant bubble
                 // materializes (text, tool activity, or media arriving).
                 final showTyping = state.isLoading &&
                     (state.messages.isEmpty ||
                         state.messages.last.role != ChatRole.assistant);
+                // Full-width scroll surface; the transcript column is capped
+                // and centered so bubbles stay readable on desktop.
+                final hPad = AppBreakpoints.centeredContentPadding(
+                  constraints.maxWidth,
+                );
                 return ListView.builder(
                   controller: _scrollController,
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
-                  padding: const EdgeInsets.all(16),
+                  padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 16),
                   itemCount: state.messages.length + (showTyping ? 1 : 0),
                   itemBuilder: (context, index) {
                     if (index >= state.messages.length) {
@@ -186,16 +196,19 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
           // Error
           if (state.error != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Text(
-                state.error!,
-                style: const TextStyle(color: AppTheme.error, fontSize: 12),
-                maxLines: 2,
+            CenteredContent(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Text(
+                  state.error!,
+                  style: const TextStyle(color: AppTheme.error, fontSize: 12),
+                  maxLines: 2,
+                ),
               ),
             ),
 
-          // Input
+          // Input (capped to the transcript column width on desktop)
           Container(
             decoration: const BoxDecoration(
               color: AppTheme.surface,
@@ -204,45 +217,47 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: SafeArea(
               top: false,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (state.messages.length <= 1) ...[
-                    _buildSuggestions(),
-                    const SizedBox(height: 8),
-                  ],
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _inputController,
-                          focusNode: _focusNode,
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (_) => _send(),
-                          onTapOutside: (_) => _dismissKeyboard(),
-                          decoration: const InputDecoration(
-                            hintText: 'Ask me anything...',
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
-                          ),
-                          maxLines: 4,
-                          minLines: 1,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: state.isLoading ? null : _send,
-                        icon: Icon(
-                          Icons.send_rounded,
-                          color: state.isLoading
-                              ? AppTheme.textSecondary
-                              : AppTheme.accent,
-                        ),
-                      ),
+              child: CenteredContent(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (state.messages.length <= 1) ...[
+                      _buildSuggestions(),
+                      const SizedBox(height: 8),
                     ],
-                  ),
-                ],
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _inputController,
+                            focusNode: _focusNode,
+                            keyboardType: TextInputType.multiline,
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: (_) => _send(),
+                            onTapOutside: (_) => _dismissKeyboard(),
+                            decoration: const InputDecoration(
+                              hintText: 'Ask me anything...',
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                            ),
+                            maxLines: 4,
+                            minLines: 1,
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: state.isLoading ? null : _send,
+                          icon: Icon(
+                            Icons.send_rounded,
+                            color: state.isLoading
+                                ? AppTheme.textSecondary
+                                : AppTheme.accent,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
@@ -452,8 +453,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           children: [
             Expanded(
               child: Text(_userSelectError!,
-                  style:
-                      const TextStyle(color: AppTheme.error, fontSize: 13)),
+                  style: const TextStyle(color: AppTheme.error, fontSize: 13)),
             ),
             TextButton(
               onPressed: _retryDirectory,
@@ -719,7 +719,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ),
         ],
       ),
-      body: ListView(
+      body: CenteredContent(
+          child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           // Service type (only for new instances)
@@ -964,7 +965,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ),
           ],
         ],
-      ),
+      )),
     );
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -47,7 +48,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
+      body: CenteredContent(
+          child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
           // Server connection
@@ -295,7 +297,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           const SizedBox(height: 32),
         ],
-      ),
+      )),
     );
   }
 

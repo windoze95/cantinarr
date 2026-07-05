@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../notification_prefs.dart';
@@ -142,27 +143,28 @@ class _NotificationPreferencesScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Notification Preferences')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : _error != null && _prefs == null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!,
-                            style: const TextStyle(color: AppTheme.error),
-                            textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                            onPressed: _load, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
-                )
-              : _buildBody(),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : _error != null && _prefs == null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_error!,
+                                style: const TextStyle(color: AppTheme.error),
+                                textAlign: TextAlign.center),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
+                                onPressed: _load, child: const Text('Retry')),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _buildBody()),
     );
   }
 

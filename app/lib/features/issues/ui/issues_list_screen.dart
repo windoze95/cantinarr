@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/issue_models.dart';
@@ -65,63 +66,64 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Issues')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : _error != null && _issues == null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_friendlyError(_error!),
-                            style: const TextStyle(color: AppTheme.error),
-                            textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                            onPressed: _load, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
-                )
-              : RefreshIndicator(
-                  color: AppTheme.accent,
-                  onRefresh: _load,
-                  child: (_issues?.isEmpty ?? true)
-                      ? ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          children: const [
-                            SizedBox(height: 120),
-                            Center(
-                              child: Text(
-                                'No reported problems.',
-                                style:
-                                    TextStyle(color: AppTheme.textSecondary),
-                              ),
-                            ),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : _error != null && _issues == null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_friendlyError(_error!),
+                                style: const TextStyle(color: AppTheme.error),
+                                textAlign: TextAlign.center),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
+                                onPressed: _load, child: const Text('Retry')),
                           ],
-                        )
-                      : ListView.separated(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: _issues!.length,
-                          separatorBuilder: (_, __) =>
-                              const Divider(color: AppTheme.border, height: 1),
-                          itemBuilder: (context, index) {
-                            final issue = _issues![index];
-                            return _IssueTile(
-                              issue: issue,
-                              onTap: () async {
-                                await context.push('/issues/${issue.id}');
-                                // Returning from the thread may have changed
-                                // state (a reply, a dismiss) — refresh.
-                                if (mounted) _load();
-                              },
-                            );
-                          },
                         ),
-                ),
+                      ),
+                    )
+                  : RefreshIndicator(
+                      color: AppTheme.accent,
+                      onRefresh: _load,
+                      child: (_issues?.isEmpty ?? true)
+                          ? ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              children: const [
+                                SizedBox(height: 120),
+                                Center(
+                                  child: Text(
+                                    'No reported problems.',
+                                    style: TextStyle(
+                                        color: AppTheme.textSecondary),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : ListView.separated(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              itemCount: _issues!.length,
+                              separatorBuilder: (_, __) => const Divider(
+                                  color: AppTheme.border, height: 1),
+                              itemBuilder: (context, index) {
+                                final issue = _issues![index];
+                                return _IssueTile(
+                                  issue: issue,
+                                  onTap: () async {
+                                    await context.push('/issues/${issue.id}');
+                                    // Returning from the thread may have changed
+                                    // state (a reply, a dismiss) — refresh.
+                                    if (mounted) _load();
+                                  },
+                                );
+                              },
+                            ),
+                    )),
     );
   }
 }
@@ -155,8 +157,7 @@ class _IssueTile extends StatelessWidget {
                 (issue.reporterName.isNotEmpty
                     ? ' · ${issue.reporterName}'
                     : ''),
-            style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 13),
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
           const SizedBox(height: 6),
           Wrap(

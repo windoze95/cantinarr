@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/request_settings_service.dart';
@@ -14,8 +15,7 @@ class RequestSettingsScreen extends ConsumerStatefulWidget {
       _RequestSettingsScreenState();
 }
 
-class _RequestSettingsScreenState
-    extends ConsumerState<RequestSettingsScreen> {
+class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
   late final RequestSettingsService _service;
 
   AdminRequestSettings? _admin;
@@ -90,27 +90,28 @@ class _RequestSettingsScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Request Defaults')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : (_admin == null || _edited == null)
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error ?? 'Something went wrong',
-                            style: const TextStyle(color: AppTheme.error),
-                            textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                            onPressed: _load, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
-                )
-              : _buildBody(_admin!, _edited!),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : (_admin == null || _edited == null)
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_error ?? 'Something went wrong',
+                                style: const TextStyle(color: AppTheme.error),
+                                textAlign: TextAlign.center),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
+                                onPressed: _load, child: const Text('Retry')),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _buildBody(_admin!, _edited!)),
     );
   }
 
@@ -130,8 +131,8 @@ class _RequestSettingsScreenState
         SwitchListTile(
           value: edited.requireApproval,
           activeThumbColor: AppTheme.accent,
-          onChanged: (v) => setState(
-              () => _edited = edited.copyWith(requireApproval: v)),
+          onChanged: (v) =>
+              setState(() => _edited = edited.copyWith(requireApproval: v)),
           title: const Text(
             'Require approval for new requests',
             style: TextStyle(
@@ -146,8 +147,8 @@ class _RequestSettingsScreenState
         SwitchListTile(
           value: edited.allowSeasonChoice,
           activeThumbColor: AppTheme.accent,
-          onChanged: (v) => setState(
-              () => _edited = edited.copyWith(allowSeasonChoice: v)),
+          onChanged: (v) =>
+              setState(() => _edited = edited.copyWith(allowSeasonChoice: v)),
           title: const Text(
             'Let users choose seasons',
             style: TextStyle(
@@ -178,8 +179,7 @@ class _RequestSettingsScreenState
             ],
             onChanged: (v) {
               if (v == null) return;
-              setState(
-                  () => _edited = edited.copyWith(defaultSeasonScope: v));
+              setState(() => _edited = edited.copyWith(defaultSeasonScope: v));
             },
           ),
         ),
@@ -187,8 +187,8 @@ class _RequestSettingsScreenState
         SwitchListTile(
           value: edited.allowQualityChoice,
           activeThumbColor: AppTheme.accent,
-          onChanged: (v) => setState(
-              () => _edited = edited.copyWith(allowQualityChoice: v)),
+          onChanged: (v) =>
+              setState(() => _edited = edited.copyWith(allowQualityChoice: v)),
           title: const Text(
             'Let users choose quality',
             style: TextStyle(
@@ -248,8 +248,7 @@ class _RequestSettingsScreenState
     required ValueChanged<int> onChanged,
   }) {
     // Guard against a stored value that no longer matches a known profile.
-    final hasValue =
-        value == 0 || profiles.any((p) => p.id == value);
+    final hasValue = value == 0 || profiles.any((p) => p.id == value);
     return ListTile(
       title: Text(
         label,

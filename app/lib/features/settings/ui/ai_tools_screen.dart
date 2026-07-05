@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/ai_tools_service.dart';
@@ -113,67 +114,70 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('AI Tools')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : _error != null && _tools == null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!,
-                            style: const TextStyle(color: AppTheme.error),
-                            textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                            onPressed: _loadTools, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
-                )
-              : RefreshIndicator(
-                  color: AppTheme.accent,
-                  onRefresh: _loadTools,
-                  child: ListView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
-                        child: Text(
-                          'Control which tools the AI assistant can use. Disabled tools are hidden from the assistant entirely.',
-                          style: TextStyle(
-                              color: AppTheme.textSecondary, fontSize: 13),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : _error != null && _tools == null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_error!,
+                                style: const TextStyle(color: AppTheme.error),
+                                textAlign: TextAlign.center),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
+                                onPressed: _loadTools,
+                                child: const Text('Retry')),
+                          ],
                         ),
                       ),
-                      _DebugLoggingTile(
-                        status: _debug,
-                        pending: _debugPending,
-                        onToggle: (enabled) => _setDebug(enabled),
-                        onExtend: () => _setDebug(true),
-                      ),
-                      const Divider(color: AppTheme.border),
-                      if (_tools?.isEmpty ?? false)
-                        const Padding(
-                          padding: EdgeInsets.all(24),
-                          child: Center(
+                    )
+                  : RefreshIndicator(
+                      color: AppTheme.accent,
+                      onRefresh: _loadTools,
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
                             child: Text(
-                              'No AI tools reported by the server.',
-                              style: TextStyle(color: AppTheme.textSecondary),
+                              'Control which tools the AI assistant can use. Disabled tools are hidden from the assistant entirely.',
+                              style: TextStyle(
+                                  color: AppTheme.textSecondary, fontSize: 13),
                             ),
                           ),
-                        ),
-                      ...?_tools?.map((tool) => _ToolTile(
-                            tool: tool,
-                            pending: _pending.contains(tool.name),
-                            onChanged: (v) => _toggleTool(tool, v),
-                          )),
-                      const SizedBox(height: 32),
-                    ],
-                  ),
-                ),
+                          _DebugLoggingTile(
+                            status: _debug,
+                            pending: _debugPending,
+                            onToggle: (enabled) => _setDebug(enabled),
+                            onExtend: () => _setDebug(true),
+                          ),
+                          const Divider(color: AppTheme.border),
+                          if (_tools?.isEmpty ?? false)
+                            const Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Center(
+                                child: Text(
+                                  'No AI tools reported by the server.',
+                                  style:
+                                      TextStyle(color: AppTheme.textSecondary),
+                                ),
+                              ),
+                            ),
+                          ...?_tools?.map((tool) => _ToolTile(
+                                tool: tool,
+                                pending: _pending.contains(tool.name),
+                                onChanged: (v) => _toggleTool(tool, v),
+                              )),
+                          const SizedBox(height: 32),
+                        ],
+                      ),
+                    )),
     );
   }
 }

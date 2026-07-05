@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
@@ -105,27 +106,30 @@ class _AiRemediationSettingsScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('AI Remediation')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : _edited == null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_friendlyError(_error ?? 'Something went wrong'),
-                            style: const TextStyle(color: AppTheme.error),
-                            textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                            onPressed: _load, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
-                )
-              : _buildBody(_edited!),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : _edited == null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                                _friendlyError(
+                                    _error ?? 'Something went wrong'),
+                                style: const TextStyle(color: AppTheme.error),
+                                textAlign: TextAlign.center),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
+                                onPressed: _load, child: const Text('Retry')),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _buildBody(_edited!)),
     );
   }
 
@@ -215,7 +219,6 @@ class _AiRemediationSettingsScreenState
             },
           ),
         ),
-
         const _SectionLabel('Model'),
         _TextField(
           controller: _providerController,
@@ -229,7 +232,6 @@ class _AiRemediationSettingsScreenState
           help: "Leave blank to use the server's configured model.",
           hint: 'e.g. a model name',
         ),
-
         const _SectionLabel('Limits'),
         _NumberTile(
           label: 'Max steps per run',
@@ -260,7 +262,6 @@ class _AiRemediationSettingsScreenState
           onChanged: (v) =>
               setState(() => _edited = s.copyWith(dailyCostCeilingMicros: v)),
         ),
-
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
           child: SizedBox(
