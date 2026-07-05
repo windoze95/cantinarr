@@ -91,7 +91,7 @@ Optional env vars for deployment tuning (a `.env` file next to the binary is aut
 | `CANTINARR_PUSH_API_KEY` | unset | Optional pinned gateway key -- leave blank and the server auto-enrolls on first start, persisting its issued key encrypted in the DB |
 | `CANTINARR_PUSH_ENROLL_TOKEN` | unset | Shared enroll token, only for gateways with gated enrollment |
 | `CANTINARR_APPLE_APP_IDS` | unset | Comma-separated `TeamID.BundleID` values served in `/.well-known/apple-app-site-association` for native Apple passkeys |
-| `CANTINARR_ANDROID_PACKAGE_NAME` | `com.cantinarr.cantinarr` | Android package name for native passkeys |
+| `CANTINARR_ANDROID_PACKAGE_NAME` | `codes.julian.cantinarr` | Android package name for native passkeys |
 | `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Comma-separated Android signing cert SHA-256 fingerprints for `/.well-known/assetlinks.json` and Android WebAuthn origins |
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Additional WebAuthn origins to trust (e.g. non-standard HTTPS ports) |
 

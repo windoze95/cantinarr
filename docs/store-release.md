@@ -56,6 +56,10 @@ ignores `key.properties` and `*.jks`.
 7. Finish the listing prerequisites in the console before promoting beyond testing: store
    listing (copy + graphics), data safety form, content rating questionnaire, privacy policy URL.
 8. Closed testing → Testers: add an email list or Google Group and share the opt-in link.
+9. For native Android passkeys on a deployment: after Play App Signing is enrolled, copy the
+   **app signing key** SHA-256 from Play Console → App integrity into the server's
+   `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` (the upload key's fingerprint is the wrong one —
+   Google re-signs distribution builds).
 
 Personal developer accounts created after Nov 13, 2023 must run a closed test with **12+ opted-in
 testers for 14 continuous days** before they can apply for production access (the beta track
