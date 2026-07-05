@@ -22,6 +22,8 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 - CI runs exactly those on every PR, plus a `CGO_ENABLED=0` server build and a `flutter build web --release`. A PR is not done if any of them fail.
 - iOS release builds happen only in CI (`testflight.yml`, auto-deploys on `main` when iOS-relevant `app/**` paths change — web/android/desktop subdirs are excluded). Don't assume a local iOS toolchain; when one isn't available, sanity-check Swift with `swiftc -parse` and let CI prove the build.
 - iOS signing is manual, via the `IOS_PROVISIONING_PROFILE_BASE64` secret. Changing app capabilities/entitlements invalidates the profile — regenerate it and update the secret.
+- Android release builds happen only in CI too (`playstore.yml`, builds a signed AAB on `main` when Android-relevant `app/**` paths change — web/ios/desktop subdirs are excluded — and uploads it to the Play beta track when `PLAY_SERVICE_ACCOUNT_JSON` is set). PRs that touch `app/android/**`, `app/pubspec.yaml`, or the workflow get a build-only check (no upload). No local Android SDK is assumed; let CI prove the build.
+- Android signing uses the `ANDROID_KEYSTORE_*` secrets (the upload keystore lives outside the repo). Store pipelines, secrets, and the one-time console setup are documented in `docs/store-release.md`.
 - Merges to `main` publish `ghcr.io/windoze95/cantinarr` (`latest`; version tags on `v*` releases).
 - Mention any tests or checks that could not be run.
 
@@ -43,6 +45,7 @@ Docs are part of the change, not a follow-up. A feature is not merged-complete u
 | `README.md` | Product pitch, feature list, quick start, configuration & env-var tables |
 | `server/README.md` | API route reference, MCP tool table (incl. the tool count), DB tables, WebSocket events, env vars, server package tree |
 | `app/README.md` | App features/screens, navigation map, project structure, key dependencies |
+| `docs/store-release.md` | Store release pipeline: how builds reach TestFlight/Play, signing secrets, one-time store-console setup |
 | `AGENTS.md` | Workflows, verification, conventions (this file) |
 
 - When a change touches a documented surface (new route, tool, env var, table, screen, workflow), update the owning doc **in the same PR**. The PR template's docs checklist is there to force the question.

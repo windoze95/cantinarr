@@ -1,0 +1,40 @@
+default_platform(:android)
+
+PACKAGE_NAME = "codes.julian.cantinarr"
+
+platform :android do
+  desc "Get next version code from Play (max across all tracks + 1)"
+  lane :next_build_number do
+    codes = []
+    %w[internal alpha beta production].each do |track|
+      begin
+        codes += google_play_track_version_codes(
+          package_name: PACKAGE_NAME,
+          track: track,
+          json_key: ENV["PLAY_JSON_KEY_PATH"],
+        )
+      rescue => e
+        UI.message("Track #{track}: #{e.message.to_s.lines.first&.strip} (skipping)")
+      end
+    end
+    next_build = (codes.max || 0) + 1
+
+    UI.message("Play version codes: #{codes.inspect}, next: #{next_build}")
+    File.write(ENV['GITHUB_OUTPUT'], "build_number=#{next_build}\n", mode: "a") if ENV['GITHUB_OUTPUT']
+  end
+
+  desc "Upload the release AAB to Play"
+  lane :beta do
+    upload_to_play_store(
+      package_name: PACKAGE_NAME,
+      track: ENV["PLAY_TRACK"] || "beta",
+      release_status: ENV["PLAY_RELEASE_STATUS"] || "completed",
+      aab: "../../build/app/outputs/bundle/release/app-release.aab",
+      json_key: ENV["PLAY_JSON_KEY_PATH"],
+      skip_upload_metadata: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+end

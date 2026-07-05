@@ -1,0 +1,149 @@
+name: Deploy to Play Store
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "!app/web/**"
+      - "!app/macos/**"
+      - "!app/ios/**"
+      - "!app/windows/**"
+      - "!app/linux/**"
+      - ".github/workflows/playstore.yml"
+  # Build-only check (no Play upload) when the Android plumbing itself changes.
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/android/**"
+      - "app/pubspec.yaml"
+      - ".github/workflows/playstore.yml"
+  workflow_dispatch:
+    inputs:
+      track:
+        description: "Play track to upload to"
+        type: choice
+        options: [beta, internal]
+        default: beta
+      release_status:
+        description: "Release status (a brand-new app must use draft until its first release is rolled out in the Play Console)"
+        type: choice
+        options: [completed, draft]
+        default: completed
+
+# Serialize Play runs. The version code is max(track version codes) + 1, so two
+# concurrent runs compute the SAME code and the second upload is rejected as a
+# duplicate. Queue instead of racing, and never cancel an in-flight upload.
+concurrency:
+  group: playstore-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Without Play credentials the workflow still builds and attaches the signed
+      # AAB (the very first upload of a new app must happen manually in the Play
+      # Console anyway - the publisher API can't create it).
+      - name: Check Play credentials
+        id: play
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::PLAY_SERVICE_ACCOUNT_JSON is not set - building the signed AAB as an artifact and skipping the Play upload."
+          fi
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Calculate build number
+        id: build_number
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if [ "${{ steps.play.outputs.available }}" = "true" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
+            printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+            export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
+            cd android
+            gem install fastlane
+            fastlane next_build_number
+          else
+            echo "build_number=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Configure signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
+          cat > android/key.properties << EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=../upload-keystore.jks
+          EOF
+
+      - name: Build AAB
+        run: |
+          flutter build appbundle \
+            --build-number=${{ steps.build_number.outputs.build_number }} \
+            --build-name=${{ steps.build_number.outputs.version }}
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cantinarr-${{ steps.build_number.outputs.version }}-${{ steps.build_number.outputs.build_number }}-aab
+          path: app/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+      - name: Upload to Play Store
+        if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_TRACK: ${{ inputs.track || 'beta' }}
+          PLAY_RELEASE_STATUS: ${{ inputs.release_status || 'completed' }}
+        run: |
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
+          cd android
+          fastlane beta
+
+      - name: Cleanup signing material
+        if: always()
+        run: |
+          rm -f android/key.properties android/upload-keystore.jks "$RUNNER_TEMP/play-service-account.json"

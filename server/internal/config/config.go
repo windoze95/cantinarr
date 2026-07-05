@@ -64,7 +64,7 @@ func Load() (*Config, error) {
 		cfg.ServerName = "Cantinarr"
 	}
 	if cfg.AndroidPackageName == "" {
-		cfg.AndroidPackageName = "com.cantinarr.cantinarr"
+		cfg.AndroidPackageName = "codes.julian.cantinarr"
 	}
 
 	androidFingerprints := os.Getenv("CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS")

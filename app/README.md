@@ -2,7 +2,7 @@
 
 The client for [Cantinarr](https://github.com/windoze95/cantinarr) -- a frictionless media request app for Plex and Jellyfin households.
 
-Built with Flutter; iOS and web are the shipping targets (web is embedded in the server binary). One dark, warm-gold "cantina" theme, TMDB/Trakt-powered discovery, one-tap requests with approvals, deep *arr control, books, an AI assistant, and push notifications -- all through the Cantinarr backend, which is the only API the app talks to.
+Built with Flutter; iOS, Android, and web are the shipping targets (web is embedded in the server binary). One dark, warm-gold "cantina" theme, TMDB/Trakt-powered discovery, one-tap requests with approvals, deep *arr control, books, an AI assistant, and push notifications -- all through the Cantinarr backend, which is the only API the app talks to.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -218,7 +218,7 @@ The router guard redirects unauthenticated users to `/login` and bounces non-adm
 
 ## Platforms & CI
 
-- **iOS** and **web** are the shipping targets. Web is built in CI and embedded in the server image; iOS auto-deploys to TestFlight on `main` (manual signing via repo secrets). Android/macOS/Windows/Linux directories are unbuilt scaffolding.
+- **iOS**, **Android**, and **web** are the shipping targets. Web is built in CI and embedded in the server image; iOS auto-deploys to TestFlight on `main` (manual signing via repo secrets); Android auto-deploys a signed AAB to the Play Store beta track on `main` (upload-keystore signing via repo secrets — see [docs/store-release.md](../docs/store-release.md)). macOS/Windows/Linux directories are unbuilt scaffolding.
 - CI runs `flutter analyze --no-fatal-infos`, `flutter test`, and `flutter build web --release` on every PR.
 
 ## License
