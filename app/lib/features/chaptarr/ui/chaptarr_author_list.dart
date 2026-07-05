@@ -159,9 +159,7 @@ class _AuthorTile extends StatelessWidget {
               child: LinearProgressIndicator(
                 value: percent,
                 backgroundColor: AppTheme.surfaceVariant,
-                valueColor: AlwaysStoppedAnimation(
-                  percent >= 1.0 ? AppTheme.available : AppTheme.accent,
-                ),
+                valueColor: AlwaysStoppedAnimation(_progressColor),
                 minHeight: 4,
               ),
             ),
@@ -194,17 +192,27 @@ class _AuthorTile extends StatelessWidget {
     );
   }
 
-  Color get _statusColor {
-    if (author.percentComplete >= 1.0) return AppTheme.available;
-    if (author.status == 'continuing') return AppTheme.downloading;
-    if (author.status == 'ended') return AppTheme.textSecondary;
-    return AppTheme.requested;
-  }
+  Color get _statusColor => switch (author.status) {
+        'continuing' => AppTheme.downloading,
+        'ended' => AppTheme.textSecondary,
+        _ => AppTheme.requested,
+      };
 
-  String get _statusText {
-    if (author.percentComplete >= 1.0) return 'Complete';
-    if (author.status == 'continuing') return 'Continuing';
-    if (author.status == 'ended') return 'Ended';
-    return 'Partial';
+  String get _statusText => switch (author.status) {
+        'continuing' => 'Continuing',
+        'ended' => 'Ended',
+        _ => 'Unknown',
+      };
+
+  /// Mirrors the Sonarr tile's progress grammar: green only when an ended
+  /// author's monitored books are all on disk, blue when merely caught up,
+  /// red/amber for monitored/unmonitored gaps.
+  Color get _progressColor {
+    if (author.percentComplete >= 1.0) {
+      return author.status == 'ended'
+          ? AppTheme.available
+          : AppTheme.downloading;
+    }
+    return author.monitored ? AppTheme.error : AppTheme.requested;
   }
 }
