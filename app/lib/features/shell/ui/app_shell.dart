@@ -24,6 +24,7 @@ import '../../issues/logic/issues_provider.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/logic/radarr_movies_provider.dart';
 import '../../request/logic/pending_approvals_provider.dart';
+import '../../settings/logic/plex_invites_provider.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
 import '../logic/shell_search_provider.dart';
@@ -441,7 +442,11 @@ class _AppShellState extends ConsumerState<AppShell>
     // Agent-proposed fixes awaiting approval — drives the drawer "Agent fixes"
     // entry and the hamburger dot. Always 0 for non-admins.
     final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
-    final menuBadgeCount = pendingApprovals + openIssues + pendingAgentActions;
+    // Users waiting for a Plex invite — drives the drawer "Plex invites"
+    // entry (only shown while someone waits) and the hamburger dot.
+    final plexInvitesWaiting = ref.watch(plexInvitesWaitingProvider);
+    final menuBadgeCount =
+        pendingApprovals + openIssues + pendingAgentActions + plexInvitesWaiting;
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
     final libraryStatus = searchState.isSearching && showSearchResults
@@ -845,6 +850,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
     final openIssues = ref.watch(openIssuesProvider);
     final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
+    final plexInvitesWaiting = ref.watch(plexInvitesWaitingProvider);
 
     return SafeArea(
       child: Column(
@@ -913,6 +919,19 @@ class _AppShellState extends ConsumerState<AppShell>
                 context.push('/agent-actions');
               },
             ),
+            // Appears only while someone is waiting on a Plex invite (e.g.
+            // the push was missed or an auto-invite failed); lands on the
+            // Users screen where the invite is one tap.
+            if (plexInvitesWaiting > 0)
+              _DrawerItem(
+                icon: Icons.play_circle_outline,
+                title: 'Plex invites',
+                badgeCount: plexInvitesWaiting,
+                onTap: () {
+                  if (isOverlay) Navigator.pop(context);
+                  context.push('/settings/users');
+                },
+              ),
             const Divider(color: AppTheme.border),
           ],
 

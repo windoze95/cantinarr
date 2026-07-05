@@ -8,6 +8,7 @@ import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../notifications/push_service.dart';
 import '../data/plex_admin_service.dart';
+import '../logic/plex_invites_provider.dart';
 
 /// Admin screen for managing user accounts: change roles, remove users, and
 /// see who still has an outstanding connect-link invite.
@@ -36,6 +37,9 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     });
     try {
       final users = await ref.read(authProvider.notifier).listUsers();
+      // Keep the drawer's "Plex invites" badge in step with what this
+      // screen just learned (e.g. an invite sent here clears the count).
+      ref.read(plexInvitesWaitingProvider.notifier).refresh();
       setState(() {
         _users = users;
         _isLoading = false;
@@ -486,7 +490,9 @@ class _UserTile extends StatelessWidget {
             if (user.plexEmail.isNotEmpty)
               _Tag(label: user.plexEmail, color: AppTheme.textSecondary),
             if (user.plexInvitedAt != null)
-              const _Tag(label: 'Plex invite sent', color: AppTheme.available),
+              const _Tag(label: 'Plex invite sent', color: AppTheme.available)
+            else if (user.plexEmail.isNotEmpty)
+              const _Tag(label: 'Needs Plex invite', color: AppTheme.requested),
           ],
         ),
       ),

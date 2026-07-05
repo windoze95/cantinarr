@@ -78,7 +78,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 - **Report a problem** -- on any available title (admin-toggleable), scoped to a movie, series, or season; category chips plus free text.
 - **Issue threads** -- a chat-style thread per issue where the reporter, admins, and the AI agent converse; the agent's questions flip the issue to "Needs your reply".
 - **Agent fixes** -- proposed mutations render as safety-critical approval cards (typed summaries, quoted parameters, rationale as passive text); admins approve or deny inline or from a grouped queue, and every run has a read-only audit timeline with step ledger and cost.
-- **Live badges** -- Approvals / Issues / Agent fixes counts in the drawer, kept current over WebSocket.
+- **Live badges** -- Approvals / Issues / Agent fixes counts in the drawer, kept current over WebSocket. A **Plex invites** entry appears (with count) only while someone is waiting on a Plex invite -- the persistent surface behind the miss-able push -- and lands on the Users screen, where waiting users carry a "Needs Plex invite" tag.
 
 ### AI assistant
 - **Multi-provider chat** (Anthropic, OpenAI, or Gemini -- server-configured) with SSE streaming, visible tool activity, and a poster carousel for results.
