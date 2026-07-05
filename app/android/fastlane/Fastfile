@@ -29,7 +29,7 @@ platform :android do
       package_name: PACKAGE_NAME,
       track: ENV["PLAY_TRACK"] || "beta",
       release_status: ENV["PLAY_RELEASE_STATUS"] || "completed",
-      aab: "../../build/app/outputs/bundle/release/app-release.aab",
+      aab: "../build/app/outputs/bundle/release/app-release.aab",
       json_key: ENV["PLAY_JSON_KEY_PATH"],
       skip_upload_metadata: true,
       skip_upload_changelogs: false,
