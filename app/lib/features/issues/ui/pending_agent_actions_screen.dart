@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/agent_action_models.dart';
@@ -47,7 +48,8 @@ class _PendingAgentActionsScreenState
       _error = null;
     });
     try {
-      final actions = await ref.read(issuesServiceProvider).listPendingActions();
+      final actions =
+          await ref.read(issuesServiceProvider).listPendingActions();
       if (!mounted) return;
       setState(() {
         _actions = actions;
@@ -75,30 +77,31 @@ class _PendingAgentActionsScreenState
 
     return Scaffold(
       appBar: AppBar(title: const Text('Agent fixes')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : _error != null && _actions == null
-              ? _ErrorView(message: _friendlyError(_error!), onRetry: _load)
-              : RefreshIndicator(
-                  color: AppTheme.accent,
-                  onRefresh: _load,
-                  child: (_actions?.isEmpty ?? true)
-                      ? ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          children: const [
-                            SizedBox(height: 120),
-                            Center(
-                              child: Text(
-                                'No fixes awaiting approval.',
-                                style:
-                                    TextStyle(color: AppTheme.textSecondary),
-                              ),
-                            ),
-                          ],
-                        )
-                      : _buildGroupedList(_actions!),
-                ),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : _error != null && _actions == null
+                  ? _ErrorView(message: _friendlyError(_error!), onRetry: _load)
+                  : RefreshIndicator(
+                      color: AppTheme.accent,
+                      onRefresh: _load,
+                      child: (_actions?.isEmpty ?? true)
+                          ? ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              children: const [
+                                SizedBox(height: 120),
+                                Center(
+                                  child: Text(
+                                    'No fixes awaiting approval.',
+                                    style: TextStyle(
+                                        color: AppTheme.textSecondary),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : _buildGroupedList(_actions!),
+                    )),
     );
   }
 

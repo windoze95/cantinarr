@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
@@ -98,16 +99,23 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       builder: (context, _) {
         final state = _detailNotifier.state;
 
-        if (state.isLoading && state.movieDetail == null && state.tvDetail == null) {
+        if (state.isLoading &&
+            state.movieDetail == null &&
+            state.tvDetail == null) {
           return const Scaffold(
-            body: Center(child: CircularProgressIndicator(color: AppTheme.accent)),
+            body: Center(
+                child: CircularProgressIndicator(color: AppTheme.accent)),
           );
         }
 
-        if (state.error != null && state.movieDetail == null && state.tvDetail == null) {
+        if (state.error != null &&
+            state.movieDetail == null &&
+            state.tvDetail == null) {
           return Scaffold(
             appBar: AppBar(),
-            body: Center(child: Text(state.error!, style: const TextStyle(color: AppTheme.error))),
+            body: Center(
+                child: Text(state.error!,
+                    style: const TextStyle(color: AppTheme.error))),
           );
         }
 
@@ -129,222 +137,243 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Header with backdrop + poster
+                    // Header with backdrop + poster (full-bleed; the detail
+                    // content below it reads as a centered column on desktop)
                     MediaHeader(
                       posterPath: state.posterPath,
                       backdropPath: state.backdropPath,
                       title: state.title,
                     ),
                     const SizedBox(height: 16),
-
-                    // Request button
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: ListenableBuilder(
-                        listenable: _requestNotifier,
-                        builder: (_, __) => RequestButton(
-                          status: _requestNotifier.state.status,
-                          isRequesting: _requestNotifier.state.isRequesting,
-                          error: _requestNotifier.state.error,
-                          onRequest: () => _onRequest(),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-
-                    // Status info tap target
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: ListenableBuilder(
-                        listenable: _requestNotifier,
-                        builder: (_, __) => GestureDetector(
-                          onTap: () => _showStatusSheet(context, state.title,
-                              _requestNotifier.state.status),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.info_outline,
-                                  size: 14, color: AppTheme.textSecondary),
-                              const SizedBox(width: 4),
-                              Text(
-                                _requestNotifier.state.status.label,
-                                style: const TextStyle(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 13),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    // Quiet "Report a problem" affordance — only once the
-                    // title is at least partially in the library and the
-                    // server allows reporting.
-                    ListenableBuilder(
-                      listenable: _requestNotifier,
-                      builder: (_, __) {
-                        if (!_canReport(_requestNotifier.state.status)) {
-                          return const SizedBox.shrink();
-                        }
-                        return Center(
-                          child: TextButton.icon(
-                            onPressed: () => _onReportProblem(state),
-                            icon: const Icon(Icons.flag_outlined, size: 14),
-                            label: const Text('Report a problem'),
-                            style: TextButton.styleFrom(
-                              foregroundColor: AppTheme.textSecondary,
-                              textStyle: const TextStyle(fontSize: 13),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Genres
-                    if (state.genres.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: state.genres
-                              .map((g) => Chip(
-                                    label: Text(g.name,
-                                        style: const TextStyle(fontSize: 12)),
-                                    backgroundColor: AppTheme.surfaceVariant,
-                                    side: const BorderSide(
-                                        color: AppTheme.border),
-                                    materialTapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                    visualDensity: VisualDensity.compact,
-                                  ))
-                              .toList(),
-                        ),
-                      ),
-
-                    // Rating
-                    if (state.voteAverage != null && state.voteAverage! > 0) ...[
-                      const SizedBox(height: 12),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.star,
-                                color: AppTheme.accent, size: 18),
-                            const SizedBox(width: 4),
-                            Text(
-                              state.voteAverage!.toStringAsFixed(1),
-                              style: const TextStyle(
-                                color: AppTheme.textPrimary,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
+                    CenteredContent(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Request button
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: ListenableBuilder(
+                              listenable: _requestNotifier,
+                              builder: (_, __) => RequestButton(
+                                status: _requestNotifier.state.status,
+                                isRequesting:
+                                    _requestNotifier.state.isRequesting,
+                                error: _requestNotifier.state.error,
+                                onRequest: () => _onRequest(),
                               ),
                             ),
-                            const Text(' / 10',
-                                style: TextStyle(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 14)),
+                          ),
+                          const SizedBox(height: 8),
+
+                          // Status info tap target
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: ListenableBuilder(
+                              listenable: _requestNotifier,
+                              builder: (_, __) => GestureDetector(
+                                onTap: () => _showStatusSheet(context,
+                                    state.title, _requestNotifier.state.status),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.info_outline,
+                                        size: 14,
+                                        color: AppTheme.textSecondary),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      _requestNotifier.state.status.label,
+                                      style: const TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 13),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+
+                          // Quiet "Report a problem" affordance — only once the
+                          // title is at least partially in the library and the
+                          // server allows reporting.
+                          ListenableBuilder(
+                            listenable: _requestNotifier,
+                            builder: (_, __) {
+                              if (!_canReport(_requestNotifier.state.status)) {
+                                return const SizedBox.shrink();
+                              }
+                              return Center(
+                                child: TextButton.icon(
+                                  onPressed: () => _onReportProblem(state),
+                                  icon:
+                                      const Icon(Icons.flag_outlined, size: 14),
+                                  label: const Text('Report a problem'),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: AppTheme.textSecondary,
+                                    textStyle: const TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Genres
+                          if (state.genres.isNotEmpty)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              child: Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                children: state.genres
+                                    .map((g) => Chip(
+                                          label: Text(g.name,
+                                              style: const TextStyle(
+                                                  fontSize: 12)),
+                                          backgroundColor:
+                                              AppTheme.surfaceVariant,
+                                          side: const BorderSide(
+                                              color: AppTheme.border),
+                                          materialTapTargetSize:
+                                              MaterialTapTargetSize.shrinkWrap,
+                                          visualDensity: VisualDensity.compact,
+                                        ))
+                                    .toList(),
+                              ),
+                            ),
+
+                          // Rating
+                          if (state.voteAverage != null &&
+                              state.voteAverage! > 0) ...[
+                            const SizedBox(height: 12),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.star,
+                                      color: AppTheme.accent, size: 18),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    state.voteAverage!.toStringAsFixed(1),
+                                    style: const TextStyle(
+                                      color: AppTheme.textPrimary,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const Text(' / 10',
+                                      style: TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 14)),
+                                ],
+                              ),
+                            ),
                           ],
-                        ),
-                      ),
-                    ],
 
-                    // Tagline
-                    if (state.tagline.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Text(
-                          '"${state.tagline}"',
-                          style: const TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 15,
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      ),
-                    ],
-
-                    // Overview
-                    if (state.overview.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Text(
-                          state.overview,
-                          style: const TextStyle(
-                              color: AppTheme.textPrimary,
-                              fontSize: 15,
-                              height: 1.5),
-                        ),
-                      ),
-                    ],
-
-                    // Watch Trailer button
-                    if (state.trailerKey != null) ...[
-                      const SizedBox(height: 16),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: OutlinedButton.icon(
-                          onPressed: () => _openTrailer(state.trailerKey!),
-                          icon: const Icon(Icons.play_arrow),
-                          label: const Text('Watch Trailer'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.textPrimary,
-                            side: const BorderSide(color: AppTheme.border),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                          // Tagline
+                          if (state.tagline.isNotEmpty) ...[
+                            const SizedBox(height: 16),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              child: Text(
+                                '"${state.tagline}"',
+                                style: const TextStyle(
+                                  color: AppTheme.textSecondary,
+                                  fontSize: 15,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      ),
-                    ],
+                          ],
 
-                    // Seasons (TV only): interactive per-season request table
-                    // fed by live availability from the request notifier.
-                    if (state.seasons.isNotEmpty) ...[
-                      const SizedBox(height: 24),
-                      Padding(
-                        key: _seasonsKey,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: const Text('Seasons',
-                            style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.textPrimary)),
-                      ),
-                      const SizedBox(height: 12),
-                      SeasonTable(
-                        seasons: state.seasons,
-                        notifier: _requestNotifier,
-                        title: state.title,
-                        tvdbId: state.tvDetail?.externalIds?.tvdbId,
-                        canRequest: _canChooseSeasons,
-                        onRequested: _bumpLibraryRefresh,
-                      ),
-                    ],
+                          // Overview
+                          if (state.overview.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              child: Text(
+                                state.overview,
+                                style: const TextStyle(
+                                    color: AppTheme.textPrimary,
+                                    fontSize: 15,
+                                    height: 1.5),
+                              ),
+                            ),
+                          ],
 
-                    // Recommendations
-                    if (state.recommendations.isNotEmpty) ...[
-                      const SizedBox(height: 24),
-                      _SectionRow(
-                        title: 'Recommended',
-                        items: state.recommendations,
-                      ),
-                    ],
+                          // Watch Trailer button
+                          if (state.trailerKey != null) ...[
+                            const SizedBox(height: 16),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              child: OutlinedButton.icon(
+                                onPressed: () =>
+                                    _openTrailer(state.trailerKey!),
+                                icon: const Icon(Icons.play_arrow),
+                                label: const Text('Watch Trailer'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppTheme.textPrimary,
+                                  side:
+                                      const BorderSide(color: AppTheme.border),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
 
-                    // Similar
-                    if (state.similar.isNotEmpty) ...[
-                      const SizedBox(height: 24),
-                      _SectionRow(
-                        title: 'Similar',
-                        items: state.similar,
-                      ),
-                    ],
+                          // Seasons (TV only): interactive per-season request table
+                          // fed by live availability from the request notifier.
+                          if (state.seasons.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            Padding(
+                              key: _seasonsKey,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              child: const Text('Seasons',
+                                  style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppTheme.textPrimary)),
+                            ),
+                            const SizedBox(height: 12),
+                            SeasonTable(
+                              seasons: state.seasons,
+                              notifier: _requestNotifier,
+                              title: state.title,
+                              tvdbId: state.tvDetail?.externalIds?.tvdbId,
+                              canRequest: _canChooseSeasons,
+                              onRequested: _bumpLibraryRefresh,
+                            ),
+                          ],
 
-                    const SizedBox(height: 40),
+                          // Recommendations
+                          if (state.recommendations.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            _SectionRow(
+                              title: 'Recommended',
+                              items: state.recommendations,
+                            ),
+                          ],
+
+                          // Similar
+                          if (state.similar.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            _SectionRow(
+                              title: 'Similar',
+                              items: state.similar,
+                            ),
+                          ],
+
+                          const SizedBox(height: 40),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -467,8 +496,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   Future<ReportScope?> _pickTvScope(
       MediaDetailState state, String title, int? tvdbId) {
     // Real seasons only (drop a season 0 / specials placeholder when empty).
-    final seasons =
-        state.seasons.where((s) => s.seasonNumber > 0).toList();
+    final seasons = state.seasons.where((s) => s.seasonNumber > 0).toList();
     return showModalBottomSheet<ReportScope>(
       context: context,
       backgroundColor: AppTheme.surface,
@@ -492,8 +520,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                 ),
               ),
               ListTile(
-                leading:
-                    const Icon(Icons.tv_outlined, color: AppTheme.textSecondary),
+                leading: const Icon(Icons.tv_outlined,
+                    color: AppTheme.textSecondary),
                 title: const Text('The whole series',
                     style: TextStyle(color: AppTheme.textPrimary)),
                 onTap: () => Navigator.of(sheetContext).pop(

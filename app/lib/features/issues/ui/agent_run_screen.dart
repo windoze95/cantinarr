@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/agent_action_models.dart';
 import '../logic/issues_provider.dart';
@@ -63,50 +64,51 @@ class _AgentRunScreenState extends ConsumerState<AgentRunScreen> {
     final detail = _detail;
     return Scaffold(
       appBar: AppBar(title: const Text('Agent activity')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : detail == null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_friendlyError(_error ?? 'Could not load run'),
-                            style: const TextStyle(color: AppTheme.error),
-                            textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                            onPressed: _load, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
-                )
-              : RefreshIndicator(
-                  color: AppTheme.accent,
-                  onRefresh: _load,
-                  child: ListView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      _RunSummary(run: detail.run),
-                      const SizedBox(height: 16),
-                      if (detail.steps.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 24),
-                          child: Center(
-                            child: Text('No steps recorded.',
-                                style: TextStyle(
-                                    color: AppTheme.textSecondary)),
-                          ),
-                        )
-                      else
-                        for (final step in detail.steps)
-                          _StepTile(step: step),
-                    ],
-                  ),
-                ),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : detail == null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_friendlyError(_error ?? 'Could not load run'),
+                                style: const TextStyle(color: AppTheme.error),
+                                textAlign: TextAlign.center),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
+                                onPressed: _load, child: const Text('Retry')),
+                          ],
+                        ),
+                      ),
+                    )
+                  : RefreshIndicator(
+                      color: AppTheme.accent,
+                      onRefresh: _load,
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.all(16),
+                        children: [
+                          _RunSummary(run: detail.run),
+                          const SizedBox(height: 16),
+                          if (detail.steps.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 24),
+                              child: Center(
+                                child: Text('No steps recorded.',
+                                    style: TextStyle(
+                                        color: AppTheme.textSecondary)),
+                              ),
+                            )
+                          else
+                            for (final step in detail.steps)
+                              _StepTile(step: step),
+                        ],
+                      ),
+                    )),
     );
   }
 }
@@ -146,8 +148,8 @@ class _RunSummary extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               'Started ${DateFormat('MMM d, h:mm a').format(run.startedAt!)}',
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 12),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
             ),
           ],
           const SizedBox(height: 10),
@@ -282,11 +284,7 @@ class _StepTile extends StatelessWidget {
           _toolHeading(s, 'Tool call')
         );
       case 'tool_result':
-        return (
-          Icons.south,
-          AppTheme.textSecondary,
-          _toolHeading(s, 'Result')
-        );
+        return (Icons.south, AppTheme.textSecondary, _toolHeading(s, 'Result'));
       case 'giveup':
         return (Icons.flag_outlined, AppTheme.error, 'Gave up');
       case 'system':

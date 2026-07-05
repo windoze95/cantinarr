@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shimmer/shimmer.dart';
 import '../../../core/config/app_config.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../person/ui/person_detail_sheet.dart';
@@ -36,7 +37,10 @@ class SearchResultsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (results.isEmpty && isLoading) {
-      return _buildLoadingList();
+      return LayoutBuilder(
+        builder: (context, constraints) =>
+            _buildLoadingList(_horizontalPadding(constraints)),
+      );
     }
 
     if (results.isEmpty && !isLoading && query.isNotEmpty) {
@@ -62,32 +66,40 @@ class SearchResultsView extends StatelessWidget {
       );
     }
 
-    return ListView.separated(
-      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: results.length + (isLoading ? 3 : 0),
-      separatorBuilder: (_, __) => const SizedBox.shrink(),
-      itemBuilder: (context, index) {
-        if (index >= results.length) {
-          return _buildShimmerRow();
-        }
-        final item = results[index];
-        if (onLoadMore != null && index >= results.length - 5) {
-          onLoadMore!(item);
-        }
-        return _SearchResultTile(
-          item: item,
-          status: libraryStatus[item.id],
-          onTap: onResultTap,
-        );
-      },
-    );
+    // Full-width scroll surface; the result column is capped and centered so
+    // rows stay readable on desktop widths.
+    return LayoutBuilder(builder: (context, constraints) {
+      final hPad = _horizontalPadding(constraints);
+      return ListView.separated(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 8),
+        itemCount: results.length + (isLoading ? 3 : 0),
+        separatorBuilder: (_, __) => const SizedBox.shrink(),
+        itemBuilder: (context, index) {
+          if (index >= results.length) {
+            return _buildShimmerRow();
+          }
+          final item = results[index];
+          if (onLoadMore != null && index >= results.length - 5) {
+            onLoadMore!(item);
+          }
+          return _SearchResultTile(
+            item: item,
+            status: libraryStatus[item.id],
+            onTap: onResultTap,
+          );
+        },
+      );
+    });
   }
 
-  Widget _buildLoadingList() {
+  double _horizontalPadding(BoxConstraints constraints) =>
+      AppBreakpoints.centeredContentPadding(constraints.maxWidth);
+
+  Widget _buildLoadingList(double horizontalPadding) {
     return ListView.separated(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: 8),
       itemCount: 8,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (_, __) => _buildShimmerRow(),

@@ -104,10 +104,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const AuthScreen(),
       ),
 
-      // Module shell (provides drawer + search bar, no bottom nav)
+      // Module shell (provides drawer/sidebar + search bar, no bottom nav)
       ShellRoute(
         builder: (context, state, child) {
-          return AppShell(child: child);
+          return AppShell(currentPath: state.uri.path, child: child);
         },
         routes: [
           // Dashboard module (Movies/TV tabs)

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -91,25 +92,26 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Setup Checklist')),
-      body: !isAdmin
-          ? const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'The setup checklist is for server admins.',
-                  style: TextStyle(color: AppTheme.textSecondary),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            )
-          : status == null
+      body: CenteredContent(
+          child: !isAdmin
               ? const Center(
-                  child: CircularProgressIndicator(color: AppTheme.accent))
-              : RefreshIndicator(
-                  onRefresh: () =>
-                      ref.read(setupStatusProvider.notifier).refresh(),
-                  child: _buildChecklist(status),
-                ),
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'The setup checklist is for server admins.',
+                      style: TextStyle(color: AppTheme.textSecondary),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : status == null
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppTheme.accent))
+                  : RefreshIndicator(
+                      onRefresh: () =>
+                          ref.read(setupStatusProvider.notifier).refresh(),
+                      child: _buildChecklist(status),
+                    )),
     );
   }
 
@@ -189,8 +191,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     final route = _routeFor(item.key);
     return ListTile(
       leading: Icon(_iconFor(item.key),
-          color:
-              item.configured ? AppTheme.available : AppTheme.textSecondary),
+          color: item.configured ? AppTheme.available : AppTheme.textSecondary),
       title: Text(item.title,
           style: const TextStyle(
               color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),

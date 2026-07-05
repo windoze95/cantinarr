@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/models/app_module.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/instance_dropdown.dart';
+import '../../../core/widgets/module_scaffold.dart';
 
-/// Downloads module shell with bottom nav: Queue | History.
+/// Downloads module shell: Queue | History.
+/// Pages render as a bottom nav on mobile and sidebar items on desktop.
 /// Shows instance dropdown in the header when 2+ download clients exist.
 class DownloadsModuleShell extends ConsumerWidget {
   final int currentIndex;
@@ -22,7 +25,7 @@ class DownloadsModuleShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final instanceState = ref.watch(instanceProvider);
 
-    return Scaffold(
+    return ModuleScaffold(
       appBar: instanceState.downloadInstances.length > 1
           ? AppBar(
               title: InstanceDropdown(
@@ -36,28 +39,10 @@ class DownloadsModuleShell extends ConsumerWidget {
               elevation: 0,
             )
           : null,
-      body: child,
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
-        ),
-        child: BottomNavigationBar(
-          currentIndex: currentIndex,
-          onTap: onTabChanged,
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.downloading_outlined),
-              activeIcon: Icon(Icons.downloading),
-              label: 'Queue',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.history_outlined),
-              activeIcon: Icon(Icons.history),
-              label: 'History',
-            ),
-          ],
-        ),
-      ),
+      pages: modulePagesFor(ModuleType.downloads),
+      currentIndex: currentIndex,
+      onTabChanged: onTabChanged,
+      child: child,
     );
   }
 }

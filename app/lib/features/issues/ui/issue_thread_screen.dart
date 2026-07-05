@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import 'package:go_router/go_router.dart';
 
+import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -203,42 +204,49 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
           child: RefreshIndicator(
             color: AppTheme.accent,
             onRefresh: _load,
-            child: ListView(
-              controller: _scrollController,
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.all(16),
-              children: [
-                _IssueSummaryCard(issue: issue),
-                if (runId != null) ...[
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: () => context.push('/agent-runs/$runId'),
-                      icon: const Icon(Icons.timeline, size: 16),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppTheme.textSecondary,
-                        padding: EdgeInsets.zero,
-                        minimumSize: const Size(0, 32),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            // Full-width scroll surface; the thread column is capped and
+            // centered so bubbles stay readable on desktop.
+            child: LayoutBuilder(builder: (context, constraints) {
+              final hPad = AppBreakpoints.centeredContentPadding(
+                constraints.maxWidth,
+              );
+              return ListView(
+                controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 16),
+                children: [
+                  _IssueSummaryCard(issue: issue),
+                  if (runId != null) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => context.push('/agent-runs/$runId'),
+                        icon: const Icon(Icons.timeline, size: 16),
+                        style: TextButton.styleFrom(
+                          foregroundColor: AppTheme.textSecondary,
+                          padding: EdgeInsets.zero,
+                          minimumSize: const Size(0, 32),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        label: const Text('View agent activity'),
                       ),
-                      label: const Text('View agent activity'),
                     ),
-                  ),
+                  ],
+                  const SizedBox(height: 16),
+                  for (final msg in thread.messages) _MessageRow(message: msg),
+                  // Proposed-action cards surfaced inline so an admin can act from
+                  // the conversation. Each freezes on decide; the list reloads.
+                  for (final action in _actions)
+                    ProposedActionCard(
+                      key: ValueKey(action.id),
+                      action: action,
+                      onDecided: (_) => _load(),
+                    ),
+                  if (issue.status.isActive) const _WorkingIndicator(),
                 ],
-                const SizedBox(height: 16),
-                for (final msg in thread.messages) _MessageRow(message: msg),
-                // Proposed-action cards surfaced inline so an admin can act from
-                // the conversation. Each freezes on decide; the list reloads.
-                for (final action in _actions)
-                  ProposedActionCard(
-                    key: ValueKey(action.id),
-                    action: action,
-                    onDecided: (_) => _load(),
-                  ),
-                if (issue.status.isActive) const _WorkingIndicator(),
-              ],
-            ),
+              );
+            }),
           ),
         ),
         _ReplyBar(
@@ -279,8 +287,7 @@ class _IssueSummaryCard extends StatelessWidget {
         children: [
           Text(
             bits.join(' · '),
-            style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 12),
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
           const SizedBox(height: 6),
           Text(
@@ -352,8 +359,7 @@ class _Bubble extends StatelessWidget {
                 color: AppTheme.accent,
                 shape: BoxShape.circle,
               ),
-              child:
-                  const Icon(Icons.smart_toy, size: 18, color: Colors.white),
+              child: const Icon(Icons.smart_toy, size: 18, color: Colors.white),
             ),
             const SizedBox(width: 8),
           ],
@@ -371,8 +377,8 @@ class _Bubble extends StatelessWidget {
                     ),
                   ),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(
                     color: isFromHuman
                         ? AppTheme.accent.withValues(alpha: 0.15)
@@ -439,8 +445,7 @@ class _SystemNotice extends StatelessWidget {
           child: SelectableText(
             message.body,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 12),
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
         ),
       ),
@@ -504,46 +509,50 @@ class _ReplyBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: SafeArea(
         top: false,
-        child: enabled
-            ? Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: controller,
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => onSend(),
-                      minLines: 1,
-                      maxLines: 4,
-                      style: const TextStyle(color: AppTheme.textPrimary),
-                      decoration: InputDecoration(
-                        hintText: hintText,
-                        hintStyle:
-                            const TextStyle(color: AppTheme.textSecondary),
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
+        // Bar background spans the window; the input is capped to match the
+        // thread column on desktop.
+        child: CenteredContent(
+          child: enabled
+              ? Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => onSend(),
+                        minLines: 1,
+                        maxLines: 4,
+                        style: const TextStyle(color: AppTheme.textPrimary),
+                        decoration: InputDecoration(
+                          hintText: hintText,
+                          hintStyle:
+                              const TextStyle(color: AppTheme.textSecondary),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                        ),
                       ),
                     ),
-                  ),
-                  IconButton(
-                    onPressed: sending ? null : onSend,
-                    icon: Icon(
-                      Icons.send_rounded,
-                      color:
-                          sending ? AppTheme.textSecondary : AppTheme.accent,
+                    IconButton(
+                      onPressed: sending ? null : onSend,
+                      icon: Icon(
+                        Icons.send_rounded,
+                        color:
+                            sending ? AppTheme.textSecondary : AppTheme.accent,
+                      ),
                     ),
+                  ],
+                )
+              : const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                  child: Text(
+                    'This issue is closed.',
+                    style:
+                        TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                   ),
-                ],
-              )
-            : const Padding(
-                padding: EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                child: Text(
-                  'This issue is closed.',
-                  style:
-                      TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
-              ),
+        ),
       ),
     );
   }

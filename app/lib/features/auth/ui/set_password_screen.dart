@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../logic/auth_provider.dart';
 
@@ -94,7 +95,8 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
     return Scaffold(
       appBar:
           AppBar(title: Text(isChange ? 'Change Password' : 'Create Password')),
-      body: SafeArea(
+      body: CenteredContent(
+          child: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
@@ -123,8 +125,8 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
                 labelText: 'New password',
                 prefixIcon: const Icon(Icons.lock_outline),
                 suffixIcon: IconButton(
-                  icon: Icon(
-                      _obscure ? Icons.visibility : Icons.visibility_off),
+                  icon:
+                      Icon(_obscure ? Icons.visibility : Icons.visibility_off),
                   onPressed: () => setState(() => _obscure = !_obscure),
                 ),
               ),
@@ -160,7 +162,7 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
             ),
           ],
         ),
-      ),
+      )),
     );
   }
 }

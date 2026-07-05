@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
@@ -138,7 +139,8 @@ class _RadarrMovieDetailScreenState
           ),
         ],
       ),
-      body: Column(
+      body: CenteredContent(
+          child: Column(
         children: [
           Expanded(child: _buildBody()),
           _ActionBar(
@@ -146,7 +148,7 @@ class _RadarrMovieDetailScreenState
             onInteractive: _interactiveSearch,
           ),
         ],
-      ),
+      )),
     );
   }
 
@@ -353,7 +355,8 @@ class _FileCard extends StatelessWidget {
                   children: [
                     StatusPill(
                       text: file.quality ?? 'Downloaded',
-                      color: cutoffMet ? AppTheme.available : AppTheme.requested,
+                      color:
+                          cutoffMet ? AppTheme.available : AppTheme.requested,
                     ),
                     if (!cutoffMet) ...[
                       const SizedBox(width: 6),
@@ -458,12 +461,11 @@ class _HistoryTile extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(_historyTime(record.date),
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 11)),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
           const SizedBox(height: 2),
           Text(_historyEventLabel(record),
-              style: const TextStyle(
-                  color: AppTheme.requested, fontSize: 12)),
+              style: const TextStyle(color: AppTheme.requested, fontSize: 12)),
         ],
       ),
     );
@@ -490,7 +492,8 @@ class _ActionBar extends StatelessWidget {
           Expanded(
             child: OutlinedButton.icon(
               onPressed: onAutomatic,
-              icon: const Icon(Icons.search, size: 18, color: AppTheme.available),
+              icon:
+                  const Icon(Icons.search, size: 18, color: AppTheme.available),
               label: const Text('Automatic',
                   style: TextStyle(color: AppTheme.textPrimary)),
               style: OutlinedButton.styleFrom(

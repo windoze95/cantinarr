@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/action_sheet.dart';
@@ -229,8 +230,8 @@ class _SonarrSeriesDetailScreenState
       _toast('No external links available');
       return;
     }
-    final url =
-        await showActionSheet<String>(context, title: _series.title, actions: links);
+    final url = await showActionSheet<String>(context,
+        title: _series.title, actions: links);
     if (url == null) return;
     launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
   }
@@ -244,7 +245,8 @@ class _SonarrSeriesDetailScreenState
       backgroundColor: AppTheme.background,
       appBar: AppBar(
         backgroundColor: AppTheme.background,
-        title: Text(_series.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title:
+            Text(_series.title, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
             icon: const Icon(Icons.link, color: AppTheme.textPrimary),
@@ -263,36 +265,38 @@ class _SonarrSeriesDetailScreenState
           ),
         ],
       ),
-      body: _error != null && _series.seasons.isEmpty
-          ? FullScreenError(message: _error!, onRetry: _load)
-          : RefreshIndicator(
-              onRefresh: _load,
-              color: AppTheme.accent,
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                children: [
-                  if (_error != null)
-                    ErrorBanner(message: _error!, onRetry: _load),
-                  _AllSeasonsCard(series: _series, onTap: _openAllSeasons),
-                  const SizedBox(height: 4),
-                  ...seasons.map((s) => _SeasonCard(
-                        season: s,
-                        busy: _togglingSeasons.contains(s.seasonNumber),
-                        onTap: () => _openSeason(s),
-                        onLongPress: () => _showSeasonActions(s),
-                        onToggleMonitored: () => _toggleSeasonMonitored(s),
-                      )),
-                  if (seasons.isEmpty && !_isLoading)
-                    const Padding(
-                      padding: EdgeInsets.all(32),
-                      child: Center(
-                        child: Text('No seasons',
-                            style: TextStyle(color: AppTheme.textSecondary)),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+      body: CenteredContent(
+          child: _error != null && _series.seasons.isEmpty
+              ? FullScreenError(message: _error!, onRetry: _load)
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  color: AppTheme.accent,
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    children: [
+                      if (_error != null)
+                        ErrorBanner(message: _error!, onRetry: _load),
+                      _AllSeasonsCard(series: _series, onTap: _openAllSeasons),
+                      const SizedBox(height: 4),
+                      ...seasons.map((s) => _SeasonCard(
+                            season: s,
+                            busy: _togglingSeasons.contains(s.seasonNumber),
+                            onTap: () => _openSeason(s),
+                            onLongPress: () => _showSeasonActions(s),
+                            onToggleMonitored: () => _toggleSeasonMonitored(s),
+                          )),
+                      if (seasons.isEmpty && !_isLoading)
+                        const Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Center(
+                            child: Text('No seasons',
+                                style:
+                                    TextStyle(color: AppTheme.textSecondary)),
+                          ),
+                        ),
+                    ],
+                  ),
+                )),
     );
   }
 }
@@ -413,7 +417,9 @@ class _SeasonCard extends StatelessWidget {
               ),
               child: Icon(
                 Icons.video_library_outlined,
-                color: season.monitored ? AppTheme.available : AppTheme.unavailable,
+                color: season.monitored
+                    ? AppTheme.available
+                    : AppTheme.unavailable,
                 size: 22,
               ),
             ),
@@ -448,9 +454,7 @@ class _SeasonCard extends StatelessWidget {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: AppTheme.accent))
                   : Icon(
-                      season.monitored
-                          ? Icons.bookmark
-                          : Icons.bookmark_border,
+                      season.monitored ? Icons.bookmark : Icons.bookmark_border,
                       color: season.monitored
                           ? AppTheme.accent
                           : AppTheme.textSecondary,

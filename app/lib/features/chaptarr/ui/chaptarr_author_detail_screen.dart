@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
@@ -194,39 +195,42 @@ class _ChaptarrAuthorDetailScreenState
           ),
         ],
       ),
-      body: _error != null && _author == null
-          ? FullScreenError(message: _error!, onRetry: _load)
-          : RefreshIndicator(
-              onRefresh: _load,
-              color: AppTheme.accent,
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                children: [
-                  if (_error != null)
-                    ErrorBanner(message: _error!, onRetry: _load),
-                  if (_author != null) _AuthorSummaryCard(author: _author!),
-                  const SizedBox(height: 4),
-                  ..._groupedBooks().map((records) => _BookCard(
-                        records: records,
-                        cover: chaptarrImageSource(
-                            ref, records.first.coverUrl, widget.instanceId),
-                        togglingIds: _togglingBooks,
-                        addingKeys: _addingFormats,
-                        onTap: () => _openBookGroup(records),
-                        onToggleRecord: _toggleBookMonitored,
-                        onAddFormat: (format) => _addFormat(records, format),
-                      )),
-                  if (_books.isEmpty && !_isLoading)
-                    const Padding(
-                      padding: EdgeInsets.all(32),
-                      child: Center(
-                        child: Text('No books',
-                            style: TextStyle(color: AppTheme.textSecondary)),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+      body: CenteredContent(
+          child: _error != null && _author == null
+              ? FullScreenError(message: _error!, onRetry: _load)
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  color: AppTheme.accent,
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    children: [
+                      if (_error != null)
+                        ErrorBanner(message: _error!, onRetry: _load),
+                      if (_author != null) _AuthorSummaryCard(author: _author!),
+                      const SizedBox(height: 4),
+                      ..._groupedBooks().map((records) => _BookCard(
+                            records: records,
+                            cover: chaptarrImageSource(
+                                ref, records.first.coverUrl, widget.instanceId),
+                            togglingIds: _togglingBooks,
+                            addingKeys: _addingFormats,
+                            onTap: () => _openBookGroup(records),
+                            onToggleRecord: _toggleBookMonitored,
+                            onAddFormat: (format) =>
+                                _addFormat(records, format),
+                          )),
+                      if (_books.isEmpty && !_isLoading)
+                        const Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Center(
+                            child: Text('No books',
+                                style:
+                                    TextStyle(color: AppTheme.textSecondary)),
+                          ),
+                        ),
+                    ],
+                  ),
+                )),
     );
   }
 }

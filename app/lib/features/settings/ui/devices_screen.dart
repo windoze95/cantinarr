@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/data/auth_service.dart';
@@ -97,7 +98,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Connected Devices')),
-      body: _buildBody(),
+      body: CenteredContent(child: _buildBody()),
     );
   }
 
@@ -166,56 +167,55 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
               ...userDevices.map((device) {
                 final isCurrent = device.id == _currentDeviceId;
                 return Dismissible(
-                    key: Key(device.id),
-                    direction: DismissDirection.endToStart,
-                    background: Container(
-                      alignment: Alignment.centerRight,
-                      padding: const EdgeInsets.only(right: 20),
-                      color: AppTheme.error,
-                      child: const Icon(Icons.delete, color: Colors.white),
+                  key: Key(device.id),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 20),
+                    color: AppTheme.error,
+                    child: const Icon(Icons.delete, color: Colors.white),
+                  ),
+                  confirmDismiss: (_) async {
+                    await _revokeDevice(device);
+                    return false; // We handle removal via _loadDevices
+                  },
+                  child: ListTile(
+                    leading: Icon(
+                      _deviceIcon(device.deviceName),
+                      color:
+                          isCurrent ? AppTheme.accent : AppTheme.textSecondary,
                     ),
-                    confirmDismiss: (_) async {
-                      await _revokeDevice(device);
-                      return false; // We handle removal via _loadDevices
-                    },
-                    child: ListTile(
-                      leading: Icon(
-                        _deviceIcon(device.deviceName),
-                        color: isCurrent
-                            ? AppTheme.accent
-                            : AppTheme.textSecondary,
-                      ),
-                      title: Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              device.deviceName,
-                              style: const TextStyle(
-                                color: AppTheme.textPrimary,
-                                fontWeight: FontWeight.w500,
-                              ),
+                    title: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            device.deviceName,
+                            style: const TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
-                          if (isCurrent) ...[
-                            const SizedBox(width: 8),
-                            _thisDeviceBadge(),
-                          ],
-                        ],
-                      ),
-                      subtitle: Text(
-                        'Last seen ${_formatTime(device.lastSeenAt)}',
-                        style: const TextStyle(
-                          color: AppTheme.textSecondary,
-                          fontSize: 13,
                         ),
-                      ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.close,
-                            color: AppTheme.textSecondary, size: 20),
-                        onPressed: () => _revokeDevice(device),
+                        if (isCurrent) ...[
+                          const SizedBox(width: 8),
+                          _thisDeviceBadge(),
+                        ],
+                      ],
+                    ),
+                    subtitle: Text(
+                      'Last seen ${_formatTime(device.lastSeenAt)}',
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 13,
                       ),
                     ),
-                  );
+                    trailing: IconButton(
+                      icon: const Icon(Icons.close,
+                          color: AppTheme.textSecondary, size: 20),
+                      onPressed: () => _revokeDevice(device),
+                    ),
+                  ),
+                );
               }),
             ],
           );

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -33,7 +34,8 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Watch on Plex')),
-      body: ListView(
+      body: CenteredContent(
+          child: ListView(
         padding: const EdgeInsets.all(24),
         children: [
           const Text(
@@ -112,7 +114,7 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
             ),
           ),
         ],
-      ),
+      )),
     );
   }
 
@@ -134,8 +136,7 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
             decoration: BoxDecoration(
               color: AppTheme.accent.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(12),
-              border:
-                  Border.all(color: AppTheme.accent.withValues(alpha: 0.2)),
+              border: Border.all(color: AppTheme.accent.withValues(alpha: 0.2)),
             ),
             child: plexEmail.isEmpty
                 ? Column(
@@ -220,7 +221,9 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
 
     // Mirrors the server's shape check: something@something, no whitespace.
     bool looksLikeEmail(String email) {
-      if (email.isEmpty || email.length > 254 || email.contains(RegExp(r'\s'))) {
+      if (email.isEmpty ||
+          email.length > 254 ||
+          email.contains(RegExp(r'\s'))) {
         return false;
       }
       final at = email.indexOf('@');
@@ -296,9 +299,8 @@ class _PlexWatchGuideState extends ConsumerState<PlexWatchGuide> {
             ),
             actions: [
               TextButton(
-                onPressed: saving
-                    ? null
-                    : () => Navigator.of(dialogContext).pop(),
+                onPressed:
+                    saving ? null : () => Navigator.of(dialogContext).pop(),
                 child: const Text('Cancel'),
               ),
               ElevatedButton(
@@ -424,8 +426,7 @@ class _TipCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.lightbulb_outline,
-              color: AppTheme.accent, size: 20),
+          const Icon(Icons.lightbulb_outline, color: AppTheme.accent, size: 20),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -433,8 +434,7 @@ class _TipCard extends StatelessWidget {
               children: [
                 Text(title,
                     style: const TextStyle(
-                        color: AppTheme.accent,
-                        fontWeight: FontWeight.w600)),
+                        color: AppTheme.accent, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
                 Text(message,
                     style: const TextStyle(

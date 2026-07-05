@@ -183,7 +183,7 @@ app/lib/
 
 ## Navigation
 
-An outer shell (drawer + persistent search bar; permanent rail on wide screens) hosts per-module bottom-tab shells:
+An outer shell (persistent search bar + navigation chrome) hosts per-module page shells. The chrome adapts at 900px: below it, a hamburger drawer lists modules and each module shows its pages as a bottom nav; at 900px+ the drawer becomes a persistent sidebar whose active module expands into its pages, and the bottom nav disappears. Line-length-sensitive surfaces (search results, chat, detail pages, settings forms) cap and center their content on desktop; modal bottom sheets cap at 640px.
 
 | Module | Tabs | Access |
 |---|---|---|

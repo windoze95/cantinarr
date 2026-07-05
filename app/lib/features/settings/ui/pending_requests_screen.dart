@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/request_settings_service.dart';
@@ -305,58 +306,60 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Approvals')),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent))
-          : _error != null && _pending == null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!,
-                            style: const TextStyle(color: AppTheme.error),
-                            textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                            onPressed: _load, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
-                )
-              : RefreshIndicator(
-                  color: AppTheme.accent,
-                  onRefresh: _load,
-                  child: (_pending?.isEmpty ?? true)
-                      ? ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          children: const [
-                            SizedBox(height: 120),
-                            Center(
-                              child: Text(
-                                'No pending requests.',
-                                style: TextStyle(color: AppTheme.textSecondary),
-                              ),
-                            ),
+      body: CenteredContent(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.accent))
+              : _error != null && _pending == null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_error!,
+                                style: const TextStyle(color: AppTheme.error),
+                                textAlign: TextAlign.center),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
+                                onPressed: _load, child: const Text('Retry')),
                           ],
-                        )
-                      : ListView.separated(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: _pending!.length,
-                          separatorBuilder: (_, __) =>
-                              const Divider(color: AppTheme.border, height: 1),
-                          itemBuilder: (context, index) {
-                            final item = _pending![index];
-                            return _PendingTile(
-                              item: item,
-                              onApprove: () => _approve(item),
-                              onDeny: () => _deny(item),
-                            );
-                          },
                         ),
-                ),
+                      ),
+                    )
+                  : RefreshIndicator(
+                      color: AppTheme.accent,
+                      onRefresh: _load,
+                      child: (_pending?.isEmpty ?? true)
+                          ? ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              children: const [
+                                SizedBox(height: 120),
+                                Center(
+                                  child: Text(
+                                    'No pending requests.',
+                                    style: TextStyle(
+                                        color: AppTheme.textSecondary),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : ListView.separated(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              itemCount: _pending!.length,
+                              separatorBuilder: (_, __) => const Divider(
+                                  color: AppTheme.border, height: 1),
+                              itemBuilder: (context, index) {
+                                final item = _pending![index];
+                                return _PendingTile(
+                                  item: item,
+                                  onApprove: () => _approve(item),
+                                  onDeny: () => _deny(item),
+                                );
+                              },
+                            ),
+                    )),
     );
   }
 }
