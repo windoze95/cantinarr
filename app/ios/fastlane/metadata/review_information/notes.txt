@@ -1,1 +1,0 @@
-Cantinarr is an open-source client for a self-hosted home media server (https://github.com/windoze95/cantinarr). The app requires a Cantinarr server; a demo server URL and a one-tap connect link for the review team are provided here before each submission.
