@@ -147,6 +147,12 @@ GET    /api/admin/plex/servers/{machineID}/libraries  # sections for the library
 PUT    /api/admin/plex/settings            # server, shared libraries, auto-invite toggle
 ```
 
+### Setup status (admin)
+```
+GET    /api/admin/setup-status             # live-derived checklist of configured/unconfigured features
+```
+Re-derived from actual configuration on every request (never stored), so the app's setup wizard is resumable and can't go stale. New features surface themselves by adding an item here; clients render unknown keys generically.
+
 ### Requests
 ```
 POST   /api/requests                       # user: create (movie/tv by tmdb_id;

@@ -59,3 +59,30 @@ final plexGuideEnabledProvider =
     StateNotifierProvider<PlexGuideNotifier, bool>(
   (ref) => PlexGuideNotifier(),
 );
+
+const _setupReminderKey = 'setup_reminder_enabled';
+
+/// Whether the drawer shows a "Setup checklist" reminder while features
+/// remain unconfigured. Admins who have deliberately skipped features can
+/// mute it from the wizard; the Settings tile always remains.
+class SetupReminderNotifier extends StateNotifier<bool> {
+  SetupReminderNotifier() : super(true) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getBool(_setupReminderKey) ?? true;
+  }
+
+  Future<void> set(bool value) async {
+    state = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_setupReminderKey, value);
+  }
+}
+
+final setupReminderEnabledProvider =
+    StateNotifierProvider<SetupReminderNotifier, bool>(
+  (ref) => SetupReminderNotifier(),
+);

@@ -6,6 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../logic/setup_status_provider.dart';
 import 'about_sheet.dart';
 
 /// Simplified settings screen for backend-connected architecture.
@@ -27,9 +28,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       setState(() => _appVersion =
           build.isNotEmpty ? '${info.version} ($build)' : info.version);
     });
-    // Learn whether the account has a password so the Account tile reflects it.
+    // Learn whether the account has a password so the Account tile reflects
+    // it, and re-derive the setup checklist so its tile subtitle is current.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(authProvider.notifier).refreshUser();
+      ref.read(setupStatusProvider.notifier).refresh();
     });
   }
 
@@ -40,6 +43,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final connection = auth?.connection;
     final user = auth?.user;
     final instances = connection?.instances ?? [];
+    final setupStatus = ref.watch(setupStatusProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -165,6 +169,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           if (user?.isAdmin == true) ...[
             const SizedBox(height: 16),
             _SectionHeader(title: 'Admin'),
+            _SettingsTile(
+              icon: Icons.checklist_outlined,
+              title: 'Setup Checklist',
+              subtitle: setupStatus == null
+                  ? 'See which features are configured'
+                  : '${setupStatus.configured} of ${setupStatus.total} features configured',
+              onTap: () => context.push('/setup'),
+            ),
             _SettingsTile(
               icon: Icons.key_outlined,
               title: 'API Credentials',

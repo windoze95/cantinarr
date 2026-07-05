@@ -49,6 +49,7 @@ func NewRouter(
 	pushHandler *push.Handler,
 	webhookHandler *webhooks.Handler,
 	plexHandler *plex.Handler,
+	plexService *plex.Service,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -147,6 +148,10 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}", authHandler.HandleDeleteUser)
 			// Send a test push to a specific user's devices (delivery diagnostics).
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/test-push", pushHandler.TestPushToUser)
+
+			// Setup checklist: which features are configured, derived live on
+			// every request (drives the app's setup wizard + reminders).
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, plexService))
 
 			// Plex integration: link the admin's Plex account (PIN flow), pick
 			// the server/libraries invites share, and send one-tap invites for
