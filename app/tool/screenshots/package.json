@@ -1,0 +1,8 @@
+{
+  "name": "cantinarr-store-screenshots",
+  "private": true,
+  "description": "Drives the screenshot harness (test/preview/screenshot_main.dart) at exact store pixel sizes. See docs/store-release.md.",
+  "dependencies": {
+    "playwright": "^1.61.1"
+  }
+}

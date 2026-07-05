@@ -1,11 +1,11 @@
 {
-    "name": "cantinarr",
-    "short_name": "cantinarr",
+    "name": "Cantinarr",
+    "short_name": "Cantinarr",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0F0A04",
+    "theme_color": "#0F0A04",
+    "description": "Requests and management for your Cantinarr media server.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

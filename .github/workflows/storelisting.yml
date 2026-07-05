@@ -1,0 +1,95 @@
+name: Sync Store Listings
+
+# Store listing copy/graphics live in-repo (app/*/fastlane); merging a change to
+# them pushes the listings to the consoles. No binaries are uploaded here.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/android/fastlane/metadata/**"
+      - "app/ios/fastlane/metadata/**"
+      - "app/ios/fastlane/screenshots/**"
+      - ".github/workflows/storelisting.yml"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Which store listing to push"
+        type: choice
+        options: [both, android, ios]
+        default: both
+
+concurrency:
+  group: storelisting
+  cancel-in-progress: false
+
+jobs:
+  play-listing:
+    if: github.event_name == 'push' || inputs.platform == 'both' || inputs.platform == 'android'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check Play credentials
+        id: play
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::PLAY_SERVICE_ACCOUNT_JSON is not set - skipping the Play listing sync."
+          fi
+
+      - name: Set up Ruby
+        if: steps.play.outputs.available == 'true'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Push listing
+        if: steps.play.outputs.available == 'true'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
+          gem install fastlane
+          fastlane listing
+
+      - name: Cleanup credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/play-service-account.json"
+
+  appstore-listing:
+    if: github.event_name == 'push' || inputs.platform == 'both' || inputs.platform == 'ios'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/ios
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Push metadata and screenshots
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
+        run: |
+          VERSION=$(grep '^version:' ../pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
+          gem install fastlane
+          APP_VERSION=$VERSION fastlane metadata

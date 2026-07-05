@@ -220,6 +220,7 @@ The router guard redirects unauthenticated users to `/login` and bounces non-adm
 
 - **iOS**, **Android**, and **web** are the shipping targets. Web is built in CI and embedded in the server image; iOS auto-deploys to TestFlight on `main` (manual signing via repo secrets); Android auto-deploys a signed AAB to the Play Store beta track on `main` (upload-keystore signing via repo secrets — see [docs/store-release.md](../docs/store-release.md)). macOS/Windows/Linux directories are unbuilt scaffolding.
 - CI runs `flutter analyze --no-fatal-infos`, `flutter test`, and `flutter build web --release` on every PR.
+- Store listing copy, graphics, and screenshots live in `android/fastlane` + `ios/fastlane` and sync to both consoles on merge (`storelisting.yml`). Screenshots are generated from the demo-data harness `test/preview/screenshot_main.dart` via `tool/screenshots/` — see [docs/store-release.md](../docs/store-release.md).
 
 ## License
 
