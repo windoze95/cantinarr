@@ -27,7 +27,7 @@ platform :android do
   lane :beta do
     upload_to_play_store(
       package_name: PACKAGE_NAME,
-      track: ENV["PLAY_TRACK"] || "beta",
+      track: ENV["PLAY_TRACK"] || "alpha",
       release_status: ENV["PLAY_RELEASE_STATUS"] || "completed",
       aab: "../build/app/outputs/bundle/release/app-release.aab",
       json_key: ENV["PLAY_JSON_KEY_PATH"],
@@ -42,7 +42,7 @@ platform :android do
   lane :listing do
     upload_to_play_store(
       package_name: PACKAGE_NAME,
-      track: ENV["PLAY_TRACK"] || "beta",
+      track: ENV["PLAY_TRACK"] || "alpha",
       json_key: ENV["PLAY_JSON_KEY_PATH"],
       skip_upload_aab: true,
       skip_upload_apk: true,
