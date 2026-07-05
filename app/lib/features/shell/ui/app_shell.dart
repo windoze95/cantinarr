@@ -25,6 +25,7 @@ import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/logic/radarr_movies_provider.dart';
 import '../../request/logic/pending_approvals_provider.dart';
 import '../../settings/logic/plex_invites_provider.dart';
+import '../../settings/logic/setup_status_provider.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
 import '../logic/shell_search_provider.dart';
@@ -851,6 +852,11 @@ class _AppShellState extends ConsumerState<AppShell>
     final openIssues = ref.watch(openIssuesProvider);
     final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
     final plexInvitesWaiting = ref.watch(plexInvitesWaitingProvider);
+    // Setup reminder: unconfigured-feature count, shown while the admin
+    // hasn't muted it from the checklist screen.
+    final setupRemaining = ref.watch(setupStatusProvider)?.remaining ?? 0;
+    final showSetupReminder =
+        setupRemaining > 0 && ref.watch(setupReminderEnabledProvider);
 
     return SafeArea(
       child: Column(
@@ -930,6 +936,18 @@ class _AppShellState extends ConsumerState<AppShell>
                 onTap: () {
                   if (isOverlay) Navigator.pop(context);
                   context.push('/settings/users');
+                },
+              ),
+            // Setup reminder: how many features are still unconfigured.
+            // Muteable from the checklist; the Settings tile always remains.
+            if (showSetupReminder)
+              _DrawerItem(
+                icon: Icons.checklist_outlined,
+                title: 'Setup checklist',
+                badgeCount: setupRemaining,
+                onTap: () {
+                  if (isOverlay) Navigator.pop(context);
+                  context.push('/setup');
                 },
               ),
             const Divider(color: AppTheme.border),

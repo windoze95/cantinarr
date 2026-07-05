@@ -78,7 +78,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 - **Report a problem** -- on any available title (admin-toggleable), scoped to a movie, series, or season; category chips plus free text.
 - **Issue threads** -- a chat-style thread per issue where the reporter, admins, and the AI agent converse; the agent's questions flip the issue to "Needs your reply".
 - **Agent fixes** -- proposed mutations render as safety-critical approval cards (typed summaries, quoted parameters, rationale as passive text); admins approve or deny inline or from a grouped queue, and every run has a read-only audit timeline with step ledger and cost.
-- **Live badges** -- Approvals / Issues / Agent fixes counts in the drawer, kept current over WebSocket. A **Plex invites** entry appears (with count) only while someone is waiting on a Plex invite -- the persistent surface behind the miss-able push -- and lands on the Users screen, where waiting users carry a "Needs Plex invite" tag.
+- **Live badges** -- Approvals / Issues / Agent fixes counts in the drawer, kept current over WebSocket. A **Plex invites** entry appears (with count) only while someone is waiting on a Plex invite -- the persistent surface behind the miss-able push -- and lands on the Users screen, where waiting users carry a "Needs Plex invite" tag. A **Setup checklist** entry (with unconfigured-feature count) appears for admins until everything is configured or they mute it from the checklist.
 
 ### AI assistant
 - **Multi-provider chat** (Anthropic, OpenAI, or Gemini -- server-configured) with SSE streaming, visible tool activity, and a poster carousel for results.
@@ -90,6 +90,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 - **Per-category preferences** -- request decisions, new movies, new episodes, Plex invite sent, and admin-only categories (new requests, issues, agent fixes, Plex access requests), plus a test-push diagnostic.
 
 ### Settings
+- **Setup Checklist** (admin) -- a live wizard at `/setup`: which features are configured and which aren't, derived by the server from actual configuration (never stored progress, so it's resumable and editable by construction). Each step opens the real settings screen and re-derives on return; unknown items from newer servers still render, which is how future features announce themselves. Surfaced as a Settings tile with an "X of Y configured" subtitle and a muteable drawer reminder with the remaining count.
 - **Instances** (admin) -- add/edit all eight service types; test connections; set the global default (single-default invariant with takeover confirmation) or per-user default pins; assign users to a Chaptarr instance (the Books access grant); assigning a user pinned to a sibling instance asks for confirmation before removing them from it; copy the per-instance **webhook URL** for Radarr/Sonarr > Connect.
 - **Users** (admin) -- roles, connect links / re-invites / device links, per-user password & passkey enablement (disabling is a real revoke), per-user request settings (tri-state inherit/on/off + default instances), test push. Shows each user's shared Plex email and invite state: with a linked Plex account it's a one-tap **Send Plex invite** (resend supported); otherwise **Invite in Plex…** copies the address and opens Plex's Manage Library Access page.
 - **Plex Invites** (admin) -- link a Plex account via the PIN flow, pick the server and libraries invites share, and toggle **auto-invite** (a user sharing their Plex email gets invited with zero admin taps).
@@ -173,7 +174,7 @@ app/lib/
 │   ├── radarr/                   # Movie management: library/queue/history/wanted/calendar
 │   ├── request/                  # Request buttons, options sheet, status sheet
 │   ├── settings/                 # Everything under Settings (see Features)
-│   ├── setup_wizard/             # Static onboarding walkthrough + Plex guide
+│   ├── setup_wizard/             # Live setup checklist wizard + Plex guide
 │   ├── shell/                    # App shell: drawer, search bar, inline AI
 │   ├── sonarr/                   # TV management + episode tools + import doctor engine
 │   └── tautulli/                 # Plex activity/history/stats

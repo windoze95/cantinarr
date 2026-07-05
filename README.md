@@ -55,6 +55,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
 - **Secrets encrypted at rest** -- arr API keys, download-client passwords, webhook tokens, and external credentials are AES-256-GCM encrypted in the database.
 - **Household-friendly** -- Connect links, passwordless by default, role-based access, per-user default instances. Admins manage services; users just browse and request.
+- **Guided setup** -- a live checklist wizard derived from what's actually configured: every step opens the real settings screen, progress can't go stale, and newly shipped features appear on the list automatically.
 - **Single container** -- One Go binary, one port, serves API + web UI. Runs great on a Raspberry Pi or NAS.
 
 ## Quick Start

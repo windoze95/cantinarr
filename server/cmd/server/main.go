@@ -228,7 +228,7 @@ func main() {
 	webhookHandler := webhooks.NewHandler(instanceStore, registry, wsHub, requestService, contentNotifier)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
