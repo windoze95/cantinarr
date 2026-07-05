@@ -11,14 +11,15 @@ for a user-facing version change — build numbers/version codes are computed pe
 
 `.github/workflows/playstore.yml` runs on every merge to `main` that touches Android-relevant
 `app/**` paths (web/ios/desktop subdirs excluded), and on manual dispatch (inputs: track
-`beta`/`internal`, release status `completed`/`draft`).
+`alpha`/`internal`, release status `completed`/`draft`).
 
 1. Version code = max version code across all Play tracks + 1 (`next_build_number` lane in
    `app/android/fastlane/Fastfile`); version name = `pubspec.yaml` version minus the `+` suffix.
 2. The AAB is signed with the upload keystore from the `ANDROID_KEYSTORE_*` secrets and attached
    to the run as an artifact — every run, upload or not.
-3. With `PLAY_SERVICE_ACCOUNT_JSON` set, the `beta` lane uploads the AAB to the Play **beta**
-   (closed testing) track. Without it, the upload is skipped and the run stays green.
+3. With `PLAY_SERVICE_ACCOUNT_JSON` set, the `beta` lane uploads the AAB to the Play **alpha**
+   track ("Closed testing - Alpha" - Google's pre-made closed track; the id `beta` is reserved
+   for open testing). Without it, the upload is skipped and the run stays green.
 
 Runs are serialized (`concurrency: playstore-deploy`) because two concurrent runs would compute
 the same version code.
@@ -45,14 +46,14 @@ ignores `key.properties` and `*.jks`.
    `codes.julian.cantinarr` on first upload and can never change.
 3. Download the `.aab` artifact from any **Deploy to Play Store** run. The very first bundle of a
    new app must be uploaded by hand (the publisher API can't create it): Testing → Closed testing
-   → create a track named `beta` → create release → upload the AAB. Accepting Play App Signing
+   → Manage the pre-made "Closed testing - Alpha" track → create release → upload the AAB. Accepting Play App Signing
    here enrolls the upload key.
 4. Google Cloud console: pick/create a project → IAM & Admin → Service accounts → create
    (e.g. `play-publisher`) → Keys → add a JSON key.
 5. Play Console → Users and permissions → Invite new users → the service account's email →
    grant release permissions (releases to testing tracks) or Admin.
 6. `gh secret set PLAY_SERVICE_ACCOUNT_JSON < key.json` — from here on, every merge to `main`
-   ships to beta automatically.
+   ships to the closed-testing track automatically.
 7. Finish the listing prerequisites in the console before promoting beyond testing: store
    listing (copy + graphics), data safety form, content rating questionnaire, privacy policy URL.
 8. Closed testing → Testers: add an email list or Google Group and share the opt-in link.
@@ -62,7 +63,7 @@ ignores `key.properties` and `*.jks`.
    Google re-signs distribution builds).
 
 Personal developer accounts created after Nov 13, 2023 must run a closed test with **12+ opted-in
-testers for 14 continuous days** before they can apply for production access (the beta track
+testers for 14 continuous days** before they can apply for production access (the closed alpha track
 satisfies this; the console dashboard tracks progress and then offers a production-access
 questionnaire).
 

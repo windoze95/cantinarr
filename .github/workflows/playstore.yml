@@ -23,8 +23,8 @@ on:
       track:
         description: "Play track to upload to"
         type: choice
-        options: [beta, internal]
-        default: beta
+        options: [alpha, internal]
+        default: alpha
       release_status:
         description: "Release status (a brand-new app must use draft until its first release is rolled out in the Play Console)"
         type: choice
@@ -135,7 +135,7 @@ jobs:
         if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          PLAY_TRACK: ${{ inputs.track || 'beta' }}
+          PLAY_TRACK: ${{ inputs.track || 'alpha' }}
           PLAY_RELEASE_STATUS: ${{ inputs.release_status || 'completed' }}
         run: |
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
