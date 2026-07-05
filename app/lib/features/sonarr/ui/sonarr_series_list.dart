@@ -176,9 +176,7 @@ class _SeriesTile extends StatelessWidget {
               child: LinearProgressIndicator(
                 value: percent,
                 backgroundColor: AppTheme.surfaceVariant,
-                valueColor: AlwaysStoppedAnimation(
-                  percent >= 1.0 ? AppTheme.available : AppTheme.accent,
-                ),
+                valueColor: AlwaysStoppedAnimation(_progressColor),
                 minHeight: 4,
               ),
             ),
@@ -225,17 +223,30 @@ class _SeriesTile extends StatelessWidget {
     );
   }
 
-  Color get _statusColor {
-    if (show.percentComplete >= 1.0) return AppTheme.available;
-    if (show.status == 'continuing') return AppTheme.downloading;
-    if (show.status == 'ended') return AppTheme.textSecondary;
-    return AppTheme.requested;
-  }
+  Color get _statusColor => switch (show.status) {
+        'continuing' => AppTheme.downloading,
+        'ended' => AppTheme.textSecondary,
+        'upcoming' => AppTheme.requested,
+        'deleted' => AppTheme.error,
+        _ => AppTheme.requested,
+      };
 
-  String get _statusText {
-    if (show.percentComplete >= 1.0) return 'Complete';
-    if (show.status == 'continuing') return 'Continuing';
-    if (show.status == 'ended') return 'Ended';
-    return 'Unknown';
+  String get _statusText => switch (show.status) {
+        'continuing' => 'Continuing',
+        'ended' => 'Ended',
+        'upcoming' => 'Upcoming',
+        'deleted' => 'Deleted',
+        _ => 'Unknown',
+      };
+
+  /// Sonarr's progress-bar grammar: green is reserved for ended series with
+  /// every monitored episode on disk. A continuing series that is merely
+  /// caught up shows blue (more episodes are coming), and gaps show red when
+  /// monitored or amber when the admin chose not to monitor them.
+  Color get _progressColor {
+    if (show.percentComplete >= 1.0) {
+      return show.status == 'ended' ? AppTheme.available : AppTheme.downloading;
+    }
+    return show.monitored ? AppTheme.error : AppTheme.requested;
   }
 }
