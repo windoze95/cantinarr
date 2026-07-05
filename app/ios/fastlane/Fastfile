@@ -48,17 +48,31 @@ platform :ios do
       is_key_content_base64: false,
     )
 
-    deliver(
-      api_key: api_key,
-      app_identifier: "codes.julian.cantinarr",
-      app_version: ENV["APP_VERSION"],
-      metadata_path: "./fastlane/metadata",
-      screenshots_path: "./fastlane/screenshots",
-      skip_binary_upload: true,
-      overwrite_screenshots: true,
-      run_precheck_before_submit: false,
-      force: true,
-    )
+    # The ASC API intermittently returns empty bodies that spaceship surfaces
+    # as "No data". Everything deliver does here is an idempotent PATCH/upload,
+    # so retrying the whole call is safe.
+    attempts = 0
+    begin
+      attempts += 1
+      deliver(
+        api_key: api_key,
+        app_identifier: "codes.julian.cantinarr",
+        app_version: ENV["APP_VERSION"],
+        metadata_path: "./fastlane/metadata",
+        screenshots_path: "./fastlane/screenshots",
+        skip_binary_upload: true,
+        overwrite_screenshots: true,
+        run_precheck_before_submit: false,
+        force: true,
+      )
+    rescue => e
+      if attempts < 3
+        UI.important("deliver attempt #{attempts} failed (#{e.message.to_s.lines.first&.strip}); retrying in 30s")
+        sleep 30
+        retry
+      end
+      raise
+    end
   end
 
   desc "Submit the latest TestFlight build of APP_VERSION for App Store review"
