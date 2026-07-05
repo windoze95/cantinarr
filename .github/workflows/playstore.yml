@@ -11,6 +11,13 @@ on:
       - "!app/windows/**"
       - "!app/linux/**"
       - ".github/workflows/playstore.yml"
+  # Build-only check (no Play upload) when the Android plumbing itself changes.
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/android/**"
+      - "app/pubspec.yaml"
+      - ".github/workflows/playstore.yml"
   workflow_dispatch:
     inputs:
       track:
@@ -72,7 +79,7 @@ jobs:
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          if [ "${{ steps.play.outputs.available }}" = "true" ]; then
+          if [ "${{ steps.play.outputs.available }}" = "true" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
             printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
             export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
             cd android
@@ -125,7 +132,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload to Play Store
-        if: steps.play.outputs.available == 'true'
+        if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           PLAY_TRACK: ${{ inputs.track || 'beta' }}
