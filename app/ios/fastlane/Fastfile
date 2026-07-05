@@ -48,6 +48,26 @@ platform :ios do
       is_key_content_base64: false,
     )
 
+    # deliver unconditionally fetches the App Store review-detail record while
+    # syncing metadata, and an app that has never had a review contact set has
+    # no such record - the API returns data:null, which fastlane surfaces as a
+    # hard "No data" crash (fastlane#20538). Creating the record via the API
+    # requires a contact phone we deliberately don't commit, so skip the
+    # review-attachment step until the record exists (one-time console step);
+    # once it does, the original behavior resumes.
+    require 'deliver'
+    unless Deliver::UploadMetadata.method_defined?(:cantinarr_orig_review_attachment_file)
+      Deliver::UploadMetadata.class_eval do
+        alias_method :cantinarr_orig_review_attachment_file, :review_attachment_file
+        def review_attachment_file(version)
+          cantinarr_orig_review_attachment_file(version)
+        rescue => e
+          raise unless e.message.to_s.include?("No data")
+          FastlaneCore::UI.important("No App Store review-detail record exists yet (set the review contact, incl. phone, once in App Store Connect); skipping review-attachment handling.")
+        end
+      end
+    end
+
     # The ASC API intermittently returns empty bodies that spaceship surfaces
     # as "No data". Everything deliver does here is an idempotent PATCH/upload,
     # so retrying the whole call is safe.
