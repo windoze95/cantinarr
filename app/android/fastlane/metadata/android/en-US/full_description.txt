@@ -25,6 +25,7 @@ The management side goes as deep as you want:
 • Import Doctor: stuck downloads explain themselves in plain English, with one-click fixes
 • See what's playing through Tautulli — active streams, history, top stats
 • Plex invites, a guided setup checklist, per-user defaults, and device management
+• Your server is an MCP server too: connect Claude or any MCP client and manage your library with the same tools that power the built-in assistant
 
 PRIVACY
 
