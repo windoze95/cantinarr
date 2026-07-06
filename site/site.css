@@ -50,7 +50,9 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { scroll-behavior: smooth; background: #0F0A04; }
+/* overflow-x on BOTH html and body: iOS Safari pans sideways otherwise.
+   clip (no scroll mechanism at all) with hidden as the older-browser fallback. */
+html { scroll-behavior: smooth; background: #0F0A04; overflow-x: hidden; overflow-x: clip; }
 
 body {
   background: var(--bg);
@@ -59,7 +61,10 @@ body {
   font-size: 16.5px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  /* positioned so the absolutely-placed .lamp glows are clipped by body's overflow */
+  position: relative;
   overflow-x: hidden;
+  overflow-x: clip;
 }
 
 /* film grain */
@@ -88,6 +93,7 @@ img { max-width: 100%; height: auto; display: block; }
   position: absolute;
   pointer-events: none;
   z-index: 0;
+  max-width: 100vw;
 }
 .lamp-hero {
   top: -260px; left: 50%;
