@@ -10,6 +10,9 @@ on:
       - "!app/android/**"
       - "!app/windows/**"
       - "!app/linux/**"
+      # Listing copy/screenshots sync via storelisting.yml — no build needed.
+      - "!app/ios/fastlane/metadata/**"
+      - "!app/ios/fastlane/screenshots/**"
       - ".github/workflows/testflight.yml"
   workflow_dispatch:
 
