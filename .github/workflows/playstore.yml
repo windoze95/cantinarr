@@ -10,6 +10,8 @@ on:
       - "!app/ios/**"
       - "!app/windows/**"
       - "!app/linux/**"
+      # Listing copy/graphics sync via storelisting.yml — no build needed.
+      - "!app/android/fastlane/metadata/**"
       - ".github/workflows/playstore.yml"
   # Build-only check (no Play upload) when the Android plumbing itself changes.
   pull_request:

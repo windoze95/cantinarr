@@ -34,4 +34,5 @@ PRIVACY
 
 The app talks only to your own server. API keys stay server-side, availability is computed live from your services, and there are no ads, analytics, or tracking. Poster art loads from the TMDB image CDN.
 
+Website: https://cantinarr.com
 Cantinarr is open source (AGPL-3.0): https://github.com/windoze95/cantinarr
