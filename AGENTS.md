@@ -25,6 +25,7 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 - Android release builds happen only in CI too (`playstore.yml`, builds a signed AAB on `main` when Android-relevant `app/**` paths change — web/ios/desktop subdirs are excluded — and uploads it to the Play beta track when `PLAY_SERVICE_ACCOUNT_JSON` is set). PRs that touch `app/android/**`, `app/pubspec.yaml`, or the workflow get a build-only check (no upload). No local Android SDK is assumed; let CI prove the build.
 - Android signing uses the `ANDROID_KEYSTORE_*` secrets (the upload keystore lives outside the repo). Store pipelines, secrets, and the one-time console setup are documented in `docs/store-release.md`.
 - Merges to `main` publish `ghcr.io/windoze95/cantinarr` (`latest`; version tags on `v*` releases).
+- Site changes (`site/`, plain static HTML/CSS, no build step): merges to `main` deploy `site/` to Cloudflare Pages via `site.yml` when the `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` secrets are set; manual deploy is `npx wrangler pages deploy site --project-name=cantinarr`.
 - Mention any tests or checks that could not be run.
 
 ## Architecture conventions
@@ -46,6 +47,7 @@ Docs are part of the change, not a follow-up. A feature is not merged-complete u
 | `server/README.md` | API route reference, MCP tool table (incl. the tool count), DB tables, WebSocket events, env vars, server package tree |
 | `app/README.md` | App features/screens, navigation map, project structure, key dependencies |
 | `docs/store-release.md` | Store release pipeline: how builds reach TestFlight/Play, signing secrets, one-time store-console setup |
+| `site/` | Marketing site (cantinarr.com): public pitch, store badges/links, live-demo link, self-host snippet |
 | `AGENTS.md` | Workflows, verification, conventions (this file) |
 
 - When a change touches a documented surface (new route, tool, env var, table, screen, workflow), update the owning doc **in the same PR**. The PR template's docs checklist is there to force the question.
