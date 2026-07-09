@@ -125,7 +125,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
 
-    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('Discover'), findsOneWidget);
     expect(find.text('Radarr'), findsNothing);
     expect(find.text('Main Radarr'), findsNothing);
     expect(find.text('4K Radarr'), findsNothing);

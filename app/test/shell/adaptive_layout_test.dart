@@ -89,7 +89,7 @@ void main() {
     await pumpShell(tester, size: const Size(1400, 900));
 
     // Persistent sidebar: module list visible without opening any drawer.
-    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('Discover'), findsOneWidget);
     expect(find.byIcon(Icons.menu), findsNothing);
 
     // Active module expands into its pages.
@@ -123,7 +123,7 @@ void main() {
     // 'Movies' exists only as a bottom-nav label, not a drawer entry.
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
-    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('Discover'), findsOneWidget);
   });
 }
 

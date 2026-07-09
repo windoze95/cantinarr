@@ -8,7 +8,7 @@ Built with Flutter; iOS, Android, and web are the shipping targets (web is embed
 ┌──────────────────────────────────────────────────────┐
 │                   Cantinarr App                      │
 │                                                      │
-│  Dashboard · Requests · Movies · TV · Books ·        │
+│  Discover · Requests · Movies · TV · Books ·         │
 │  Downloads · Tautulli · Issues · AI · Settings       │
 │                        │                             │
 │                        ▼                             │
@@ -48,7 +48,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 - **Ever-present search bar** -- debounced multi-search from anywhere in the shell. Results carry **requester-vocabulary availability chips** (Available / Partially Available / Requested -- never arr jargon), matched against the user's default library and kept fresh via WebSocket pings.
 - **Search-to-AI hand-off** -- a query that looks like a question (or returns nothing) lights up an AI affordance; the chat opens inline in the shell and shares one conversation with the full-screen assistant.
 
-### Dashboard
+### Discover
 - **Movies / TV tabs** -- discovery rows plus live library rows from the user's default instances: Downloading Soon, Recently Downloaded, Airing Next.
 - **Releases tab** -- a unified movie + episode release timeline with list and month-calendar views.
 - **Books tab** -- appears only for users with a Chaptarr grant: owned-aware book search with per-format request buttons (see Books).
