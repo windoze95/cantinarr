@@ -61,6 +61,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 
 ### Movies & TV management (admin)
 - **Drill-down** -- library → movie detail, or series → season → episode, with per-item download progress, quality/size, history, and messages, proxied verbatim to Radarr/Sonarr API v3.
+- **Open in Radarr/Sonarr** -- on a discovery detail page, admins get a jump into the matching arr item, shown only once the title actually exists there (it appears right after a request adds it). Movies link to Radarr, TV to Sonarr; books are out of scope.
 - **Sonarr episode power tools** -- long-press action menus, episode **multi-select with batch search** (quick-select All / Undownloaded), batch **delete files**, an **All Seasons** view, per-season/series monitor toggles, **Edit Series** (profile, type, path, tags, season folders), and external links (IMDb/TheTVDB/TMDB/Trakt).
 - **Interactive release search** -- per-episode, per-season, per-movie, and per-book: live indexer results with smart sorting, seeders/leechers, and rejection reasons; tap to grab.
 - **Import Doctor** -- any stuck queue item explains itself in plain English with the raw arr messages shown for transparency, then offers ordered one-click fixes (manual/force import with candidates preview, remove, blocklist + re-search, category hand-off, rescan). One shared rule engine drives Sonarr, Radarr, and Chaptarr, mirrored from the server's classifier.
