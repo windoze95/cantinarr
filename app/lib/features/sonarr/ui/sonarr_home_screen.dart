@@ -254,8 +254,8 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
                       color: AppTheme.accent,
                       child: SonarrSeriesList(
                         series: state.filtered,
-                        onDelete: (id) =>
-                            _notifier!.deleteSeries(id, deleteFiles: false),
+                        onDelete: (id, {bool deleteFiles = true}) =>
+                            _notifier!.deleteSeries(id, deleteFiles: deleteFiles),
                         onSearch: _triggerAutomaticSearch,
                         onInteractiveSearch: _openInteractiveSearch,
                         onOpen: _openSeries,

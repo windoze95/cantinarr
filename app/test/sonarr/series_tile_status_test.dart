@@ -29,7 +29,7 @@ Future<void> _pump(WidgetTester tester, SonarrSeries show) {
     home: Scaffold(
       body: SonarrSeriesList(
         series: [show],
-        onDelete: (_) {},
+        onDelete: (_, {bool deleteFiles = true}) {},
         onSearch: (_) {},
       ),
     ),

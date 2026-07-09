@@ -9,7 +9,7 @@ class ChaptarrAuthorList extends StatelessWidget {
   final List<ChaptarrAuthor> authors;
   final void Function(ChaptarrAuthor) onTap;
   final void Function(ChaptarrAuthor)? onSearch;
-  final void Function(ChaptarrAuthor)? onDelete;
+  final void Function(ChaptarrAuthor, {bool deleteFiles})? onDelete;
   final bool embedded;
 
   const ChaptarrAuthorList({
@@ -53,31 +53,56 @@ class ChaptarrAuthorList extends StatelessWidget {
             padding: const EdgeInsets.only(right: 20),
             child: const Icon(Icons.delete, color: Colors.white),
           ),
-          confirmDismiss: (_) => _confirmDelete(context, author.authorName),
-          onDismissed: (_) => onDelete!(author),
+          confirmDismiss: (_) async {
+            final deleteFiles = await _confirmDelete(context, author.authorName);
+            if (deleteFiles == null) return false;
+            onDelete!(author, deleteFiles: deleteFiles);
+            return true;
+          },
           child: tile,
         );
       },
     );
   }
 
+  /// Delete confirmation with an "also delete files" choice (defaulted on).
+  /// Resolves to the delete-files flag, or null when cancelled.
   Future<bool?> _confirmDelete(BuildContext context, String name) {
+    var deleteFiles = true;
     return showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        title: const Text('Delete Author'),
-        content: Text('Remove "$name" from Chaptarr?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.error),
-            child: const Text('Delete'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: const Text('Delete Author'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Remove "$name" from Chaptarr?'),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: deleteFiles,
+                onChanged: (v) => setState(() => deleteFiles = v ?? false),
+                title: const Text('Also delete files from disk',
+                    style: TextStyle(fontSize: 14)),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                activeColor: AppTheme.error,
+              ),
+            ],
           ),
-        ],
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, deleteFiles),
+              style: TextButton.styleFrom(foregroundColor: AppTheme.error),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
       ),
     );
   }

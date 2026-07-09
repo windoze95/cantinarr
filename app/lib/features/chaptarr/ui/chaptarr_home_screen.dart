@@ -186,8 +186,8 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
                         authors: state.filtered,
                         onTap: _openAuthor,
                         onSearch: _triggerAutomaticSearch,
-                        onDelete: (author) => _notifier!
-                            .deleteAuthor(author.id, deleteFiles: false),
+                        onDelete: (author, {bool deleteFiles = true}) => _notifier!
+                            .deleteAuthor(author.id, deleteFiles: deleteFiles),
                       ),
                     ),
             ),
