@@ -37,6 +37,9 @@ type Config struct {
 	PushGatewayURL  string
 	PushAPIKey      string
 	PushEnrollToken string
+	// DisableUpdateCheck turns off the periodic GitHub release check that powers
+	// the admin "update available" banner (CANTINARR_DISABLE_UPDATE_CHECK).
+	DisableUpdateCheck bool
 }
 
 func Load() (*Config, error) {
@@ -59,6 +62,8 @@ func Load() (*Config, error) {
 		PushAPIKey:         os.Getenv("CANTINARR_PUSH_API_KEY"),
 		PushEnrollToken:    os.Getenv("CANTINARR_PUSH_ENROLL_TOKEN"),
 	}
+
+	cfg.DisableUpdateCheck = envBool(os.Getenv("CANTINARR_DISABLE_UPDATE_CHECK"))
 
 	if cfg.ServerName == "" {
 		cfg.ServerName = "Cantinarr"
@@ -110,6 +115,17 @@ func splitEnvList(value string) []string {
 		}
 	}
 	return result
+}
+
+// envBool parses a boolean environment variable. It accepts 1/true/yes/on
+// (case-insensitive) as true; everything else (including empty) is false.
+func envBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeAndroidFingerprints(values []string) ([]string, error) {

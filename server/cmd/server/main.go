@@ -30,8 +30,11 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
+	"github.com/windoze95/cantinarr-server/internal/serversettings"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
+	"github.com/windoze95/cantinarr-server/internal/update"
+	"github.com/windoze95/cantinarr-server/internal/version"
 	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
@@ -227,8 +230,13 @@ func main() {
 	// events and content pushes the queue-poll witness emits.
 	webhookHandler := webhooks.NewHandler(instanceStore, registry, wsHub, requestService, contentNotifier)
 
+	// Update checker (GitHub release comparison) + server settings (the
+	// admin-configured management-portal URL the update banner links to).
+	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
+	serverSettings := serversettings.NewService(database)
+
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService, updateChecker, serverSettings)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

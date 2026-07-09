@@ -55,8 +55,7 @@ class PlexGuideNotifier extends StateNotifier<bool> {
   }
 }
 
-final plexGuideEnabledProvider =
-    StateNotifierProvider<PlexGuideNotifier, bool>(
+final plexGuideEnabledProvider = StateNotifierProvider<PlexGuideNotifier, bool>(
   (ref) => PlexGuideNotifier(),
 );
 
@@ -85,4 +84,31 @@ class SetupReminderNotifier extends StateNotifier<bool> {
 final setupReminderEnabledProvider =
     StateNotifierProvider<SetupReminderNotifier, bool>(
   (ref) => SetupReminderNotifier(),
+);
+
+const _dismissedUpdateVersionKey = 'dismissed_update_version';
+
+/// The server version the admin last dismissed the "update available" banner
+/// for. Stored locally per device; the banner reappears once a newer version
+/// than this is offered, so a dismissal only silences the release it was for.
+class DismissedUpdateNotifier extends StateNotifier<String?> {
+  DismissedUpdateNotifier() : super(null) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getString(_dismissedUpdateVersionKey);
+  }
+
+  Future<void> set(String version) async {
+    state = version;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_dismissedUpdateVersionKey, version);
+  }
+}
+
+final dismissedUpdateVersionProvider =
+    StateNotifierProvider<DismissedUpdateNotifier, String?>(
+  (ref) => DismissedUpdateNotifier(),
 );

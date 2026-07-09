@@ -94,6 +94,7 @@ Optional env vars for deployment tuning (a `.env` file next to the binary is aut
 | `CANTINARR_ANDROID_PACKAGE_NAME` | `codes.julian.cantinarr` | Android package name for native passkeys |
 | `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Comma-separated Android signing cert SHA-256 fingerprints for `/.well-known/assetlinks.json` and Android WebAuthn origins |
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Additional WebAuthn origins to trust (e.g. non-standard HTTPS ports) |
+| `CANTINARR_DISABLE_UPDATE_CHECK` | unset | Set to `1` to disable the periodic GitHub release check behind the admin "update available" banner |
 
 The database lives at `/config/cantinarr.db` (SQLite, WAL mode). Keep the `/config` volume -- it holds the DB and the auto-generated encryption key, and encrypted secrets are unrecoverable without that key.
 
@@ -152,6 +153,13 @@ PUT    /api/admin/plex/settings            # server, shared libraries, auto-invi
 GET    /api/admin/setup-status             # live-derived checklist of configured/unconfigured features
 ```
 Re-derived from actual configuration on every request (never stored), so the app's setup wizard is resumable and can't go stale. New features surface themselves by adding an item here; clients render unknown keys generically.
+
+### Update status (admin)
+```
+GET    /api/admin/update-status            # latest-release comparison + management-portal URL
+PUT    /api/admin/update-status            # set the management-portal URL ({ management_url })
+```
+Backs the app's "update available" banner. The server compares its own build version against the latest published GitHub release (`windoze95/cantinarr`), cached ~12h, best-effort and non-blocking; only real semver-tagged builds check (dev/`latest`/PR builds never contact GitHub), and `CANTINARR_DISABLE_UPDATE_CHECK=1` turns it off. `management_url` is an optional admin-set link to a container-management portal the banner points at. The running version is also surfaced to all clients (for the About screen) in `/api/config` as `version`.
 
 ### Requests
 ```

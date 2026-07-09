@@ -480,6 +480,9 @@ class UserSummary {
 /// Server-provided configuration returned after authentication.
 class ServerConfig {
   final String serverName;
+
+  /// The running server version, from the `version` field of /api/config.
+  final String? serverVersion;
   final AvailableServices services;
   final List<ServiceInstance> instances;
 
@@ -491,6 +494,7 @@ class ServerConfig {
 
   const ServerConfig({
     required this.serverName,
+    this.serverVersion,
     required this.services,
     this.instances = const [],
     this.issuesEnabled = false,
@@ -505,6 +509,7 @@ class ServerConfig {
 
     return ServerConfig(
       serverName: json['server_name'] as String? ?? 'Cantinarr',
+      serverVersion: json['version'] as String?,
       services: AvailableServices.fromJson(
           json['services'] as Map<String, dynamic>? ?? {}),
       instances: instancesList,

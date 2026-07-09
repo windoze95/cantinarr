@@ -4,6 +4,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'core/network/websocket_client.dart';
 import 'core/providers/realtime_provider.dart';
 import 'core/storage/preferences.dart';
@@ -12,6 +13,7 @@ import 'features/auth/logic/auth_provider.dart';
 import 'features/issues/logic/issues_provider.dart';
 import 'features/notifications/push_service.dart';
 import 'features/request/logic/pending_approvals_provider.dart';
+import 'features/settings/logic/update_status_provider.dart';
 import 'navigation/app_router.dart';
 
 class CantinarrApp extends ConsumerStatefulWidget {
@@ -51,6 +53,8 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       ref.read(pendingApprovalsProvider.notifier).refresh();
       // Same for the open-issues badge.
       ref.read(openIssuesProvider.notifier).refresh();
+      // And re-check for a newer server release (no-op for non-admins).
+      ref.read(updateStatusProvider.notifier).refresh();
     }
   }
 
@@ -134,7 +138,8 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     final data = event.data;
     final approved = data['decision'] == 'approved';
     final rawTitle = (data['title'] as String?)?.trim();
-    final label = rawTitle == null || rawTitle.isEmpty ? 'Your request' : rawTitle;
+    final label =
+        rawTitle == null || rawTitle.isEmpty ? 'Your request' : rawTitle;
     final reason = (data['reason'] as String?)?.trim();
     final text = approved
         ? 'Approved: $label'
@@ -216,8 +221,9 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       debugShowCheckedModeBanner: false,
       scaffoldMessengerKey: _scaffoldMessengerKey,
       routerConfig: router,
-      builder: (context, child) =>
-          _ReconnectingBanner(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => _UpdateBanner(
+        child: _ReconnectingBanner(child: child ?? const SizedBox.shrink()),
+      ),
     );
   }
 }
@@ -318,6 +324,124 @@ class _ReconnectingBar extends StatelessWidget {
           Text(
             'Reconnecting…',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A persistent, admin-only banner shown at the top of the app when a newer
+/// Cantinarr release is available. Its action links to the admin's configured
+/// management portal (if set) or the update guide otherwise, and it is
+/// dismissible per release — dismissing silences only the offered version.
+class _UpdateBanner extends ConsumerWidget {
+  const _UpdateBanner({required this.child});
+
+  final Widget child;
+
+  static const _updateGuideUrl =
+      'https://github.com/windoze95/cantinarr/blob/main/docs/updating.md';
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isAdmin = ref.watch(
+      authProvider.select((s) => s.valueOrNull?.user?.isAdmin ?? false),
+    );
+    final status = ref.watch(updateStatusProvider);
+    final dismissed = ref.watch(dismissedUpdateVersionProvider);
+
+    final update = status?.update;
+    if (!isAdmin ||
+        update == null ||
+        !update.available ||
+        update.latest.isEmpty ||
+        dismissed == update.latest) {
+      return child;
+    }
+
+    return Column(
+      children: [
+        Material(
+          color: AppTheme.surfaceVariant,
+          child: SafeArea(
+            bottom: false,
+            child: _UpdateBannerBar(
+              latest: update.latest,
+              releaseUrl: update.url,
+              managementUrl: status?.managementUrl ?? '',
+              guideUrl: _updateGuideUrl,
+              onDismiss: () => ref
+                  .read(dismissedUpdateVersionProvider.notifier)
+                  .set(update.latest),
+            ),
+          ),
+        ),
+        Expanded(child: child),
+      ],
+    );
+  }
+}
+
+/// The update banner's visual content: a short message plus a "Notes" link, the
+/// primary update action, and a dismiss button.
+class _UpdateBannerBar extends StatelessWidget {
+  const _UpdateBannerBar({
+    required this.latest,
+    required this.releaseUrl,
+    required this.managementUrl,
+    required this.guideUrl,
+    required this.onDismiss,
+  });
+
+  final String latest;
+  final String releaseUrl;
+  final String managementUrl;
+  final String guideUrl;
+  final VoidCallback onDismiss;
+
+  void _open(String url) {
+    if (url.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPortal = managementUrl.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+      child: Row(
+        children: [
+          const Icon(Icons.system_update, size: 18, color: AppTheme.accent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Cantinarr $latest is available',
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (releaseUrl.isNotEmpty)
+            TextButton(
+              onPressed: () => _open(releaseUrl),
+              child: const Text('Notes'),
+            ),
+          TextButton(
+            onPressed: () => _open(hasPortal ? managementUrl : guideUrl),
+            child: Text(hasPortal ? 'Update' : 'How to update'),
+          ),
+          IconButton(
+            onPressed: onDismiss,
+            icon: const Icon(Icons.close, size: 18),
+            color: AppTheme.textSecondary,
+            tooltip: 'Dismiss',
+            visualDensity: VisualDensity.compact,
           ),
         ],
       ),

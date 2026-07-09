@@ -8,6 +8,7 @@ import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../logic/setup_status_provider.dart';
+import '../logic/update_status_provider.dart';
 import 'about_sheet.dart';
 
 /// Simplified settings screen for backend-connected architecture.
@@ -34,6 +35,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(authProvider.notifier).refreshUser();
       ref.read(setupStatusProvider.notifier).refresh();
+      ref.read(updateStatusProvider.notifier).refresh();
     });
   }
 
@@ -45,6 +47,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final user = auth?.user;
     final instances = connection?.instances ?? [];
     final setupStatus = ref.watch(setupStatusProvider);
+    final updateStatus = ref.watch(updateStatusProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -227,6 +230,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               subtitle: 'Manage all connected devices',
               onTap: () => context.push('/settings/devices'),
             ),
+            _SettingsTile(
+              icon: Icons.open_in_new,
+              title: 'Update Portal',
+              subtitle: (updateStatus?.managementUrl.isNotEmpty ?? false)
+                  ? updateStatus!.managementUrl
+                  : 'Link your container manager for the update banner',
+              onTap: () => _showManagementUrlDialog(
+                context,
+                updateStatus?.managementUrl ?? '',
+              ),
+            ),
           ],
 
           const SizedBox(height: 16),
@@ -395,6 +409,78 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 icon: const Icon(Icons.copy, size: 18),
                 label: const Text('Copy'),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showManagementUrlDialog(BuildContext context, String current) {
+    final controller = TextEditingController(text: current);
+    bool saving = false;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Update Portal'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Optional. When set, the "update available" banner links here so '
+                'you can apply the update in your own container manager (e.g. an '
+                'Unraid Docker page or Portainer). Leave blank to clear.',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                decoration: const InputDecoration(
+                  labelText: 'Portal URL',
+                  hintText: 'http://tower.local/Docker',
+                  prefixIcon: Icon(Icons.open_in_new),
+                ),
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                textInputAction: TextInputAction.done,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      setDialogState(() => saving = true);
+                      try {
+                        await ref
+                            .read(updateStatusProvider.notifier)
+                            .setManagementUrl(controller.text.trim());
+                        if (dialogContext.mounted) {
+                          Navigator.of(dialogContext).pop();
+                        }
+                      } catch (e) {
+                        setDialogState(() => saving = false);
+                        if (dialogContext.mounted) {
+                          ScaffoldMessenger.of(dialogContext).showSnackBar(
+                            SnackBar(content: Text('Failed to save: $e')),
+                          );
+                        }
+                      }
+                    },
+              child: saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save'),
+            ),
           ],
         ),
       ),

@@ -195,12 +195,13 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         accessToken: accessToken,
         refreshToken: refreshToken,
         serverName: meta['server_name'] as String?,
+        serverVersion: meta['version'] as String?,
         services: services is Map<String, dynamic>
             ? AvailableServices.fromJson(services)
             : const AvailableServices(),
         instances: (meta['instances'] as List<dynamic>?)
-                ?.map((e) =>
-                    ServiceInstance.fromJson(e as Map<String, dynamic>))
+                ?.map(
+                    (e) => ServiceInstance.fromJson(e as Map<String, dynamic>))
                 .toList() ??
             const [],
         issuesEnabled: meta['issues_enabled'] as bool? ?? false,
@@ -273,6 +274,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           accessToken: authResp.accessToken,
           refreshToken: authResp.refreshToken,
           serverName: config.serverName,
+          serverVersion: config.serverVersion,
           services: config.services,
           instances: config.instances,
           issuesEnabled: config.issuesEnabled,
@@ -351,6 +353,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         accessToken: authResp.accessToken,
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
+        serverVersion: config.serverVersion,
         services: config.services,
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
@@ -446,6 +449,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         accessToken: authResp.accessToken,
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
+        serverVersion: config.serverVersion,
         services: config.services,
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
@@ -496,6 +500,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         accessToken: authResp.accessToken,
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
+        serverVersion: config.serverVersion,
         services: config.services,
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
@@ -541,6 +546,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         accessToken: authResp.accessToken,
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
+        serverVersion: config.serverVersion,
         services: config.services,
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
@@ -580,6 +586,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         await _authService.fetchConfig(conn.serverUrl, conn.accessToken);
     final updatedConn = conn.copyWith(
       serverName: config.serverName,
+      serverVersion: config.serverVersion,
       services: config.services,
       instances: config.instances,
       issuesEnabled: config.issuesEnabled,
@@ -782,6 +789,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         accessToken: authResp.accessToken,
         refreshToken: authResp.refreshToken,
         serverName: config.serverName,
+        serverVersion: config.serverVersion,
         services: config.services,
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
@@ -833,8 +841,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     // A successful refresh means we reached the server — clear any reconnecting
     // hold and stop the retry loop.
     _stopReconnect();
-    state = AsyncData(
-        current.copyWith(connection: updated, isReconnecting: false));
+    state =
+        AsyncData(current.copyWith(connection: updated, isReconnecting: false));
   }
 
   /// Called when the server has *rejected* our refresh token (a genuine 401):
@@ -907,14 +915,14 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   /// Cache the non-secret parts of an authenticated session (user profile +
   /// server config) so a later cold start can restore an optimistic, usable
   /// session before the server is reachable. Tokens are stored separately.
-  Future<void> _persistSession(
-      BackendConnection conn, UserProfile user) async {
+  Future<void> _persistSession(BackendConnection conn, UserProfile user) async {
     await _storage.write(
         key: StorageKeys.sessionUser, value: jsonEncode(user.toJson()));
     await _storage.write(
       key: StorageKeys.sessionConnection,
       value: jsonEncode({
         'server_name': conn.serverName,
+        'version': conn.serverVersion,
         'services': conn.services.toJson(),
         'instances': conn.instances.map((i) => i.toJson()).toList(),
         'issues_enabled': conn.issuesEnabled,

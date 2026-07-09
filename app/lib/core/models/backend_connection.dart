@@ -34,6 +34,9 @@ class BackendConnection {
   final String accessToken;
   final String refreshToken;
   final String? serverName;
+
+  /// The running server version, reported by /api/config.
+  final String? serverVersion;
   final AvailableServices services;
   final List<ServiceInstance> instances;
 
@@ -48,6 +51,7 @@ class BackendConnection {
     required this.accessToken,
     required this.refreshToken,
     this.serverName,
+    this.serverVersion,
     this.services = const AvailableServices(),
     this.instances = const [],
     this.issuesEnabled = false,
@@ -59,6 +63,7 @@ class BackendConnection {
     String? accessToken,
     String? refreshToken,
     String? serverName,
+    String? serverVersion,
     AvailableServices? services,
     List<ServiceInstance>? instances,
     bool? issuesEnabled,
@@ -69,6 +74,7 @@ class BackendConnection {
         accessToken: accessToken ?? this.accessToken,
         refreshToken: refreshToken ?? this.refreshToken,
         serverName: serverName ?? this.serverName,
+        serverVersion: serverVersion ?? this.serverVersion,
         services: services ?? this.services,
         instances: instances ?? this.instances,
         issuesEnabled: issuesEnabled ?? this.issuesEnabled,
