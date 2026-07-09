@@ -78,6 +78,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 ### Issues & AI remediation
 - **Report a problem** -- on any available title (admin-toggleable), scoped to a movie, series, or season; category chips plus free text.
 - **Issue threads** -- a chat-style thread per issue where the reporter, admins, and the AI agent converse; the agent's questions flip the issue to "Needs your reply".
+- **Read/unread** -- the admin list flags unread issues with a dot: new issues and any non-admin status change (agent/system/reporter) show as unread, and opening the thread marks it read. Admin-toggleable "mark resolved issues as read" keeps a cleanly resolved issue from re-flagging.
 - **Agent fixes** -- proposed mutations render as safety-critical approval cards (typed summaries, quoted parameters, rationale as passive text); admins approve or deny inline or from a grouped queue, and every run has a read-only audit timeline with step ledger and cost.
 - **Live badges** -- Approvals / Issues / Agent fixes counts in the drawer, kept current over WebSocket. A **Plex invites** entry appears (with count) only while someone is waiting on a Plex invite -- the persistent surface behind the miss-able push -- and lands on the Users screen, where waiting users carry a "Needs Plex invite" tag. A **Setup checklist** entry (with unconfigured-feature count) appears for admins until everything is configured or they mute it from the checklist.
 
@@ -99,7 +100,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 - **Devices** (admin) -- every connected device with hardware model, last-seen, "This device" badge, and revoke.
 - **Credentials** (admin, write-only) -- TMDB, Trakt, and AI provider keys + provider/model selection.
 - **AI tools** (admin) -- per-tool toggles for chat + MCP, and a one-hour debug-logging switch.
-- **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, autonomy tier, provider/model, and run budgets.
+- **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, mark-resolved-issues-as-read, autonomy tier, provider/model, and run budgets.
 - **Update Portal** (admin) -- optional link to your own container-management portal (e.g. an Unraid or Portainer page). When the server sees a newer published release, an admin-only banner appears app-wide and links here (or to the update guide when unset); it's dismissible per release. The About sheet also shows the running server version.
 - **Notifications, Passkeys, Password** -- self-service (passkey/password screens appear when admin-enabled).
 - **Watch on Plex guide** -- requester-focused walkthrough (install the Plex app, sign in, accept the invite, start watching) with a **Request your invite** step: the user shares their Plex email, admins get a push pointing at the Users screen, and once the invite goes out (one-tap or auto) the card flips to "check your inbox" and the user gets a push. Hideable from the guide itself or via a Settings toggle that also removes it from the menu.

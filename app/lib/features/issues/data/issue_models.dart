@@ -83,6 +83,10 @@ class Issue {
   final int episodeNumber; // 0 = whole season / movie
   final String detail; // UNTRUSTED free text — render passively
   final int occurrences;
+
+  /// Whether an admin has seen the issue's current state. Any non-admin status
+  /// change re-flags it unread; an admin opening the thread marks it read.
+  final bool read;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -100,6 +104,7 @@ class Issue {
     required this.episodeNumber,
     required this.detail,
     required this.occurrences,
+    required this.read,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -138,6 +143,9 @@ class Issue {
         episodeNumber: json['episode_number'] as int? ?? 0,
         detail: json['detail'] as String? ?? '',
         occurrences: json['occurrences'] as int? ?? 1,
+        // Default true so an older server that omits the field doesn't paint the
+        // whole list unread.
+        read: json['read'] as bool? ?? true,
         createdAt:
             DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
         updatedAt:
@@ -236,6 +244,10 @@ class RemediationSettings {
   final bool enabled;
   final bool autoDispatch;
   final bool allowReporting;
+
+  /// When on, an issue that transitions to resolved is marked read (overriding
+  /// the flip-to-unread that any non-admin status change otherwise triggers).
+  final bool markResolvedAsRead;
   final RemediationAutonomy autonomy;
 
   /// AI provider override (e.g. "anthropic", "openai"). Empty means "use the
@@ -257,6 +269,7 @@ class RemediationSettings {
     required this.enabled,
     required this.autoDispatch,
     required this.allowReporting,
+    required this.markResolvedAsRead,
     required this.autonomy,
     required this.provider,
     required this.model,
@@ -274,6 +287,8 @@ class RemediationSettings {
         enabled: json['enabled'] as bool? ?? false,
         autoDispatch: json['auto_dispatch'] as bool? ?? false,
         allowReporting: json['allow_reporting'] as bool? ?? false,
+        // Default true to match the server default when the field is absent.
+        markResolvedAsRead: json['mark_resolved_as_read'] as bool? ?? true,
         autonomy: RemediationAutonomy.fromValue(json['autonomy'] as String?),
         provider: json['provider'] as String? ?? '',
         model: json['model'] as String? ?? '',
@@ -290,6 +305,7 @@ class RemediationSettings {
         'enabled': enabled,
         'auto_dispatch': autoDispatch,
         'allow_reporting': allowReporting,
+        'mark_resolved_as_read': markResolvedAsRead,
         'autonomy': autonomy.value,
         'provider': provider,
         'model': model,
@@ -306,6 +322,7 @@ class RemediationSettings {
     bool? enabled,
     bool? autoDispatch,
     bool? allowReporting,
+    bool? markResolvedAsRead,
     RemediationAutonomy? autonomy,
     String? provider,
     String? model,
@@ -321,6 +338,7 @@ class RemediationSettings {
         enabled: enabled ?? this.enabled,
         autoDispatch: autoDispatch ?? this.autoDispatch,
         allowReporting: allowReporting ?? this.allowReporting,
+        markResolvedAsRead: markResolvedAsRead ?? this.markResolvedAsRead,
         autonomy: autonomy ?? this.autonomy,
         provider: provider ?? this.provider,
         model: model ?? this.model,

@@ -76,6 +76,14 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An admin opening the thread marks the issue read (clears the unread dot);
+	// the reporter viewing their own issue must NOT. Reflect it in this payload
+	// too so the caller sees the new state immediately.
+	if auth.HasPermission(claims.Role, auth.PermissionRemediationManage) {
+		_ = h.service.MarkIssueRead(id)
+		issue.Read = true
+	}
+
 	thread, err := h.service.IssueThread(id)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

@@ -44,10 +44,18 @@ func (s *Service) ConcludeIssue(ctx context.Context, issueID int64, status, reso
 	if status != IssueResolved && status != IssueWontFix {
 		status = IssueWontFix
 	}
+	// A conclude is always a non-admin (agent/system) status change, so it flips
+	// the issue back to unread — UNLESS it resolved and the admin opted to
+	// "mark resolved issues as read", which overrides the flip so a clean
+	// resolution doesn't nag the admin.
+	read := 0
+	if status == IssueResolved && s.Settings().MarkResolvedAsRead {
+		read = 1
+	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE issues SET status = ?, resolution = ?, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		`UPDATE issues SET status = ?, resolution = ?, read = ?, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND closed_at IS NULL`,
-		status, resolution, issueID,
+		status, resolution, read, issueID,
 	)
 	if err != nil {
 		return fmt.Errorf("conclude issue: %w", err)

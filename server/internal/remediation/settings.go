@@ -35,6 +35,7 @@ type Settings struct {
 	Enabled                bool   `json:"enabled"`                   // master switch — ships OFF
 	AutoDispatch           bool   `json:"auto_dispatch"`             // poller may open auto issues — ships OFF
 	AllowReporting         bool   `json:"allow_reporting"`           // user-visible "Report a problem" affordance
+	MarkResolvedAsRead     bool   `json:"mark_resolved_as_read"`     // mark an issue read when it resolves (default ON)
 	Autonomy               string `json:"autonomy"`                  // investigate_only | propose | auto_safe
 	Provider               string `json:"provider"`                  // "" = inherit the configured AI provider
 	Model                  string `json:"model"`                     // "" = inherit the configured AI model
@@ -57,6 +58,7 @@ func Defaults() Settings {
 		Enabled:                false,
 		AutoDispatch:           false,
 		AllowReporting:         true,
+		MarkResolvedAsRead:     true,
 		Autonomy:               AutonomyPropose,
 		Provider:               "",
 		Model:                  "",

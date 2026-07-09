@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS issues (
     detail TEXT NOT NULL DEFAULT '',            -- user free-text reason OR doctor diagnosis summary (UNTRUSTED)
     dedupe_key TEXT,                           -- stable idempotency key (auto); NULL allowed (user reports)
     occurrences INTEGER NOT NULL DEFAULT 1,     -- bumped when a duplicate signal/report attaches
+    read INTEGER NOT NULL DEFAULT 0,            -- admin read/unread flag; any non-admin status change re-flags unread, an admin viewing marks read
     active_run_id INTEGER,                      -- CAS claim: at most one running run per issue
     resolution TEXT,                           -- short closing note on a terminal state
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -397,6 +398,16 @@ func Open(dbPath string) (*sql.DB, error) {
 		// stamp records that it went out and the user is told to check email.
 		{alter: "ALTER TABLE users ADD COLUMN plex_invited_at DATETIME"},
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN plex_invite_sent INTEGER NOT NULL DEFAULT 1"},
+		{
+			// AI remediation: per-issue admin read/unread flag. New issues start
+			// unread (default 0); a non-admin status change re-flags unread, an
+			// admin viewing the thread marks read. Backfill the pre-existing
+			// backlog to read so it isn't a wall of unread on upgrade.
+			alter: "ALTER TABLE issues ADD COLUMN read INTEGER NOT NULL DEFAULT 0",
+			backfill: []string{
+				"UPDATE issues SET read = 1",
+			},
+		},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {

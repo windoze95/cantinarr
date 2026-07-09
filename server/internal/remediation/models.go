@@ -95,6 +95,7 @@ type Issue struct {
 	EpisodeNumber int       `json:"episode_number"` // 0 = whole season / movie
 	Detail        string    `json:"detail"`         // UNTRUSTED free text
 	Occurrences   int       `json:"occurrences"`
+	Read          bool      `json:"read"` // admin has seen the current state; any non-admin status change re-flags unread
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

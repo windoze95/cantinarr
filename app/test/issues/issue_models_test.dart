@@ -48,6 +48,16 @@ void main() {
       expect(tv.id, 7);
       expect(tv.category, IssueCategory.wrongAudio);
       expect(tv.scopeLabel, 'S2·E4');
+      expect(tv.read, isTrue); // absent 'read' defaults true (older server)
+
+      final unread = Issue.fromJson({
+        'id': 11,
+        'media_type': 'movie',
+        'status': 'open',
+        'tmdb_id': 1,
+        'read': false,
+      });
+      expect(unread.read, isFalse); // explicit false parses through
 
       final movie = Issue.fromJson({
         'id': 8,
@@ -87,6 +97,7 @@ void main() {
         enabled: true,
         autoDispatch: false,
         allowReporting: true,
+        markResolvedAsRead: false,
         autonomy: RemediationAutonomy.propose,
         provider: 'openai',
         model: 'gpt-5',
@@ -103,6 +114,7 @@ void main() {
       expect(back.model, 'gpt-5');
       expect(back.autonomy, RemediationAutonomy.propose);
       expect(back.maxCostMicros, 500000);
+      expect(back.markResolvedAsRead, isFalse); // explicit false round-trips
     });
 
     test('blank provider/model means "inherit server default"', () {
@@ -110,6 +122,7 @@ void main() {
       expect(s.provider, '');
       expect(s.model, '');
       expect(s.autonomy, RemediationAutonomy.propose); // tolerant default
+      expect(s.markResolvedAsRead, isTrue); // defaults on when absent
     });
   });
 }
