@@ -279,7 +279,7 @@ func (s *Service) GetIssue(issueID int64) (*Issue, error) {
 	row := s.db.QueryRow(
 		`SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
 		        i.tmdb_id, i.media_type, i.title, i.season_number, i.episode_number,
-		        i.detail, i.occurrences, i.created_at, i.updated_at
+		        i.detail, i.occurrences, i.read, i.created_at, i.updated_at
 		 FROM issues i LEFT JOIN users u ON u.id = i.reporter_id
 		 WHERE i.id = ?`,
 		issueID,
@@ -370,6 +370,12 @@ func (s *Service) PostReply(issueID int64, authorKind string, authorID int64, bo
 	// to the run keyed to the ask tool_use, then enqueue the resume. (Defined in
 	// approvals.go alongside the W3 approval-resume helper, which it mirrors.)
 	if status == IssueAwaitingUser && (authorKind == AuthorUser || authorKind == AuthorAdmin) {
+		// A reporter's reply resumes the agent — a non-admin status change — so the
+		// issue flips back to unread for admins. An admin replying is an admin
+		// action (resumeOnReporterReply serves both), so it must NOT re-flag unread.
+		if authorKind == AuthorUser {
+			s.db.Exec("UPDATE issues SET read = 0 WHERE id = ?", issueID)
+		}
 		s.resumeOnReporterReply(issueID, body)
 	}
 	return nil
@@ -441,7 +447,7 @@ func (s *Service) SweepStaleAwaitingUser(ctx context.Context, maxWaitHours int) 
 func (s *Service) ListIssues(status string) ([]Issue, error) {
 	query := `SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
 	                 i.tmdb_id, i.media_type, i.title, i.season_number, i.episode_number,
-	                 i.detail, i.occurrences, i.created_at, i.updated_at
+	                 i.detail, i.occurrences, i.read, i.created_at, i.updated_at
 	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id`
 	var (
 		rows *sql.Rows
@@ -469,10 +475,12 @@ func (s *Service) ListIssues(status string) ([]Issue, error) {
 }
 
 // DismissIssue marks an open (non-terminal) issue dismissed and closes it. The
-// CAS on closed_at IS NULL makes a double-dismiss a no-op.
+// CAS on closed_at IS NULL makes a double-dismiss a no-op. Dismissal is an admin
+// action, so the issue is also marked read (an admin status change never re-flags
+// it unread).
 func (s *Service) DismissIssue(issueID int64) error {
 	res, err := s.db.Exec(
-		"UPDATE issues SET status = ?, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND closed_at IS NULL",
+		"UPDATE issues SET status = ?, read = 1, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND closed_at IS NULL",
 		IssueDismissed, issueID,
 	)
 	if err != nil {
@@ -485,6 +493,18 @@ func (s *Service) DismissIssue(issueID int64) error {
 		if qerr := s.db.QueryRow("SELECT 1 FROM issues WHERE id = ?", issueID).Scan(&exists); qerr == sql.ErrNoRows {
 			return fmt.Errorf("issue not found")
 		}
+	}
+	return nil
+}
+
+// MarkIssueRead clears the admin unread flag on an issue. It is a side effect of
+// an admin opening the issue thread (the Get handler calls it); a reporter
+// viewing their own issue does not mark it read. It deliberately leaves
+// updated_at untouched so "read" never re-sorts the issue as recently active.
+// Idempotent, and a harmless no-op for a nonexistent issue.
+func (s *Service) MarkIssueRead(issueID int64) error {
+	if _, err := s.db.Exec("UPDATE issues SET read = 1 WHERE id = ?", issueID); err != nil {
+		return fmt.Errorf("mark issue read: %w", err)
 	}
 	return nil
 }
@@ -517,7 +537,7 @@ func scanIssue(row rowScanner) (*Issue, error) {
 	if err := row.Scan(
 		&iss.ID, &iss.Source, &iss.Status, &category, &reporterID, &reporter,
 		&iss.TmdbID, &iss.MediaType, &iss.Title, &iss.SeasonNumber, &iss.EpisodeNumber,
-		&iss.Detail, &iss.Occurrences, &iss.CreatedAt, &iss.UpdatedAt,
+		&iss.Detail, &iss.Occurrences, &iss.Read, &iss.CreatedAt, &iss.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}

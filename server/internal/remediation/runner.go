@@ -553,7 +553,9 @@ func (r *Runner) parkWith(issueID, runID int64, runStatus, stopReason, issueStat
 		log.Printf("remediation: park run %d (%s): %v", runID, runStatus, err)
 	}
 	if _, err := r.db.Exec(
-		"UPDATE issues SET status = ?, active_run_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND closed_at IS NULL",
+		// Parking for a human gate (awaiting_approval / awaiting_user) is an agent
+		// status change, so it flips the issue to unread for admins.
+		"UPDATE issues SET status = ?, read = 0, active_run_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND closed_at IS NULL",
 		issueStatus, issueID,
 	); err != nil {
 		log.Printf("remediation: park issue %d (%s): %v", issueID, issueStatus, err)
@@ -645,7 +647,10 @@ func (r *Runner) claim(issueID int64, model string) (runID int64, claimed bool, 
 	}
 
 	cas, err := r.db.Exec(
-		"UPDATE issues SET status = ?, active_run_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND active_run_id IS NULL AND closed_at IS NULL",
+		// A fresh claim moves the issue to investigating — a non-admin (agent)
+		// status change — so it flips to unread. (Resume's re-claim deliberately
+		// does NOT touch read: it may be reached from an admin approve/deny.)
+		"UPDATE issues SET status = ?, read = 0, active_run_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND active_run_id IS NULL AND closed_at IS NULL",
 		IssueInvestigating, runID, issueID,
 	)
 	if err != nil {

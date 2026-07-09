@@ -191,6 +191,22 @@ class _AiRemediationSettingsScreenState
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
+        SwitchListTile(
+          value: s.markResolvedAsRead,
+          activeThumbColor: AppTheme.accent,
+          onChanged: (v) =>
+              setState(() => _edited = s.copyWith(markResolvedAsRead: v)),
+          title: const Text(
+            'Mark resolved issues as read',
+            style: TextStyle(
+                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+          ),
+          subtitle: const Text(
+            'Clear the unread dot when an issue resolves, instead of re-flagging '
+            'it for another look.',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
+        ),
         ListTile(
           title: const Text(
             'Autonomy',

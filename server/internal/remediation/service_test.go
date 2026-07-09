@@ -235,6 +235,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if d.Enabled || d.AutoDispatch || !d.AllowReporting {
 		t.Fatalf("default switches = %+v, want enabled=false auto_dispatch=false allow_reporting=true", d)
 	}
+	if !d.MarkResolvedAsRead {
+		t.Fatalf("default mark_resolved_as_read = false, want true (resolved issues marked read by default)")
+	}
 	if d.Autonomy != AutonomyPropose {
 		t.Fatalf("default autonomy = %q, want propose", d.Autonomy)
 	}
@@ -253,6 +256,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 		Enabled:                true,
 		AutoDispatch:           true,
 		AllowReporting:         false,
+		MarkResolvedAsRead:     false, // explicit false must override the true default and round-trip
 		Autonomy:               AutonomyInvestigateOnly,
 		Provider:               "openai",
 		Model:                  "gpt-x",

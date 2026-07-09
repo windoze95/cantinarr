@@ -182,12 +182,12 @@ Request statuses: `unavailable`, `requested`, `pending` (awaiting approval), `de
 ### Issues & AI remediation
 ```
 POST   /api/issues                         # user: report a problem (gated by allow_reporting)
-GET    /api/issues/{id}                    # reporter or admin: issue thread
+GET    /api/issues/{id}                    # reporter or admin: issue thread (an admin viewing marks it read)
 POST   /api/issues/{id}/reply              # reporter or admin: reply (answers agent questions)
-GET    /api/admin/issues?status=           # admin: issue queue (user-reported + auto-detected)
+GET    /api/admin/issues?status=           # admin: issue queue (user-reported + auto-detected; each row carries read/unread)
 POST   /api/admin/issues/{id}/dismiss      # admin
 GET|PUT /api/admin/remediation-settings    # admin: master switch, auto-dispatch, reporting,
-                                           #   autonomy tier, provider/model, run budgets
+                                           #   mark-resolved-as-read, autonomy tier, provider/model, run budgets
 GET    /api/admin/agent-actions?status=    # admin: proposed-fix approval queue
 POST   /api/admin/agent-actions/{id}/approve   # admin: executes the stored proposal exactly once
 POST   /api/admin/agent-actions/{id}/deny      # admin: denial resumes the investigation
@@ -331,6 +331,8 @@ The issue system turns "my episode won't download" into a supervised agent workf
 5. **Audit** -- every run persists its full step ledger (`agent_runs`/`agent_steps`) with token counts and cost, viewable from the app.
 
 Auto-dispatch has a circuit breaker: repeated agent give-ups disable it and notify admins. Issue statuses: `open`, `investigating`, `awaiting_user`, `awaiting_approval`, `resolved`, `wont_fix`, `failed`, `dismissed`.
+
+Each issue also carries an admin **read/unread** flag: new issues start unread, any non-admin (agent/system/reporter) status change re-flags it unread, and an admin opening the thread (or dismissing it) marks it read. The `mark_resolved_as_read` setting (default on) keeps a cleanly resolved issue read instead of re-flagging it. The drawer's Issues badge still counts *open* issues, not unread ones.
 
 ### Import Doctor
 

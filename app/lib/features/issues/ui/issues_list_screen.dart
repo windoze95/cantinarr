@@ -139,11 +139,23 @@ class _IssueTile extends StatelessWidget {
     final category = issue.category;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      // Unread affordance: a small filled accent dot. The slot is reserved in
+      // both states (transparent when read) so titles stay aligned across rows.
+      leading: Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(
+          color: issue.read ? Colors.transparent : AppTheme.accent,
+          shape: BoxShape.circle,
+        ),
+      ),
+      minLeadingWidth: 8,
+      horizontalTitleGap: 12,
       title: Text(
         issue.title.isEmpty ? 'Issue #${issue.id}' : issue.title,
-        style: const TextStyle(
+        style: TextStyle(
           color: AppTheme.textPrimary,
-          fontWeight: FontWeight.bold,
+          fontWeight: issue.read ? FontWeight.w600 : FontWeight.w800,
         ),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
