@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
@@ -14,11 +15,16 @@ import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../issues/ui/report_problem_sheet.dart';
+import '../../radarr/data/radarr_api_service.dart';
+import '../../radarr/ui/radarr_movie_detail_screen.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/request_provider.dart';
 import '../../request/ui/request_button.dart';
 import '../../request/ui/request_options_sheet.dart';
 import '../../request/ui/request_status_sheet.dart';
+import '../../sonarr/data/sonarr_api_service.dart';
+import '../../sonarr/ui/sonarr_series_detail_screen.dart';
+import '../logic/arr_deep_link.dart';
 import '../logic/media_detail_provider.dart';
 import 'season_table.dart';
 
@@ -52,6 +58,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// silent no-op.
   RequestOptions? _requestOptions;
 
+  /// For admins, a resolved deep link into the backing *arr (Radarr for movies,
+  /// Sonarr for TV) when this title actually exists there. Null while loading,
+  /// for non-admins, or when the title has no destination in the arr yet — the
+  /// "Open in …" affordance is shown only when this is non-null.
+  ArrDeepLink? _arrLink;
+
   @override
   void initState() {
     super.initState();
@@ -68,7 +80,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       mediaType: widget.mediaType,
     );
 
-    _detailNotifier.load();
+    // Resolve the arr deep link once the TMDB detail is in — Sonarr matching
+    // needs the show's TVDB id, which only lands after the detail loads.
+    _detailNotifier.load().then((_) {
+      if (mounted) _resolveArrLink();
+    });
     _requestNotifier.checkStatus();
     if (widget.mediaType == MediaType.tv) {
       _requestNotifier.fetchOptions().then((opts) {
@@ -94,6 +110,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         _requestNotifier.checkStatus();
       }
     });
+    // A request just added the title to the arr (main or per-season request
+    // both bump this tick) — re-check so the admin "Open in …" link appears.
+    ref.listen(libraryRefreshTickProvider, (_, __) => _resolveArrLink());
+    // Resolve (or re-resolve) the admin link once auth settles — covers auth
+    // landing after the initial detail load (e.g. an optimistic reconnect).
+    ref.listen(authProvider, (_, __) => _resolveArrLink());
     return ListenableBuilder(
       listenable: _detailNotifier,
       builder: (context, _) {
@@ -215,6 +237,32 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                               );
                             },
                           ),
+
+                          // Admin-only jump into the backing *arr, shown only
+                          // when this title actually exists there (Radarr for
+                          // movies, Sonarr for TV). Non-admins never resolve a
+                          // link, so this stays hidden for them.
+                          if (_arrLink != null) ...[
+                            const SizedBox(height: 12),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              child: OutlinedButton.icon(
+                                onPressed: _openInArr,
+                                icon: const Icon(Icons.open_in_new, size: 18),
+                                label:
+                                    Text('Open in ${_arrLink!.moduleLabel}'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppTheme.textPrimary,
+                                  side:
+                                      const BorderSide(color: AppTheme.border),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 16),
 
                           // Genres
@@ -456,6 +504,81 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// the next search.
   void _bumpLibraryRefresh() {
     ref.read(libraryRefreshTickProvider.notifier).state++;
+  }
+
+  /// For admins, resolve whether this title already exists in the backing arr
+  /// (Radarr for movies, Sonarr for TV) and, when it does, capture the matched
+  /// library object + instance id so the "Open in …" affordance can push the
+  /// arr detail screen. Runs on load and again after a request (via
+  /// [libraryRefreshTickProvider]). Non-admins never resolve a link, and any
+  /// fetch error leaves the current link untouched (quietly hidden) rather than
+  /// surfacing — the affordance appears only when there's a real destination.
+  Future<void> _resolveArrLink() async {
+    final isAdmin = ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    if (!isAdmin) return;
+
+    final backendDio = ref.read(backendClientProvider);
+    final instances = ref.read(instanceProvider);
+    final connection = ref.read(authProvider).valueOrNull?.connection;
+
+    try {
+      if (widget.mediaType == MediaType.movie) {
+        final instanceId = instances.activeRadarrInstance?.id ??
+            connection?.defaultRadarrInstance?.id;
+        if (instanceId == null) return;
+        final movies = await RadarrApiService(
+          backendDio: backendDio,
+          instanceId: instanceId,
+        ).getMovies();
+        if (!mounted) return;
+        final match = matchRadarrMovie(movies, widget.id);
+        setState(() => _arrLink = match == null
+            ? null
+            : ArrDeepLink(instanceId: instanceId, movie: match));
+      } else {
+        final instanceId = instances.activeSonarrInstance?.id ??
+            connection?.defaultSonarrInstance?.id;
+        if (instanceId == null) return;
+        final series = await SonarrApiService(
+          backendDio: backendDio,
+          instanceId: instanceId,
+        ).getSeries();
+        if (!mounted) return;
+        final match = matchSonarrSeries(
+          series,
+          tvdbId: _detailNotifier.state.tvDetail?.externalIds?.tvdbId,
+          title: _detailNotifier.state.title,
+        );
+        setState(() => _arrLink = match == null
+            ? null
+            : ArrDeepLink(instanceId: instanceId, series: match));
+      }
+    } catch (_) {
+      // Leave any existing link as-is; a transient fetch failure shouldn't
+      // yank a working affordance.
+    }
+  }
+
+  /// Pushes the matched arr detail screen (movie → Radarr, TV → Sonarr) over
+  /// the root navigator, mirroring how the arr home screens open an item.
+  void _openInArr() {
+    final link = _arrLink;
+    if (link == null) return;
+    final movie = link.movie;
+    final series = link.series;
+    final Widget screen;
+    if (movie != null) {
+      screen =
+          RadarrMovieDetailScreen(instanceId: link.instanceId, movie: movie);
+    } else if (series != null) {
+      screen =
+          SonarrSeriesDetailScreen(instanceId: link.instanceId, series: series);
+    } else {
+      return;
+    }
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(builder: (_) => screen),
+    );
   }
 
   /// Reporting is offered only once the title is at least partially in the
