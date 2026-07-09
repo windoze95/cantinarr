@@ -22,7 +22,10 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
+	"github.com/windoze95/cantinarr-server/internal/serversettings"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
+	"github.com/windoze95/cantinarr-server/internal/update"
+	"github.com/windoze95/cantinarr-server/internal/version"
 	"github.com/windoze95/cantinarr-server/internal/web"
 	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
@@ -50,6 +53,8 @@ func NewRouter(
 	webhookHandler *webhooks.Handler,
 	plexHandler *plex.Handler,
 	plexService *plex.Service,
+	updateChecker *update.Checker,
+	serverSettings *serversettings.Service,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -152,6 +157,12 @@ func NewRouter(
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, plexService))
+
+			// Update availability + the admin-configured management-portal URL that
+			// backs the "update available" banner. GET returns both; PUT sets the
+			// management URL.
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/update-status", updateStatusHandler(updateChecker, serverSettings))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/update-status", updateServerSettingsHandler(updateChecker, serverSettings))
 
 			// Plex integration: link the admin's Plex account (PIN flow), pick
 			// the server/libraries invites share, and send one-tap invites for
@@ -493,6 +504,7 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"server_name":     cfg.ServerName,
+			"version":         version.Version,
 			"services":        services,
 			"instances":       instances,
 			"issues_enabled":  remSettings.Enabled,

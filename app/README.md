@@ -99,6 +99,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 - **Credentials** (admin, write-only) -- TMDB, Trakt, and AI provider keys + provider/model selection.
 - **AI tools** (admin) -- per-tool toggles for chat + MCP, and a one-hour debug-logging switch.
 - **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, autonomy tier, provider/model, and run budgets.
+- **Update Portal** (admin) -- optional link to your own container-management portal (e.g. an Unraid or Portainer page). When the server sees a newer published release, an admin-only banner appears app-wide and links here (or to the update guide when unset); it's dismissible per release. The About sheet also shows the running server version.
 - **Notifications, Passkeys, Password** -- self-service (passkey/password screens appear when admin-enabled).
 - **Watch on Plex guide** -- requester-focused walkthrough (install the Plex app, sign in, accept the invite, start watching) with a **Request your invite** step: the user shares their Plex email, admins get a push pointing at the Users screen, and once the invite goes out (one-tap or auto) the card flips to "check your inbox" and the user gets a push. Hideable from the guide itself or via a Settings toggle that also removes it from the menu.
 

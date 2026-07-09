@@ -14,7 +14,8 @@ RUN go mod download
 COPY server/ .
 # Copy Flutter web build into the Go embed directory
 COPY --from=flutter-builder /app/build/web/ ./internal/web/dist/
-RUN CGO_ENABLED=0 go build -o cantinarr ./cmd/server
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags "-X github.com/windoze95/cantinarr-server/internal/version.Version=${VERSION}" -o cantinarr ./cmd/server
 
 # Stage 3: Final image
 FROM alpine:3.19

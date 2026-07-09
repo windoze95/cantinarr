@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../auth/logic/auth_provider.dart';
 
-class AboutSheet extends StatelessWidget {
+class AboutSheet extends ConsumerWidget {
   const AboutSheet({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final serverVersion =
+        ref.watch(authProvider).valueOrNull?.connection?.serverVersion;
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: const BoxDecoration(
@@ -67,12 +71,24 @@ class AboutSheet extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                build.isNotEmpty ? 'Version $version ($build)' : 'Version $version',
+                build.isNotEmpty
+                    ? 'Version $version ($build)'
+                    : 'Version $version',
                 style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 14,
                 ),
               ),
+              if (serverVersion != null && serverVersion.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  'Server $serverVersion',
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
 
               const SizedBox(height: 24),
             ],

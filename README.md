@@ -146,6 +146,7 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_ANDROID_PACKAGE_NAME` | `codes.julian.cantinarr` | Android package name for native passkeys |
 | `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Android signing cert fingerprints for `/.well-known/assetlinks.json` |
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Additional WebAuthn origins to trust |
+| `CANTINARR_DISABLE_UPDATE_CHECK` | unset | Set to `1` to disable the periodic GitHub release check behind the admin "update available" banner |
 
 Native app passkeys require a public HTTPS server domain associated with the app (AASA for Apple, Digital Asset Links for Android). Browser passkey setup remains available when native association isn't possible. See [`server/README.md`](server/README.md#configuration) for details.
 
@@ -169,6 +170,7 @@ By default, users are passwordless and passkeyless: a connect link starts a perm
 4. Optionally require approval for requests -- pending ones arrive as push notifications
 5. Copy each instance's webhook URL into Radarr/Sonarr > Connect so external changes sync instantly
 6. Manage everything from the app -- queues, stuck imports, issues, agent fixes. No config files.
+7. When a newer release ships, an in-app banner points you to it; optionally set an **Update Portal** link (**Settings > Admin**) to jump straight to your container manager. See [`docs/updating.md`](docs/updating.md).
 
 ### ID Bridge (TMDB-to-TVDB)
 

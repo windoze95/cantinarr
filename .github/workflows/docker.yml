@@ -67,6 +67,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
           platforms: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch) && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
