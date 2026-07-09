@@ -8,7 +8,7 @@ import '../data/sonarr_models.dart';
 /// wired.
 class SonarrSeriesList extends StatelessWidget {
   final List<SonarrSeries> series;
-  final void Function(int id) onDelete;
+  final void Function(int id, {bool deleteFiles}) onDelete;
   final void Function(int id) onSearch;
   final void Function(SonarrSeries show)? onInteractiveSearch;
   final void Function(SonarrSeries show)? onOpen;
@@ -52,8 +52,12 @@ class SonarrSeriesList extends StatelessWidget {
             padding: const EdgeInsets.only(right: 20),
             child: const Icon(Icons.delete, color: Colors.white),
           ),
-          confirmDismiss: (_) => _confirmDelete(context, show.title),
-          onDismissed: (_) => onDelete(show.id),
+          confirmDismiss: (_) async {
+            final deleteFiles = await _confirmDelete(context, show.title);
+            if (deleteFiles == null) return false;
+            onDelete(show.id, deleteFiles: deleteFiles);
+            return true;
+          },
           child: _SeriesTile(
             show: show,
             onSearch: () => onSearch(show.id),
@@ -68,23 +72,44 @@ class SonarrSeriesList extends StatelessWidget {
     );
   }
 
+  /// Delete confirmation with an "also delete files" choice (defaulted on).
+  /// Resolves to the delete-files flag, or null when cancelled.
   Future<bool?> _confirmDelete(BuildContext context, String title) {
+    var deleteFiles = true;
     return showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        title: const Text('Delete Series'),
-        content: Text('Remove "$title" from Sonarr?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.error),
-            child: const Text('Delete'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: const Text('Delete Series'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Remove "$title" from Sonarr?'),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: deleteFiles,
+                onChanged: (v) => setState(() => deleteFiles = v ?? false),
+                title: const Text('Also delete files from disk',
+                    style: TextStyle(fontSize: 14)),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                activeColor: AppTheme.error,
+              ),
+            ],
           ),
-        ],
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, deleteFiles),
+              style: TextButton.styleFrom(foregroundColor: AppTheme.error),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
       ),
     );
   }

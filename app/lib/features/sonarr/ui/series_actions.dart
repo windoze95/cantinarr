@@ -82,7 +82,7 @@ Future<void> showSeriesActions(
 /// Remove confirmation with a "delete files" choice. Resolves to the
 /// delete-files flag, or null when cancelled.
 Future<bool?> confirmRemoveSeries(BuildContext context, String title) {
-  var deleteFiles = false;
+  var deleteFiles = true;
   return showDialog<bool>(
     context: context,
     builder: (ctx) => StatefulBuilder(

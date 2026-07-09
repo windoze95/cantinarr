@@ -210,7 +210,7 @@ void main() {
       expect(changed, 1);
     });
 
-    testWidgets('Remove asks for confirmation and honors delete-files',
+    testWidgets('Remove asks for confirmation and defaults to deleting files',
         (tester) async {
       await pumpHarness(tester);
       await tester.tap(find.text('Remove Series'));
@@ -222,11 +222,28 @@ void main() {
       expect(ofMethod('DELETE'), isEmpty);
       expect(removed, 0);
 
-      // Again, this time deleting files too.
+      // Again, accepting the default — "delete files" is pre-checked.
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Remove Series'));
       await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+
+      final deletes = ofMethod('DELETE');
+      expect(deletes, hasLength(1));
+      expect(deletes.single.path, endsWith('/series/7'));
+      expect(deletes.single.query['deleteFiles'], 'true');
+      expect(removed, 1);
+    });
+
+    testWidgets('Remove can opt out of deleting files from disk',
+        (tester) async {
+      await pumpHarness(tester);
+      await tester.tap(find.text('Remove Series'));
+      await tester.pumpAndSettle();
+
+      // Uncheck the pre-checked "delete files" box, then confirm.
       await tester.tap(find.text('Delete files from disk'));
       await tester.pump();
       await tester.tap(find.text('Remove'));
@@ -235,7 +252,7 @@ void main() {
       final deletes = ofMethod('DELETE');
       expect(deletes, hasLength(1));
       expect(deletes.single.path, endsWith('/series/7'));
-      expect(deletes.single.query['deleteFiles'], 'true');
+      expect(deletes.single.query['deleteFiles'], 'false');
       expect(removed, 1);
     });
 

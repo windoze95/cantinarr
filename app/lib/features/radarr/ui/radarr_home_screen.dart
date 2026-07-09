@@ -201,8 +201,8 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
                       color: AppTheme.accent,
                       child: RadarrMovieList(
                         movies: state.filtered,
-                        onDelete: (id) =>
-                            _notifier!.deleteMovie(id, deleteFiles: false),
+                        onDelete: (id, {bool deleteFiles = true}) =>
+                            _notifier!.deleteMovie(id, deleteFiles: deleteFiles),
                         onSearch: _triggerAutomaticSearch,
                         onInteractiveSearch: _openInteractiveSearch,
                         onOpen: _openMovie,
