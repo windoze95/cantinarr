@@ -22,7 +22,7 @@ void main() {
     await container.pump();
 
     final modules = container.read(moduleProvider).modules;
-    expect(_labels(modules), ['Dashboard']);
+    expect(_labels(modules), ['Discover']);
     expect(_labels(modules), isNot(contains('Main Radarr')));
     expect(_labels(modules), isNot(contains('4K Radarr')));
     expect(_labels(modules), isNot(contains('Radarr')));
@@ -49,7 +49,7 @@ void main() {
     expect(
       _labels(modules),
       containsAll([
-        'Dashboard',
+        'Discover',
         'Radarr',
         'Sonarr',
         'Chaptarr',

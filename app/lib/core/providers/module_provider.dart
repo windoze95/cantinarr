@@ -57,11 +57,13 @@ class ModuleNotifier extends Notifier<ModuleState> {
       {bool isAdmin = false}) {
     final modules = <AppModule>[];
 
-    // Dashboard is always available
+    // Discover (the browse/home surface) is always available. Kept internally
+    // as ModuleType.dashboard / the /dashboard/* routes; only the user-facing
+    // label reads "Discover".
     modules.add(const AppModule(
       type: ModuleType.dashboard,
-      label: 'Dashboard',
-      icon: Icons.dashboard,
+      label: 'Discover',
+      icon: Icons.explore,
     ));
 
     if (connection != null) {

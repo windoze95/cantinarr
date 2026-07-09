@@ -901,6 +901,94 @@ class _AppShellState extends ConsumerState<AppShell>
     final showSetupReminder =
         setupRemaining > 0 && ref.watch(setupReminderEnabledProvider);
 
+    // AI Assistant is a tool, not a library, so it sits with the footer actions
+    // instead of under the "Libraries" header. It's always last in
+    // moduleState.modules, so pulling it out leaves the remaining indices (used
+    // by the active-highlight fallback below) unchanged.
+    AppModule? assistantModule;
+    final libraryModules = <AppModule>[];
+    for (final m in moduleState.modules) {
+      if (m.type == ModuleType.assistant) {
+        assistantModule = m;
+      } else {
+        libraryModules.add(m);
+      }
+    }
+
+    // Builds one module row (plus its desktop sub-pages when active). [index]
+    // is the module's position in moduleState.modules, used for the active-
+    // highlight fallback when the current route isn't itself a module path.
+    Widget buildModuleTile(int index, AppModule module) {
+      final isActive = pathModule != null
+          ? module.type == pathModule
+          : index == moduleState.activeIndex;
+      final selectorInstances = isAdmin
+          ? _instancesForModule(instanceState, module.type)
+          : const <ServiceInstance>[];
+      final activeInstance =
+          _activeInstanceForModule(instanceState, module.type);
+
+      final item = _DrawerItem(
+        icon: module.icon,
+        title: module.label,
+        selected: isActive,
+        trailing: selectorInstances.length > 1
+            ? _InstanceSelector(
+                appName: module.label,
+                instances: selectorInstances,
+                activeInstanceId: activeInstance?.id,
+                onSelected: (instanceId) {
+                  if (isOverlay) Navigator.pop(context);
+                  _navigateToModule(
+                    context,
+                    module,
+                    instanceId: instanceId,
+                  );
+                  if (module.type != ModuleType.assistant) {
+                    ref
+                        .read(moduleProvider.notifier)
+                        .setActiveModule(module.type);
+                  }
+                },
+              )
+            : null,
+        onTap: () {
+          if (isOverlay) Navigator.pop(context);
+          _navigateToModule(
+            context,
+            module,
+            instanceId: _defaultInstanceForModule(
+              instanceState,
+              module.type,
+            )?.id,
+          );
+          if (module.type != ModuleType.assistant) {
+            ref.read(moduleProvider.notifier).setActiveModule(
+                  module.type,
+                );
+          }
+        },
+      );
+
+      final pages = !isOverlay && isActive
+          ? modulePagesFor(module.type, includeBooks: hasChaptarrService)
+          : const <ModulePage>[];
+      if (pages.isEmpty) return item;
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          item,
+          for (final page in pages)
+            _DrawerSubItem(
+              page: page,
+              selected: widget.currentPath == page.route,
+              onTap: () => context.go(page.route),
+            ),
+        ],
+      );
+    }
+
     return SafeArea(
       child: Column(
         children: [
@@ -938,9 +1026,10 @@ class _AppShellState extends ConsumerState<AppShell>
           ),
           const Divider(color: AppTheme.border),
 
-          // Admin approval queue — kept above the modules so a waiting count is
+          // Admin action queues — kept above the modules so a waiting count is
           // the first thing an admin sees when the drawer opens.
           if (isAdmin) ...[
+            const _DrawerSectionHeader('Needs attention'),
             _DrawerItem(
               icon: Icons.fact_check_outlined,
               title: 'Approvals',
@@ -959,15 +1048,19 @@ class _AppShellState extends ConsumerState<AppShell>
                 context.push('/issues');
               },
             ),
-            _DrawerItem(
-              icon: Icons.build_circle_outlined,
-              title: 'Agent fixes',
-              badgeCount: pendingAgentActions,
-              onTap: () {
-                if (isOverlay) Navigator.pop(context);
-                context.push('/agent-actions');
-              },
-            ),
+            // Only while fixes await review: the screen is a pending queue
+            // (empty at zero), agent-run history stays reachable via Issues, and
+            // a push for a new proposal deep-links straight here.
+            if (pendingAgentActions > 0)
+              _DrawerItem(
+                icon: Icons.build_circle_outlined,
+                title: 'Agent fixes',
+                badgeCount: pendingAgentActions,
+                onTap: () {
+                  if (isOverlay) Navigator.pop(context);
+                  context.push('/agent-actions');
+                },
+              ),
             // Appears only while someone is waiting on a Plex invite (e.g.
             // the push was missed or an auto-invite failed); lands on the
             // Users screen where the invite is one tap.
@@ -996,90 +1089,37 @@ class _AppShellState extends ConsumerState<AppShell>
             const Divider(color: AppTheme.border),
           ],
 
-          // Scrollable module navigation items. On desktop the active module
-          // also expands into its pages — those replace the module shell's
-          // bottom nav there. The mobile drawer stays modules-only because
-          // the bottom nav covers page switching.
+          // Module navigation. Discover (the browse/home surface) leads on its
+          // own; the "Libraries" header groups the managed arr modules beneath
+          // it. On desktop the active module also expands into its pages — those
+          // replace the module shell's bottom nav there. The mobile drawer stays
+          // modules-only because the bottom nav covers page switching.
           Expanded(
             child: ListView(
               padding: EdgeInsets.zero,
-              children: moduleState.modules.asMap().entries.map((entry) {
-                final module = entry.value;
-                final isActive = pathModule != null
-                    ? module.type == pathModule
-                    : entry.key == moduleState.activeIndex;
-                final selectorInstances = isAdmin
-                    ? _instancesForModule(instanceState, module.type)
-                    : const <ServiceInstance>[];
-                final activeInstance =
-                    _activeInstanceForModule(instanceState, module.type);
-
-                final item = _DrawerItem(
-                  icon: module.icon,
-                  title: module.label,
-                  selected: isActive,
-                  trailing: selectorInstances.length > 1
-                      ? _InstanceSelector(
-                          appName: module.label,
-                          instances: selectorInstances,
-                          activeInstanceId: activeInstance?.id,
-                          onSelected: (instanceId) {
-                            if (isOverlay) Navigator.pop(context);
-                            _navigateToModule(
-                              context,
-                              module,
-                              instanceId: instanceId,
-                            );
-                            if (module.type != ModuleType.assistant) {
-                              ref
-                                  .read(moduleProvider.notifier)
-                                  .setActiveModule(module.type);
-                            }
-                          },
-                        )
-                      : null,
-                  onTap: () {
-                    if (isOverlay) Navigator.pop(context);
-                    _navigateToModule(
-                      context,
-                      module,
-                      instanceId: _defaultInstanceForModule(
-                        instanceState,
-                        module.type,
-                      )?.id,
-                    );
-                    if (module.type != ModuleType.assistant) {
-                      ref.read(moduleProvider.notifier).setActiveModule(
-                            module.type,
-                          );
-                    }
-                  },
-                );
-
-                final pages = !isOverlay && isActive
-                    ? modulePagesFor(module.type,
-                        includeBooks: hasChaptarrService)
-                    : const <ModulePage>[];
-                if (pages.isEmpty) return item;
-
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    item,
-                    for (final page in pages)
-                      _DrawerSubItem(
-                        page: page,
-                        selected: widget.currentPath == page.route,
-                        onTap: () => context.go(page.route),
-                      ),
-                  ],
-                );
-              }).toList(),
+              children: [
+                if (libraryModules.isNotEmpty)
+                  buildModuleTile(0, libraryModules.first),
+                if (libraryModules.length > 1) ...[
+                  const _DrawerSectionHeader('Libraries'),
+                  for (int i = 1; i < libraryModules.length; i++)
+                    buildModuleTile(i, libraryModules[i]),
+                ],
+              ],
             ),
           ),
 
           const Divider(color: AppTheme.border),
 
+          if (assistantModule != null)
+            _DrawerItem(
+              icon: assistantModule.icon,
+              title: assistantModule.label,
+              onTap: () {
+                if (isOverlay) Navigator.pop(context);
+                context.push('/assistant');
+              },
+            ),
           if (ref.watch(plexGuideEnabledProvider))
             _DrawerItem(
               icon: Icons.play_circle_outline,
@@ -1232,6 +1272,30 @@ class _DrawerItem extends StatelessWidget {
       selectedTileColor: AppTheme.accent.withValues(alpha: 0.08),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       onTap: onTap,
+    );
+  }
+}
+
+/// A small caps label that segments the drawer into scannable groups
+/// (e.g. "Needs attention", "Libraries"). Purely visual — not tappable.
+class _DrawerSectionHeader extends StatelessWidget {
+  final String label;
+
+  const _DrawerSectionHeader(this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      child: Text(
+        label.toUpperCase(),
+        style: const TextStyle(
+          color: AppTheme.textSecondary,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.8,
+        ),
+      ),
     );
   }
 }
