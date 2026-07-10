@@ -104,8 +104,7 @@ const _tags = [
   {'id': 3, 'label': '4k'},
 ];
 
-final _series = SonarrSeries.fromJson(
-    Map<String, dynamic>.from(_rawSeries));
+final _series = SonarrSeries.fromJson(Map<String, dynamic>.from(_rawSeries));
 
 ({_FakeAdapter adapter, Dio dio}) _fakeDio() {
   final adapter = _FakeAdapter();
@@ -153,9 +152,15 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    List<({String method, String path, Map<String, dynamic> query, dynamic body})>
-        ofMethod(String method) =>
-            adapter.requests.where((r) => r.method == method).toList();
+    List<
+        ({
+          String method,
+          String path,
+          Map<String, dynamic> query,
+          dynamic body
+        })> ofMethod(
+            String method) =>
+        adapter.requests.where((r) => r.method == method).toList();
 
     testWidgets('shows every action for a monitored series', (tester) async {
       await pumpHarness(tester);
@@ -204,17 +209,25 @@ void main() {
       expect(puts, hasLength(1));
       final body = puts.single.body as Map<String, dynamic>;
       expect(body['monitored'], false);
-      expect(body['someUnknownField'], {'nested': [1, 2]},
+      expect(
+          body['someUnknownField'],
+          {
+            'nested': [1, 2]
+          },
           reason: 'unmodelled fields must survive the round-trip');
       expect(body['qualityProfileId'], 5);
       expect(changed, 1);
     });
 
-    testWidgets('Remove asks for confirmation and defaults to deleting files',
+    testWidgets('Remove asks for confirmation and defaults to keeping files',
         (tester) async {
       await pumpHarness(tester);
       await tester.tap(find.text('Remove Series'));
       await tester.pumpAndSettle();
+
+      final checkbox =
+          tester.widget<CheckboxListTile>(find.byType(CheckboxListTile));
+      expect(checkbox.value, isFalse);
 
       // Cancel first: nothing deleted.
       await tester.tap(find.text('Cancel'));
@@ -222,7 +235,7 @@ void main() {
       expect(ofMethod('DELETE'), isEmpty);
       expect(removed, 0);
 
-      // Again, accepting the default — "delete files" is pre-checked.
+      // Again, accept the safe default: keep files on disk.
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Remove Series'));
@@ -233,18 +246,18 @@ void main() {
       final deletes = ofMethod('DELETE');
       expect(deletes, hasLength(1));
       expect(deletes.single.path, endsWith('/series/7'));
-      expect(deletes.single.query['deleteFiles'], 'true');
+      expect(deletes.single.query['deleteFiles'], 'false');
       expect(removed, 1);
     });
 
-    testWidgets('Remove can opt out of deleting files from disk',
+    testWidgets('Remove can opt in to deleting files from disk',
         (tester) async {
       await pumpHarness(tester);
       await tester.tap(find.text('Remove Series'));
       await tester.pumpAndSettle();
 
-      // Uncheck the pre-checked "delete files" box, then confirm.
-      await tester.tap(find.text('Delete files from disk'));
+      // Check the opt-in "delete files" box, then confirm.
+      await tester.tap(find.text('Also delete files from disk'));
       await tester.pump();
       await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
@@ -252,7 +265,7 @@ void main() {
       final deletes = ofMethod('DELETE');
       expect(deletes, hasLength(1));
       expect(deletes.single.path, endsWith('/series/7'));
-      expect(deletes.single.query['deleteFiles'], 'false');
+      expect(deletes.single.query['deleteFiles'], 'true');
       expect(removed, 1);
     });
 
@@ -288,7 +301,11 @@ void main() {
       expect(body['seriesType'], 'standard');
       expect(body['path'], '/tv/Example');
       expect(body['tags'], [2]);
-      expect(body['someUnknownField'], {'nested': [1, 2]},
+      expect(
+          body['someUnknownField'],
+          {
+            'nested': [1, 2]
+          },
           reason: 'unmodelled fields must survive the edit round-trip');
 
       // The editor popped back to the harness and signalled a change.
@@ -339,8 +356,7 @@ void main() {
       await tester.tap(find.text('Automatic Search'));
       await tester.pumpAndSettle();
 
-      final posts =
-          adapter.requests.where((r) => r.method == 'POST').toList();
+      final posts = adapter.requests.where((r) => r.method == 'POST').toList();
       expect(posts, hasLength(1));
       expect(posts.single.body,
           {'name': 'SeasonSearch', 'seriesId': 7, 'seasonNumber': 1});
@@ -368,8 +384,7 @@ void main() {
       expect(find.text('Search Monitored'), findsOneWidget);
       await tester.tap(find.text('Search Monitored'));
       await tester.pumpAndSettle();
-      final posts =
-          adapter.requests.where((r) => r.method == 'POST').toList();
+      final posts = adapter.requests.where((r) => r.method == 'POST').toList();
       expect(posts.single.body, {'name': 'SeriesSearch', 'seriesId': 7});
     });
   });

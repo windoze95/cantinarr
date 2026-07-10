@@ -19,7 +19,7 @@ enum RequestStatus {
   downloading('Downloading', 'Downloading'),
 
   /// Fully available on the media server.
-  available('Available on Plex', 'Watch Now'),
+  available('Available', 'Available'),
 
   /// Partially available (some seasons/episodes).
   partial('Partially Available', 'Request More'),
@@ -106,7 +106,7 @@ class BookRequestStatusDetail {
   /// Short reason a [format] is covered, for the request sheet: a request status
   /// label, else "Downloaded" when the file is present, else null. An
   /// available (fulfilled) request also reads "Downloaded" — the movie/TV
-  /// available label ("Available on Plex") makes no sense for a book.
+  /// available label is normalized to "Downloaded" for a book.
   String? coverageLabel(BookRequestFormat format) {
     if (!isCovered(format)) return null;
     final reqKey =

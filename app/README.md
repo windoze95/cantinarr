@@ -2,7 +2,7 @@
 
 The client for [Cantinarr](https://github.com/windoze95/cantinarr) -- a frictionless media request app for Plex and Jellyfin households.
 
-Built with Flutter; iOS, Android, and web are the shipping targets (web is embedded in the server binary). One dark, warm-gold "cantina" theme, TMDB/Trakt-powered discovery, one-tap requests with approvals, deep *arr control, books, an AI assistant, and push notifications -- all through the Cantinarr backend, which is the only API the app talks to.
+Built with Flutter; iOS, Android, and web are the shipping targets (web is embedded in the server binary). One dark, warm cinematic theme, TMDB/Trakt-powered discovery, one-tap requests with approvals, deep *arr control, books, an AI assistant, and push notifications -- all through the Cantinarr backend, which is the only API the app talks to.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -26,27 +26,31 @@ Built with Flutter; iOS, Android, and web are the shipping targets (web is embed
 
 ## Design
 
-A single dark-first theme with warm gold accents, designed for couch browsing. Sheets and setting cards paint on a Material surface so ink effects render correctly everywhere.
+A single dark-first, cinematic theme designed for couch browsing and high-signal admin work. Its near-black sign face, espresso/umber layers, glowing amber-gold, and ember highlights come directly from the Cantinarr logo. A static, pointer-transparent ambient gradient sits behind translucent page scaffolds, while semantic Material 3 surfaces provide restrained depth for navigation, forms, grouped settings, and action docks. The futuristic feel comes from precision, depth, and interaction—not a cold blue cyber palette.
+
+The shared design foundation also owns typography, spacing, shape, and motion tokens. Reusable ambient-canvas, panel, section-header, media-card, and featured-hero primitives keep discovery and management screens visually related without wrapping every row in another card or adding perpetual background animation.
 
 | Color | Hex | Usage |
 |---|---|---|
-| Accent | `#E5A00D` | Warm gold -- buttons, active states, brand |
-| Background | `#0F0A04` | Warm near-black canvas |
-| Surface | `#1C1510` | Cards, nav, sheets |
-| Surface variant | `#2A1F14` | Elevated tiles |
-| Text primary | `#F0F0F0` | Headings, body |
-| Text secondary | `#9E918A` | Labels, hints |
-| Available | `#4CAF50` | Green -- on the server |
-| Requested | `#FFA726` | Amber -- pending/requested |
-| Downloading | `#42A5F5` | Blue -- in progress |
-| Unavailable | `#757575` | Grey |
+| Background | `#0C0805` | Warm near-black ambient canvas |
+| Surface | `#15100C` | Navigation, sheets, sign-face chrome |
+| Surface variant | `#201710` | Cards, fields, grouped content |
+| Raised surface | `#2A1E14` | Elevated umber panels and hero controls |
+| Amber accent | `#F2AC2D` | Primary actions, active navigation, logo glow |
+| Ember signal | `#F47A2E` | Secondary highlights, AI, and live signals |
+| Text primary | `#F6F0E8` | Warm-cream headings and body copy |
+| Text secondary | `#B7A99D` | Supporting copy and labels |
+| Text muted | `#A09286` | Disabled, unavailable, and low-emphasis metadata |
+| Available / success | `#72CC91` | Ready on the media server |
+| Requested / pending | `#F4C66A` | Awaiting approval or acquisition |
+| Downloading / info | `#D98A58` | In progress and informational state |
 
 ## Features
 
 ### Discovery & search
 - **TMDB + Trakt rows** -- trending, popular movies/TV, top rated, upcoming; all proxied through the backend so keys stay server-side (poster/backdrop images load straight from the TMDB CDN).
-- **Ever-present search bar** -- debounced multi-search from anywhere in the shell. Results carry **requester-vocabulary availability chips** (Available / Partially Available / Requested -- never arr jargon), matched against the user's default library and kept fresh via WebSocket pings.
-- **Search-to-AI hand-off** -- a query that looks like a question (or returns nothing) lights up an AI affordance; the chat opens inline in the shell and shares one conversation with the full-screen assistant.
+- **Module-global search bar** -- debounced multi-search from every primary library/discovery surface. Secondary work screens hide it to avoid stacking global search above local filters. Results carry **requester-vocabulary availability chips** (Available / Partially Available / Requested -- never arr jargon), matched against the user's default library and kept fresh via WebSocket pings.
+- **Search-to-AI hand-off** -- a query that looks like a question (or returns nothing) lights up an AI affordance; sending it opens the dedicated assistant with the prompt already in flight.
 
 ### Discover
 - **Movies / TV tabs** -- discovery rows plus live library rows from the user's default instances: Downloading Soon, Recently Downloaded, Airing Next.
@@ -54,7 +58,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 - **Books tab** -- appears only for users with a Chaptarr grant: owned-aware book search with per-format request buttons (see Books).
 
 ### Requests
-- **One-tap requesting** with status-aware labels: Request → Pending (awaiting approval) → Requested → Downloading → **Watch Now**; partially-available shows get **Request More**, which jumps to the season picker.
+- **One-tap requesting** with status-aware labels: Request → Pending (awaiting approval) → Requested → Downloading → **Available**; partially-available shows get **Request More**, which jumps to the season picker. The ready state stays provider-neutral rather than assuming a particular playback app.
 - **Season-level choice** -- per-season availability, multi-select, "Request N seasons"; shown only to users the admin has allowed to choose (others inherit the default scope).
 - **Book formats** -- request the eBook, the Audiobook, or both; formats already owned or requested are disabled with their status shown.
 - **Live status** -- request state and download progress update in real time over WebSocket, including changes made directly in the arrs (webhooks).
@@ -62,6 +66,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 ### Movies & TV management (admin)
 - **Drill-down** -- library → movie detail, or series → season → episode, with per-item download progress, quality/size, history, and messages, proxied verbatim to Radarr/Sonarr API v3.
 - **Open in Radarr/Sonarr** -- on a discovery detail page, admins get a jump into the matching arr item, shown only once the title actually exists there (it appears right after a request adds it). Movies link to Radarr, TV to Sonarr; books are out of scope.
+- **Explicit safe removal** -- destructive library actions live in each row's labeled overflow menu rather than behind a swipe gesture; confirmation is mandatory and deleting files from disk is always opt-in.
 - **Sonarr episode power tools** -- long-press action menus, episode **multi-select with batch search** (quick-select All / Undownloaded), batch **delete files**, an **All Seasons** view, per-season/series monitor toggles, **Edit Series** (profile, type, path, tags, season folders), and external links (IMDb/TheTVDB/TMDB/Trakt).
 - **Interactive release search** -- per-episode, per-season, per-movie, and per-book: live indexer results with smart sorting, seeders/leechers, and rejection reasons; tap to grab.
 - **Import Doctor** -- any stuck queue item explains itself in plain English with the raw arr messages shown for transparency, then offers ordered one-click fixes (manual/force import with candidates preview, remove, blocklist + re-search, category hand-off, rescan). One shared rule engine drives Sonarr, Radarr, and Chaptarr, mirrored from the server's classifier.
@@ -85,7 +90,7 @@ A single dark-first theme with warm gold accents, designed for couch browsing. S
 ### AI assistant
 - **Multi-provider chat** (Anthropic, OpenAI, or Gemini -- server-configured) with SSE streaming, visible tool activity, and a poster carousel for results.
 - **Server-side tools** -- the assistant searches, checks availability, and requests on your behalf; admins can triage queues conversationally.
-- **One session everywhere** -- the inline shell chat and `/assistant` share the same conversation (30-minute idle expiry).
+- **Persistent session** -- the focused `/assistant` workspace keeps one conversation alive across navigation (30-minute idle expiry).
 
 ### Notifications (iOS)
 - **Native APNs push** via a `MethodChannel` -- no Firebase. Tokens register with the backend per device; taps deep-link to the right screen (detail page, approvals, issue thread...).
@@ -161,8 +166,8 @@ app/lib/
 │   │                             #   shared image cache (1000 objects / 30-day stale)
 │   ├── providers/                # Realtime event fan-out, instances, modules
 │   ├── storage/                  # Secure tokens + stable device identity, prefs
-│   ├── theme/                    # The cantina design system
-│   └── widgets/                  # MediaCard, StatusPill, InstanceDropdown, sheets...
+│   ├── theme/                    # Semantic color, type, spacing, shape, motion tokens
+│   └── widgets/                  # Ambient canvas, panels, heroes, media primitives, sheets...
 ├── features/
 │   ├── auth/                     # Auth screen (setup/login/connect), passkeys, session
 │   ├── ai_assistant/             # SSE chat, tool activity, media carousel
@@ -178,7 +183,7 @@ app/lib/
 │   ├── request/                  # Request buttons, options sheet, status sheet
 │   ├── settings/                 # Everything under Settings (see Features)
 │   ├── setup_wizard/             # Live setup checklist wizard + Plex guide
-│   ├── shell/                    # App shell: drawer, search bar, inline AI
+│   ├── shell/                    # App shell: navigation + search-to-AI hand-off
 │   ├── sonarr/                   # TV management + episode tools + import doctor engine
 │   └── tautulli/                 # Plex activity/history/stats
 └── navigation/app_router.dart    # GoRouter: shell + module tab shells + guards
@@ -186,7 +191,7 @@ app/lib/
 
 ## Navigation
 
-An outer shell (persistent search bar + navigation chrome) hosts per-module page shells. The chrome adapts at 900px: below it, a hamburger drawer lists modules and each module shows its pages as a bottom nav; at 900px+ the drawer becomes a persistent sidebar whose active module expands into its pages, and the bottom nav disappears. Line-length-sensitive surfaces (search results, chat, detail pages, settings forms) cap and center their content on desktop; modal bottom sheets cap at 640px.
+One authenticated shell hosts both module pages and secondary work screens over the shared ambient canvas. The chrome adapts at 900px: below it, a hamburger drawer lists modules and each module shows its pages in a floating bottom dock; at 900px+ the drawer becomes a layered persistent sidebar whose active module expands into its pages, and the bottom dock disappears. Detail, settings, approval, issue, and assistant routes therefore keep the desktop command sidebar instead of dropping users into a disconnected navigation mode. The global discovery bar appears on primary module surfaces and yields to each secondary screen's own focused controls. Line-length-sensitive surfaces (search results, chat, detail pages, settings forms) cap and center their content on desktop; modal bottom sheets cap at 640px.
 
 | Module | Tabs | Access |
 |---|---|---|
@@ -199,9 +204,9 @@ An outer shell (persistent search bar + navigation chrome) hosts per-module page
 
 ¹ Books appears only with a Chaptarr grant.
 
-Full-screen routes: `/login`, `/assistant`, `/detail/:type/:id`, `/approvals`, `/issues`, `/issues/:id`, `/agent-actions`, `/agent-runs/:id`, `/settings/...`, `/plex-guide`, `/setup`.
+`/login` is the only route outside the authenticated shell. Secondary routes inside it include `/assistant`, `/detail/:type/:id`, `/approvals`, `/issues`, `/issues/:id`, `/agent-actions`, `/agent-runs/:id`, `/settings/...`, `/plex-guide`, and `/setup`.
 
-The router guard redirects unauthenticated users to `/login` and bounces non-admins from management modules to `/dashboard/movies`. Modules with multiple instances get an instance selector in the drawer/app bar.
+The router guard redirects unauthenticated users to `/login`, remembers safe internal deep-link targets through sign-in, centrally bounces non-admins from admin routes, and gates Books on the user's Chaptarr grant. Modules with multiple instances get an instance selector in the drawer/app bar.
 
 ## Key Dependencies
 

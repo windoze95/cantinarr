@@ -9,6 +9,7 @@ import 'core/network/websocket_client.dart';
 import 'core/providers/realtime_provider.dart';
 import 'core/storage/preferences.dart';
 import 'core/theme/app_theme.dart';
+import 'core/widgets/app_ambient_background.dart';
 import 'features/auth/logic/auth_provider.dart';
 import 'features/issues/logic/issues_provider.dart';
 import 'features/notifications/push_service.dart';
@@ -151,7 +152,7 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       ..showSnackBar(SnackBar(
         behavior: SnackBarBehavior.floating,
         backgroundColor: approved ? AppTheme.available : AppTheme.error,
-        content: Text(text, style: const TextStyle(color: Colors.white)),
+        content: Text(text, style: const TextStyle(color: AppTheme.background)),
       ));
   }
 
@@ -170,11 +171,11 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
         content: const Text(
           'Auto-fix paused: too many failed attempts. Re-enable it in AI '
           'remediation settings.',
-          style: TextStyle(color: Colors.white),
+          style: TextStyle(color: AppTheme.background),
         ),
         action: SnackBarAction(
           label: 'Settings',
-          textColor: Colors.white,
+          textColor: AppTheme.background,
           onPressed: () =>
               ref.read(appRouterProvider).push('/settings/ai-remediation'),
         ),
@@ -210,6 +211,9 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
         title: 'Cantinarr',
         theme: AppTheme.dark,
         debugShowCheckedModeBanner: false,
+        builder: (context, child) => AppAmbientBackground(
+          child: child ?? const SizedBox.shrink(),
+        ),
         home: const Scaffold(),
       );
     }
@@ -221,8 +225,10 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       debugShowCheckedModeBanner: false,
       scaffoldMessengerKey: _scaffoldMessengerKey,
       routerConfig: router,
-      builder: (context, child) => _UpdateBanner(
-        child: _ReconnectingBanner(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => AppAmbientBackground(
+        child: _UpdateBanner(
+          child: _ReconnectingBanner(child: child ?? const SizedBox.shrink()),
+        ),
       ),
     );
   }

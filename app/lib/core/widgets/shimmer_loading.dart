@@ -11,35 +11,37 @@ class ShimmerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Shimmer.fromColors(
-      baseColor: AppTheme.surfaceVariant,
-      highlightColor: AppTheme.surface.withValues(alpha: 0.5),
-      child: SizedBox(
-        width: width,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            AspectRatio(
-              aspectRatio: 2 / 3,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: AppTheme.surfaceVariant,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Container(
-              height: 12,
-              width: width * 0.8,
+    final placeholder = SizedBox(
+      width: width,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 2 / 3,
+            child: Container(
               decoration: BoxDecoration(
                 color: AppTheme.surfaceVariant,
-                borderRadius: BorderRadius.circular(4),
+                borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
               ),
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 9),
+          Container(
+            height: 12,
+            width: width * 0.8,
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceVariant,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ],
       ),
+    );
+    if (MediaQuery.disableAnimationsOf(context)) return placeholder;
+    return Shimmer.fromColors(
+      baseColor: AppTheme.surfaceVariant,
+      highlightColor: AppTheme.surfaceRaised,
+      child: placeholder,
     );
   }
 }
@@ -57,17 +59,19 @@ class ShimmerLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final placeholder = Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(4),
+      ),
+    );
+    if (MediaQuery.disableAnimationsOf(context)) return placeholder;
     return Shimmer.fromColors(
       baseColor: AppTheme.surfaceVariant,
-      highlightColor: AppTheme.surface.withValues(alpha: 0.5),
-      child: Container(
-        width: width,
-        height: height,
-        decoration: BoxDecoration(
-          color: AppTheme.surfaceVariant,
-          borderRadius: BorderRadius.circular(4),
-        ),
-      ),
+      highlightColor: AppTheme.surfaceRaised,
+      child: placeholder,
     );
   }
 }

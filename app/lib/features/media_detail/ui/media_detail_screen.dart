@@ -8,9 +8,11 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/media_header.dart';
+import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
@@ -171,98 +173,80 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Request button
+                          // One coherent request/status dock. The previous
+                          // tiny status text was easy to miss and not keyboard
+                          // accessible; every secondary action is now a real
+                          // button in the same decision surface.
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: ListenableBuilder(
-                              listenable: _requestNotifier,
-                              builder: (_, __) => RequestButton(
-                                status: _requestNotifier.state.status,
-                                isRequesting:
-                                    _requestNotifier.state.isRequesting,
-                                error: _requestNotifier.state.error,
-                                onRequest: () => _onRequest(),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-
-                          // Status info tap target
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: ListenableBuilder(
-                              listenable: _requestNotifier,
-                              builder: (_, __) => GestureDetector(
-                                onTap: () => _showStatusSheet(context,
-                                    state.title, _requestNotifier.state.status),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                            child: AppPanel(
+                              accentColor: AppTheme.accent,
+                              child: ListenableBuilder(
+                                listenable: _requestNotifier,
+                                builder: (_, __) => Column(
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.info_outline,
-                                        size: 14,
-                                        color: AppTheme.textSecondary),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      _requestNotifier.state.status.label,
-                                      style: const TextStyle(
-                                          color: AppTheme.textSecondary,
-                                          fontSize: 13),
+                                    RequestButton(
+                                      status: _requestNotifier.state.status,
+                                      isRequesting:
+                                          _requestNotifier.state.isRequesting,
+                                      error: _requestNotifier.state.error,
+                                      onRequest: () => _onRequest(),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Wrap(
+                                      alignment: WrapAlignment.center,
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center,
+                                      spacing: 6,
+                                      runSpacing: 4,
+                                      children: [
+                                        TextButton.icon(
+                                          onPressed: () => _showStatusSheet(
+                                            context,
+                                            state.title,
+                                            _requestNotifier.state.status,
+                                          ),
+                                          icon: const Icon(
+                                            Icons.info_outline_rounded,
+                                            size: 17,
+                                          ),
+                                          label: Text(
+                                            _requestNotifier.state.status.label,
+                                          ),
+                                        ),
+                                        if (_canReport(
+                                          _requestNotifier.state.status,
+                                        ))
+                                          TextButton.icon(
+                                            onPressed: () =>
+                                                _onReportProblem(state),
+                                            icon: const Icon(
+                                              Icons.flag_outlined,
+                                              size: 17,
+                                            ),
+                                            label: const Text(
+                                              'Report a problem',
+                                            ),
+                                          ),
+                                        if (_arrLink != null)
+                                          TextButton.icon(
+                                            onPressed: _openInArr,
+                                            icon: const Icon(
+                                              Icons.open_in_new_rounded,
+                                              size: 17,
+                                            ),
+                                            label: Text(
+                                              'Open in ${_arrLink!.moduleLabel}',
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                   ],
                                 ),
                               ),
                             ),
                           ),
-
-                          // Quiet "Report a problem" affordance — only once the
-                          // title is at least partially in the library and the
-                          // server allows reporting.
-                          ListenableBuilder(
-                            listenable: _requestNotifier,
-                            builder: (_, __) {
-                              if (!_canReport(_requestNotifier.state.status)) {
-                                return const SizedBox.shrink();
-                              }
-                              return Center(
-                                child: TextButton.icon(
-                                  onPressed: () => _onReportProblem(state),
-                                  icon:
-                                      const Icon(Icons.flag_outlined, size: 14),
-                                  label: const Text('Report a problem'),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: AppTheme.textSecondary,
-                                    textStyle: const TextStyle(fontSize: 13),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-
-                          // Admin-only jump into the backing *arr, shown only
-                          // when this title actually exists there (Radarr for
-                          // movies, Sonarr for TV). Non-admins never resolve a
-                          // link, so this stays hidden for them.
-                          if (_arrLink != null) ...[
-                            const SizedBox(height: 12),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 16),
-                              child: OutlinedButton.icon(
-                                onPressed: _openInArr,
-                                icon: const Icon(Icons.open_in_new, size: 18),
-                                label:
-                                    Text('Open in ${_arrLink!.moduleLabel}'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppTheme.textPrimary,
-                                  side:
-                                      const BorderSide(color: AppTheme.border),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
                           const SizedBox(height: 16),
 
                           // Genres
@@ -383,11 +367,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                               key: _seasonsKey,
                               padding:
                                   const EdgeInsets.symmetric(horizontal: 16),
-                              child: const Text('Seasons',
-                                  style: TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppTheme.textPrimary)),
+                              child: const SectionHeader(title: 'Seasons'),
                             ),
                             const SizedBox(height: 12),
                             SeasonTable(
@@ -714,11 +694,7 @@ class _SectionRow extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Text(title,
-              style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.textPrimary)),
+          child: SectionHeader(title: title),
         ),
         const SizedBox(height: 12),
         HorizontalItemRow<MediaItem>(

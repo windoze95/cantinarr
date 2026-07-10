@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// The library tile follows Sonarr's grammar: the badge is the airing status,
 /// and completeness lives in the progress bar — green only for an ended series
-/// with every monitored episode on disk, blue for a continuing series that is
+/// with every monitored episode on disk, info/ember for a continuing series that is
 /// merely caught up, red for monitored gaps, amber for unmonitored gaps.
 SonarrSeries _series({
   String? status,
@@ -24,16 +24,27 @@ SonarrSeries _series({
           SonarrStatistics(episodeFileCount: files, episodeCount: count),
     );
 
-Future<void> _pump(WidgetTester tester, SonarrSeries show) {
+Future<void> _pump(
+  WidgetTester tester,
+  SonarrSeries show, {
+  void Function(int id, {bool deleteFiles})? onDelete,
+}) {
   return tester.pumpWidget(MaterialApp(
     home: Scaffold(
       body: SonarrSeriesList(
         series: [show],
-        onDelete: (_, {bool deleteFiles = true}) {},
+        onDelete: onDelete ?? (_, {bool deleteFiles = false}) {},
         onSearch: (_) {},
       ),
     ),
   ));
+}
+
+Future<void> _openRemoveConfirmation(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('Actions for Show'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Remove…'));
+  await tester.pumpAndSettle();
 }
 
 Color? _barColor(WidgetTester tester) {
@@ -43,7 +54,7 @@ Color? _barColor(WidgetTester tester) {
 }
 
 void main() {
-  testWidgets('caught-up continuing series stays Continuing with a blue bar',
+  testWidgets('caught-up continuing series stays Continuing with an info bar',
       (tester) async {
     await _pump(tester, _series(status: 'continuing', files: 33, count: 33));
     expect(find.text('Continuing'), findsOneWidget);
@@ -76,5 +87,65 @@ void main() {
     await _pump(tester, _series(status: 'upcoming'));
     expect(find.text('Upcoming'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
+  });
+
+  testWidgets('remove menu opens a confirmation with file deletion off',
+      (tester) async {
+    await _pump(tester, _series(status: 'ended'));
+    expect(find.byType(Dismissible), findsNothing);
+
+    await _openRemoveConfirmation(tester);
+
+    expect(find.text('Delete Series'), findsOneWidget);
+    expect(find.text('Also delete files from disk'), findsOneWidget);
+    final checkbox =
+        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile));
+    expect(checkbox.value, isFalse);
+  });
+
+  testWidgets('cancelling explicit removal invokes no callback',
+      (tester) async {
+    ({int id, bool deleteFiles})? deletion;
+    await _pump(
+      tester,
+      _series(status: 'ended'),
+      onDelete: (id, {bool deleteFiles = false}) {
+        deletion = (id: id, deleteFiles: deleteFiles);
+      },
+    );
+
+    await _openRemoveConfirmation(tester);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(deletion, isNull);
+    expect(find.text('Show'), findsOneWidget);
+  });
+
+  testWidgets('explicit removal keeps files by default and supports opt-in',
+      (tester) async {
+    final deletions = <({int id, bool deleteFiles})>[];
+    await _pump(
+      tester,
+      _series(status: 'ended'),
+      onDelete: (id, {bool deleteFiles = false}) {
+        deletions.add((id: id, deleteFiles: deleteFiles));
+      },
+    );
+
+    await _openRemoveConfirmation(tester);
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    expect(deletions, [(id: 1, deleteFiles: false)]);
+
+    await _openRemoveConfirmation(tester);
+    await tester.tap(find.text('Also delete files from disk'));
+    await tester.pump();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    expect(
+      deletions,
+      [(id: 1, deleteFiles: false), (id: 1, deleteFiles: true)],
+    );
   });
 }

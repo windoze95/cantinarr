@@ -72,6 +72,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   ref.onDispose(authRefresh.dispose);
   ref.listen(authProvider, (_, __) => authRefresh.value++);
 
+  // Keep an in-memory return target while authentication (or the first-login
+  // passkey offer) temporarily sends the user to /login. This deliberately
+  // accepts only app-internal locations, so it cannot become an open redirect.
+  String? pendingReturnTo;
+
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
     initialLocation: '/dashboard/movies',
@@ -82,16 +87,32 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final isAuthRoute = state.matchedLocation == '/login';
       final pendingPasskey = auth?.pendingPasskeyOffer ?? false;
 
-      if (!isAuthenticated && !isAuthRoute) return '/login';
+      if (!isAuthenticated && !isAuthRoute) {
+        if (_isInternalReturnLocation(state.uri)) {
+          pendingReturnTo = state.uri.toString();
+        }
+        return '/login';
+      }
       // During passkey offer, force user to /login (where the offer renders)
       if (isAuthenticated && pendingPasskey) {
+        if (!isAuthRoute && _isInternalReturnLocation(state.uri)) {
+          pendingReturnTo = state.uri.toString();
+        }
         return isAuthRoute ? null : '/login';
       }
-      if (isAuthenticated && isAuthRoute) return '/dashboard/movies';
+      if (isAuthenticated && isAuthRoute) {
+        final destination = pendingReturnTo;
+        pendingReturnTo = null;
+        return destination ?? '/dashboard/movies';
+      }
       final isAdmin = auth?.user?.isAdmin ?? false;
+      if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
+        return '/dashboard/movies';
+      }
+      final hasChaptarrGrant = auth?.connection?.services.chaptarr ?? false;
       if (isAuthenticated &&
-          !isAdmin &&
-          _isInstanceModuleRoute(state.uri.path)) {
+          !hasChaptarrGrant &&
+          _isWithinRoute(state.uri.path, '/dashboard/books')) {
         return '/dashboard/movies';
       }
       return null;
@@ -375,171 +396,230 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
+          // Authenticated secondary routes stay inside the same shell. On
+          // desktop this preserves the command sidebar through details,
+          // settings, approvals, and issue work; compact layouts still use
+          // each screen's own back affordance.
+          GoRoute(
+            path: '/assistant',
+            builder: (_, __) {
+              final auth = ref.read(authProvider).valueOrNull;
+              final hasAi = auth?.connection?.services.ai ?? false;
+              return AiChatScreen(aiAvailable: hasAi);
+            },
+          ),
+          GoRoute(
+            path: '/detail/:type/:id',
+            redirect: (_, state) => _hasValidMediaDetailParameters(state)
+                ? null
+                : '/dashboard/movies',
+            builder: (context, state) {
+              final type = state.pathParameters['type']!;
+              final id = _positiveIntParameter(state, 'id');
+              if (id == null) {
+                return const _InvalidRouteScreen(
+                  message: 'This media link is invalid.',
+                );
+              }
+              final mediaType = type == 'tv' ? MediaType.tv : MediaType.movie;
+              return MediaDetailScreen(
+                id: id,
+                mediaType: mediaType,
+              );
+            },
+          ),
+          GoRoute(
+            path: '/settings',
+            builder: (_, __) => const SettingsScreen(),
+          ),
+          GoRoute(
+            path: '/settings/credentials',
+            builder: (_, __) => const CredentialsScreen(),
+          ),
+          GoRoute(
+            path: '/settings/ai-tools',
+            builder: (_, __) => const AiToolsScreen(),
+          ),
+          GoRoute(
+            path: '/settings/users',
+            builder: (_, __) => const UsersScreen(),
+          ),
+          GoRoute(
+            path: '/settings/users/:userId/request-settings',
+            redirect: (_, state) =>
+                _positiveIntParameter(state, 'userId') == null
+                    ? '/settings/users'
+                    : null,
+            builder: (context, state) {
+              final userId = _positiveIntParameter(state, 'userId');
+              if (userId == null) {
+                return const _InvalidRouteScreen(
+                  message: 'This user settings link is invalid.',
+                );
+              }
+              final username = state.extra as String? ?? '';
+              return UserRequestSettingsScreen(
+                  userId: userId, username: username);
+            },
+          ),
+          GoRoute(
+            path: '/approvals',
+            builder: (_, __) => const PendingRequestsScreen(),
+          ),
+          GoRoute(
+            path: '/issues',
+            builder: (_, __) => const IssuesListScreen(),
+          ),
+          GoRoute(
+            path: '/issues/:id',
+            builder: (context, state) {
+              final id = int.tryParse(state.pathParameters['id'] ?? '') ?? 0;
+              return IssueThreadScreen(issueId: id);
+            },
+          ),
+          GoRoute(
+            path: '/agent-actions',
+            builder: (_, __) => const PendingAgentActionsScreen(),
+          ),
+          GoRoute(
+            path: '/agent-runs/:id',
+            builder: (context, state) {
+              final id = int.tryParse(state.pathParameters['id'] ?? '') ?? 0;
+              return AgentRunScreen(runId: id);
+            },
+          ),
+          GoRoute(
+            path: '/settings/ai-remediation',
+            builder: (_, __) => const AiRemediationSettingsScreen(),
+          ),
+          GoRoute(
+            path: '/settings/request-settings',
+            builder: (_, __) => const RequestSettingsScreen(),
+          ),
+          GoRoute(
+            path: '/settings/devices',
+            builder: (_, __) => const DevicesScreen(),
+          ),
+          GoRoute(
+            path: '/settings/plex',
+            builder: (_, __) => const PlexSettingsScreen(),
+          ),
+          GoRoute(
+            path: '/settings/notifications',
+            builder: (_, __) => const NotificationPreferencesScreen(),
+          ),
+          GoRoute(
+            path: '/settings/passkeys',
+            builder: (_, __) => const PasskeyManagementScreen(),
+          ),
+          GoRoute(
+            path: '/settings/passkeys/new',
+            builder: (_, __) => const PasskeyCreateScreen(),
+          ),
+          GoRoute(
+            path: '/settings/password',
+            builder: (_, __) => const SetPasswordScreen(),
+          ),
+          GoRoute(
+            path: '/settings/instance/new',
+            builder: (_, __) => const InstanceEditScreen(),
+          ),
+          GoRoute(
+            path: '/settings/instance/:id',
+            builder: (context, state) {
+              final extra = state.extra as Map<String, dynamic>?;
+              return InstanceEditScreen(
+                instanceId: state.pathParameters['id'],
+                initialServiceType: extra?['service_type'] as String?,
+                initialName: extra?['name'] as String?,
+                initialUrl: extra?['url'] as String?,
+                initialApiKey: extra?['api_key'] as String?,
+                initialUsername: extra?['username'] as String?,
+                initialIsDefault: extra?['is_default'] as bool? ?? false,
+              );
+            },
+          ),
+          GoRoute(
+            path: '/setup',
+            builder: (_, __) => const SetupWizardScreen(),
+          ),
+          GoRoute(
+            path: '/plex-guide',
+            builder: (_, __) => const PlexWatchGuide(),
+          ),
         ],
-      ),
-
-      // Full-screen routes (outside the shell)
-      GoRoute(
-        path: '/assistant',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) {
-          final auth = ref.read(authProvider).valueOrNull;
-          final hasAi = auth?.connection?.services.ai ?? false;
-          return AiChatScreen(aiAvailable: hasAi);
-        },
-      ),
-      GoRoute(
-        path: '/detail/:type/:id',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) {
-          final type = state.pathParameters['type']!;
-          final id = int.parse(state.pathParameters['id']!);
-          final mediaType = type == 'tv' ? MediaType.tv : MediaType.movie;
-          return MediaDetailScreen(
-            id: id,
-            mediaType: mediaType,
-          );
-        },
-      ),
-      GoRoute(
-        path: '/settings',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const SettingsScreen(),
-      ),
-      GoRoute(
-        path: '/settings/credentials',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const CredentialsScreen(),
-      ),
-      GoRoute(
-        path: '/settings/ai-tools',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const AiToolsScreen(),
-      ),
-      GoRoute(
-        path: '/settings/users',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const UsersScreen(),
-      ),
-      GoRoute(
-        path: '/settings/users/:userId/request-settings',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) {
-          final userId = int.parse(state.pathParameters['userId']!);
-          final username = state.extra as String? ?? '';
-          return UserRequestSettingsScreen(userId: userId, username: username);
-        },
-      ),
-      GoRoute(
-        path: '/approvals',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const PendingRequestsScreen(),
-      ),
-      GoRoute(
-        path: '/issues',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const IssuesListScreen(),
-      ),
-      GoRoute(
-        path: '/issues/:id',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) {
-          final id = int.tryParse(state.pathParameters['id'] ?? '') ?? 0;
-          return IssueThreadScreen(issueId: id);
-        },
-      ),
-      GoRoute(
-        path: '/agent-actions',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const PendingAgentActionsScreen(),
-      ),
-      GoRoute(
-        path: '/agent-runs/:id',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) {
-          final id = int.tryParse(state.pathParameters['id'] ?? '') ?? 0;
-          return AgentRunScreen(runId: id);
-        },
-      ),
-      GoRoute(
-        path: '/settings/ai-remediation',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const AiRemediationSettingsScreen(),
-      ),
-      GoRoute(
-        path: '/settings/request-settings',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const RequestSettingsScreen(),
-      ),
-      GoRoute(
-        path: '/settings/devices',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const DevicesScreen(),
-      ),
-      GoRoute(
-        path: '/settings/plex',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const PlexSettingsScreen(),
-      ),
-      GoRoute(
-        path: '/settings/notifications',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const NotificationPreferencesScreen(),
-      ),
-      GoRoute(
-        path: '/settings/passkeys',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const PasskeyManagementScreen(),
-      ),
-      GoRoute(
-        path: '/settings/passkeys/new',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const PasskeyCreateScreen(),
-      ),
-      GoRoute(
-        path: '/settings/password',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const SetPasswordScreen(),
-      ),
-      GoRoute(
-        path: '/settings/instance/new',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const InstanceEditScreen(),
-      ),
-      GoRoute(
-        path: '/settings/instance/:id',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) {
-          final extra = state.extra as Map<String, dynamic>?;
-          return InstanceEditScreen(
-            instanceId: state.pathParameters['id'],
-            initialServiceType: extra?['service_type'] as String?,
-            initialName: extra?['name'] as String?,
-            initialUrl: extra?['url'] as String?,
-            initialApiKey: extra?['api_key'] as String?,
-            initialUsername: extra?['username'] as String?,
-            initialIsDefault: extra?['is_default'] as bool? ?? false,
-          );
-        },
-      ),
-      GoRoute(
-        path: '/setup',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const SetupWizardScreen(),
-      ),
-      GoRoute(
-        path: '/plex-guide',
-        parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const PlexWatchGuide(),
       ),
     ],
   );
 });
 
-bool _isInstanceModuleRoute(String path) {
-  return path.startsWith('/radarr/') ||
-      path.startsWith('/sonarr/') ||
-      path.startsWith('/chaptarr/') ||
-      path.startsWith('/downloads/') ||
-      path.startsWith('/tautulli/');
+bool _isInternalReturnLocation(Uri uri) {
+  return !uri.hasScheme &&
+      !uri.hasAuthority &&
+      uri.path.startsWith('/') &&
+      !uri.path.startsWith('//') &&
+      uri.path != '/login';
+}
+
+bool _isWithinRoute(String path, String route) =>
+    path == route || path.startsWith('$route/');
+
+/// Every route whose UI is explicitly admin-only. Issue threads are omitted:
+/// reporters must be able to follow a notification back to their own thread,
+/// while the aggregate `/issues` queue remains an admin surface.
+bool _isAdminOnlyRoute(String path) {
+  const adminRoots = [
+    '/radarr',
+    '/sonarr',
+    '/chaptarr',
+    '/downloads',
+    '/tautulli',
+    '/approvals',
+    '/agent-actions',
+    '/agent-runs',
+    '/setup',
+    '/settings/credentials',
+    '/settings/ai-tools',
+    '/settings/users',
+    '/settings/ai-remediation',
+    '/settings/request-settings',
+    '/settings/devices',
+    '/settings/plex',
+    '/settings/instance',
+  ];
+
+  return path == '/issues' ||
+      adminRoots.any((route) => _isWithinRoute(path, route));
+}
+
+int? _positiveIntParameter(GoRouterState state, String name) {
+  final value = int.tryParse(state.pathParameters[name] ?? '');
+  return value != null && value > 0 ? value : null;
+}
+
+bool _hasValidMediaDetailParameters(GoRouterState state) {
+  final type = state.pathParameters['type'];
+  return (type == 'movie' || type == 'tv') &&
+      _positiveIntParameter(state, 'id') != null;
+}
+
+/// Defensive fallback for a malformed parameter if a future router version
+/// invokes a builder before its route-level redirect has settled.
+class _InvalidRouteScreen extends StatelessWidget {
+  final String message;
+
+  const _InvalidRouteScreen({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(message, textAlign: TextAlign.center),
+        ),
+      ),
+    );
+  }
 }

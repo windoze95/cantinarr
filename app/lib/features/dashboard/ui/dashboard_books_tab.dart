@@ -491,7 +491,7 @@ class _BookRequestButtonState extends State<_BookRequestButton> {
   String get _buttonText {
     if (!_requestable) {
       // Both formats covered. Books don't use the movie/TV available labels
-      // ("Watch Now"): a fulfilled request is simply downloaded, and a
+      // ("Available"): a fulfilled request is simply downloaded, and a
       // partially fulfilled one is still on its way.
       return switch (_status) {
         RequestStatus.available => 'Downloaded',

@@ -367,7 +367,7 @@ Map<String, dynamic> _relatedTv() => _page([
 
 Map<String, dynamic> _requestStatus(int tmdbId) {
   if (tmdbId == _phm.tmdbId) {
-    // Movie: fully available -> "Watch Now".
+    // Movie: fully available -> "Available".
     return {'status': 'available', 'seasons': const []};
   }
   if (tmdbId == _hotd.tmdbId) {

@@ -92,8 +92,7 @@ class ReportProblemButton extends StatelessWidget {
           style: TextStyle(color: AppTheme.textPrimary)),
       style: OutlinedButton.styleFrom(
         side: const BorderSide(color: AppTheme.border),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         padding: const EdgeInsets.symmetric(vertical: 12),
       ),
     );
@@ -243,7 +242,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
                       backgroundColor: AppTheme.surfaceVariant,
                       labelStyle: TextStyle(
                         color: _category == c
-                            ? Colors.white
+                            ? AppTheme.onAccent
                             : AppTheme.textPrimary,
                         fontSize: 13,
                       ),
@@ -286,9 +285,8 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: _submitting
-                      ? null
-                      : () => Navigator.of(context).pop(),
+                  onPressed:
+                      _submitting ? null : () => Navigator.of(context).pop(),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppTheme.textPrimary,
                     side: const BorderSide(color: AppTheme.border),
@@ -305,7 +303,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
                   onPressed: _submitting ? null : _submit,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.accent,
-                    foregroundColor: Colors.white,
+                    foregroundColor: AppTheme.onAccent,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -315,7 +313,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
                           width: 20,
                           height: 20,
                           child: CircularProgressIndicator(
-                            color: Colors.white,
+                            color: AppTheme.onAccent,
                             strokeWidth: 2,
                           ),
                         )

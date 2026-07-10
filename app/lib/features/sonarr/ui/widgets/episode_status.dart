@@ -9,7 +9,7 @@ typedef EpisodeStatus = ({String text, Color color});
 /// Computes the episode status line, mirroring LunaSea's priority order:
 /// 1. an active download in the queue -> "{pct}% — {phrase}"
 /// 2. no file, already aired          -> "Missing"  (red)
-/// 3. no file, not yet aired          -> "Unaired"  (blue)
+/// 3. no file, not yet aired          -> "Unaired"  (info/ember)
 /// 4. has file, below quality cutoff  -> "{quality} — {size}"  (orange)
 /// 5. has file, meets cutoff          -> "{quality} — {size}"  (green)
 EpisodeStatus episodeStatusLine(SonarrEpisode episode, SonarrQueueItem? queue) {

@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/featured_media_hero.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
+import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/ui/category_row.dart';
 import '../../radarr/data/radarr_api_service.dart';
@@ -16,8 +18,7 @@ class DashboardMoviesTab extends ConsumerStatefulWidget {
   const DashboardMoviesTab({super.key});
 
   @override
-  ConsumerState<DashboardMoviesTab> createState() =>
-      _DashboardMoviesTabState();
+  ConsumerState<DashboardMoviesTab> createState() => _DashboardMoviesTabState();
 }
 
 class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
@@ -61,8 +62,8 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
     setState(() => _isLoadingLibrary = true);
 
     final backendDio = ref.read(backendClientProvider);
-    final service = RadarrApiService(
-        backendDio: backendDio, instanceId: defaultRadarr.id);
+    final service =
+        RadarrApiService(backendDio: backendDio, instanceId: defaultRadarr.id);
 
     List<RadarrMovie> movies = [];
     try {
@@ -70,7 +71,8 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
       if (!mounted) return;
 
       final downloaded = movies.where((m) => m.hasFile).toList()
-        ..sort((a, b) => (b.added ?? DateTime(0)).compareTo(a.added ?? DateTime(0)));
+        ..sort((a, b) =>
+            (b.added ?? DateTime(0)).compareTo(a.added ?? DateTime(0)));
 
       setState(() {
         _recentlyDownloaded = downloaded.take(10).toList();
@@ -84,16 +86,17 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
       if (!mounted) return;
 
       // Track which movies are actively downloading
-      final downloadingIds = queue
-          .map((r) => r['movieId'] as int?)
-          .whereType<int>()
-          .toSet();
+      final downloadingIds =
+          queue.map((r) => r['movieId'] as int?).whereType<int>().toSet();
 
       // "Downloading Soon" includes both actively downloading and monitored-waiting;
       // actively downloading items are shown first.
-      final waitingMovies = movies.where((m) => m.monitored && !m.hasFile).toList();
-      final downloading = waitingMovies.where((m) => downloadingIds.contains(m.id)).toList();
-      final monitored = waitingMovies.where((m) => !downloadingIds.contains(m.id)).toList();
+      final waitingMovies =
+          movies.where((m) => m.monitored && !m.hasFile).toList();
+      final downloading =
+          waitingMovies.where((m) => downloadingIds.contains(m.id)).toList();
+      final monitored =
+          waitingMovies.where((m) => !downloadingIds.contains(m.id)).toList();
       final downloadingSoon = [...downloading, ...monitored];
 
       setState(() {
@@ -103,7 +106,8 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
     } catch (_) {
       if (!mounted) return;
       // Queue fetch failed; still show monitored-but-missing movies without download status.
-      final waitingMovies = movies.where((m) => m.monitored && !m.hasFile).toList();
+      final waitingMovies =
+          movies.where((m) => m.monitored && !m.hasFile).toList();
       setState(() {
         _downloadingSoon = waitingMovies.take(10).toList();
         _downloadingMovieIds = {};
@@ -130,6 +134,14 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
       child: ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
+          if (discover.popularMovies.isNotEmpty)
+            FeaturedMediaHero(
+              item: discover.popularMovies.first,
+              eyebrow: 'Movie spotlight',
+              onTap: () => context.push(
+                '/detail/movie/${discover.popularMovies.first.id}',
+              ),
+            ),
           // Discovery rows
           CategoryRow(
             title: 'Popular Movies',
@@ -162,7 +174,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               items: _downloadingSoon,
               badgeBuilder: (movie) => _downloadingMovieIds.contains(movie.id)
                   ? (label: 'Downloading', color: AppTheme.downloading)
-                  : (label: 'Monitored', color: AppTheme.requested),
+                  : (label: 'Requested', color: AppTheme.requested),
             ),
           if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)
             _buildRow(
@@ -181,26 +193,26 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
     required List<RadarrMovie> items,
     required ({String label, Color color}) Function(RadarrMovie) badgeBuilder,
   }) {
+    final viewportWidth = MediaQuery.sizeOf(context).width;
+    final cardWidth =
+        viewportWidth >= 900 ? 124.0 : (viewportWidth >= 600 ? 116.0 : 108.0);
+
     return Padding(
       padding: const EdgeInsets.only(top: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              title,
-              style: const TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
+            padding: EdgeInsets.symmetric(
+              horizontal: MediaQuery.sizeOf(context).width >= 900 ? 24 : 16,
             ),
+            child: SectionHeader(title: title),
           ),
           const SizedBox(height: 12),
           HorizontalItemRow<RadarrMovie>(
             items: items,
             isLoading: _isLoadingLibrary,
+            height: cardWidth * 1.5 + 54,
             itemBuilder: (movie) {
               final badge = badgeBuilder(movie);
               return MediaCard(
@@ -209,7 +221,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
                 posterPath: movie.posterUrl,
                 statusLabel: badge.label,
                 statusColor: badge.color,
-                width: 100,
+                width: cardWidth,
                 onTap: movie.tmdbId != null
                     ? () => context.push('/detail/movie/${movie.tmdbId}')
                     : null,

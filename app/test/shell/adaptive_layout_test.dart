@@ -125,6 +125,22 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Discover'), findsOneWidget);
   });
+
+  testWidgets('desktop chrome switches exactly between 899 and 900 pixels',
+      (tester) async {
+    await pumpShell(tester, size: const Size(899, 800));
+
+    expect(find.byTooltip('Open navigation'), findsOneWidget);
+    expect(find.byType(BottomNavigationBar), findsOneWidget);
+    expect(find.text('CANTINARR'), findsNothing);
+
+    tester.view.physicalSize = const Size(900, 800);
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Open navigation'), findsNothing);
+    expect(find.byType(BottomNavigationBar), findsNothing);
+    expect(find.text('CANTINARR'), findsOneWidget);
+  });
 }
 
 const _userState = AuthState(

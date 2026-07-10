@@ -3,7 +3,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../data/sonarr_models.dart';
 
-/// List of Sonarr series with swipe-to-delete and progress indicators.
+/// List of Sonarr series with explicit row actions and progress indicators.
 /// Long-pressing a tile opens the series action sheet when [onLongPress] is
 /// wired.
 class SonarrSeriesList extends StatelessWidget {
@@ -43,39 +43,28 @@ class SonarrSeriesList extends StatelessWidget {
           const Divider(color: AppTheme.border, height: 1),
       itemBuilder: (context, index) {
         final show = series[index];
-        return Dismissible(
-          key: ValueKey(show.id),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            color: AppTheme.error,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 20),
-            child: const Icon(Icons.delete, color: Colors.white),
-          ),
-          confirmDismiss: (_) async {
+        return _SeriesTile(
+          show: show,
+          onDelete: () async {
             final deleteFiles = await _confirmDelete(context, show.title);
-            if (deleteFiles == null) return false;
+            if (deleteFiles == null) return;
             onDelete(show.id, deleteFiles: deleteFiles);
-            return true;
           },
-          child: _SeriesTile(
-            show: show,
-            onSearch: () => onSearch(show.id),
-            onInteractiveSearch: onInteractiveSearch != null
-                ? () => onInteractiveSearch!(show)
-                : null,
-            onOpen: onOpen != null ? () => onOpen!(show) : null,
-            onLongPress: onLongPress != null ? () => onLongPress!(show) : null,
-          ),
+          onSearch: () => onSearch(show.id),
+          onInteractiveSearch: onInteractiveSearch != null
+              ? () => onInteractiveSearch!(show)
+              : null,
+          onOpen: onOpen != null ? () => onOpen!(show) : null,
+          onLongPress: onLongPress != null ? () => onLongPress!(show) : null,
         );
       },
     );
   }
 
-  /// Delete confirmation with an "also delete files" choice (defaulted on).
+  /// Delete confirmation with an opt-in "also delete files" choice.
   /// Resolves to the delete-files flag, or null when cancelled.
   Future<bool?> _confirmDelete(BuildContext context, String title) {
-    var deleteFiles = true;
+    var deleteFiles = false;
     return showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -117,6 +106,7 @@ class SonarrSeriesList extends StatelessWidget {
 
 class _SeriesTile extends StatelessWidget {
   final SonarrSeries show;
+  final VoidCallback onDelete;
   final VoidCallback onSearch;
   final VoidCallback? onInteractiveSearch;
   final VoidCallback? onOpen;
@@ -124,6 +114,7 @@ class _SeriesTile extends StatelessWidget {
 
   const _SeriesTile({
     required this.show,
+    required this.onDelete,
     required this.onSearch,
     this.onInteractiveSearch,
     this.onOpen,
@@ -211,13 +202,17 @@ class _SeriesTile extends StatelessWidget {
       trailing: PopupMenuButton<String>(
         icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
         color: AppTheme.surfaceVariant,
-        tooltip: 'Actions',
+        tooltip: 'Actions for ${show.title}',
         onSelected: (value) {
           switch (value) {
             case 'search':
               onSearch();
             case 'interactive':
               onInteractiveSearch?.call();
+            case 'more':
+              onLongPress?.call();
+            case 'remove':
+              onDelete();
           }
         },
         itemBuilder: (_) => [
@@ -243,6 +238,32 @@ class _SeriesTile extends StatelessWidget {
                 ],
               ),
             ),
+          if (onLongPress != null)
+            const PopupMenuItem(
+              value: 'more',
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.more_horiz_rounded,
+                    size: 18,
+                    color: AppTheme.textSecondary,
+                  ),
+                  SizedBox(width: 10),
+                  Text('More actions…'),
+                ],
+              ),
+            ),
+          const PopupMenuDivider(),
+          const PopupMenuItem(
+            value: 'remove',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, size: 18, color: AppTheme.error),
+                SizedBox(width: 10),
+                Text('Remove…', style: TextStyle(color: AppTheme.error)),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -266,7 +287,7 @@ class _SeriesTile extends StatelessWidget {
 
   /// Sonarr's progress-bar grammar: green is reserved for ended series with
   /// every monitored episode on disk. A continuing series that is merely
-  /// caught up shows blue (more episodes are coming), and gaps show red when
+  /// caught up shows the warm info tone (more episodes are coming), and gaps show red when
   /// monitored or amber when the admin chose not to monitor them.
   Color get _progressColor {
     if (show.percentComplete >= 1.0) {

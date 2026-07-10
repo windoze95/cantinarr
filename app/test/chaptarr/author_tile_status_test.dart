@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// Mirrors the Sonarr tile's grammar: the badge is the author's publishing
 /// status, and the bar carries completeness — green only for an ended author
-/// with every monitored book on disk, blue when merely caught up, red/amber
+/// with every monitored book on disk, info/ember when merely caught up, red/amber
 /// for monitored/unmonitored gaps.
 ChaptarrAuthor _author({
   String? status,
@@ -41,7 +41,7 @@ Color? _barColor(WidgetTester tester) {
 }
 
 void main() {
-  testWidgets('caught-up continuing author stays Continuing with a blue bar',
+  testWidgets('caught-up continuing author stays Continuing with an info bar',
       (tester) async {
     await _pump(tester, _author(status: 'continuing', files: 12, count: 12));
     expect(find.text('Continuing'), findsOneWidget);

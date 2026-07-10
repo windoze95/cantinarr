@@ -45,7 +45,11 @@ class ChatBubble extends StatelessWidget {
                 color: AppTheme.accent,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.smart_toy, size: 18, color: Colors.white),
+              child: const Icon(
+                Icons.smart_toy,
+                size: 18,
+                color: AppTheme.onAccent,
+              ),
             ),
             const SizedBox(width: 8),
           ],

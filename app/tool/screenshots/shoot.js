@@ -47,6 +47,13 @@ const shots = require('./routes.js');
       const page = await ctx.newPage();
       const url = `${baseUrl}/?shot=${s.name}#${s.route}`;
       await page.goto(url, { waitUntil: 'networkidle' }).catch(() => {});
+      // The standalone screenshot entrypoint does not run the production app's
+      // startup lifecycle. Remove the HTML-only boot splash explicitly so the
+      // transparent cinematic canvas cannot reveal it behind sparse screens.
+      await page.evaluate(() => {
+        document.getElementById('splash')?.remove();
+        document.getElementById('splash-branding')?.remove();
+      });
       await page.waitForTimeout(s.settle || 4500);
       if (s.actions) await s.actions(page, d);
       // Let poster images finish decoding after any interaction.

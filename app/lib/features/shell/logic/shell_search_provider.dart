@@ -11,14 +11,8 @@ enum SearchMode {
   /// Normal search — bar at top, results overlay below.
   search,
 
-  /// No results found and AI is available — glow transition state.
-  noResults,
-
   /// AI ready — search bar stays at top, expands to multiline with shimmer glow.
   aiReady,
-
-  /// AI chat mode — bar at bottom (multiline), chat messages above.
-  aiChat,
 }
 
 /// Lightweight client-side intent hint for the unified search/AI bar.
@@ -204,20 +198,7 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
     }
   }
 
-  /// Transition from top-bar intent capture to full inline AI chat mode.
-  void beginAiChat() {
-    _searchDebounce?.cancel();
-    _searchGeneration++;
-    _searchLoader.reset();
-    state = state.copyWith(
-      searchMode: SearchMode.aiChat,
-      searchQuery: '',
-      searchResults: [],
-      isLoadingSearch: false,
-    );
-  }
-
-  /// Exit AI mode and return to normal search.
+  /// Exit the AI-ready hand-off and return to normal search.
   void exitAiMode() {
     _searchDebounce?.cancel();
     _searchGeneration++;

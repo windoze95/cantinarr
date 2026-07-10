@@ -184,9 +184,7 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
           ),
         ),
         Expanded(
-          child: _view == _ReleasesView.list
-              ? _buildList()
-              : _buildCalendar(),
+          child: _view == _ReleasesView.list ? _buildList() : _buildCalendar(),
         ),
       ],
     );
@@ -207,7 +205,8 @@ class _DashboardReleasesTabState extends ConsumerState<DashboardReleasesTab> {
             _StatusMessage(
               icon: Icons.event_busy_outlined,
               title: 'No upcoming releases',
-              message: 'Monitored movies and episodes will appear here.',
+              message:
+                  'Upcoming movies and episodes in your library will appear here.',
             ),
           ],
         ),
@@ -317,8 +316,8 @@ class _ViewToggle extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           _segment(_ReleasesView.list, Icons.view_agenda_outlined, 'List'),
-          _segment(
-              _ReleasesView.calendar, Icons.calendar_month_outlined, 'Calendar'),
+          _segment(_ReleasesView.calendar, Icons.calendar_month_outlined,
+              'Calendar'),
         ],
       ),
     );

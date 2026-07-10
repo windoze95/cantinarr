@@ -219,7 +219,7 @@ class _UserRequestSettingsScreenState
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.accent,
-                foregroundColor: Colors.white,
+                foregroundColor: AppTheme.onAccent,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
               onPressed: _saving ? null : _save,
@@ -228,7 +228,7 @@ class _UserRequestSettingsScreenState
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
+                          strokeWidth: 2, color: AppTheme.onAccent),
                     )
                   : const Text('Save'),
             ),
@@ -503,7 +503,7 @@ class _TriBool extends StatelessWidget {
       selectedColor: AppTheme.accent,
       side: const BorderSide(color: AppTheme.border),
       labelStyle: TextStyle(
-        color: selected ? Colors.white : AppTheme.textSecondary,
+        color: selected ? AppTheme.onAccent : AppTheme.textSecondary,
         fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
       ),
     );

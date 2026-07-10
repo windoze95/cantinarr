@@ -173,7 +173,10 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                     alignment: Alignment.centerRight,
                     padding: const EdgeInsets.only(right: 20),
                     color: AppTheme.error,
-                    child: const Icon(Icons.delete, color: Colors.white),
+                    child: const Icon(
+                      Icons.delete,
+                      color: AppTheme.background,
+                    ),
                   ),
                   confirmDismiss: (_) async {
                     await _revokeDevice(device);

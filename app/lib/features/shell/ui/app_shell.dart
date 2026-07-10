@@ -15,9 +15,7 @@ import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/search_bar.dart';
 import '../../../core/widgets/shimmer_border.dart';
-import '../../ai_assistant/data/ai_models.dart';
 import '../../ai_assistant/logic/ai_chat_provider.dart';
-import '../../ai_assistant/ui/chat_bubble.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/ui/search_results_view.dart';
@@ -56,7 +54,6 @@ class _AppShellState extends ConsumerState<AppShell>
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
-  final _chatScrollController = ScrollController();
   RadarrMoviesNotifier? _radarrNotifier;
   SonarrSeriesNotifier? _sonarrNotifier;
 
@@ -72,16 +69,11 @@ class _AppShellState extends ConsumerState<AppShell>
   late final AnimationController _searchBarAnim;
   late final Animation<double> _searchBarCurve;
 
-  // AI mode layout flip
-  late final AnimationController _aiModeAnim;
-  late final Animation<double> _aiModeCurve;
-
   // Shimmer sweep rotation for aiReady state
   late final AnimationController _shimmerRotationAnim;
 
-  // Shell-scoped AI chat notifier (lazy)
-  AiChatNotifier? _aiChatNotifier;
   SearchMode _prevMode = SearchMode.search;
+  bool? _prevReduceMotion;
 
   @override
   void initState() {
@@ -94,14 +86,6 @@ class _AppShellState extends ConsumerState<AppShell>
     _searchBarCurve = CurvedAnimation(
       parent: _searchBarAnim,
       curve: Curves.easeOut,
-    );
-    _aiModeAnim = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 500),
-    );
-    _aiModeCurve = CurvedAnimation(
-      parent: _aiModeAnim,
-      curve: Curves.easeInOutCubic,
     );
     _shimmerRotationAnim = AnimationController(
       vsync: this,
@@ -198,67 +182,25 @@ class _AppShellState extends ConsumerState<AppShell>
     FocusManager.instance.primaryFocus?.unfocus();
   }
 
-  /// Lazily attach to the shared AI chat notifier.
-  AiChatNotifier _getOrCreateAiChat() {
-    final existing = _aiChatNotifier;
-    if (existing != null) return existing;
-    final notifier = ref.read(aiChatProvider);
-    _setAiChatNotifier(notifier);
-    return notifier;
-  }
-
-  void _setAiChatNotifier(AiChatNotifier? notifier) {
-    if (identical(_aiChatNotifier, notifier)) return;
-    _aiChatNotifier?.removeListener(_onAiChatChanged);
-    _aiChatNotifier = notifier;
-    _aiChatNotifier?.addListener(_onAiChatChanged);
-  }
-
-  void _onAiChatChanged() {
-    if (mounted) {
-      setState(() {});
-      // Auto-scroll chat to bottom
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_chatScrollController.hasClients) {
-          _chatScrollController.animateTo(
-            _chatScrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-          );
-        }
-      });
-    }
-  }
-
-  /// React to search mode changes and drive animations.
-  void _onSearchModeChanged(SearchMode mode) {
-    if (mode == _prevMode) return;
+  /// React to the AI-ready hand-off and drive its bounded visual state.
+  void _onSearchModeChanged(SearchMode mode, {required bool reduceMotion}) {
+    if (mode == _prevMode && reduceMotion == _prevReduceMotion) return;
     _prevMode = mode;
+    _prevReduceMotion = reduceMotion;
 
     switch (mode) {
-      case SearchMode.noResults:
       case SearchMode.aiReady:
-        _shimmerRotationAnim.repeat();
-
-      case SearchMode.aiChat:
-        _shimmerRotationAnim.stop();
-        _shimmerRotationAnim.value = 0;
-        _aiModeAnim.forward();
-        // Transfer query text to the bottom input if AI chat is opened
-        // without immediately sending the existing prompt.
-        final query = ref.read(shellSearchProvider).searchQuery;
-        if (query.isNotEmpty && _searchController.text != query) {
-          _searchController.text = query;
-          _searchController.selection = TextSelection.fromPosition(
-            TextPosition(offset: query.length),
-          );
+        if (reduceMotion) {
+          _shimmerRotationAnim
+            ..stop()
+            ..value = 0;
+        } else {
+          _shimmerRotationAnim.repeat();
         }
-        _getOrCreateAiChat();
 
       case SearchMode.search:
         _shimmerRotationAnim.stop();
         _shimmerRotationAnim.value = 0;
-        _aiModeAnim.reverse();
     }
   }
 
@@ -266,14 +208,6 @@ class _AppShellState extends ConsumerState<AppShell>
     _searchController.clear();
     ref.read(shellSearchProvider.notifier).exitAiMode();
     _dismissKeyboard();
-  }
-
-  void _sendAiMessage() {
-    final text = _searchController.text.trim();
-    if (text.isEmpty || _aiChatNotifier == null) return;
-    _searchController.clear();
-    _dismissKeyboard();
-    _aiChatNotifier!.sendMessage(text);
   }
 
   /// Submit top-bar input through the full-screen assistant route.
@@ -407,10 +341,7 @@ class _AppShellState extends ConsumerState<AppShell>
     WidgetsBinding.instance.removeObserver(this);
     _libraryRefreshDebounce?.cancel();
     _searchBarAnim.dispose();
-    _aiModeAnim.dispose();
     _shimmerRotationAnim.dispose();
-    _chatScrollController.dispose();
-    _setAiChatNotifier(null);
     _disposeLibraries();
     _searchController.dispose();
     _searchFocusNode.removeListener(_onSearchFocusChanged);
@@ -470,20 +401,19 @@ class _AppShellState extends ConsumerState<AppShell>
 
     final mobile = AppBreakpoints.isMobile(context);
     final desktop = AppBreakpoints.isDesktop(context);
+    final showGlobalSearch = _moduleTypeForPath(widget.currentPath) != null;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
     // Drive animations from state changes
-    _onSearchModeChanged(searchState.searchMode);
+    _onSearchModeChanged(
+      searchState.searchMode,
+      reduceMotion: reduceMotion || !showGlobalSearch,
+    );
 
-    final isAiMode = searchState.searchMode == SearchMode.aiChat;
     final isAiReady = searchState.searchMode == SearchMode.aiReady;
-    if (isAiMode) {
-      _setAiChatNotifier(ref.watch(aiChatProvider));
-    } else {
-      _setAiChatNotifier(null);
-    }
 
     final searchBar = Padding(
-      padding: EdgeInsets.fromLTRB(desktop ? 16 : 4, 8, 16, 8),
+      padding: EdgeInsets.fromLTRB(desktop ? 24 : 6, 12, desktop ? 24 : 12, 10),
       child: AnimatedBuilder(
         animation: _shimmerRotationAnim,
         builder: (context, child) {
@@ -491,8 +421,8 @@ class _AppShellState extends ConsumerState<AppShell>
             foregroundPainter: isAiReady
                 ? ShimmerBorderPainter(
                     progress: _shimmerRotationAnim.value,
-                    borderRadius: 14.0,
-                    accentColor: AppTheme.accent,
+                    borderRadius: AppTheme.radiusLarge,
+                    accentColor: AppTheme.signal,
                   )
                 : null,
             child: child,
@@ -509,10 +439,9 @@ class _AppShellState extends ConsumerState<AppShell>
           aiEnabled: hasAi,
           onSubmitted: _submitSearchBar,
           onSend: isAiReady ? _submitSearchBarToAi : null,
-          onChanged: isAiMode ? null : (q) => searchNotifier.updateSearch(q),
-          onClear: isAiReady || isAiMode
-              ? _exitAiMode
-              : () => searchNotifier.updateSearch(''),
+          onChanged: (q) => searchNotifier.updateSearch(q),
+          onClear:
+              isAiReady ? _exitAiMode : () => searchNotifier.updateSearch(''),
         ),
       ),
     );
@@ -524,7 +453,7 @@ class _AppShellState extends ConsumerState<AppShell>
       topBar = Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(
-            maxWidth: AppBreakpoints.readableContentWidth,
+            maxWidth: 880,
           ),
           child: searchBar,
         ),
@@ -533,27 +462,94 @@ class _AppShellState extends ConsumerState<AppShell>
       topBar = Row(
         children: [
           Padding(
-            padding: const EdgeInsets.only(left: 4, top: 8, bottom: 8),
-            child: IconButton(
-              icon: Badge(
-                isLabelVisible: menuBadgeCount > 0,
-                backgroundColor: AppTheme.accent,
-                smallSize: 9,
-                child: const Icon(Icons.menu, color: AppTheme.textPrimary),
+            padding: const EdgeInsets.only(left: 10, top: 12, bottom: 10),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceVariant,
+                borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+                border: Border.all(color: AppTheme.border),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    blurRadius: 12,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
               ),
-              tooltip: pendingApprovals > 0
-                  ? '$pendingApprovals approval${pendingApprovals == 1 ? '' : 's'} waiting'
-                  : null,
-              onPressed: () {
-                _dismissKeyboard();
-                _scaffoldKey.currentState?.openDrawer();
-              },
+              child: IconButton(
+                icon: Badge(
+                  isLabelVisible: menuBadgeCount > 0,
+                  backgroundColor: AppTheme.accent,
+                  smallSize: 9,
+                  child: const Icon(
+                    Icons.menu,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                tooltip: pendingApprovals > 0
+                    ? '$pendingApprovals approval${pendingApprovals == 1 ? '' : 's'} waiting'
+                    : 'Open navigation',
+                onPressed: () {
+                  _dismissKeyboard();
+                  _scaffoldKey.currentState?.openDrawer();
+                },
+              ),
             ),
           ),
           Expanded(child: searchBar),
         ],
       );
     }
+
+    final secondaryTopBar = Container(
+      margin: const EdgeInsets.fromLTRB(10, 10, 10, 5),
+      height: 48,
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: Badge(
+              isLabelVisible: menuBadgeCount > 0,
+              backgroundColor: AppTheme.accent,
+              smallSize: 9,
+              child: const Icon(Icons.menu),
+            ),
+            tooltip: 'Open navigation',
+            onPressed: () {
+              _dismissKeyboard();
+              _scaffoldKey.currentState?.openDrawer();
+            },
+          ),
+          Container(width: 1, height: 20, color: AppTheme.border),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              _secondaryRouteLabel(widget.currentPath).toUpperCase(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.only(right: 15),
+            child: Icon(
+              Icons.blur_on_rounded,
+              size: 16,
+              color: AppTheme.signal,
+            ),
+          ),
+        ],
+      ),
+    );
 
     final scaffold = Scaffold(
       key: _scaffoldKey,
@@ -565,7 +561,7 @@ class _AppShellState extends ConsumerState<AppShell>
             Column(
               children: [
                 // Search bar at top (hidden during AI mode)
-                if (!isAiMode) ...[
+                if (showGlobalSearch) ...[
                   if (mobile)
                     SizeTransition(
                       sizeFactor: _searchBarCurve,
@@ -574,24 +570,23 @@ class _AppShellState extends ConsumerState<AppShell>
                     )
                   else
                     topBar,
-                ],
+                ] else if (!desktop)
+                  secondaryTopBar,
                 // Module content (includes its own bottom nav)
                 Expanded(
                   child: Stack(
                     children: [
                       NotificationListener<ScrollNotification>(
-                        onNotification: mobile &&
-                                !searchState.isSearching &&
-                                !isAiMode &&
-                                !isAiReady
-                            ? _handleScrollNotification
-                            : null,
+                        onNotification:
+                            mobile && !searchState.isSearching && !isAiReady
+                                ? _handleScrollNotification
+                                : null,
                         child: widget.child,
                       ),
                       if (isAiReady)
                         Positioned.fill(
                           child: Container(
-                            color: AppTheme.background,
+                            color: AppTheme.background.withValues(alpha: 0.96),
                             child: Column(
                               children: [
                                 Padding(
@@ -634,35 +629,33 @@ class _AppShellState extends ConsumerState<AppShell>
                             ),
                           ),
                         ),
+                      // Search lives in the same measured content region as
+                      // the module, so it always begins below the actual top
+                      // bar height (including text scaling).
+                      if (showGlobalSearch &&
+                          searchState.searchMode == SearchMode.search &&
+                          searchState.isSearching)
+                        Positioned.fill(
+                          child: ColoredBox(
+                            color: AppTheme.background.withValues(alpha: 0.97),
+                            child: SearchResultsView(
+                              results: searchState.searchResults,
+                              isLoading: searchState.isLoadingSearch,
+                              query: searchState.searchQuery,
+                              onLoadMore: searchNotifier.loadMoreSearch,
+                              libraryStatus: libraryStatus,
+                              onResultTap: _dismissKeyboard,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
               ],
             ),
 
-            // Overlay: search results (normal search mode)
-            if (searchState.searchMode == SearchMode.search &&
-                searchState.isSearching)
-              Positioned.fill(
-                top: 60, // below the search bar
-                child: Container(
-                  color: AppTheme.background,
-                  child: SearchResultsView(
-                    results: searchState.searchResults,
-                    isLoading: searchState.isLoadingSearch,
-                    query: searchState.searchQuery,
-                    onLoadMore: searchNotifier.loadMoreSearch,
-                    libraryStatus: libraryStatus,
-                    onResultTap: _dismissKeyboard,
-                  ),
-                ),
-              ),
-
-            // Overlay: AI chat mode
-            if (isAiMode) _buildAiChatOverlay(),
-
-            // Bottom fade gradient (only when not in AI mode)
-            if (!isAiMode)
+            // Quiet depth cue above module navigation.
+            if (showGlobalSearch)
               Positioned(
                 left: 0,
                 right: 0,
@@ -675,8 +668,8 @@ class _AppShellState extends ConsumerState<AppShell>
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          AppTheme.accent.withValues(alpha: 0),
-                          AppTheme.accent.withValues(alpha: 0.08),
+                          AppTheme.background.withValues(alpha: 0),
+                          AppTheme.signal.withValues(alpha: 0.035),
                         ],
                       ),
                     ),
@@ -692,14 +685,23 @@ class _AppShellState extends ConsumerState<AppShell>
     if (desktop) {
       return Row(
         children: [
-          SizedBox(
+          Container(
             width: AppBreakpoints.sidebarWidth,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [AppTheme.surfaceRaised, AppTheme.surface],
+              ),
+              border: Border(
+                right: BorderSide(color: AppTheme.border),
+              ),
+            ),
             child: Material(
-              color: AppTheme.surface,
+              color: Colors.transparent,
               child: _buildDrawerContent(context, isOverlay: false),
             ),
           ),
-          const VerticalDivider(width: 1, thickness: 1, color: AppTheme.border),
           Expanded(child: scaffold),
         ],
       );
@@ -708,177 +710,23 @@ class _AppShellState extends ConsumerState<AppShell>
     return scaffold;
   }
 
-  /// AI chat overlay: messages above, multiline input at bottom.
-  Widget _buildAiChatOverlay() {
-    final chatState = _aiChatNotifier?.state;
-    final messages = chatState?.messages ?? [];
-    final isLoading = chatState?.isLoading ?? false;
-
-    return AnimatedBuilder(
-      animation: _aiModeCurve,
-      builder: (context, _) {
-        return Positioned.fill(
-          child: FadeTransition(
-            opacity: _aiModeCurve,
-            child: Container(
-              color: AppTheme.background,
-              child: Column(
-                children: [
-                  // Header
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: const BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(color: AppTheme.border),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.arrow_back,
-                              color: AppTheme.textSecondary, size: 22),
-                          onPressed: _exitAiMode,
-                          tooltip: 'Back to search',
-                        ),
-                        Icon(
-                          Icons.auto_awesome,
-                          size: 18,
-                          color: AppTheme.accent.withValues(alpha: 0.8),
-                        ),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'AI',
-                          style: TextStyle(
-                            color: AppTheme.textPrimary,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const Spacer(),
-                        if (messages.length > 1)
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline,
-                                color: AppTheme.textSecondary, size: 20),
-                            onPressed: () {
-                              _aiChatNotifier?.clearChat();
-                            },
-                            tooltip: 'Clear chat',
-                          ),
-                      ],
-                    ),
-                  ),
-
-                  // Chat messages: full-width scroll surface with the
-                  // transcript column capped for readability on desktop.
-                  Expanded(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTap: _dismissKeyboard,
-                      child: LayoutBuilder(builder: (context, constraints) {
-                        final hPad = AppBreakpoints.centeredContentPadding(
-                          constraints.maxWidth,
-                        );
-                        return ListView.builder(
-                          controller: _chatScrollController,
-                          keyboardDismissBehavior:
-                              ScrollViewKeyboardDismissBehavior.onDrag,
-                          padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 16),
-                          itemCount: messages.length +
-                              (isLoading &&
-                                      (messages.isEmpty ||
-                                          messages.last.role !=
-                                              ChatRole.assistant)
-                                  ? 1
-                                  : 0),
-                          itemBuilder: (context, index) {
-                            if (index >= messages.length) {
-                              return const _TypingIndicator();
-                            }
-                            // Skip the initial welcome message
-                            final msg = messages[index];
-                            if (index == 0 && msg.role == ChatRole.assistant) {
-                              return const SizedBox.shrink();
-                            }
-                            final isLast = index == messages.length - 1;
-                            return ChatBubble(
-                              message: msg,
-                              onRetry: isLast && msg.errorText != null
-                                  ? _aiChatNotifier?.retryLast
-                                  : null,
-                            );
-                          },
-                        );
-                      }),
-                    ),
-                  ),
-
-                  // Error
-                  if (chatState?.error != null)
-                    CenteredContent(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 4),
-                        child: Text(
-                          chatState!.error!,
-                          style: const TextStyle(
-                              color: AppTheme.error, fontSize: 12),
-                          maxLines: 2,
-                        ),
-                      ),
-                    ),
-
-                  // Bottom input bar
-                  Container(
-                    decoration: BoxDecoration(
-                      color: AppTheme.surface,
-                      border: const Border(
-                        top: BorderSide(color: AppTheme.border),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppTheme.accent.withValues(alpha: 0.05),
-                          blurRadius: 12,
-                          offset: const Offset(0, -2),
-                        ),
-                      ],
-                    ),
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                    child: SafeArea(
-                      top: false,
-                      child: Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(
-                            maxWidth: AppBreakpoints.readableContentWidth,
-                          ),
-                          child: CantinarrSearchBar(
-                            controller: _searchController,
-                            focusNode: _searchFocusNode,
-                            hintText: 'Ask about movies, shows...',
-                            aiEnabled: true,
-                            multiline: true,
-                            onSend: _sendAiMessage,
-                            onChanged: (_) => setState(() {}),
-                            onClear: _exitAiMode,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   Widget _buildDrawer(BuildContext context) {
     return Drawer(
       backgroundColor: AppTheme.surface,
       child: _buildDrawerContent(context, isOverlay: true),
     );
+  }
+
+  static String _secondaryRouteLabel(String path) {
+    if (path.startsWith('/detail/')) return 'Media details';
+    if (path.startsWith('/settings')) return 'Settings';
+    if (path.startsWith('/approvals')) return 'Approvals';
+    if (path.startsWith('/issues')) return 'Issues';
+    if (path.startsWith('/agent-')) return 'Agent workspace';
+    if (path.startsWith('/assistant')) return 'AI assistant';
+    if (path.startsWith('/setup')) return 'Setup';
+    if (path.startsWith('/plex-guide')) return 'Watch on Plex';
+    return 'Cantinarr';
   }
 
   Widget _buildDrawerContent(BuildContext context, {required bool isOverlay}) {
@@ -915,13 +763,9 @@ class _AppShellState extends ConsumerState<AppShell>
       }
     }
 
-    // Builds one module row (plus its desktop sub-pages when active). [index]
-    // is the module's position in moduleState.modules, used for the active-
-    // highlight fallback when the current route isn't itself a module path.
-    Widget buildModuleTile(int index, AppModule module) {
-      final isActive = pathModule != null
-          ? module.type == pathModule
-          : index == moduleState.activeIndex;
+    // Builds one module row plus its desktop sub-pages when active.
+    Widget buildModuleTile(AppModule module) {
+      final isActive = pathModule != null && module.type == pathModule;
       final selectorInstances = isAdmin
           ? _instancesForModule(instanceState, module.type)
           : const <ServiceInstance>[];
@@ -995,31 +839,61 @@ class _AppShellState extends ConsumerState<AppShell>
           // Header
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+            child: Row(
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.asset(
-                    'assets/logo.png',
-                    width: 48,
-                    height: 48,
-                    fit: BoxFit.cover,
+                Container(
+                  width: 50,
+                  height: 50,
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [AppTheme.accent, AppTheme.signal],
+                    ),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.accent.withValues(alpha: 0.16),
+                        blurRadius: 18,
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(13),
+                    child: Image.asset(
+                      'assets/logo.png',
+                      fit: BoxFit.cover,
+                    ),
                   ),
                 ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Cantinarr',
-                  style: TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'CANTINARR',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              color: AppTheme.textPrimary,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.25,
+                            ),
+                      ),
+                      const SizedBox(height: 3),
+                      const Text(
+                        'How you doing, you old pirate?',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppTheme.textMuted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-                const Text(
-                  'How you doing, you old pirate?',
-                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
                 ),
               ],
             ),
@@ -1096,14 +970,14 @@ class _AppShellState extends ConsumerState<AppShell>
           // modules-only because the bottom nav covers page switching.
           Expanded(
             child: ListView(
-              padding: EdgeInsets.zero,
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
               children: [
                 if (libraryModules.isNotEmpty)
-                  buildModuleTile(0, libraryModules.first),
+                  buildModuleTile(libraryModules.first),
                 if (libraryModules.length > 1) ...[
                   const _DrawerSectionHeader('Libraries'),
                   for (int i = 1; i < libraryModules.length; i++)
-                    buildModuleTile(i, libraryModules[i]),
+                    buildModuleTile(libraryModules[i]),
                 ],
               ],
             ),
@@ -1257,21 +1131,60 @@ class _DrawerItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon,
-          color: selected ? AppTheme.accent : AppTheme.textSecondary),
-      title: Text(
-        title,
-        style: TextStyle(
-          color: selected ? AppTheme.accent : AppTheme.textPrimary,
-          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: AnimatedContainer(
+        duration: AppTheme.motionMedium,
+        decoration: BoxDecoration(
+          gradient: selected
+              ? LinearGradient(
+                  colors: [
+                    AppTheme.accent.withValues(alpha: 0.16),
+                    AppTheme.signal.withValues(alpha: 0.045),
+                  ],
+                )
+              : null,
+          borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+          border: Border.all(
+            color: selected
+                ? AppTheme.accent.withValues(alpha: 0.28)
+                : Colors.transparent,
+          ),
+        ),
+        child: ListTile(
+          leading: AnimatedContainer(
+            duration: AppTheme.motionFast,
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: selected
+                  ? AppTheme.accent.withValues(alpha: 0.14)
+                  : AppTheme.surfaceVariant.withValues(alpha: 0.7),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+            ),
+            child: Icon(
+              icon,
+              size: 20,
+              color: selected ? AppTheme.accent : AppTheme.textSecondary,
+            ),
+          ),
+          title: Text(
+            title,
+            style: TextStyle(
+              color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              letterSpacing: selected ? 0.05 : 0,
+            ),
+          ),
+          trailing: badgeCount > 0 ? _CountPill(count: badgeCount) : trailing,
+          selected: selected,
+          selectedTileColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+          ),
+          onTap: onTap,
         ),
       ),
-      trailing: badgeCount > 0 ? _CountPill(count: badgeCount) : trailing,
-      selected: selected,
-      selectedTileColor: AppTheme.accent.withValues(alpha: 0.08),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      onTap: onTap,
     );
   }
 }
@@ -1286,14 +1199,14 @@ class _DrawerSectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      padding: const EdgeInsets.fromLTRB(10, 18, 10, 7),
       child: Text(
         label.toUpperCase(),
         style: const TextStyle(
-          color: AppTheme.textSecondary,
-          fontSize: 11,
+          color: AppTheme.textMuted,
+          fontSize: 10,
           fontWeight: FontWeight.w700,
-          letterSpacing: 0.8,
+          letterSpacing: 1.25,
         ),
       ),
     );
@@ -1315,28 +1228,33 @@ class _DrawerSubItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      dense: true,
-      contentPadding: const EdgeInsets.only(left: 36, right: 16),
-      minLeadingWidth: 0,
-      horizontalTitleGap: 14,
-      leading: Icon(
-        selected ? page.activeIcon : page.icon,
-        size: 20,
-        color: selected ? AppTheme.accent : AppTheme.textSecondary,
-      ),
-      title: Text(
-        page.label,
-        style: TextStyle(
-          fontSize: 14,
-          color: selected ? AppTheme.accent : AppTheme.textPrimary,
-          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+    return Padding(
+      padding: const EdgeInsets.only(left: 20, top: 1, bottom: 1),
+      child: ListTile(
+        dense: true,
+        contentPadding: const EdgeInsets.only(left: 13, right: 12),
+        minLeadingWidth: 0,
+        horizontalTitleGap: 11,
+        leading: Icon(
+          selected ? page.activeIcon : page.icon,
+          size: 18,
+          color: selected ? AppTheme.signal : AppTheme.textMuted,
         ),
+        title: Text(
+          page.label,
+          style: TextStyle(
+            fontSize: 13,
+            color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          ),
+        ),
+        selected: selected,
+        selectedTileColor: AppTheme.signal.withValues(alpha: 0.075),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        ),
+        onTap: onTap,
       ),
-      selected: selected,
-      selectedTileColor: AppTheme.accent.withValues(alpha: 0.08),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      onTap: onTap,
     );
   }
 }
@@ -1395,8 +1313,9 @@ class _InstanceSelector extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            border: Border.all(color: AppTheme.border),
-            borderRadius: BorderRadius.circular(8),
+            color: AppTheme.surfaceVariant.withValues(alpha: 0.8),
+            border: Border.all(color: AppTheme.borderStrong),
+            borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1439,97 +1358,20 @@ class _CountPill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
         color: AppTheme.accent,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.accent.withValues(alpha: 0.2),
+            blurRadius: 10,
+          ),
+        ],
       ),
       child: Text(
         count > 99 ? '99+' : '$count',
         style: const TextStyle(
-          color: AppTheme.background,
+          color: AppTheme.onAccent,
           fontSize: 12,
           fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-}
-
-/// Typing indicator with animated dots.
-class _TypingIndicator extends StatelessWidget {
-  const _TypingIndicator();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceVariant,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: List.generate(
-                3,
-                (i) => Padding(
-                  padding: EdgeInsets.only(left: i > 0 ? 4 : 0),
-                  child: _Dot(delay: i * 200),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Dot extends StatefulWidget {
-  final int delay;
-  const _Dot({required this.delay});
-
-  @override
-  State<_Dot> createState() => _DotState();
-}
-
-class _DotState extends State<_Dot> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _animation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 600),
-      vsync: this,
-    );
-    _animation = Tween(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
-    Future.delayed(Duration(milliseconds: widget.delay), () {
-      if (mounted) _controller.repeat(reverse: true);
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _animation,
-      builder: (_, __) => Container(
-        width: 8,
-        height: 8,
-        decoration: BoxDecoration(
-          color: AppTheme.textSecondary
-              .withValues(alpha: 0.3 + _animation.value * 0.7),
-          shape: BoxShape.circle,
         ),
       ),
     );

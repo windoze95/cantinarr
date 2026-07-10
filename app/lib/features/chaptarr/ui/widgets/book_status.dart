@@ -9,7 +9,7 @@ typedef BookStatus = ({String text, Color color});
 /// priority order adapted to books (which have no live queue lookup here):
 /// 1. has a file              -> "{format} — {size}" / "Downloaded"  (green)
 /// 2. no file, already out    -> "Missing"     (red)
-/// 3. no file, not yet out    -> "Unreleased"  (blue)
+/// 3. no file, not yet out    -> "Unreleased"  (info/ember)
 BookStatus bookFileStatusLine(ChaptarrBook book) {
   if (book.hasFile) {
     final size = book.statistics?.sizeFormatted;
