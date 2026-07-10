@@ -84,7 +84,8 @@ class _SeasonTableState extends State<SeasonTable> {
     ..addAll(_selectableNumbers));
 
   void _selectFirst() {
-    final first = _selectableNumbers.isNotEmpty ? _selectableNumbers.first : null;
+    final first =
+        _selectableNumbers.isNotEmpty ? _selectableNumbers.first : null;
     setState(() {
       _selected.clear();
       if (first != null) _selected.add(first);
@@ -92,7 +93,8 @@ class _SeasonTableState extends State<SeasonTable> {
   }
 
   void _selectLatest() {
-    final latest = _selectableNumbers.isNotEmpty ? _selectableNumbers.last : null;
+    final latest =
+        _selectableNumbers.isNotEmpty ? _selectableNumbers.last : null;
     setState(() {
       _selected.clear();
       if (latest != null) _selected.add(latest);
@@ -176,7 +178,7 @@ class _SeasonTableState extends State<SeasonTable> {
                             width: 16,
                             height: 16,
                             child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
+                                strokeWidth: 2, color: AppTheme.onAccent),
                           )
                         : const Icon(Icons.add, size: 18),
                     label: Text(
@@ -187,10 +189,10 @@ class _SeasonTableState extends State<SeasonTable> {
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.accent,
-                      foregroundColor: Colors.white,
+                      foregroundColor: AppTheme.onAccent,
                       disabledBackgroundColor:
                           AppTheme.accent.withValues(alpha: 0.3),
-                      disabledForegroundColor: Colors.white70,
+                      disabledForegroundColor: AppTheme.onAccent,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -239,7 +241,7 @@ class _SeasonRow extends StatelessWidget {
                 value: checked,
                 onChanged: available ? null : onChanged,
                 activeColor: AppTheme.accent,
-                checkColor: Colors.white,
+                checkColor: AppTheme.onAccent,
                 side: const BorderSide(color: AppTheme.textSecondary),
               )
             else
@@ -299,8 +301,8 @@ class _SeasonStatusBadge extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: TextStyle(
-            color: color, fontSize: 11, fontWeight: FontWeight.w600),
+        style:
+            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
       ),
     );
   }

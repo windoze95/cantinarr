@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_panel.dart';
 import '../data/passkey_service.dart';
 import '../data/server_status.dart';
 import '../logic/auth_provider.dart';
@@ -109,72 +110,107 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 32),
             // Login card: full-width buttons would otherwise stretch the
             // column across a desktop window.
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Logo
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    child: Image.asset(
-                      'assets/logo.png',
-                      width: 72,
-                      height: 72,
-                      fit: BoxFit.cover,
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: AppPanel(
+                padding: const EdgeInsets.fromLTRB(28, 30, 28, 28),
+                radius: AppTheme.radiusXLarge,
+                accentColor: AppTheme.signal,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Logo
+                    Container(
+                      width: 78,
+                      height: 78,
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [AppTheme.accent, AppTheme.signal],
+                        ),
+                        borderRadius: BorderRadius.circular(22),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppTheme.accent.withValues(alpha: 0.17),
+                            blurRadius: 24,
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(19),
+                        child: Image.asset(
+                          'assets/logo.png',
+                          fit: BoxFit.cover,
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Cantinarr',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
+                    const SizedBox(height: 18),
+                    const Text(
+                      'CANTINARR',
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 27,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 2.2,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    showPasskeyOffer ? 'Secure your account' : _subtitle,
-                    style: const TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 15),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 40),
+                    const SizedBox(height: 5),
+                    const Text(
+                      'YOUR MEDIA, ONE SIGNAL',
+                      style: TextStyle(
+                        color: AppTheme.signal,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.45,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      showPasskeyOffer ? 'Secure your account' : _subtitle,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 15,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 34),
 
-                  // Post-setup passkey offer takes priority
-                  if (showPasskeyOffer)
-                    const _PasskeyOfferView()
-                  else
-                    // View-specific content
-                    switch (_view) {
-                      _AuthView.serverUrl => _ServerUrlView(
-                          controller: _serverUrlController,
-                          isLoading: _isCheckingServer,
-                          error: _serverError,
-                          onCheck: _checkServer,
-                          onConnectLink: _showConnectLink,
-                        ),
-                      _AuthView.setup => _SetupView(
-                          serverUrl: _serverUrlController.text.trim(),
-                          serverStatus: _serverStatus!,
-                          onBack: _backToServerUrl,
-                        ),
-                      _AuthView.login => _LoginView(
-                          serverUrl: _serverUrlController.text.trim(),
-                          serverStatus: _serverStatus,
-                          onBack: _backToServerUrl,
-                          onConnectLink: _showConnectLink,
-                        ),
-                      _AuthView.connectLink => _ConnectLinkView(
-                          controller: _linkController,
-                          onBack: _backToServerUrl,
-                        ),
-                    },
-                ],
+                    // Post-setup passkey offer takes priority
+                    if (showPasskeyOffer)
+                      const _PasskeyOfferView()
+                    else
+                      // View-specific content
+                      switch (_view) {
+                        _AuthView.serverUrl => _ServerUrlView(
+                            controller: _serverUrlController,
+                            isLoading: _isCheckingServer,
+                            error: _serverError,
+                            onCheck: _checkServer,
+                            onConnectLink: _showConnectLink,
+                          ),
+                        _AuthView.setup => _SetupView(
+                            serverUrl: _serverUrlController.text.trim(),
+                            serverStatus: _serverStatus!,
+                            onBack: _backToServerUrl,
+                          ),
+                        _AuthView.login => _LoginView(
+                            serverUrl: _serverUrlController.text.trim(),
+                            serverStatus: _serverStatus,
+                            onBack: _backToServerUrl,
+                            onConnectLink: _showConnectLink,
+                          ),
+                        _AuthView.connectLink => _ConnectLinkView(
+                            controller: _linkController,
+                            onBack: _backToServerUrl,
+                          ),
+                      },
+                  ],
+                ),
               ),
             ),
           ),

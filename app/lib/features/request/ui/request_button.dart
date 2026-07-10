@@ -27,7 +27,7 @@ class RequestButton extends StatelessWidget {
       children: [
         SizedBox(
           width: double.infinity,
-          height: 48,
+          height: 54,
           child: _buildButton(),
         ),
         if (error != null)
@@ -63,14 +63,18 @@ class RequestButton extends StatelessWidget {
         ),
       RequestStatus.available => (
           AppTheme.available,
-          Icons.play_circle_fill,
+          Icons.check_circle_rounded,
           false
         ),
       RequestStatus.partial => (AppTheme.accent, Icons.add, true),
     };
 
+    final foreground = color.computeLuminance() > 0.42
+        ? AppTheme.background
+        : AppTheme.textPrimary;
+
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
+      duration: AppTheme.motionMedium,
       child: ElevatedButton.icon(
         onPressed: enabled && !isRequesting ? onRequest : null,
         icon: isRequesting
@@ -78,20 +82,25 @@ class RequestButton extends StatelessWidget {
                 width: 18,
                 height: 18,
                 child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.white),
+                  strokeWidth: 2,
+                  color: AppTheme.onAccent,
+                ),
               )
             : Icon(icon, size: 20),
         label: Text(
           isRequesting ? 'Requesting...' : status.buttonLabel,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
         ),
         style: ElevatedButton.styleFrom(
-          backgroundColor: enabled ? color : color.withValues(alpha: 0.3),
-          foregroundColor: Colors.white,
-          disabledBackgroundColor: color.withValues(alpha: 0.3),
-          disabledForegroundColor: Colors.white70,
+          backgroundColor: color,
+          foregroundColor: foreground,
+          disabledBackgroundColor: color.withValues(alpha: 0.13),
+          disabledForegroundColor: color,
+          side: BorderSide(
+            color: color.withValues(alpha: enabled ? 0.52 : 0.3),
+          ),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
           ),
         ),
       ),

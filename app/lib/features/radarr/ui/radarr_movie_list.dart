@@ -3,7 +3,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../data/radarr_models.dart';
 
-/// List of Radarr movies with swipe actions.
+/// List of Radarr movies with explicit, keyboard-accessible row actions.
 class RadarrMovieList extends StatelessWidget {
   final List<RadarrMovie> movies;
   final void Function(int id, {bool deleteFiles}) onDelete;
@@ -39,38 +39,27 @@ class RadarrMovieList extends StatelessWidget {
           const Divider(color: AppTheme.border, height: 1),
       itemBuilder: (context, index) {
         final movie = movies[index];
-        return Dismissible(
-          key: ValueKey(movie.id),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            color: AppTheme.error,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 20),
-            child: const Icon(Icons.delete, color: Colors.white),
-          ),
-          confirmDismiss: (_) async {
+        return _MovieTile(
+          movie: movie,
+          onDelete: () async {
             final deleteFiles = await _confirmDelete(context, movie.title);
-            if (deleteFiles == null) return false;
+            if (deleteFiles == null) return;
             onDelete(movie.id, deleteFiles: deleteFiles);
-            return true;
           },
-          child: _MovieTile(
-            movie: movie,
-            onSearch: () => onSearch(movie.id),
-            onInteractiveSearch: onInteractiveSearch != null
-                ? () => onInteractiveSearch!(movie)
-                : null,
-            onOpen: onOpen != null ? () => onOpen!(movie) : null,
-          ),
+          onSearch: () => onSearch(movie.id),
+          onInteractiveSearch: onInteractiveSearch != null
+              ? () => onInteractiveSearch!(movie)
+              : null,
+          onOpen: onOpen != null ? () => onOpen!(movie) : null,
         );
       },
     );
   }
 
-  /// Delete confirmation with an "also delete files" choice (defaulted on).
+  /// Delete confirmation with an opt-in "also delete files" choice.
   /// Resolves to the delete-files flag, or null when cancelled.
   Future<bool?> _confirmDelete(BuildContext context, String title) {
-    var deleteFiles = true;
+    var deleteFiles = false;
     return showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -112,12 +101,14 @@ class RadarrMovieList extends StatelessWidget {
 
 class _MovieTile extends StatelessWidget {
   final RadarrMovie movie;
+  final VoidCallback onDelete;
   final VoidCallback onSearch;
   final VoidCallback? onInteractiveSearch;
   final VoidCallback? onOpen;
 
   const _MovieTile({
     required this.movie,
+    required this.onDelete,
     required this.onSearch,
     this.onInteractiveSearch,
     this.onOpen,
@@ -193,13 +184,15 @@ class _MovieTile extends StatelessWidget {
       trailing: PopupMenuButton<String>(
         icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
         color: AppTheme.surfaceVariant,
-        tooltip: 'Actions',
+        tooltip: 'Actions for ${movie.title}',
         onSelected: (value) {
           switch (value) {
             case 'search':
               onSearch();
             case 'interactive':
               onInteractiveSearch?.call();
+            case 'delete':
+              onDelete();
           }
         },
         itemBuilder: (_) => [
@@ -225,6 +218,17 @@ class _MovieTile extends StatelessWidget {
                 ],
               ),
             ),
+          const PopupMenuDivider(),
+          const PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, size: 18, color: AppTheme.error),
+                SizedBox(width: 10),
+                Text('Delete…', style: TextStyle(color: AppTheme.error)),
+              ],
+            ),
+          ),
         ],
       ),
     );

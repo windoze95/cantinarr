@@ -25,26 +25,57 @@ class ModuleScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.transparent,
       appBar: appBar,
       body: child,
       bottomNavigationBar: AppBreakpoints.isDesktop(context)
           ? null
-          : Container(
-              decoration: const BoxDecoration(
-                border:
-                    Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
-              ),
-              child: BottomNavigationBar(
-                currentIndex: currentIndex.clamp(0, pages.length - 1),
-                onTap: onTabChanged,
-                items: [
-                  for (final page in pages)
-                    BottomNavigationBarItem(
-                      icon: Icon(page.icon),
-                      activeIcon: Icon(page.activeIcon),
-                      label: page.label,
+          : SafeArea(
+              top: false,
+              minimum: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+              child: Container(
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: AppTheme.surface.withValues(alpha: 0.97),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusXLarge),
+                  border: Border.all(color: AppTheme.border),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.42),
+                      blurRadius: 24,
+                      offset: const Offset(0, 10),
                     ),
-                ],
+                    BoxShadow(
+                      color: AppTheme.signal.withValues(alpha: 0.035),
+                      blurRadius: 20,
+                    ),
+                  ],
+                ),
+                child: BottomNavigationBar(
+                  backgroundColor: Colors.transparent,
+                  currentIndex: currentIndex.clamp(0, pages.length - 1),
+                  onTap: onTabChanged,
+                  items: [
+                    for (final page in pages)
+                      BottomNavigationBarItem(
+                        icon: Icon(page.icon),
+                        activeIcon: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 13,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.accent.withValues(alpha: 0.13),
+                            borderRadius: BorderRadius.circular(
+                              AppTheme.radiusPill,
+                            ),
+                          ),
+                          child: Icon(page.activeIcon),
+                        ),
+                        label: page.label,
+                      ),
+                  ],
+                ),
               ),
             ),
     );

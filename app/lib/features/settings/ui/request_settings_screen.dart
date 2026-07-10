@@ -220,7 +220,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.accent,
-                foregroundColor: Colors.white,
+                foregroundColor: AppTheme.onAccent,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
               onPressed: _saving ? null : _save,
@@ -229,7 +229,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
-                        color: Colors.white,
+                        color: AppTheme.onAccent,
                         strokeWidth: 2,
                       ),
                     )

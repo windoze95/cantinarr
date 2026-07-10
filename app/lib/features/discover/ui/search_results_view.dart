@@ -80,14 +80,21 @@ class SearchResultsView extends StatelessWidget {
             return _buildShimmerRow();
           }
           final item = results[index];
-          if (onLoadMore != null && index >= results.length - 5) {
-            onLoadMore!(item);
-          }
-          return _SearchResultTile(
+          final tile = _SearchResultTile(
             item: item,
             status: libraryStatus[item.id],
             onTap: onResultTap,
           );
+          final triggerIndex = results.length > 5 ? results.length - 5 : 0;
+          if (onLoadMore != null && index == triggerIndex) {
+            return _LoadMoreBoundary(
+              key: ValueKey('search-page-${results.length}-${item.id}'),
+              item: item,
+              onAppear: onLoadMore!,
+              child: tile,
+            );
+          }
+          return tile;
         },
       );
     });
@@ -173,6 +180,37 @@ class SearchResultsView extends StatelessWidget {
   }
 }
 
+/// Defers pagination until after layout instead of mutating provider state
+/// from ListView's itemBuilder.
+class _LoadMoreBoundary extends StatefulWidget {
+  final MediaItem item;
+  final ValueChanged<MediaItem> onAppear;
+  final Widget child;
+
+  const _LoadMoreBoundary({
+    super.key,
+    required this.item,
+    required this.onAppear,
+    required this.child,
+  });
+
+  @override
+  State<_LoadMoreBoundary> createState() => _LoadMoreBoundaryState();
+}
+
+class _LoadMoreBoundaryState extends State<_LoadMoreBoundary> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onAppear(widget.item);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 class _SearchResultTile extends StatelessWidget {
   final MediaItem item;
   final LibraryStatus? status;
@@ -200,8 +238,10 @@ class _SearchResultTile extends StatelessWidget {
             ? item.posterPath!
             : AppConfig.tmdbPoster(item.posterPath, width: 154);
 
-    return GestureDetector(
-      onTap: () {
+    return _resultSurface(
+      context,
+      semanticLabel: 'View ${item.title}, person',
+      onPressed: () {
         onTap?.call();
         showPersonDetailSheet(
           context,
@@ -211,7 +251,7 @@ class _SearchResultTile extends StatelessWidget {
         );
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.all(12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -266,19 +306,21 @@ class _SearchResultTile extends StatelessWidget {
         ? item.releaseDate!.substring(0, 4)
         : null;
 
-    return GestureDetector(
-      onTap: () {
+    return _resultSurface(
+      context,
+      semanticLabel: 'View ${item.title}, ${item.mediaType.displayName}',
+      onPressed: () {
         onTap?.call();
         context.push('/detail/${item.mediaType.name}/${item.id}');
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.all(12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Poster thumbnail
             ClipRRect(
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
               child: SizedBox(
                 width: 50,
                 height: 75,
@@ -300,6 +342,7 @@ class _SearchResultTile extends StatelessWidget {
                     text: TextSpan(text: item.title, style: _titleStyle),
                     maxLines: 3,
                     textDirection: TextDirection.ltr,
+                    textScaler: MediaQuery.textScalerOf(context),
                   )..layout(maxWidth: constraints.maxWidth);
                   final titleLines = titlePainter.computeLineMetrics().length;
                   final descMaxLines = titleLines <= 1
@@ -383,6 +426,37 @@ class _SearchResultTile extends StatelessWidget {
       ),
     );
   }
+
+  Widget _resultSurface(
+    BuildContext context, {
+    required String semanticLabel,
+    required VoidCallback onPressed,
+    required Widget child,
+  }) {
+    return Semantics(
+      button: true,
+      label: semanticLabel,
+      excludeSemantics: true,
+      onTap: onPressed,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Material(
+          color: AppTheme.surfaceVariant.withValues(alpha: 0.68),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+            side: const BorderSide(color: AppTheme.border),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onPressed,
+            hoverColor: AppTheme.signal.withValues(alpha: 0.045),
+            focusColor: AppTheme.signal.withValues(alpha: 0.08),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _Chip extends StatelessWidget {
@@ -402,14 +476,15 @@ class _Chip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: backgroundColor,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+        border: Border.all(color: color.withValues(alpha: 0.26)),
       ),
       child: Text(
         label,
         style: TextStyle(
           color: color,
           fontSize: 11,
-          fontWeight: FontWeight.w500,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );

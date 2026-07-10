@@ -7,7 +7,7 @@ class AppConfig {
 
   /// Duration before the request timeout fires.
   static Duration get requestTimeout =>
-      Duration(seconds: requestTimeoutSeconds);
+      const Duration(seconds: requestTimeoutSeconds);
 
   /// Number of items remaining before triggering a prefetch.
   static const int prefetchThreshold = 5;

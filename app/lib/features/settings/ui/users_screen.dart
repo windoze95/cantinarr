@@ -458,7 +458,7 @@ class _UserTile extends StatelessWidget {
           ),
           if (isSelf) ...[
             const SizedBox(width: 8),
-            _Tag(label: 'You', color: AppTheme.accent),
+            const _Tag(label: 'You', color: AppTheme.accent),
           ],
         ],
       ),
@@ -473,9 +473,9 @@ class _UserTile extends StatelessWidget {
               color: user.isAdmin ? AppTheme.accent : AppTheme.textSecondary,
             ),
             if (user.hasPendingInvite)
-              _Tag(label: 'Invited', color: AppTheme.requested)
+              const _Tag(label: 'Invited', color: AppTheme.requested)
             else if (_needsInvite)
-              _Tag(label: 'Invite expired', color: AppTheme.unavailable),
+              const _Tag(label: 'Invite expired', color: AppTheme.unavailable),
             _Tag(
               label: user.deviceCount == 1
                   ? '1 device'

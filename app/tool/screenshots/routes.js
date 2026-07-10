@@ -1,7 +1,8 @@
 // Per-shot routes + interactions for shoot.js. Array order defines the
 // numbering (and therefore the store display order) of the output files.
 module.exports = [
-  { name: 'dashboard_movies', route: '/dashboard/movies', settle: 6500 },
+  { name: 'discover', route: '/dashboard/movies', settle: 6500 },
+  { name: 'seasons', route: '/detail/tv/94997', settle: 6500 },
   {
     name: 'search',
     route: '/dashboard/movies',
@@ -11,16 +12,24 @@ module.exports = [
     // the 400ms debounce. A short generic query reads naturally over the
     // fixed mixed result set the harness returns.
     actions: async (page, d) => {
+      // The field stays horizontally centered in both the mobile top bar and
+      // desktop shell. Forty pixels is inside the input at every capture size.
       await page.mouse.click(d.vw / 2, 40);
       await page.waitForTimeout(400);
       await page.keyboard.type('the', { delay: 90 });
     },
   },
-  { name: 'detail_movie', route: '/detail/movie/687163', settle: 6500 },
-  { name: 'detail_tv', route: '/detail/tv/94997', settle: 6500 },
-  { name: 'dashboard_tv', route: '/dashboard/tv', settle: 6500 },
+  { name: 'movie_detail', route: '/detail/movie/687163', settle: 6500 },
   { name: 'releases', route: '/dashboard/releases', settle: 5500 },
   { name: 'downloads', route: '/downloads/queue', settle: 5500 },
-  { name: 'sonarr_library', route: '/sonarr/library', settle: 5500 },
-  { name: 'approvals', route: '/approvals', settle: 5500 },
+  { name: 'tv_library', route: '/sonarr/library', settle: 5500 },
+  { name: 'tv_home', route: '/dashboard/tv', settle: 6500 },
+  {
+    name: 'approvals',
+    route: '/approvals',
+    settle: 5500,
+    // Google Play keeps the existing eight-shot story; App Store carries the
+    // ninth admin approvals screen for both iPhone and iPad.
+    skip: ['android', 'tablet10'],
+  },
 ];

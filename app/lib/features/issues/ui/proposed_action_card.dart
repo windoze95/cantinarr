@@ -123,7 +123,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.error,
-              foregroundColor: Colors.white,
+              foregroundColor: AppTheme.background,
             ),
             onPressed: () => Navigator.of(dialogContext).pop(true),
             child: const Text('Deny'),
@@ -151,7 +151,8 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
       });
       widget.onDecided?.call(updated);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Denied — the agent will try another way.')),
+        const SnackBar(
+            content: Text('Denied — the agent will try another way.')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -164,8 +165,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
 
   @override
   Widget build(BuildContext context) {
-    final isAdmin =
-        ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
     final action = _action;
     final pending = action.status.isPending;
 
@@ -292,13 +292,13 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
                     width: 14,
                     height: 14,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
+                        strokeWidth: 2, color: AppTheme.background),
                   )
                 : const Icon(Icons.check_circle_outline, size: 18),
             label: const Text('Approve'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.available,
-              foregroundColor: Colors.white,
+              foregroundColor: AppTheme.background,
               disabledBackgroundColor:
                   AppTheme.available.withValues(alpha: 0.5),
             ),
@@ -447,21 +447,36 @@ class _ActionCopy {
     final by = a.executedAt != null ? _relative(a.executedAt!) : when;
     switch (a.status) {
       case AgentActionStatus.executed:
-        return ('Approved${by != null ? ' · $by' : ''} · applied',
-            Icons.check_circle, AppTheme.available);
+        return (
+          'Approved${by != null ? ' · $by' : ''} · applied',
+          Icons.check_circle,
+          AppTheme.available
+        );
       case AgentActionStatus.approved:
       case AgentActionStatus.executing:
-        return ('Approved${when != null ? ' · $when' : ''} · applying…',
-            Icons.check_circle, AppTheme.available);
+        return (
+          'Approved${when != null ? ' · $when' : ''} · applying…',
+          Icons.check_circle,
+          AppTheme.available
+        );
       case AgentActionStatus.denied:
-        return ('Denied${when != null ? ' · $when' : ''}', Icons.cancel,
-            AppTheme.error);
+        return (
+          'Denied${when != null ? ' · $when' : ''}',
+          Icons.cancel,
+          AppTheme.error
+        );
       case AgentActionStatus.failed:
-        return ('Approved, but the fix failed', Icons.error_outline,
-            AppTheme.error);
+        return (
+          'Approved, but the fix failed',
+          Icons.error_outline,
+          AppTheme.error
+        );
       case AgentActionStatus.superseded:
-        return ('Superseded by a newer proposal', Icons.history,
-            AppTheme.textSecondary);
+        return (
+          'Superseded by a newer proposal',
+          Icons.history,
+          AppTheme.textSecondary
+        );
       case AgentActionStatus.proposed:
       case AgentActionStatus.unknown:
         return (a.status.label, Icons.info_outline, AppTheme.textSecondary);
@@ -496,7 +511,8 @@ class _ParamRow extends StatelessWidget {
   final String value;
   final bool mono;
 
-  const _ParamRow({required this.label, required this.value, this.mono = false});
+  const _ParamRow(
+      {required this.label, required this.value, this.mono = false});
 
   @override
   Widget build(BuildContext context) {

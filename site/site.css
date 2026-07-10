@@ -1,4 +1,4 @@
-/* Cantinarr — cantina-at-night. Palette lifted straight from the app's design system. */
+/* Cantinarr — warm cinematic cantina. Palette lifted straight from the logo and app. */
 
 @font-face {
   font-family: 'Fraunces';
@@ -30,19 +30,21 @@
 }
 
 :root {
-  --bg: #0F0A04;
-  --bg-2: #14100A;
-  --surface: #1C1510;
-  --surface-2: #2A1F14;
-  --border: #332818;
-  --ink: #F0F0F0;
-  --muted: #9E918A;
-  --gold: #E5A00D;
-  --gold-bright: #FFC549;
-  --on-gold: #1C1510;
-  --available: #4CAF50;
-  --requested: #FFA726;
-  --downloading: #42A5F5;
+  --bg: #0C0805;
+  --bg-2: #15100C;
+  --surface: #201710;
+  --surface-2: #2A1E14;
+  --border: #3B2B20;
+  --ink: #F6F0E8;
+  --muted: #B7A99D;
+  --quiet: #A09286;
+  --gold: #F2AC2D;
+  --gold-bright: #F4C66A;
+  --signal: #F47A2E;
+  --on-gold: #201505;
+  --available: #72CC91;
+  --requested: #F4C66A;
+  --downloading: #D98A58;
   --display: 'Fraunces', Georgia, serif;
   --body: 'Schibsted Grotesk', -apple-system, 'Segoe UI', sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
@@ -52,7 +54,7 @@
 
 /* overflow-x on BOTH html and body: iOS Safari pans sideways otherwise.
    clip (no scroll mechanism at all) with hidden as the older-browser fallback. */
-html { scroll-behavior: smooth; background: #0F0A04; overflow-x: hidden; overflow-x: clip; }
+html { scroll-behavior: smooth; background: #0C0805; overflow-x: hidden; overflow-x: clip; }
 
 body {
   background: var(--bg);
@@ -82,7 +84,7 @@ body::before {
 
 a { color: var(--gold); text-decoration: none; }
 a:hover { color: var(--gold-bright); text-decoration: underline; text-underline-offset: 3px; }
-:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 3px; border-radius: 4px; }
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; border-radius: 4px; }
 
 img { max-width: 100%; height: auto; display: block; }
 
@@ -99,13 +101,13 @@ img { max-width: 100%; height: auto; display: block; }
   top: -260px; left: 50%;
   width: 1400px; height: 900px;
   transform: translateX(-58%);
-  background: radial-gradient(closest-side, rgba(229, 160, 13, .13), rgba(229, 160, 13, .05) 45%, transparent 72%);
+  background: radial-gradient(closest-side, rgba(242, 172, 45, .13), rgba(242, 172, 45, .05) 45%, transparent 72%);
 }
 .lamp-get {
   top: -120px; left: 50%;
   width: 1000px; height: 700px;
   transform: translateX(-50%);
-  background: radial-gradient(closest-side, rgba(229, 160, 13, .1), transparent 70%);
+  background: radial-gradient(closest-side, rgba(242, 172, 45, .1), transparent 70%);
 }
 
 /* ---------- nav ---------- */
@@ -130,7 +132,7 @@ img { max-width: 100%; height: auto; display: block; }
 }
 .wordmark .arr {
   color: var(--gold);
-  text-shadow: 0 0 18px rgba(229, 160, 13, .55);
+  text-shadow: 0 0 18px rgba(242, 172, 45, .55);
 }
 .nav-links { display: flex; align-items: center; gap: 26px; }
 .nav-links a { color: var(--ink); font-weight: 500; font-size: .95rem; }
@@ -173,7 +175,7 @@ h1 {
 h1 em {
   font-style: normal;
   color: var(--gold);
-  text-shadow: 0 0 14px rgba(229, 160, 13, .5), 0 0 46px rgba(229, 160, 13, .28);
+  text-shadow: 0 0 14px rgba(242, 172, 45, .5), 0 0 46px rgba(242, 172, 45, .28);
 }
 
 .lede { font-size: 1.13rem; color: var(--muted); max-width: 34em; }
@@ -212,7 +214,7 @@ h1 em {
   border-radius: 999px;
   padding: 2px 8px;
   transform: rotate(3deg);
-  box-shadow: 0 0 16px rgba(229, 160, 13, .45);
+  box-shadow: 0 0 16px rgba(242, 172, 45, .45);
 }
 
 /* hero phones */
@@ -230,7 +232,7 @@ h1 em {
 .phone-front {
   left: 6%; top: 34px;
   transform: rotate(-2.2deg);
-  box-shadow: 0 30px 80px rgba(0, 0, 0, .65), 0 0 90px rgba(229, 160, 13, .13);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .65), 0 0 90px rgba(242, 172, 45, .13);
   z-index: 2;
 }
 .phone-back {
@@ -277,7 +279,7 @@ h1 em {
 .chip-available i { background: var(--available); box-shadow: 0 0 12px var(--available); }
 .chip-requested { top: 300px; right: -6px; color: #FFD59A; animation-delay: 1.4s; }
 .chip-requested i { background: var(--requested); box-shadow: 0 0 12px var(--requested); }
-.chip-downloading { bottom: 88px; left: 2px; color: #A9D4F8; animation-delay: 2.6s; }
+.chip-downloading { bottom: 88px; left: 2px; color: var(--downloading); animation-delay: 2.6s; }
 .chip-downloading i { background: var(--downloading); box-shadow: 0 0 12px var(--downloading); }
 
 @keyframes bob {
@@ -350,7 +352,7 @@ section { position: relative; padding: 104px 0; }
 .tcard:hover, .fcard:hover {
   transform: translateY(-4px);
   border-color: color-mix(in srgb, var(--gold) 45%, var(--border));
-  box-shadow: 0 18px 44px rgba(0, 0, 0, .4), 0 0 34px rgba(229, 160, 13, .07);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .4), 0 0 34px rgba(242, 172, 45, .07);
 }
 .tnum {
   display: block;
@@ -358,7 +360,7 @@ section { position: relative; padding: 104px 0; }
   font-weight: 550;
   font-size: 1.7rem;
   color: var(--gold);
-  text-shadow: 0 0 16px rgba(229, 160, 13, .45);
+  text-shadow: 0 0 16px rgba(242, 172, 45, .45);
   margin-bottom: 14px;
 }
 .tcard h3, .fcard h3 {
@@ -519,7 +521,7 @@ section { position: relative; padding: 104px 0; }
 .get-panel { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; }
 .get-sign {
   border-radius: 22px;
-  filter: drop-shadow(0 0 34px rgba(229, 160, 13, .35));
+  filter: drop-shadow(0 0 34px rgba(242, 172, 45, .35));
   animation: sway 7s ease-in-out infinite alternate;
   transform-origin: 50% -20%;
   margin-bottom: 26px;
@@ -545,9 +547,9 @@ section { position: relative; padding: 104px 0; }
 .btn-gold {
   background: var(--gold);
   color: var(--on-gold);
-  box-shadow: 0 6px 26px rgba(229, 160, 13, .3);
+  box-shadow: 0 6px 26px rgba(242, 172, 45, .3);
 }
-.btn-gold:hover { color: var(--on-gold); transform: translateY(-2px); box-shadow: 0 10px 36px rgba(229, 160, 13, .45); }
+.btn-gold:hover { color: var(--on-gold); transform: translateY(-2px); box-shadow: 0 10px 36px rgba(242, 172, 45, .45); }
 .btn-ghost { border: 1px solid var(--border); color: var(--ink); }
 .btn-ghost:hover { color: var(--gold-bright); border-color: color-mix(in srgb, var(--gold) 50%, var(--border)); transform: translateY(-2px); }
 

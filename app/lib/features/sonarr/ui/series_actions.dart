@@ -27,8 +27,8 @@ Future<void> showSeriesActions(
           SeriesAction.searchMonitored, Icons.search, 'Search Monitored'),
       const SheetAction(SeriesAction.edit, Icons.edit_outlined, 'Edit Series'),
       const SheetAction(SeriesAction.refresh, Icons.refresh, 'Refresh Series'),
-      const SheetAction(SeriesAction.remove, Icons.delete_outline,
-          'Remove Series',
+      const SheetAction(
+          SeriesAction.remove, Icons.delete_outline, 'Remove Series',
           color: AppTheme.error),
       SheetAction(
           SeriesAction.toggleMonitor,
@@ -82,7 +82,7 @@ Future<void> showSeriesActions(
 /// Remove confirmation with a "delete files" choice. Resolves to the
 /// delete-files flag, or null when cancelled.
 Future<bool?> confirmRemoveSeries(BuildContext context, String title) {
-  var deleteFiles = true;
+  var deleteFiles = false;
   return showDialog<bool>(
     context: context,
     builder: (ctx) => StatefulBuilder(
@@ -98,7 +98,7 @@ Future<bool?> confirmRemoveSeries(BuildContext context, String title) {
             CheckboxListTile(
               value: deleteFiles,
               onChanged: (v) => setState(() => deleteFiles = v ?? false),
-              title: const Text('Delete files from disk',
+              title: const Text('Also delete files from disk',
                   style: TextStyle(fontSize: 14)),
               contentPadding: EdgeInsets.zero,
               controlAffinity: ListTileControlAffinity.leading,
@@ -108,8 +108,7 @@ Future<bool?> confirmRemoveSeries(BuildContext context, String title) {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, deleteFiles),
             style: TextButton.styleFrom(foregroundColor: AppTheme.error),

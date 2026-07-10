@@ -33,7 +33,6 @@ dependencies:
   # UI
   shimmer: ^3.0.0
   flutter_animate: ^4.5.2
-  google_fonts: ^6.2.1
 
   # WebSocket
   web_socket_channel: ^3.0.1
@@ -68,10 +67,10 @@ dev_dependencies:
   retrofit_generator: ^9.1.5
 
 flutter_native_splash:
-  color: "#0F0801"
+  color: "#0C0805"
   image: assets/splash_icon.png
   android_12:
-    color: "#0F0801"
+    color: "#0C0805"
     image: assets/splash_icon.png
 
 flutter:

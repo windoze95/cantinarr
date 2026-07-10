@@ -4,7 +4,7 @@ import '../../data/chaptarr_models.dart';
 
 /// A small themed chip marking a book/edition/file's medium: an audiobook
 /// (headphones) or an ebook (book). Audiobooks are first-class, so they get the
-/// accent colour; ebooks read as a quieter "downloading" blue. Unknown formats
+/// accent colour; ebooks read as a quieter warm info tone. Unknown formats
 /// render nothing.
 class ChaptarrFormatBadge extends StatelessWidget {
   final BookFormat format;

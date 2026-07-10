@@ -285,7 +285,7 @@ class _AiRemediationSettingsScreenState
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.accent,
-                foregroundColor: Colors.white,
+                foregroundColor: AppTheme.onAccent,
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
               onPressed: _saving ? null : _save,
@@ -294,7 +294,7 @@ class _AiRemediationSettingsScreenState
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
-                        color: Colors.white,
+                        color: AppTheme.onAccent,
                         strokeWidth: 2,
                       ),
                     )

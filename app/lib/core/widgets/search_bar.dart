@@ -44,63 +44,116 @@ class CantinarrSearchBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasGlow = glowIntensity > 0.0;
-    final borderColor = hasGlow
-        ? Color.lerp(AppTheme.border, AppTheme.accent, glowIntensity)!
-        : AppTheme.border;
     final submitAction = multiline ? onSend : onSubmitted;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceVariant,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: borderColor, width: hasGlow ? 1.5 : 1),
-        boxShadow: hasGlow
-            ? [
+    return ListenableBuilder(
+      listenable: Listenable.merge([controller, focusNode]),
+      builder: (context, _) {
+        final focused = focusNode.hasFocus;
+        final glow = focused ? 1.0 : glowIntensity;
+        final signalColor = aiEnabled ? AppTheme.signal : AppTheme.accent;
+        final borderColor = Color.lerp(
+          AppTheme.border,
+          signalColor,
+          glow.clamp(0, 1),
+        )!;
+
+        return AnimatedContainer(
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : AppTheme.motionMedium,
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                focused ? AppTheme.surfaceRaised : AppTheme.surfaceVariant,
+                AppTheme.surface,
+              ],
+            ),
+            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+            border: Border.all(
+              color: borderColor,
+              width: focused || glowIntensity > 0 ? 1.35 : 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: focused ? 0.34 : 0.22),
+                blurRadius: focused ? 24 : 14,
+                offset: const Offset(0, 8),
+              ),
+              if (glow > 0)
                 BoxShadow(
-                  color: AppTheme.accent.withValues(alpha: glowIntensity * 0.2),
-                  blurRadius: 20,
+                  color: signalColor.withValues(alpha: glow * 0.12),
+                  blurRadius: 28,
                   spreadRadius: 1,
                 ),
-              ]
-            : null,
-      ),
-      child: TextField(
-        controller: controller,
-        focusNode: focusNode,
-        keyboardType: TextInputType.text,
-        onChanged: onChanged,
-        onSubmitted: submitAction == null ? null : (_) => submitAction(),
-        onTapOutside: (_) => focusNode.unfocus(),
-        textInputAction: multiline
-            ? (onSend == null ? TextInputAction.newline : TextInputAction.send)
-            : TextInputAction.search,
-        maxLines: maxLines ?? (multiline ? 3 : 1),
-        minLines: multiline ? 2 : 1,
-        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 16),
-        decoration: InputDecoration(
-          hintText: hintText,
-          hintStyle: const TextStyle(color: AppTheme.textSecondary),
-          prefixIcon: _buildPrefixIcon(),
-          suffixIcon: _buildSuffixIcon(),
-          filled: false,
-          border: InputBorder.none,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        ),
-      ),
+            ],
+          ),
+          child: TextField(
+            controller: controller,
+            focusNode: focusNode,
+            keyboardType: TextInputType.text,
+            onChanged: onChanged,
+            onSubmitted: submitAction == null ? null : (_) => submitAction(),
+            onTapOutside: (_) => focusNode.unfocus(),
+            textInputAction: multiline
+                ? (onSend == null
+                    ? TextInputAction.newline
+                    : TextInputAction.send)
+                : TextInputAction.search,
+            maxLines: maxLines ?? (multiline ? 3 : 1),
+            minLines: multiline ? 2 : 1,
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: AppTheme.textPrimary,
+                  fontWeight: FontWeight.w500,
+                ),
+            decoration: InputDecoration(
+              hintText: hintText,
+              hintStyle: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: AppTheme.textMuted,
+                    fontWeight: FontWeight.w400,
+                  ),
+              prefixIcon: _buildPrefixIcon(focused),
+              suffixIcon: _buildSuffixIcon(),
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: multiline ? 15 : 16,
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildPrefixIcon() {
-    if (aiEnabled) {
-      return Icon(
-        Icons.auto_awesome,
-        size: 20,
-        color: AppTheme.accent.withValues(alpha: 0.7),
-      );
-    }
-    return const Icon(Icons.search, color: AppTheme.textSecondary);
+  Widget _buildPrefixIcon(bool focused) {
+    final color = aiEnabled
+        ? AppTheme.signal
+        : (focused ? AppTheme.accent : AppTheme.textSecondary);
+    return Padding(
+      padding: const EdgeInsets.all(10),
+      child: AnimatedContainer(
+        duration: AppTheme.motionFast,
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: focused ? 0.16 : 0.09),
+          borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+          border: Border.all(color: color.withValues(alpha: 0.18)),
+        ),
+        child: Icon(
+          aiEnabled ? Icons.auto_awesome_rounded : Icons.search_rounded,
+          size: 18,
+          color: color,
+        ),
+      ),
+    );
   }
 
   Widget? _buildSuffixIcon() {
@@ -111,6 +164,7 @@ class CantinarrSearchBar extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
+            tooltip: 'Clear message',
             icon: const Icon(Icons.close,
                 size: 20, color: AppTheme.textSecondary),
             onPressed: () {
@@ -119,7 +173,11 @@ class CantinarrSearchBar extends StatelessWidget {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.send_rounded, color: AppTheme.accent),
+            tooltip: 'Send',
+            icon: Icon(
+              Icons.send_rounded,
+              color: aiEnabled ? AppTheme.signal : AppTheme.accent,
+            ),
             onPressed: onSend,
           ),
         ],
@@ -128,7 +186,8 @@ class CantinarrSearchBar extends StatelessWidget {
 
     if (controller.text.isNotEmpty) {
       return IconButton(
-        icon: const Icon(Icons.close, color: AppTheme.textSecondary),
+        tooltip: 'Clear search',
+        icon: const Icon(Icons.close_rounded, color: AppTheme.textSecondary),
         onPressed: () {
           controller.clear();
           onClear?.call();
@@ -138,6 +197,7 @@ class CantinarrSearchBar extends StatelessWidget {
 
     if (hasSend) {
       return IconButton(
+        tooltip: 'Send',
         icon: Icon(Icons.send_rounded,
             color: AppTheme.textSecondary.withValues(alpha: 0.5)),
         onPressed: null,

@@ -204,7 +204,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.available,
-                    foregroundColor: Colors.white,
+                    foregroundColor: AppTheme.background,
                   ),
                   onPressed: () => Navigator.of(dialogContext).pop(true),
                   child: const Text('Approve'),
@@ -272,7 +272,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.error,
-                foregroundColor: Colors.white,
+                foregroundColor: AppTheme.background,
               ),
               onPressed: () => Navigator.of(dialogContext).pop(true),
               child: const Text('Deny'),

@@ -26,14 +26,13 @@ class ErrorBanner extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(Icons.warning_amber_rounded,
+          const Icon(Icons.warning_amber_rounded,
               color: AppTheme.requested, size: 20),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               message,
-              style: const TextStyle(
-                  color: AppTheme.textPrimary, fontSize: 13),
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),

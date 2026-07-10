@@ -87,7 +87,7 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
                         backgroundColor: AppTheme.surfaceVariant,
                         labelStyle: TextStyle(
                           color: _seasonScope == c.value
-                              ? Colors.white
+                              ? AppTheme.onAccent
                               : AppTheme.textPrimary,
                           fontSize: 13,
                         ),
@@ -154,7 +154,7 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.accent,
-                    foregroundColor: Colors.white,
+                    foregroundColor: AppTheme.onAccent,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),

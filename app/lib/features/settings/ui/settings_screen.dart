@@ -6,6 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_panel.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
@@ -55,8 +56,81 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
+          AppPanel(
+            margin: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+            padding: const EdgeInsets.all(18),
+            accentColor: AppTheme.signal,
+            child: Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppTheme.signal.withValues(alpha: 0.2),
+                        AppTheme.accent.withValues(alpha: 0.11),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+                    border: Border.all(
+                      color: AppTheme.signal.withValues(alpha: 0.22),
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.tune_rounded,
+                    color: AppTheme.signal,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Settings overview',
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  color: AppTheme.textPrimary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        '${user?.username ?? 'Account'}  /  ${connection?.serverName ?? 'Cantinarr'}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: auth?.isAuthenticated == true
+                        ? AppTheme.available
+                        : AppTheme.error,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: (auth?.isAuthenticated == true
+                                ? AppTheme.available
+                                : AppTheme.error)
+                            .withValues(alpha: 0.28),
+                        blurRadius: 10,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
           // Server connection
-          _SectionHeader(title: 'Server'),
+          const _SectionHeader(title: 'Server'),
           _SettingsTile(
             icon: Icons.dns_outlined,
             title: connection?.serverName ?? 'Cantinarr',
@@ -79,7 +153,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 16),
 
           // Account
-          _SectionHeader(title: 'Account'),
+          const _SectionHeader(title: 'Account'),
           _SettingsTile(
             icon: Icons.person_outline,
             title: user?.username ?? 'Unknown',
@@ -100,9 +174,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 16),
 
           // Modules (dynamic, instance-based)
-          _SectionHeader(title: 'Modules'),
+          const _SectionHeader(title: 'Modules'),
           if (instances.isEmpty)
-            _SettingsTile(
+            const _SettingsTile(
               icon: Icons.info_outline,
               title: 'No instances configured',
               subtitle: 'Add a Radarr or Sonarr instance to get started',
@@ -112,7 +186,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: inst.name,
                 subtitle:
                     '${_serviceLabel(inst.serviceType)}${inst.isDefault ? ' (Default)' : ''}',
-                trailing: Icon(
+                trailing: const Icon(
                   Icons.circle,
                   size: 12,
                   color: AppTheme.available,
@@ -149,13 +223,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onPressed: () async {
                   final result =
                       await context.push<bool>('/settings/instance/new');
-                  if (result == true && mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                          content: Text(
-                              'Instance added. Restart the app to see changes.')),
-                    );
-                  }
+                  if (result != true || !context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text(
+                            'Instance added. Restart the app to see changes.')),
+                  );
                 },
                 icon: const Icon(Icons.add),
                 label: const Text('Add Instance'),
@@ -173,7 +246,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           // Admin section
           if (user?.isAdmin == true) ...[
             const SizedBox(height: 16),
-            _SectionHeader(title: 'Admin'),
+            const _SectionHeader(title: 'Admin'),
             _SettingsTile(
               icon: Icons.checklist_outlined,
               title: 'Setup Checklist',
@@ -246,7 +319,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 16),
 
           // Notifications
-          _SectionHeader(title: 'Notifications'),
+          const _SectionHeader(title: 'Notifications'),
           _SettingsTile(
             icon: Icons.notifications_outlined,
             title: 'Notification Preferences',
@@ -271,7 +344,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 16),
 
           // Guides
-          _SectionHeader(title: 'Guides'),
+          const _SectionHeader(title: 'Guides'),
           if (ref.watch(plexGuideEnabledProvider))
             _SettingsTile(
               icon: Icons.play_circle_outline,
@@ -297,7 +370,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 16),
 
           // About
-          _SectionHeader(title: 'About'),
+          const _SectionHeader(title: 'About'),
           _SettingsTile(
             icon: Icons.info_outline,
             title: 'Cantinarr',
@@ -538,15 +611,28 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Text(
-        title.toUpperCase(),
-        style: const TextStyle(
-          color: AppTheme.accent,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.2,
-        ),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
+      child: Row(
+        children: [
+          Container(
+            width: 18,
+            height: 2,
+            decoration: BoxDecoration(
+              color: AppTheme.accent,
+              borderRadius: BorderRadius.circular(99),
+            ),
+          ),
+          const SizedBox(width: 9),
+          Text(
+            title.toUpperCase(),
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.25,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -569,18 +655,51 @@ class _SettingsTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon, color: AppTheme.textSecondary),
-      title: Text(title,
-          style: const TextStyle(
-              color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
-      subtitle: Text(subtitle,
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-      trailing: trailing ??
-          (onTap != null
-              ? const Icon(Icons.chevron_right, color: AppTheme.textSecondary)
-              : null),
-      onTap: onTap,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      child: Material(
+        color: AppTheme.surfaceVariant.withValues(alpha: 0.72),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+          side: const BorderSide(color: AppTheme.border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ListTile(
+          leading: Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceRaised,
+              borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Icon(icon, color: AppTheme.textSecondary, size: 20),
+          ),
+          title: Text(
+            title,
+            style: const TextStyle(
+              color: AppTheme.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          subtitle: Text(
+            subtitle,
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 13,
+            ),
+          ),
+          trailing: trailing ??
+              (onTap != null
+                  ? const Icon(
+                      Icons.arrow_forward_ios_rounded,
+                      size: 15,
+                      color: AppTheme.textMuted,
+                    )
+                  : null),
+          onTap: onTap,
+        ),
+      ),
     );
   }
 }

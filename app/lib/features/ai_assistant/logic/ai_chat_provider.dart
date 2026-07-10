@@ -10,8 +10,7 @@ import '../data/ai_chat_service.dart';
 /// How long an assistant session can sit unused before it is refreshed.
 const aiChatSessionIdleTimeout = Duration(minutes: 30);
 
-/// Shared assistant conversation for both the full-screen assistant and the
-/// shell's inline AI mode.
+/// Assistant conversation shared across visits to the focused chat route.
 ///
 /// The keep-alive link lets users leave and reopen the assistant without
 /// losing the active conversation. Auto-dispose still gives us a natural

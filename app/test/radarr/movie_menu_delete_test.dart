@@ -1,14 +1,14 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:cantinarr/features/chaptarr/data/chaptarr_api_service.dart';
-import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
-import 'package:cantinarr/features/chaptarr/ui/chaptarr_author_list.dart';
+import 'package:cantinarr/features/radarr/data/radarr_api_service.dart';
+import 'package:cantinarr/features/radarr/data/radarr_models.dart';
+import 'package:cantinarr/features/radarr/ui/radarr_movie_list.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Fake Dio adapter: records every request (method, path, query) so the swipe
+/// Fake Dio adapter: records every request (method, path, query) so the menu
 /// tests can assert the DELETE and its deleteFiles flag. No GETs are issued.
 class _FakeAdapter implements HttpClientAdapter {
   final List<({String method, String path, Map<String, dynamic> query})>
@@ -38,25 +38,25 @@ class _FakeAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-const _author = ChaptarrAuthor(id: 7, authorName: 'Example Author');
+const _movie = RadarrMovie(id: 7, title: 'Example Movie', year: 2020);
 
 void main() {
-  group('ChaptarrAuthorList swipe-to-delete', () {
+  group('RadarrMovieList explicit delete action', () {
     late _FakeAdapter adapter;
 
     Future<void> pumpList(WidgetTester tester) async {
       adapter = _FakeAdapter();
       final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
         ..httpClientAdapter = adapter;
-      final service = ChaptarrApiService(backendDio: dio, instanceId: 'inst1');
+      final service = RadarrApiService(backendDio: dio, instanceId: 'inst1');
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: ChaptarrAuthorList(
-              authors: const [_author],
-              onTap: (_) {},
-              onDelete: (author, {bool deleteFiles = true}) =>
-                  service.deleteAuthor(author.id, deleteFiles: deleteFiles),
+            body: RadarrMovieList(
+              movies: const [_movie],
+              onDelete: (id, {bool deleteFiles = false}) =>
+                  service.deleteMovie(id, deleteFiles: deleteFiles),
+              onSearch: (_) {},
             ),
           ),
         ),
@@ -67,48 +67,51 @@ void main() {
         deletes() =>
             adapter.requests.where((r) => r.method == 'DELETE').toList();
 
-    Future<void> swipe(WidgetTester tester) async {
-      await tester.drag(find.text('Example Author'), const Offset(-500, 0));
+    Future<void> openDeleteConfirmation(WidgetTester tester) async {
+      await tester.tap(find.byTooltip('Actions for Example Movie'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete…'));
       await tester.pumpAndSettle();
     }
 
-    testWidgets('swiping shows a confirmation with delete-files pre-checked',
+    testWidgets('menu shows a confirmation with delete-files unchecked',
         (tester) async {
       await pumpList(tester);
-      await swipe(tester);
-      expect(find.text('Delete Author'), findsOneWidget);
+      expect(find.byType(Dismissible), findsNothing);
+      await openDeleteConfirmation(tester);
+      expect(find.text('Delete Movie'), findsOneWidget);
       expect(find.text('Also delete files from disk'), findsOneWidget);
-      final box = tester.widget<CheckboxListTile>(find.byType(CheckboxListTile));
-      expect(box.value, isTrue);
+      final box =
+          tester.widget<CheckboxListTile>(find.byType(CheckboxListTile));
+      expect(box.value, isFalse);
     });
 
     testWidgets('cancelling sends no DELETE and keeps the tile',
         (tester) async {
       await pumpList(tester);
-      await swipe(tester);
+      await openDeleteConfirmation(tester);
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(deletes(), isEmpty);
-      expect(find.text('Example Author'), findsOneWidget);
+      expect(find.text('Example Movie'), findsOneWidget);
     });
 
-    testWidgets('confirming with the default deletes files from disk',
+    testWidgets('confirming with the default preserves files on disk',
         (tester) async {
       await pumpList(tester);
-      await swipe(tester);
+      await openDeleteConfirmation(tester);
       await tester.tap(find.text('Delete'));
       await tester.pumpAndSettle();
 
       final d = deletes();
       expect(d, hasLength(1));
-      expect(d.single.path, endsWith('/author/7'));
-      expect(d.single.query['deleteFiles'], 'true');
+      expect(d.single.path, endsWith('/movie/7'));
+      expect(d.single.query['deleteFiles'], 'false');
     });
 
-    testWidgets('unchecking the box confirms without deleting files',
-        (tester) async {
+    testWidgets('opting in confirms with file deletion', (tester) async {
       await pumpList(tester);
-      await swipe(tester);
+      await openDeleteConfirmation(tester);
       await tester.tap(find.text('Also delete files from disk'));
       await tester.pump();
       await tester.tap(find.text('Delete'));
@@ -116,8 +119,8 @@ void main() {
 
       final d = deletes();
       expect(d, hasLength(1));
-      expect(d.single.path, endsWith('/author/7'));
-      expect(d.single.query['deleteFiles'], 'false');
+      expect(d.single.path, endsWith('/movie/7'));
+      expect(d.single.query['deleteFiles'], 'true');
     });
   });
 }

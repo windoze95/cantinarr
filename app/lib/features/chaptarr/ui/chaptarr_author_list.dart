@@ -3,7 +3,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../data/chaptarr_models.dart';
 
-/// List of Chaptarr authors with swipe-to-delete and progress indicators.
+/// List of Chaptarr authors with explicit row actions and progress indicators.
 /// Mirrors [SonarrSeriesList] adapted to the author-centric book library.
 class ChaptarrAuthorList extends StatelessWidget {
   final List<ChaptarrAuthor> authors;
@@ -38,37 +38,27 @@ class ChaptarrAuthorList extends StatelessWidget {
           const Divider(color: AppTheme.border, height: 1),
       itemBuilder: (context, index) {
         final author = authors[index];
-        final tile = _AuthorTile(
+        return _AuthorTile(
           author: author,
           onTap: () => onTap(author),
           onSearch: onSearch != null ? () => onSearch!(author) : null,
-        );
-        if (onDelete == null) return tile;
-        return Dismissible(
-          key: ValueKey(author.id),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            color: AppTheme.error,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 20),
-            child: const Icon(Icons.delete, color: Colors.white),
-          ),
-          confirmDismiss: (_) async {
-            final deleteFiles = await _confirmDelete(context, author.authorName);
-            if (deleteFiles == null) return false;
-            onDelete!(author, deleteFiles: deleteFiles);
-            return true;
-          },
-          child: tile,
+          onDelete: onDelete == null
+              ? null
+              : () async {
+                  final deleteFiles =
+                      await _confirmDelete(context, author.authorName);
+                  if (deleteFiles == null) return;
+                  onDelete!(author, deleteFiles: deleteFiles);
+                },
         );
       },
     );
   }
 
-  /// Delete confirmation with an "also delete files" choice (defaulted on).
+  /// Delete confirmation with an opt-in "also delete files" choice.
   /// Resolves to the delete-files flag, or null when cancelled.
   Future<bool?> _confirmDelete(BuildContext context, String name) {
-    var deleteFiles = true;
+    var deleteFiles = false;
     return showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -112,11 +102,13 @@ class _AuthorTile extends StatelessWidget {
   final ChaptarrAuthor author;
   final VoidCallback onTap;
   final VoidCallback? onSearch;
+  final VoidCallback? onDelete;
 
   const _AuthorTile({
     required this.author,
     required this.onTap,
     this.onSearch,
+    this.onDelete,
   });
 
   @override
@@ -191,26 +183,47 @@ class _AuthorTile extends StatelessWidget {
           ],
         ],
       ),
-      trailing: onSearch != null
+      trailing: onSearch != null || onDelete != null
           ? PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
               color: AppTheme.surfaceVariant,
-              tooltip: 'Actions',
+              tooltip: 'Actions for ${author.authorName}',
               onSelected: (value) {
-                if (value == 'search') onSearch!();
+                switch (value) {
+                  case 'search':
+                    onSearch?.call();
+                  case 'remove':
+                    onDelete?.call();
+                }
               },
               itemBuilder: (_) => [
-                const PopupMenuItem(
-                  value: 'search',
-                  child: Row(
-                    children: [
-                      Icon(Icons.search,
-                          size: 18, color: AppTheme.textSecondary),
-                      SizedBox(width: 10),
-                      Text('Automatic search'),
-                    ],
+                if (onSearch != null)
+                  const PopupMenuItem(
+                    value: 'search',
+                    child: Row(
+                      children: [
+                        Icon(Icons.search,
+                            size: 18, color: AppTheme.textSecondary),
+                        SizedBox(width: 10),
+                        Text('Automatic search'),
+                      ],
+                    ),
                   ),
-                ),
+                if (onSearch != null && onDelete != null)
+                  const PopupMenuDivider(),
+                if (onDelete != null)
+                  const PopupMenuItem(
+                    value: 'remove',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_outline,
+                            size: 18, color: AppTheme.error),
+                        SizedBox(width: 10),
+                        Text('Remove…',
+                            style: TextStyle(color: AppTheme.error)),
+                      ],
+                    ),
+                  ),
               ],
             )
           : null,
@@ -230,7 +243,7 @@ class _AuthorTile extends StatelessWidget {
       };
 
   /// Mirrors the Sonarr tile's progress grammar: green only when an ended
-  /// author's monitored books are all on disk, blue when merely caught up,
+  /// author's monitored books are all on disk, info/ember when merely caught up,
   /// red/amber for monitored/unmonitored gaps.
   Color get _progressColor {
     if (author.percentComplete >= 1.0) {
