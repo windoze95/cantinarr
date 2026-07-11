@@ -20,7 +20,8 @@ func NewClient(clientID string) *Client {
 	return &Client{
 		clientID: clientID,
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:       10 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }

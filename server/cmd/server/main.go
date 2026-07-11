@@ -105,7 +105,7 @@ func main() {
 	// Instance store and registry
 	instanceStore := instance.NewStore(database, cipher)
 	registry := instance.NewRegistry(instanceStore)
-	instanceHandler := instance.NewHandler(instanceStore, registry)
+	instanceHandler := instance.NewHandler(instanceStore, registry, cfg.PublicURL)
 
 	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission queue management)
 	downloadsHandler := downloads.NewHandler(instanceStore, registry)

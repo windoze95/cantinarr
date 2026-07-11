@@ -108,6 +108,10 @@ func (f *fixture) post(t *testing.T, path, body string, auth func(*http.Request)
 	return rec
 }
 
+func basicWebhookAuth(token string) func(*http.Request) {
+	return func(r *http.Request) { r.SetBasicAuth("cantinarr", token) }
+}
+
 func (f *fixture) eventTypes() []string {
 	var types []string
 	for _, e := range f.hub.events {
@@ -125,8 +129,9 @@ func TestWebhookRejectsBadToken(t *testing.T) {
 		auth func(*http.Request)
 	}{
 		{"no token", "/api/webhooks/arr/" + f.radarrID, nil},
-		{"wrong token", "/api/webhooks/arr/" + f.radarrID + "?token=wrong", nil},
-		{"other instance's token", "/api/webhooks/arr/" + f.radarrID + "?token=" + f.sonarrTok, nil},
+		{"legacy query token", "/api/webhooks/arr/" + f.radarrID + "?token=" + f.radarrTok, nil},
+		{"wrong token", "/api/webhooks/arr/" + f.radarrID, basicWebhookAuth("wrong")},
+		{"other instance's token", "/api/webhooks/arr/" + f.radarrID, basicWebhookAuth(f.sonarrTok)},
 	}
 	for _, c := range cases {
 		rec := f.post(t, c.path, `{"eventType":"Download"}`, c.auth)
@@ -138,7 +143,7 @@ func TestWebhookRejectsBadToken(t *testing.T) {
 		t.Errorf("unauthorized requests caused side effects: %v %v", f.hub.events, f.requests.instanceIDs)
 	}
 
-	rec := f.post(t, "/api/webhooks/arr/nope?token="+f.radarrTok, `{}`, nil)
+	rec := f.post(t, "/api/webhooks/arr/nope", `{}`, basicWebhookAuth(f.radarrTok))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("unknown instance: status = %d, want 404", rec.Code)
 	}
@@ -157,6 +162,29 @@ func TestWebhookAcceptsBasicAuthPassword(t *testing.T) {
 	}
 }
 
+func TestWebhookRotationAcceptsPendingWithoutBreakingCurrent(t *testing.T) {
+	f := newFixture(t, "http://unused", "http://unused")
+	pending, err := f.store.PrepareWebhookToken(f.radarrID)
+	if err != nil {
+		t.Fatalf("PrepareWebhookToken: %v", err)
+	}
+	for name, token := range map[string]string{"current": f.radarrTok, "pending": pending} {
+		rec := f.post(t, "/api/webhooks/arr/"+f.radarrID, `{"eventType":"Test"}`, basicWebhookAuth(token))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s credential status = %d, want 200", name, rec.Code)
+		}
+	}
+	if err := f.store.PromoteWebhookToken(f.radarrID, pending); err != nil {
+		t.Fatalf("PromoteWebhookToken: %v", err)
+	}
+	if rec := f.post(t, "/api/webhooks/arr/"+f.radarrID, `{"eventType":"Test"}`, basicWebhookAuth(f.radarrTok)); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old credential after promotion status = %d, want 401", rec.Code)
+	}
+	if rec := f.post(t, "/api/webhooks/arr/"+f.radarrID, `{"eventType":"Test"}`, basicWebhookAuth(pending)); rec.Code != http.StatusOK {
+		t.Fatalf("promoted credential status = %d, want 200", rec.Code)
+	}
+}
+
 func TestWebhookMovieDownload(t *testing.T) {
 	radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v3/movie/7" {
@@ -169,8 +197,8 @@ func TestWebhookMovieDownload(t *testing.T) {
 	defer radarrSrv.Close()
 
 	f := newFixture(t, radarrSrv.URL, "http://unused")
-	rec := f.post(t, "/api/webhooks/arr/"+f.radarrID+"?token="+f.radarrTok,
-		`{"eventType":"Download","movie":{"id":7,"title":"Manually Imported","tmdbId":600}}`, nil)
+	rec := f.post(t, "/api/webhooks/arr/"+f.radarrID,
+		`{"eventType":"Download","movie":{"id":7,"title":"Manually Imported","tmdbId":600}}`, basicWebhookAuth(f.radarrTok))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -208,8 +236,8 @@ func TestWebhookSeriesDownloadPartial(t *testing.T) {
 	defer sonarrSrv.Close()
 
 	f := newFixture(t, "http://unused", sonarrSrv.URL)
-	rec := f.post(t, "/api/webhooks/arr/"+f.sonarrID+"?token="+f.sonarrTok,
-		`{"eventType":"Download","series":{"id":9,"title":"Gappy Show","tvdbId":500}}`, nil)
+	rec := f.post(t, "/api/webhooks/arr/"+f.sonarrID,
+		`{"eventType":"Download","series":{"id":9,"title":"Gappy Show","tvdbId":500}}`, basicWebhookAuth(f.sonarrTok))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -227,8 +255,8 @@ func TestWebhookSeriesDownloadPartial(t *testing.T) {
 func TestWebhookDeleteAndGrab(t *testing.T) {
 	f := newFixture(t, "http://unused", "http://unused")
 
-	rec := f.post(t, "/api/webhooks/arr/"+f.sonarrID+"?token="+f.sonarrTok,
-		`{"eventType":"SeriesDelete","series":{"id":9,"title":"Gone","tvdbId":500,"tmdbId":700}}`, nil)
+	rec := f.post(t, "/api/webhooks/arr/"+f.sonarrID,
+		`{"eventType":"SeriesDelete","series":{"id":9,"title":"Gone","tvdbId":500,"tmdbId":700}}`, basicWebhookAuth(f.sonarrTok))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("SeriesDelete status = %d", rec.Code)
 	}
@@ -242,7 +270,7 @@ func TestWebhookDeleteAndGrab(t *testing.T) {
 		t.Errorf("delete should invalidate digests once, got %v", f.requests.instanceIDs)
 	}
 
-	rec = f.post(t, "/api/webhooks/arr/"+f.radarrID+"?token="+f.radarrTok, `{"eventType":"Grab"}`, nil)
+	rec = f.post(t, "/api/webhooks/arr/"+f.radarrID, `{"eventType":"Grab"}`, basicWebhookAuth(f.radarrTok))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Grab status = %d", rec.Code)
 	}

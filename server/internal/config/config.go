@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,10 @@ type Config struct {
 	DBPath     string
 	Port       int
 	ServerName string
+	// PublicURL is the trusted browser-facing origin used when Cantinarr installs
+	// server-managed arr webhooks. Empty falls back to the direct request origin;
+	// forwarded headers are never trusted for callback credentials.
+	PublicURL string
 	// EncryptionKeyFile backs secrets-at-rest when CANTINARR_ENCRYPTION_KEY
 	// is not set; it lives next to the database.
 	EncryptionKeyFile string
@@ -52,6 +57,7 @@ func Load() (*Config, error) {
 		JWTSecret:         os.Getenv("CANTINARR_JWT_SECRET"),
 		DBPath:            "/config/cantinarr.db",
 		ServerName:        os.Getenv("CANTINARR_SERVER_NAME"),
+		PublicURL:         strings.TrimRight(os.Getenv("CANTINARR_PUBLIC_URL"), "/"),
 		EncryptionKeyFile: "/config/encryption.key",
 		WebAuthnExtraOrigins: splitEnvList(
 			os.Getenv("CANTINARR_WEBAUTHN_EXTRA_ORIGINS"),
@@ -70,6 +76,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.AndroidPackageName == "" {
 		cfg.AndroidPackageName = "codes.julian.cantinarr"
+	}
+	if err := validatePublicURL(cfg.PublicURL); err != nil {
+		return nil, fmt.Errorf("invalid CANTINARR_PUBLIC_URL: %w", err)
 	}
 
 	androidFingerprints := os.Getenv("CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS")
@@ -100,6 +109,23 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func validatePublicURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	u, err := url.Parse(value)
+	if err != nil {
+		return err
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("must be an absolute http or https origin")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return fmt.Errorf("must contain only a scheme and host")
+	}
+	return nil
 }
 
 func splitEnvList(value string) []string {

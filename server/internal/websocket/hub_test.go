@@ -14,9 +14,10 @@ import (
 // reaches the opener, and the opener is then called once per confirming poll
 // (the real DB dedupe — exercised separately — collapses those into one issue).
 type fakeOpener struct {
-	mu     sync.Mutex
-	calls  []openCall
-	closes []openCall
+	mu         sync.Mutex
+	calls      []openCall
+	closes     []openCall
+	reconciles int
 }
 
 type openCall struct {
@@ -26,10 +27,16 @@ type openCall struct {
 	problem     string
 }
 
-func (f *fakeOpener) OpenAutoIssue(serviceType, instanceID, downloadID string, d arr.Diagnosis) {
+func (f *fakeOpener) OpenAutoIssue(serviceType, instanceID, downloadID string, media arr.QueueMediaContext, d arr.Diagnosis) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, openCall{serviceType, instanceID, downloadID, d.Problem})
+}
+
+func (f *fakeOpener) ReconcileAutoIssues(serviceType, instanceID string, activeDownloadIDs []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reconciles++
 }
 
 func (f *fakeOpener) CloseAutoIssue(serviceType, instanceID, downloadID string) {
@@ -236,24 +243,36 @@ func TestAutoDispatchPerInstanceIsolation(t *testing.T) {
 // auto-dispatch path needs the detailed queue.
 func TestQueueSignalMappers(t *testing.T) {
 	r := radarrQueueSignal(radarr.DetailedQueueItem{
+		ID:                   41,
 		DownloadID:           "rdl",
 		TrackedDownloadState: "importPending",
 		Protocol:             "usenet",
+		Movie:                &radarr.MovieContext{Title: "Movie", TmdbID: 101},
 	})
 	if r.downloadID != "rdl" || r.signal.TrackedDownloadState != "importPending" {
 		t.Fatalf("radarr mapping = %+v, want downloadID=rdl state=importPending", r)
+	}
+	if r.media.QueueID != 41 || r.media.TmdbID != 101 || r.media.Title != "Movie" {
+		t.Fatalf("radarr media context = %+v", r.media)
 	}
 	if d := arr.Diagnose(r.signal); d.Severity != arr.SeverityWarning {
 		t.Fatalf("radarr importPending severity = %q, want warning", d.Severity)
 	}
 
 	s := sonarrQueueSignal(sonarr.DetailedQueueItem{
+		ID:                    42,
 		DownloadID:            "sdl",
 		TrackedDownloadStatus: "error",
 		ErrorMessage:          "The download is stalled with no connections",
+		Series:                &sonarr.SeriesContext{Title: "Show", TvdbID: 202, TmdbID: 303},
+		Episode:               &sonarr.EpisodeContext{SeasonNumber: 1, EpisodeNumber: 2},
 	})
 	if s.downloadID != "sdl" {
 		t.Fatalf("sonarr mapping downloadID = %q, want sdl", s.downloadID)
+	}
+	if s.media.QueueID != 42 || s.media.TmdbID != 303 || s.media.TvdbID != 202 ||
+		s.media.SeasonNumber != 1 || s.media.EpisodeNumber != 2 || s.media.Title != "Show" {
+		t.Fatalf("sonarr media context = %+v", s.media)
 	}
 	if d := arr.Diagnose(s.signal); d.Severity != arr.SeverityError {
 		t.Fatalf("sonarr stalled severity = %q, want error", d.Severity)

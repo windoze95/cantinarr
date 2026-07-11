@@ -6,10 +6,10 @@ import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
 
 /// The media scope a problem report is filed against. Mirrors the request
-/// payload's identifier set: media-scoped (tmdb_id + media_type), optionally
-/// narrowed to a TV season/episode. Stable identifiers only (TVDB + S/E
-/// numbers), never volatile arr ids.
+/// payload's identifier set: bound to one exact arr instance and media item,
+/// optionally narrowed to a TV season/episode.
 class ReportScope {
+  final String instanceId;
   final String mediaType; // 'movie' | 'tv'
   final int tmdbId;
   final int? tvdbId;
@@ -18,6 +18,7 @@ class ReportScope {
   final String? title;
 
   const ReportScope({
+    required this.instanceId,
     required this.mediaType,
     required this.tmdbId,
     this.tvdbId,
@@ -27,17 +28,25 @@ class ReportScope {
   });
 
   const ReportScope.movie({
+    required String instanceId,
     required int tmdbId,
     String? title,
-  }) : this(mediaType: 'movie', tmdbId: tmdbId, title: title);
+  }) : this(
+          instanceId: instanceId,
+          mediaType: 'movie',
+          tmdbId: tmdbId,
+          title: title,
+        );
 
   const ReportScope.episode({
+    required String instanceId,
     required int tmdbId,
     int? tvdbId,
     required int seasonNumber,
     required int episodeNumber,
     String? title,
   }) : this(
+          instanceId: instanceId,
           mediaType: 'tv',
           tmdbId: tmdbId,
           tvdbId: tvdbId,
@@ -47,11 +56,13 @@ class ReportScope {
         );
 
   const ReportScope.series({
+    required String instanceId,
     required int tmdbId,
     int? tvdbId,
     int? seasonNumber,
     String? title,
   }) : this(
+          instanceId: instanceId,
           mediaType: 'tv',
           tmdbId: tmdbId,
           tvdbId: tvdbId,
@@ -159,6 +170,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
     final scope = widget.scope;
     try {
       await ref.read(issuesServiceProvider).reportProblem(
+            instanceId: scope.instanceId,
             mediaType: scope.mediaType,
             tmdbId: scope.tmdbId,
             tvdbId: scope.tvdbId,

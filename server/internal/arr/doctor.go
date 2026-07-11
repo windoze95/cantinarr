@@ -31,6 +31,19 @@ type QueueSignal struct {
 	Protocol              string
 }
 
+// QueueMediaContext is the stable media identity the arr already returned with
+// a detailed queue item. Auto-remediation carries it into the issue instead of
+// throwing it away, so the agent is bound to the exact instance, queue row, and
+// movie/episode that triggered the incident.
+type QueueMediaContext struct {
+	QueueID       int
+	Title         string
+	TmdbID        int
+	TvdbID        int
+	SeasonNumber  int
+	EpisodeNumber int
+}
+
 // Diagnosis is the classifier's verdict for one queue item.
 type Diagnosis struct {
 	// Severity is one of: ok, info, warning, error.

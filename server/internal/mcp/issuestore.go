@@ -20,9 +20,6 @@ import (
 type IssueStore interface {
 	// PostIssueMessage appends an agent-authored message to an issue's thread.
 	PostIssueMessage(ctx context.Context, issueID int64, body string) error
-	// ConcludeIssue moves an issue to a terminal state (resolved | wont_fix) with
-	// a short closing note.
-	ConcludeIssue(ctx context.Context, issueID int64, status, resolution string) error
 	// RemediationEnabled reports whether the remediation feature is switched on.
 	// Every agent-only tool early-returns a benign result when this is false.
 	RemediationEnabled(ctx context.Context) bool
@@ -40,8 +37,8 @@ type IssueStore interface {
 	// issue. It validates params against the kind's schema, computes a stable
 	// fingerprint, and conditionally inserts an agent_actions row keyed by that
 	// fingerprint. The model NEVER executes the mutation: the row sits in
-	// 'proposed' until an admin approves it, at which point the server replays the
-	// stored params verbatim.
+	// 'proposed' until an admin approves it, at which point the server revalidates
+	// the immutable proposal against fresh arr state before dispatch.
 	//
 	// proposalID is the row id (existing or new). alreadyExisted is true when a
 	// row with the same fingerprint was already present (a re-proposed identical

@@ -48,6 +48,31 @@ func TestLoadRejectsInvalidAndroidFingerprint(t *testing.T) {
 	}
 }
 
+func TestLoadValidatesPublicURL(t *testing.T) {
+	t.Setenv("CANTINARR_PUBLIC_URL", "https://cantinarr.example:8443/")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.PublicURL != "https://cantinarr.example:8443" {
+		t.Fatalf("PublicURL = %q", cfg.PublicURL)
+	}
+
+	for _, invalid := range []string{
+		"javascript://attacker.example",
+		"https://user:password@example.com",
+		"https://example.com/subpath",
+		"https://example.com?token=secret",
+	} {
+		t.Run(invalid, func(t *testing.T) {
+			t.Setenv("CANTINARR_PUBLIC_URL", invalid)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want invalid public URL error")
+			}
+		})
+	}
+}
+
 func contains(values []string, needle string) bool {
 	for _, value := range values {
 		if value == needle {

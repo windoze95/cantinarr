@@ -17,26 +17,29 @@ final issuesServiceProvider = Provider<IssuesService>((ref) {
 ///
 /// Drives the drawer "Issues" entry badge (and could feed an app-bar dot the
 /// same way the approvals count does). It is seeded from REST, kept live by
-/// `issue_created`/`agent_action_pending` websocket events, and refreshed
-/// after a dismiss. Non-admin accounts always report 0 and never call the
+/// issue/action websocket events, and refreshed after a dismiss. Non-admin
+/// accounts always report 0 and never call the
 /// admin-only endpoint. Mirrors `PendingApprovalsNotifier`.
 class OpenIssuesNotifier extends StateNotifier<int> {
   OpenIssuesNotifier(this._ref) : super(0) {
-    _service = _ref.read(issuesServiceProvider);
     _bind();
     // Re-bind on login/logout/role change without rebuilding the provider.
-    _ref.listen(authProvider, (_, __) => _bind());
+    _ref.listen(authProvider, (_, __) => _bind(force: true));
   }
 
   final Ref _ref;
-  late final IssuesService _service;
   StreamSubscription<WsEvent>? _sub;
+  Timer? _refreshDebounce;
   bool _isAdmin = false;
+  int _refreshEpoch = 0;
 
   /// (Re)attaches to the live event stream when the admin status changes.
-  void _bind() {
+  void _bind({bool force = false}) {
     final admin = _ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
-    if (admin == _isAdmin) return; // no change
+    // Auth changes can replace both Dio and WebSocket clients even when the
+    // role stays admin (server switch, token refresh, reconnect).
+    if (!force && admin == _isAdmin) return;
+    _refreshEpoch++;
     _isAdmin = admin;
     _sub?.cancel();
     _sub = null;
@@ -48,7 +51,11 @@ class OpenIssuesNotifier extends StateNotifier<int> {
     _sub = _ref
         .read(realtimeEventsProvider)
         .where((e) =>
-            e.type == 'issue_created' || e.type == 'agent_action_pending')
+            e.type == 'issue_created' ||
+            e.type == 'issue_updated' ||
+            e.type == 'agent_action_pending' ||
+            e.type == 'agent_action_terminal' ||
+            e.type == 'agent_action_superseded')
         .listen(_onPing);
   }
 
@@ -58,9 +65,12 @@ class OpenIssuesNotifier extends StateNotifier<int> {
   void _onPing(WsEvent event) {
     final raw = event.data['open_count'];
     if (raw is num) {
+      _refreshDebounce?.cancel();
+      _refreshEpoch++;
       _set(raw.toInt());
     } else {
-      refresh();
+      _refreshDebounce?.cancel();
+      _refreshDebounce = Timer(const Duration(milliseconds: 300), refresh);
     }
   }
 
@@ -68,8 +78,13 @@ class OpenIssuesNotifier extends StateNotifier<int> {
   /// the badge reflects the resolved queue immediately.
   Future<void> refresh() async {
     if (!_isAdmin) return;
+    final epoch = ++_refreshEpoch;
     try {
-      final issues = await _service.listIssues();
+      // Resolve the service for every request. The authenticated Dio client is
+      // replaced on reconnect/server switch, so caching this provider value
+      // would keep calling the old server.
+      final issues = await _ref.read(issuesServiceProvider).listIssues();
+      if (!_isAdmin || epoch != _refreshEpoch) return;
       final open = issues.where((i) => !i.status.isTerminal).length;
       _set(open);
     } catch (_) {
@@ -80,7 +95,10 @@ class OpenIssuesNotifier extends StateNotifier<int> {
 
   /// Sets the count directly from a caller that already holds the authoritative
   /// list (the issues screen), avoiding a redundant fetch.
-  void setCount(int value) => _set(value);
+  void setCount(int value) {
+    _refreshEpoch++;
+    _set(value);
+  }
 
   void _set(int value) {
     state = value < 0 ? 0 : value;
@@ -89,6 +107,7 @@ class OpenIssuesNotifier extends StateNotifier<int> {
   @override
   void dispose() {
     _sub?.cancel();
+    _refreshDebounce?.cancel();
     super.dispose();
   }
 }
@@ -101,25 +120,25 @@ final openIssuesProvider =
 /// admins only.
 ///
 /// Drives the drawer "Agent fixes" entry badge. It is seeded from REST, kept
-/// live by `agent_action_pending` (which carries the authoritative
-/// `pending_count`) and `agent_action_decided` (which doesn't, so we refetch),
-/// and refreshed after an approve/deny. Non-admin accounts always report 0 and
-/// never call the admin-only endpoint. Mirrors `PendingApprovalsNotifier`.
+/// live by action and issue lifecycle events, and refreshed after an
+/// approve/deny. Non-admin accounts always report 0 and never call the
+/// admin-only endpoint. Mirrors `PendingApprovalsNotifier`.
 class PendingAgentActionsNotifier extends StateNotifier<int> {
   PendingAgentActionsNotifier(this._ref) : super(0) {
-    _service = _ref.read(issuesServiceProvider);
     _bind();
-    _ref.listen(authProvider, (_, __) => _bind());
+    _ref.listen(authProvider, (_, __) => _bind(force: true));
   }
 
   final Ref _ref;
-  late final IssuesService _service;
   StreamSubscription<WsEvent>? _sub;
+  Timer? _refreshDebounce;
   bool _isAdmin = false;
+  int _refreshEpoch = 0;
 
-  void _bind() {
+  void _bind({bool force = false}) {
     final admin = _ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
-    if (admin == _isAdmin) return;
+    if (!force && admin == _isAdmin) return;
+    _refreshEpoch++;
     _isAdmin = admin;
     _sub?.cancel();
     _sub = null;
@@ -132,7 +151,10 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
         .read(realtimeEventsProvider)
         .where((e) =>
             e.type == 'agent_action_pending' ||
-            e.type == 'agent_action_decided')
+            e.type == 'agent_action_decided' ||
+            e.type == 'agent_action_terminal' ||
+            e.type == 'agent_action_superseded' ||
+            e.type == 'issue_updated')
         .listen(_onPing);
   }
 
@@ -141,9 +163,12 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
   void _onPing(WsEvent event) {
     final raw = event.data['pending_count'];
     if (raw is num) {
+      _refreshDebounce?.cancel();
+      _refreshEpoch++;
       _set(raw.toInt());
     } else {
-      refresh();
+      _refreshDebounce?.cancel();
+      _refreshDebounce = Timer(const Duration(milliseconds: 300), refresh);
     }
   }
 
@@ -151,9 +176,12 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
   /// the badge reflects the resolved queue immediately.
   Future<void> refresh() async {
     if (!_isAdmin) return;
+    final epoch = ++_refreshEpoch;
     try {
-      final actions = await _service.listPendingActions();
-      _set(actions.length);
+      final actions =
+          await _ref.read(issuesServiceProvider).listPendingActions();
+      if (!_isAdmin || epoch != _refreshEpoch) return;
+      _set(actions.where((a) => a.canTakeAction).length);
     } catch (_) {
       // Best-effort: keep the last known count on a transient failure (covers
       // the pre-merge 404 too).
@@ -162,7 +190,10 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
 
   /// Sets the count directly from a caller that already holds the authoritative
   /// queue (the agent-actions screen), avoiding a redundant fetch.
-  void setCount(int value) => _set(value);
+  void setCount(int value) {
+    _refreshEpoch++;
+    _set(value);
+  }
 
   void _set(int value) {
     state = value < 0 ? 0 : value;
@@ -171,6 +202,7 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
   @override
   void dispose() {
     _sub?.cancel();
+    _refreshDebounce?.cancel();
     super.dispose();
   }
 }

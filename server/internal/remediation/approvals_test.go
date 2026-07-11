@@ -2,12 +2,19 @@ package remediation
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/ai"
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
@@ -31,6 +38,16 @@ type execCall struct {
 	kind    ActionKind
 	params  string
 }
+
+type partialTestError struct{}
+
+func (partialTestError) Error() string         { return "old download removed; replacement search failed" }
+func (partialTestError) PartialMutation() bool { return true }
+
+type notStartedTestError struct{}
+
+func (notStartedTestError) Error() string            { return "fresh scoped release no longer exists" }
+func (notStartedTestError) MutationNotStarted() bool { return true }
 
 func (f *fakeExecutor) Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage) (string, error) {
 	f.mu.Lock()
@@ -83,15 +100,21 @@ func approvalFixture(t *testing.T) (*Service, *fakeExecutor, int64, int64) {
 	if _, err := database.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (?, 'admin', '', 'admin')", testAdminID); err != nil {
 		t.Fatalf("seed admin: %v", err)
 	}
+	if _, err := database.Exec(
+		`INSERT INTO service_instances (id, service_type, name, url, api_key)
+		 VALUES ('radarr-main', 'radarr', 'Main Movies', 'http://radarr.test', 'key')`,
+	); err != nil {
+		t.Fatalf("seed target instance: %v", err)
+	}
 	// Feature on so a resume is enqueued (the worker pool isn't running in these
 	// tests, so the resume job is simply queued and harmless).
-	if _, err := svc.SetSettings(Settings{Enabled: true, Autonomy: AutonomyPropose, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 
 	// Seed an issue (movie scope), claimed by a parked run.
 	res, err := database.Exec(
-		"INSERT INTO issues (source, status, media_type, tmdb_id, title, detail) VALUES ('user','awaiting_approval','movie',42,'Test Movie','wrong content')",
+		"INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, instance_id) VALUES ('user','awaiting_approval','movie',42,'Test Movie','wrong content','radarr-main')",
 	)
 	if err != nil {
 		t.Fatalf("seed issue: %v", err)
@@ -124,7 +147,7 @@ func approvalFixture(t *testing.T) (*Service, *fakeExecutor, int64, int64) {
 
 	// The proposed action keyed to the run + tool_use_id.
 	params := `{"media_type":"movie","queue_id":7,"action":"blocklist_search"}`
-	fp := fingerprint(issueID, ActionRemediateQueue, json.RawMessage(params))
+	fp := fingerprint(issueID, runID, toolUseID, ActionRemediateQueue, json.RawMessage(params))
 	actRes, err := database.Exec(
 		"INSERT INTO agent_actions (issue_id, run_id, tool_use_id, kind, params, rationale, risk, status, fingerprint) VALUES (?, ?, ?, ?, ?, 'because', 'mutating', ?, ?)",
 		issueID, runID, toolUseID, string(ActionRemediateQueue), params, ActionProposed, fp,
@@ -166,6 +189,261 @@ func TestDoubleApproveExecutesExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestPartialMutationIsNotReportedAsCleanFailure(t *testing.T) {
+	svc, fx, issueID, actionID := approvalFixture(t)
+	fx.err = partialTestError{}
+	action, err := svc.ApproveAction(testAdminID, actionID, nil)
+	if err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+	if action.Status != ActionOutcomeUnknown {
+		t.Fatalf("partial action status = %q, want outcome_unknown", action.Status)
+	}
+	if action.ResultText == nil || !strings.Contains(*action.ResultText, "Partially executed") {
+		t.Fatalf("partial result = %v", action.ResultText)
+	}
+	assertUnknownOutcomeNeedsAdmin(t, svc, issueID)
+}
+
+func TestPreflightRejectionIsDefinitiveFailureNotUnknownOutcome(t *testing.T) {
+	svc, fx, _, actionID := approvalFixture(t)
+	fx.err = notStartedTestError{}
+	action, err := svc.ApproveAction(testAdminID, actionID, nil)
+	if err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+	if action.Status != ActionFailed {
+		t.Fatalf("preflight action status = %q, want failed", action.Status)
+	}
+	if action.ResultText == nil || !strings.HasPrefix(*action.ResultText, "Not executed:") {
+		t.Fatalf("preflight result = %v", action.ResultText)
+	}
+}
+
+func TestRecoverDurableDecisionRebuildsResumeHandoff(t *testing.T) {
+	svc, _, issueID, actionID := approvalFixture(t)
+	if _, err := svc.db.Exec(
+		"UPDATE agent_actions SET status = ?, result_text = ? WHERE id = ?",
+		ActionExecuted, "replacement queued", actionID,
+	); err != nil {
+		t.Fatalf("seed decided action: %v", err)
+	}
+	svc.recoverDecisionHandoffs()
+	var issueStatus, runStatus string
+	if err := svc.db.QueryRow(
+		`SELECT i.status, r.status FROM issues i JOIN agent_runs r ON r.issue_id = i.id
+		 WHERE i.id = ?`, issueID,
+	).Scan(&issueStatus, &runStatus); err != nil {
+		t.Fatalf("load handoff: %v", err)
+	}
+	if issueStatus != IssueInvestigating || runStatus != runStatusResumePending {
+		t.Fatalf("recovered handoff = issue %q run %q", issueStatus, runStatus)
+	}
+	assertWellFormedResume(t, loadTranscript(t, svc, issueID), "toolu_propose_1", "Approved and executed: replacement queued")
+}
+
+func TestRecoverUnknownOutcomeStopsInsteadOfResuming(t *testing.T) {
+	svc, _, issueID, actionID := approvalFixture(t)
+	if _, err := svc.db.Exec(
+		"UPDATE agent_actions SET status = ?, result_text = ? WHERE id = ?",
+		ActionOutcomeUnknown, "dispatch outcome unknown", actionID,
+	); err != nil {
+		t.Fatalf("seed unknown action: %v", err)
+	}
+	svc.recoverDecisionHandoffs()
+	assertUnknownOutcomeNeedsAdmin(t, svc, issueID)
+}
+
+func TestClearedAutoSignalDoesNotCloseUnknownOutcome(t *testing.T) {
+	svc, fx, issueID, actionID := approvalFixture(t)
+	if _, err := svc.db.Exec(
+		"UPDATE issues SET source = ?, instance_id = 'sonarr-1', download_id = 'download-1' WHERE id = ?",
+		SourceAuto, issueID,
+	); err != nil {
+		t.Fatalf("scope auto issue: %v", err)
+	}
+	fx.err = partialTestError{}
+	if _, err := svc.ApproveAction(testAdminID, actionID, nil); err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+
+	svc.CloseAutoIssueForDownload("sonarr-1", "download-1")
+	svc.CloseAutoIssueForDownload("sonarr-1", "download-1") // evidence is idempotent
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Status != IssueNeedsAdmin || issue.ClosedAt != nil {
+		t.Fatalf("unknown outcome issue closed after signal cleared: status=%q closed=%v", issue.Status, issue.ClosedAt)
+	}
+	var evidenceCount int
+	if err := svc.db.QueryRow(
+		`SELECT COUNT(*) FROM issue_messages
+		 WHERE issue_id = ? AND author_kind = ? AND body LIKE '%unknown or partial outcome%'`,
+		issueID, AuthorSystem,
+	).Scan(&evidenceCount); err != nil {
+		t.Fatalf("count cleared evidence: %v", err)
+	}
+	if evidenceCount != 1 {
+		t.Fatalf("cleared-signal evidence rows = %d, want 1", evidenceCount)
+	}
+}
+
+func TestRecoverDecisionDoesNotBypassNewerPendingProposal(t *testing.T) {
+	svc, _, issueID, historicalID := approvalFixture(t)
+	var runID int64
+	if err := svc.db.QueryRow("SELECT run_id FROM agent_actions WHERE id = ?", historicalID).Scan(&runID); err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		"UPDATE agent_actions SET status = ?, result_text = ? WHERE id = ?",
+		ActionExecuted, "historical result", historicalID,
+	); err != nil {
+		t.Fatalf("terminalize historical action: %v", err)
+	}
+	params := json.RawMessage(`{"media_type":"movie","tmdb_id":42}`)
+	fp := fingerprint(issueID, runID, "toolu_propose_2", ActionRescan, params)
+	current, err := svc.db.Exec(
+		`INSERT INTO agent_actions
+		 (issue_id, run_id, tool_use_id, kind, params, rationale, status, fingerprint)
+		 VALUES (?, ?, 'toolu_propose_2', ?, ?, 'current proposal', ?, ?)`,
+		issueID, runID, string(ActionRescan), string(params), ActionProposed, fp,
+	)
+	if err != nil {
+		t.Fatalf("seed current proposal: %v", err)
+	}
+	currentID, _ := current.LastInsertId()
+
+	svc.recoverDecisionHandoffs()
+
+	var issueStatus, runStatus, currentStatus string
+	if err := svc.db.QueryRow(
+		`SELECT i.status, r.status FROM issues i JOIN agent_runs r ON r.id = ? WHERE i.id = ?`,
+		runID, issueID,
+	).Scan(&issueStatus, &runStatus); err != nil {
+		t.Fatalf("load gate: %v", err)
+	}
+	if err := svc.db.QueryRow("SELECT status FROM agent_actions WHERE id = ?", currentID).Scan(&currentStatus); err != nil {
+		t.Fatalf("load current action: %v", err)
+	}
+	if issueStatus != IssueAwaitingApproval || runStatus != runStatusWaitingApproval || currentStatus != ActionProposed {
+		t.Fatalf("newer gate was bypassed: issue=%q run=%q action=%q", issueStatus, runStatus, currentStatus)
+	}
+}
+
+func TestClaimResumeConsumesOneExactHandoff(t *testing.T) {
+	svc, _, issueID, actionID := approvalFixture(t)
+	if _, err := svc.ApproveAction(testAdminID, actionID, nil); err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+	select {
+	case <-svc.jobs:
+	default:
+		t.Fatal("expected resume hint")
+	}
+	r := &Runner{db: svc.db}
+	var wg sync.WaitGroup
+	results := make(chan bool, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, claimed, err := r.claimResume(issueID)
+			if err != nil {
+				t.Errorf("claimResume: %v", err)
+			}
+			results <- claimed
+		}()
+	}
+	wg.Wait()
+	close(results)
+	claimed := 0
+	for result := range results {
+		if result {
+			claimed++
+		}
+	}
+	if claimed != 1 {
+		t.Fatalf("successful resume claims = %d, want exactly 1", claimed)
+	}
+}
+
+func TestInvalidOpenApprovalGateIsSuperseded(t *testing.T) {
+	svc, fx, issueID, actionID := approvalFixture(t)
+	if _, err := svc.db.Exec("UPDATE agent_runs SET status = 'aborted' WHERE issue_id = ?", issueID); err != nil {
+		t.Fatalf("invalidate gate: %v", err)
+	}
+	action, err := svc.ApproveAction(testAdminID, actionID, nil)
+	if err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+	if action.Status != ActionSuperseded || action.CanDecide {
+		t.Fatalf("invalid gate action = %q can_decide=%v", action.Status, action.CanDecide)
+	}
+	if fx.count() != 0 {
+		t.Fatalf("executor ran %d times for invalid gate", fx.count())
+	}
+}
+
+func TestGiveUpSupersedesProposalWithRunTransition(t *testing.T) {
+	svc, _, issueID, actionID := approvalFixture(t)
+	var runID int64
+	if err := svc.db.QueryRow("SELECT run_id FROM agent_actions WHERE id = ?", actionID).Scan(&runID); err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	// Model the crash-sensitive interval after propose_action inserted its row but
+	// before the Runner could persist the approval park.
+	if _, err := svc.db.Exec("UPDATE agent_runs SET status = ? WHERE id = ?", runStatusRunning, runID); err != nil {
+		t.Fatalf("activate run: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		"UPDATE issues SET status = ?, active_run_id = ? WHERE id = ?",
+		IssueInvestigating, runID, issueID,
+	); err != nil {
+		t.Fatalf("claim issue: %v", err)
+	}
+
+	transitioned, err := svc.GiveUpIssue(context.Background(), issueID, runID,
+		stopInfrastructure, "internal state error", "administrator review required")
+	if err != nil || !transitioned {
+		t.Fatalf("GiveUpIssue = %v, %v", transitioned, err)
+	}
+	var issueStatus, runStatus, actionStatus string
+	if err := svc.db.QueryRow(
+		`SELECT i.status, r.status, a.status
+		 FROM issues i JOIN agent_runs r ON r.id = ? JOIN agent_actions a ON a.id = ?
+		 WHERE i.id = ?`, runID, actionID, issueID,
+	).Scan(&issueStatus, &runStatus, &actionStatus); err != nil {
+		t.Fatalf("load aggregate: %v", err)
+	}
+	if issueStatus != IssueNeedsAdmin || runStatus != runStatusGaveUp || actionStatus != ActionSuperseded {
+		t.Fatalf("give-up aggregate = issue %q run %q action %q", issueStatus, runStatus, actionStatus)
+	}
+}
+
+func TestUnclaimedGiveUpCannotDisruptApprovalGate(t *testing.T) {
+	svc, _, issueID, actionID := approvalFixture(t)
+	transitioned, err := svc.GiveUpIssue(context.Background(), issueID, 0,
+		stopModelError, "provider unavailable", "administrator review required")
+	if err != nil {
+		t.Fatalf("GiveUpIssue: %v", err)
+	}
+	if transitioned {
+		t.Fatal("stale unclaimed give-up overwrote a live approval gate")
+	}
+	action, err := svc.GetAction(actionID)
+	if err != nil {
+		t.Fatalf("GetAction: %v", err)
+	}
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Status != IssueAwaitingApproval || action.Status != ActionProposed || !action.CanDecide {
+		t.Fatalf("approval gate changed: issue=%q action=%q can_decide=%v", issue.Status, action.Status, action.CanDecide)
+	}
+}
+
 // TestSequentialDoubleApproveIdempotent is the deterministic companion to (a): a
 // second approve AFTER the first completed is a no-op (the row is no longer
 // proposed), so the mutation still ran exactly once.
@@ -175,9 +453,10 @@ func TestSequentialDoubleApproveIdempotent(t *testing.T) {
 	if _, err := svc.ApproveAction(testAdminID, actionID, nil); err != nil {
 		t.Fatalf("first approve: %v", err)
 	}
-	// Second approve must NOT execute again (status is now executed, not proposed).
-	if _, err := svc.ApproveAction(testAdminID, actionID, nil); err == nil {
-		t.Fatalf("second approve should error (not proposed)")
+	// Second approve returns the durable result so a client can safely reconcile
+	// a lost response, but must NOT execute again.
+	if act, err := svc.ApproveAction(testAdminID, actionID, nil); err != nil || act.Status != ActionExecuted {
+		t.Fatalf("second approve = (%+v, %v), want executed result", act, err)
 	}
 	if fx.count() != 1 {
 		t.Fatalf("executor ran %d times, want exactly 1", fx.count())
@@ -272,26 +551,206 @@ func TestDenyDoesNotExecuteAndResumes(t *testing.T) {
 	}
 }
 
-// TestApproveExecutionFailureMarksFailedNoSilentReexec asserts a definitive
-// execution error marks the action failed (never reverted to proposed), so it
-// can never be silently re-executed; the resume still fires so the agent reacts.
-func TestApproveExecutionFailureMarksFailed(t *testing.T) {
-	svc, fx, _, actionID := approvalFixture(t)
-	fx.err = context.DeadlineExceeded // a definitive failure for the test
+func TestDenyRejectsOversizedNoteWithoutChangingGate(t *testing.T) {
+	svc, _, _, actionID := approvalFixture(t)
+	if _, err := svc.DenyAction(testAdminID, actionID, strings.Repeat("x", maxIssueReplyBytes+1)); err == nil {
+		t.Fatal("oversized denial note was accepted")
+	}
+	action, err := svc.GetAction(actionID)
+	if err != nil {
+		t.Fatalf("GetAction: %v", err)
+	}
+	if action.Status != ActionProposed || !action.CanDecide {
+		t.Fatalf("gate changed after rejected note: status=%q can_decide=%v", action.Status, action.CanDecide)
+	}
+}
+
+func TestActionAPIsExposeImmutableTargetInstance(t *testing.T) {
+	svc, _, issueID, actionID := approvalFixture(t)
+
+	assertTarget := func(name string, action *AgentAction) {
+		t.Helper()
+		if action.InstanceID != "radarr-main" || action.InstanceName != "Main Movies" || action.InstanceServiceType != "radarr" {
+			t.Fatalf("%s target = %q/%q/%q, want radarr-main/Main Movies/radarr",
+				name, action.InstanceID, action.InstanceName, action.InstanceServiceType)
+		}
+	}
+
+	got, err := svc.GetAction(actionID)
+	if err != nil {
+		t.Fatalf("GetAction: %v", err)
+	}
+	assertTarget("get", got)
+	wire, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal action DTO: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(wire, &payload); err != nil {
+		t.Fatalf("decode action DTO: %v", err)
+	}
+	if payload["instance_id"] != "radarr-main" || payload["instance_name"] != "Main Movies" || payload["instance_service_type"] != "radarr" {
+		t.Fatalf("action JSON target = %#v", payload)
+	}
+
+	listed, err := svc.ListActions("all")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("ListActions = %d actions, err %v", len(listed), err)
+	}
+	assertTarget("list", &listed[0])
+
+	activity, err := svc.GetIssueActivity(issueID)
+	if err != nil || len(activity.Actions) != 1 {
+		t.Fatalf("GetIssueActivity = %d actions, err %v", len(activity.Actions), err)
+	}
+	assertTarget("activity", &activity.Actions[0])
+}
+
+func TestDenyAfterApprovalReturnsConflict(t *testing.T) {
+	svc, _, _, actionID := approvalFixture(t)
+	if _, err := svc.db.Exec(
+		"UPDATE agent_actions SET status = ?, decided_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ?",
+		ActionExecuting, testAdminID, actionID,
+	); err != nil {
+		t.Fatalf("seed approval winner: %v", err)
+	}
+
+	if _, err := svc.DenyAction(testAdminID, actionID, "too late"); !errors.Is(err, ErrActionDecisionConflict) {
+		t.Fatalf("DenyAction error = %v, want decision conflict", err)
+	}
+	action, err := svc.GetAction(actionID)
+	if err != nil {
+		t.Fatalf("GetAction: %v", err)
+	}
+	if action.Status != ActionExecuting || action.DenyReason != nil {
+		t.Fatalf("approval winner changed by denial: status=%q deny_reason=%v", action.Status, action.DenyReason)
+	}
+}
+
+func TestDenyConflictReturnsHTTP409(t *testing.T) {
+	svc, _, _, actionID := approvalFixture(t)
+	if _, err := svc.db.Exec(
+		"UPDATE agent_actions SET status = ?, decided_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ?",
+		ActionExecuted, testAdminID, actionID,
+	); err != nil {
+		t.Fatalf("seed approval winner: %v", err)
+	}
+
+	id := strconv.FormatInt(actionID, 10)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/agent-actions/"+id+"/deny", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", id)
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+	ctx = context.WithValue(ctx, auth.ClaimsKey, &auth.Claims{UserID: testAdminID, Role: auth.RoleAdmin})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	NewHandler(svc).DenyAction(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("deny status = %d, body %s; want 409", rec.Code, rec.Body.String())
+	}
+}
+
+// A transport failure after dispatch cannot prove whether the arr accepted the
+// mutation, so it is outcome_unknown and is never silently re-executed.
+func TestApproveExecutionFailureMarksOutcomeUnknown(t *testing.T) {
+	svc, fx, issueID, actionID := approvalFixture(t)
+	fx.err = context.DeadlineExceeded
 
 	act, err := svc.ApproveAction(testAdminID, actionID, nil)
 	if err != nil {
 		t.Fatalf("ApproveAction returned a transport error to the caller: %v", err)
 	}
-	if act.Status != ActionFailed {
-		t.Fatalf("action status = %q, want failed", act.Status)
+	if act.Status != ActionOutcomeUnknown {
+		t.Fatalf("action status = %q, want outcome_unknown", act.Status)
 	}
-	// A re-approve must NOT re-run it (no silent re-exec): status is failed.
-	if _, err := svc.ApproveAction(testAdminID, actionID, nil); err == nil {
-		t.Fatalf("re-approve of a failed action should error")
+	// A re-approve reconciles the stored failure but must never re-run it.
+	if again, err := svc.ApproveAction(testAdminID, actionID, nil); err != nil || again.Status != ActionOutcomeUnknown {
+		t.Fatalf("re-approve = (%+v, %v), want stored unknown outcome", again, err)
 	}
 	if fx.count() != 1 {
 		t.Fatalf("executor ran %d times, want exactly 1 (failed action never re-runs)", fx.count())
+	}
+	assertUnknownOutcomeNeedsAdmin(t, svc, issueID)
+}
+
+func assertUnknownOutcomeNeedsAdmin(t *testing.T, svc *Service, issueID int64) {
+	t.Helper()
+	var issueStatus, runStatus, stopReason string
+	var activeRun sql.NullInt64
+	if err := svc.db.QueryRow(
+		`SELECT i.status, i.active_run_id, r.status, COALESCE(r.stop_reason, '')
+		 FROM issues i JOIN agent_runs r ON r.issue_id = i.id WHERE i.id = ?`, issueID,
+	).Scan(&issueStatus, &activeRun, &runStatus, &stopReason); err != nil {
+		t.Fatalf("load unknown outcome boundary: %v", err)
+	}
+	if issueStatus != IssueNeedsAdmin || activeRun.Valid || runStatus != "aborted" || stopReason != "action_outcome_unknown" {
+		t.Fatalf("unknown outcome boundary = issue %s active=%v run %s/%s", issueStatus, activeRun, runStatus, stopReason)
+	}
+	select {
+	case job := <-svc.jobs:
+		t.Fatalf("unknown outcome enqueued model resume: %+v", job)
+	default:
+	}
+}
+
+func TestExternalResolutionSupersedesProposalAndAbortsRun(t *testing.T) {
+	svc, fx, issueID, actionID := approvalFixture(t)
+	if err := svc.concludeIssue(context.Background(), issueID, IssueResolved,
+		"queue signal cleared", ResolutionArrStateCleared); err != nil {
+		t.Fatalf("concludeIssue: %v", err)
+	}
+
+	action, err := svc.GetAction(actionID)
+	if err != nil {
+		t.Fatalf("GetAction: %v", err)
+	}
+	if action.Status != ActionSuperseded || action.CanDecide {
+		t.Fatalf("action = status %q can_decide=%v, want superseded/false", action.Status, action.CanDecide)
+	}
+	var runStatus, stopReason string
+	if err := svc.db.QueryRow(
+		"SELECT status, COALESCE(stop_reason,'') FROM agent_runs WHERE issue_id = ?", issueID,
+	).Scan(&runStatus, &stopReason); err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if runStatus != "aborted" || stopReason != "external_resolution" {
+		t.Fatalf("run = %s/%s, want aborted/external_resolution", runStatus, stopReason)
+	}
+	if _, err := svc.ApproveAction(testAdminID, actionID, nil); err == nil {
+		t.Fatal("approving a superseded action should conflict")
+	}
+	if fx.count() != 0 {
+		t.Fatalf("executor ran %d times, want 0", fx.count())
+	}
+}
+
+func TestDismissSupersedesProposal(t *testing.T) {
+	svc, fx, issueID, actionID := approvalFixture(t)
+	if err := svc.DismissIssue(issueID); err != nil {
+		t.Fatalf("DismissIssue: %v", err)
+	}
+	action, err := svc.GetAction(actionID)
+	if err != nil {
+		t.Fatalf("GetAction: %v", err)
+	}
+	if action.Status != ActionSuperseded || action.CanDecide {
+		t.Fatalf("action = status %q can_decide=%v, want superseded/false", action.Status, action.CanDecide)
+	}
+	if fx.count() != 0 {
+		t.Fatalf("executor ran %d times, want 0", fx.count())
+	}
+}
+
+func TestProposalScopeMustMatchIssue(t *testing.T) {
+	svc, _, issueID, seededActionID := approvalFixture(t)
+	if _, err := svc.db.Exec("DELETE FROM agent_actions WHERE id = ?", seededActionID); err != nil {
+		t.Fatalf("clear fixture proposal: %v", err)
+	}
+	_, _, err := svc.ProposeAction(context.Background(), issueID, "trigger_search",
+		json.RawMessage(`{"media_type":"tv","tmdb_id":42,"season":1}`), "wrong service", "tu")
+	if err == nil {
+		t.Fatal("proposal with media_type outside the issue scope should fail")
 	}
 }
 
@@ -299,8 +758,21 @@ func TestApproveExecutionFailureMarksFailed(t *testing.T) {
 // idempotent: re-proposing an identical {issue, kind, params} returns the same
 // row and does NOT create a duplicate (UNIQUE(fingerprint) + conditional insert).
 func TestProposeActionFingerprintIdempotent(t *testing.T) {
-	svc, _, issueID, _ := approvalFixture(t)
+	svc, _, issueID, seededActionID := approvalFixture(t)
 	ctx := context.Background()
+	if _, err := svc.db.Exec("DELETE FROM agent_actions WHERE id = ?", seededActionID); err != nil {
+		t.Fatalf("clear fixture proposal: %v", err)
+	}
+	var runID int64
+	if err := svc.db.QueryRow("SELECT id FROM agent_runs WHERE issue_id = ?", issueID).Scan(&runID); err != nil {
+		t.Fatalf("load fixture run: %v", err)
+	}
+	if _, err := svc.db.Exec("UPDATE agent_runs SET status = ? WHERE id = ?", runStatusRunning, runID); err != nil {
+		t.Fatalf("activate fixture run: %v", err)
+	}
+	if _, err := svc.db.Exec("UPDATE issues SET status = ?, active_run_id = ? WHERE id = ?", IssueInvestigating, runID, issueID); err != nil {
+		t.Fatalf("claim fixture issue: %v", err)
+	}
 
 	params := json.RawMessage(`{"media_type":"movie","queue_id":9,"action":"remove"}`)
 	id1, existed1, err := svc.ProposeAction(ctx, issueID, "remediate_queue", params, "r1", "tu_a")
@@ -311,10 +783,10 @@ func TestProposeActionFingerprintIdempotent(t *testing.T) {
 		t.Fatalf("first propose existed=%v id=%d, want new row", existed1, id1)
 	}
 
-	// Re-propose the SAME action (even with different key order in params + a
-	// different rationale/tool_use_id): same fingerprint => idempotent.
+	// Retry the SAME model tool gate with reordered params and a different
+	// rationale: same fingerprint => idempotent.
 	reordered := json.RawMessage(`{"action":"remove","queue_id":9,"media_type":"movie"}`)
-	id2, existed2, err := svc.ProposeAction(ctx, issueID, "remediate_queue", reordered, "r2", "tu_b")
+	id2, existed2, err := svc.ProposeAction(ctx, issueID, "remediate_queue", reordered, "r2", "tu_a")
 	if err != nil {
 		t.Fatalf("second propose: %v", err)
 	}
@@ -325,13 +797,26 @@ func TestProposeActionFingerprintIdempotent(t *testing.T) {
 		t.Fatalf("second propose id=%d, want the same row %d", id2, id1)
 	}
 
-	// Exactly one row exists for that fingerprint.
+	// Once that gate is terminal, a later model tool gate may deliberately offer
+	// the same fix again and must receive a new audit row.
+	if _, err := svc.db.Exec("UPDATE agent_actions SET status = ? WHERE id = ?", ActionDenied, id1); err != nil {
+		t.Fatalf("terminalize first proposal: %v", err)
+	}
+	id3, existed3, err := svc.ProposeAction(ctx, issueID, "remediate_queue", params, "new attempt", "tu_b")
+	if err != nil {
+		t.Fatalf("later re-proposal: %v", err)
+	}
+	if existed3 || id3 == id1 {
+		t.Fatalf("later gate returned existed=%v id=%d, want a fresh row", existed3, id3)
+	}
+
+	// Each distinct gate has one row; the retry of tu_a did not add a third.
 	var n int
 	if err := svc.db.QueryRow("SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND kind = 'remediate_queue' AND params LIKE '%\"queue_id\":9%'", issueID).Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("rows for the re-proposed action = %d, want 1", n)
+	if n != 2 {
+		t.Fatalf("rows for the action across two gates = %d, want 2", n)
 	}
 }
 
@@ -348,6 +833,10 @@ func TestProposeActionRejectsBadParams(t *testing.T) {
 	// Missing guid/indexer for grab_release.
 	if _, _, err := svc.ProposeAction(ctx, issueID, "grab_release", json.RawMessage(`{"media_type":"movie"}`), "", "tu"); err == nil {
 		t.Fatalf("expected rejection of missing guid/indexer_id")
+	}
+	// Negative identifiers are not valid arr/indexer identities.
+	if _, _, err := svc.ProposeAction(ctx, issueID, "grab_release", json.RawMessage(`{"media_type":"movie","guid":"x","indexer_id":-1}`), "", "tu"); err == nil {
+		t.Fatalf("expected rejection of negative indexer_id")
 	}
 	// Unknown kind.
 	if _, _, err := svc.ProposeAction(ctx, issueID, "delete_everything", json.RawMessage(`{}`), "", "tu"); err == nil {
@@ -388,6 +877,13 @@ func TestProposeApproveExecuteResumeCycle(t *testing.T) {
 	if fx.count() != 0 {
 		t.Fatalf("executor ran %d times before approval, want 0", fx.count())
 	}
+	var persistedSteps int
+	if err := svc.db.QueryRow("SELECT step_count FROM agent_runs WHERE issue_id = ?", issueID).Scan(&persistedSteps); err != nil {
+		t.Fatalf("load parked step_count: %v", err)
+	}
+	if persistedSteps != 2 {
+		t.Fatalf("parked step_count = %d, want 2 read/proposal tool calls", persistedSteps)
+	}
 
 	// 2) Admin approves. The Executor runs the typed mutation exactly once with
 	// the proposal's verbatim params; a resume job is enqueued.
@@ -405,8 +901,10 @@ func TestProposeApproveExecuteResumeCycle(t *testing.T) {
 	if err := json.Unmarshal([]byte(call.params), &gp); err != nil {
 		t.Fatalf("decode executor params: %v", err)
 	}
-	if gp.GUID != "abc-guid" || gp.IndexerID != 3 || gp.MediaType != "movie" {
-		t.Fatalf("executor params = %+v, want movie/abc-guid/3", gp)
+	if gp.GUID != releaseGUIDFingerprint("abc-guid") || gp.IndexerID != 3 || gp.MediaType != "movie" ||
+		gp.ReleaseTitle != "Test.Movie.1080p" || gp.Quality != "WEBDL-1080p" ||
+		gp.Size != 2048 || gp.Protocol != "usenet" || gp.Indexer != "Test Indexer" {
+		t.Fatalf("executor params = %+v, want movie/safe-release-reference/3", gp)
 	}
 
 	// The transcript the REAL Runner parked (which already held the placeholder
@@ -456,6 +954,25 @@ func (h *serviceBackedHost) ToolsByName(names []string) []mcp.Tool {
 }
 
 func (h *serviceBackedHost) ExecuteTool(ctx context.Context, name string, input json.RawMessage, callCtx mcp.CallContext) (*mcp.ToolResult, error) {
+	if name == "search_releases" {
+		return &mcp.ToolResult{
+			Text: "Found one scoped release.",
+			ReleaseCandidates: []mcp.ReleaseCandidate{{
+				Reference: "abc-guid", IndexerID: 3, Title: "Test.Movie.1080p",
+				Quality: "WEBDL-1080p", Size: 2048, Protocol: "usenet", Indexer: "Test Indexer",
+			}},
+		}, nil
+	}
+	if name == "get_queue" {
+		return &mcp.ToolResult{
+			Text: "Movie queue: empty.",
+			Verification: &mcp.ToolVerification{
+				Kind:          mcp.VerificationQueueTarget,
+				ExactScope:    true,
+				TargetPresent: false,
+			},
+		}, nil
+	}
 	return &mcp.ToolResult{Text: "ok: " + name}, nil
 }
 
@@ -477,8 +994,7 @@ func (h *serviceBackedHost) ExecuteAgentTool(ctx context.Context, name string, i
 		if a.Status != mcp.ConcludeResolved && a.Status != mcp.ConcludeWontFix {
 			a.Status = mcp.ConcludeWontFix
 		}
-		h.svc.ConcludeIssue(ctx, issueID, a.Status, a.Resolution)
-		return &mcp.AgentToolResult{Text: "concluded", Concluded: true, Status: a.Status}, nil
+		return &mcp.AgentToolResult{Text: "conclusion requested", Concluded: true, Status: a.Status, Resolution: a.Resolution}, nil
 	case mcp.ToolProposeAction:
 		var a struct {
 			Kind      string          `json:"kind"`
@@ -511,7 +1027,7 @@ func (h *serviceBackedHost) ExecuteAgentTool(ctx context.Context, name string, i
 		if !hasReporter {
 			return &mcp.AgentToolResult{Text: "no reporter to ask"}, nil
 		}
-		return &mcp.AgentToolResult{Text: "Question posted to the reporter; the investigation will resume with their reply.", Parked: true, AwaitingUser: true}, nil
+		return &mcp.AgentToolResult{Text: "Question posted to the reporter; the investigation will resume with their reply.", Parked: true, AwaitingUser: true, Question: a.Question}, nil
 	}
 	return &mcp.AgentToolResult{Text: "noop"}, nil
 }
@@ -529,7 +1045,7 @@ func newProposeCycleRunner(t *testing.T) (*Runner, *Service, *fakeExecutor, int6
 	svc := NewService(database, nil, nil, &fakeNotifier{})
 	fx := &fakeExecutor{out: "Release sent to the download client."}
 	svc.executor = fx
-	if _, err := svc.SetSettings(Settings{Enabled: true, Autonomy: AutonomyPropose, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 	if _, err := database.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (?, 'admin', '', 'admin')", testAdminID); err != nil {
@@ -537,18 +1053,18 @@ func newProposeCycleRunner(t *testing.T) (*Runner, *Service, *fakeExecutor, int6
 	}
 
 	res, err := database.Exec(
-		"INSERT INTO issues (source, status, media_type, tmdb_id, title, detail) VALUES ('user','open','movie',42,'Test Movie','bad copy')",
+		"INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, arr_queue_id, download_id) VALUES ('auto','open','movie',42,'Test Movie','bad copy',7,'download-7')",
 	)
 	if err != nil {
 		t.Fatalf("seed issue: %v", err)
 	}
 	issueID, _ := res.LastInsertId()
 
-	grabInput := json.RawMessage(`{"kind":"grab_release","params":{"media_type":"movie","guid":"abc-guid","indexer_id":3},"rationale":"better release"}`)
+	grabInput := json.RawMessage(`{"kind":"grab_release","params":{"media_type":"movie","guid":"abc-guid","indexer_id":3,"queue_id_to_replace":7},"rationale":"better release"}`)
 	script := &scriptedTurn{turns: []ai.TranscriptMessage{
 		// Turn 1: investigate (a read), then propose a grab_release. The Runner
 		// parks after dispatching propose_action.
-		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("r1", "get_history")}},
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("r1", "search_releases")}},
 		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{{Type: ai.BlockToolUse, ID: "prop1", Name: mcp.ToolProposeAction, Input: grabInput}}},
 		// Turn 2 (resume, after approval): verify read-only, then conclude resolved.
 		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("r2", "get_queue")}},

@@ -2,11 +2,29 @@ package remediation
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/db"
 )
+
+func TestConcurrentCircuitBreakerIncrementsAreNotLost(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	const workers = 24
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			svc.bumpAutoGiveupStreak()
+		}()
+	}
+	wg.Wait()
+	if got := svc.readAutoGiveupStreak(); got != workers {
+		t.Fatalf("concurrent streak = %d, want %d", got, workers)
+	}
+}
 
 // enableAutoDispatch turns on both the master switch and the auto-dispatch
 // sub-toggle with a known circuit-breaker threshold, returning the saved value.
@@ -66,7 +84,7 @@ func TestAutoDispatcherOpensExactlyOneIssueAcrossPolls(t *testing.T) {
 	d := stalledDiagnosis()
 	// Simulate many confirming polls of the SAME stuck download.
 	for i := 0; i < 6; i++ {
-		ad.OpenAutoIssue("radarr", "inst1", "stuckHash", d)
+		ad.OpenAutoIssue("radarr", "inst1", "stuckHash", arr.QueueMediaContext{}, d)
 	}
 
 	if got := countOpenAutoIssues(t, svc); got != 1 {
@@ -98,8 +116,8 @@ func TestOpenAutoIssueStoresMediaTypeNotServiceType(t *testing.T) {
 	ad := NewAutoDispatcher(svc)
 
 	d := stalledDiagnosis()
-	ad.OpenAutoIssue("sonarr", "inst1", "tvHash", d)
-	ad.OpenAutoIssue("radarr", "inst1", "movieHash", d)
+	ad.OpenAutoIssue("sonarr", "inst1", "tvHash", arr.QueueMediaContext{}, d)
+	ad.OpenAutoIssue("radarr", "inst1", "movieHash", arr.QueueMediaContext{}, d)
 	drainJobs(svc)
 
 	for downloadID, want := range map[string]string{"tvHash": "tv", "movieHash": "movie"} {
@@ -116,6 +134,43 @@ func TestOpenAutoIssueStoresMediaTypeNotServiceType(t *testing.T) {
 	}
 }
 
+func TestOpenAutoIssuePreservesMediaContext(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	enableAutoDispatch(t, svc, 5)
+	ad := NewAutoDispatcher(svc)
+	media := arr.QueueMediaContext{
+		QueueID: 77, Title: "Example Series", TmdbID: 1920, TvdbID: 70533,
+		SeasonNumber: 1, EpisodeNumber: 1,
+	}
+	ad.OpenAutoIssue("sonarr", "sonarr-a", "download-a", media, stalledDiagnosis())
+	var title string
+	var tmdbID, tvdbID, season, episode, queueID int
+	if err := svc.db.QueryRow(
+		`SELECT title, tmdb_id, tvdb_id, season_number, episode_number, arr_queue_id
+		 FROM issues WHERE download_id = 'download-a'`,
+	).Scan(&title, &tmdbID, &tvdbID, &season, &episode, &queueID); err != nil {
+		t.Fatalf("load auto issue: %v", err)
+	}
+	if title != "Example Series" || tmdbID != 1920 || tvdbID != 70533 || season != 1 || episode != 1 || queueID != 77 {
+		t.Fatalf("stored context = %q/%d/%d S%dE%d queue=%d", title, tmdbID, tvdbID, season, episode, queueID)
+	}
+}
+
+func TestReconcileAutoIssuesClosesAcrossRestartSnapshot(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	enableAutoDispatch(t, svc, 5)
+	ad := NewAutoDispatcher(svc)
+	ad.OpenAutoIssue("sonarr", "sonarr-a", "gone", arr.QueueMediaContext{}, stalledDiagnosis())
+	ad.ReconcileAutoIssues("sonarr", "sonarr-a", nil)
+	issue, err := svc.ListIssues(IssueResolved)
+	if err != nil || len(issue) != 1 {
+		t.Fatalf("resolved issues = %d, err=%v", len(issue), err)
+	}
+	if issue[0].ResolutionKind != ResolutionArrStateCleared {
+		t.Fatalf("resolution_kind = %q, want %q", issue[0].ResolutionKind, ResolutionArrStateCleared)
+	}
+}
+
 // TestCloseAutoIssueResolvesRecoveredDownload proves that when the poller stops
 // flagging a download, the matching open auto issue is resolved and closed.
 func TestCloseAutoIssueResolvesRecoveredDownload(t *testing.T) {
@@ -124,8 +179,8 @@ func TestCloseAutoIssueResolvesRecoveredDownload(t *testing.T) {
 	ad := NewAutoDispatcher(svc)
 
 	d := stalledDiagnosis()
-	ad.OpenAutoIssue("radarr", "inst1", "stuckHash", d)
-	ad.OpenAutoIssue("radarr", "inst1", "stuckHash", d) // dedupe, still one open
+	ad.OpenAutoIssue("radarr", "inst1", "stuckHash", arr.QueueMediaContext{}, d)
+	ad.OpenAutoIssue("radarr", "inst1", "stuckHash", arr.QueueMediaContext{}, d) // dedupe, still one open
 	drainJobs(svc)
 	if got := countOpenAutoIssues(t, svc); got != 1 {
 		t.Fatalf("open auto issues = %d, want 1", got)
@@ -160,7 +215,7 @@ func TestAutoDispatcherGatedOff(t *testing.T) {
 	d := stalledDiagnosis()
 
 	// Default settings: Enabled=false, AutoDispatch=false -> no-op.
-	ad.OpenAutoIssue("radarr", "inst1", "h1", d)
+	ad.OpenAutoIssue("radarr", "inst1", "h1", arr.QueueMediaContext{}, d)
 	if got := countOpenAutoIssues(t, svc); got != 0 {
 		t.Fatalf("with feature off, opened %d issue(s), want 0", got)
 	}
@@ -173,14 +228,14 @@ func TestAutoDispatcherGatedOff(t *testing.T) {
 	if _, err := svc.SetSettings(s); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
-	ad.OpenAutoIssue("radarr", "inst1", "h1", d)
+	ad.OpenAutoIssue("radarr", "inst1", "h1", arr.QueueMediaContext{}, d)
 	if got := countOpenAutoIssues(t, svc); got != 0 {
 		t.Fatalf("with AutoDispatch off, opened %d issue(s), want 0", got)
 	}
 
 	// Both on -> opens.
 	enableAutoDispatch(t, svc, 5)
-	ad.OpenAutoIssue("radarr", "inst1", "h1", d)
+	ad.OpenAutoIssue("radarr", "inst1", "h1", arr.QueueMediaContext{}, d)
 	if got := countOpenAutoIssues(t, svc); got != 1 {
 		t.Fatalf("with both on, opened %d issue(s), want 1", got)
 	}
@@ -213,7 +268,7 @@ func TestCircuitBreakerDisablesAutoDispatchAfterNGiveups(t *testing.T) {
 
 	// A user-reported give-up must NOT count toward the breaker.
 	userIssue, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
-		MediaType: "movie", TmdbID: 99, Category: CategoryOther,
+		InstanceID: testRadarrInstanceID, MediaType: "movie", TmdbID: 99, Category: CategoryOther,
 	})
 	if err != nil {
 		t.Fatalf("create user issue: %v", err)

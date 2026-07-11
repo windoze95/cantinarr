@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -92,4 +93,89 @@ func TestInstanceUsersEndpoints(t *testing.T) {
 func jsonInt(v int64) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+func TestInstanceURLRejectsEmbeddedSecrets(t *testing.T) {
+	for _, rawURL := range []string{
+		"http://user:password@example.test/sonarr",
+		"https://example.test/sonarr?apiKey=secret",
+		"https://example.test/sonarr#secret",
+	} {
+		inst := &Instance{ServiceType: "sonarr", Name: "TV", URL: rawURL, APIKey: "write-only"}
+		if err := validateRequiredFields(inst); err == nil {
+			t.Fatalf("validateRequiredFields(%q) accepted a secret-bearing URL", rawURL)
+		}
+	}
+}
+
+func TestValidateArrURLDoesNotFollowRedirects(t *testing.T) {
+	var redirectedRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedRequests.Add(1)
+		if got := r.Header.Get("X-Api-Key"); got != "" {
+			t.Errorf("redirect destination received X-Api-Key %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(destination.Close)
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Api-Key"); got != "validation-secret" {
+			t.Errorf("validation source X-Api-Key = %q", got)
+		}
+		http.Redirect(w, r, destination.URL+"/stolen", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	err := validateArrURL(source.URL, "validation-secret", "v3")
+	if err == nil || !strings.Contains(err.Error(), "status 307") {
+		t.Fatalf("validateArrURL redirect error = %v, want status 307", err)
+	}
+	if got := redirectedRequests.Load(); got != 0 {
+		t.Fatalf("redirect destination received %d requests, want 0", got)
+	}
+}
+
+func TestValidateConnectionDoesNotFollowServiceRedirects(t *testing.T) {
+	serviceTypes := []string{
+		"radarr",
+		"sonarr",
+		"chaptarr",
+		"sabnzbd",
+		"qbittorrent",
+		"nzbget",
+		"transmission",
+		"tautulli",
+	}
+
+	for _, serviceType := range serviceTypes {
+		t.Run(serviceType, func(t *testing.T) {
+			var redirectedRequests atomic.Int32
+			destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				redirectedRequests.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(destination.Close)
+
+			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, destination.URL+"/credential-sink", http.StatusTemporaryRedirect)
+			}))
+			t.Cleanup(source.Close)
+
+			inst := &Instance{
+				ServiceType: serviceType,
+				Name:        serviceType,
+				URL:         source.URL,
+				APIKey:      "service-api-secret",
+				Username:    "service-user",
+				Password:    "service-password",
+			}
+			if err := validateConnection(inst); err == nil {
+				t.Fatal("validateConnection accepted an upstream redirect")
+			}
+			if got := redirectedRequests.Load(); got != 0 {
+				t.Fatalf("redirect destination received %d requests, want 0", got)
+			}
+		})
+	}
 }

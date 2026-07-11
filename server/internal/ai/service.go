@@ -84,7 +84,10 @@ func NewService(apiKey, model string, toolServer *mcp.ToolServer) *Service {
 		model = defaultAnthropicModel
 	}
 	return &Service{
-		client:     anthropic.NewClient(option.WithAPIKey(apiKey)),
+		client: anthropic.NewClient(
+			option.WithAPIKey(apiKey),
+			option.WithHTTPClient(newCredentialHTTPClient(0)),
+		),
 		model:      anthropic.Model(model),
 		toolServer: toolServer,
 	}

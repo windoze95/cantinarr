@@ -16,7 +16,7 @@ import (
 // separate issues (dedupe is per reporter+scope+category) rather than bumping
 // occurrences.
 func movieReq(tmdbID int) *CreateIssueRequest {
-	return &CreateIssueRequest{MediaType: "movie", TmdbID: tmdbID, Category: CategoryOther, Reason: "x"}
+	return &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "movie", TmdbID: tmdbID, Category: CategoryOther, Reason: "x"}
 }
 
 func readFlag(t *testing.T, svc *Service, issueID int64) bool {

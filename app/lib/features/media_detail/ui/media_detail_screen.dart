@@ -101,6 +101,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Reporting binds to the currently active arr, so an instance switch must
+    // rebuild the affordance and capture the new concrete instance id.
+    ref.watch(instanceProvider);
     // Live-update the request button when an approval decision for THIS title
     // arrives over the socket (complements the global toast).
     ref.listen(requestDecisionEventsProvider, (_, next) {
@@ -568,7 +571,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final allow =
         ref.watch(authProvider).valueOrNull?.connection?.allowReporting ??
             false;
-    if (!allow) return false;
+    if (!allow || _reportInstanceId == null) return false;
     return status == RequestStatus.available ||
         status == RequestStatus.partial ||
         status == RequestStatus.downloading;
@@ -578,17 +581,23 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// lets the reporter narrow to a season/episode (reusing the loaded seasons)
   /// or report the whole series.
   Future<void> _onReportProblem(MediaDetailState state) async {
+    final instanceId = _reportInstanceId;
+    if (instanceId == null) return;
     final title = state.title;
     if (widget.mediaType == MediaType.movie) {
       await showReportProblemSheet(
         context,
-        scope: ReportScope.movie(tmdbId: widget.id, title: title),
+        scope: ReportScope.movie(
+          instanceId: instanceId,
+          tmdbId: widget.id,
+          title: title,
+        ),
       );
       return;
     }
 
     final tvdbId = state.tvDetail?.externalIds?.tvdbId;
-    final scope = await _pickTvScope(state, title, tvdbId);
+    final scope = await _pickTvScope(state, title, tvdbId, instanceId);
     if (scope == null) return; // cancelled
     if (!mounted) return;
     await showReportProblemSheet(context, scope: scope);
@@ -597,7 +606,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// Presents a small picker for which part of a show the report is about.
   /// Returns null if cancelled.
   Future<ReportScope?> _pickTvScope(
-      MediaDetailState state, String title, int? tvdbId) {
+      MediaDetailState state, String title, int? tvdbId, String instanceId) {
     // Real seasons only (drop a season 0 / specials placeholder when empty).
     final seasons = state.seasons.where((s) => s.seasonNumber > 0).toList();
     return showModalBottomSheet<ReportScope>(
@@ -629,7 +638,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                     style: TextStyle(color: AppTheme.textPrimary)),
                 onTap: () => Navigator.of(sheetContext).pop(
                   ReportScope.series(
-                      tmdbId: widget.id, tvdbId: tvdbId, title: title),
+                    instanceId: instanceId,
+                    tmdbId: widget.id,
+                    tvdbId: tvdbId,
+                    title: title,
+                  ),
                 ),
               ),
               if (seasons.isNotEmpty)
@@ -646,6 +659,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                   const TextStyle(color: AppTheme.textPrimary)),
                           onTap: () => Navigator.of(sheetContext).pop(
                             ReportScope.series(
+                              instanceId: instanceId,
                               tmdbId: widget.id,
                               tvdbId: tvdbId,
                               seasonNumber: s.seasonNumber,
@@ -662,6 +676,23 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         );
       },
     );
+  }
+
+  /// The concrete arr currently backing this media surface. An already
+  /// resolved detail link is authoritative; regular requester screens fall
+  /// back to the active/default instance exposed for that media type.
+  String? get _reportInstanceId {
+    final linked = _arrLink?.instanceId;
+    if (linked != null && linked.isNotEmpty) return linked;
+
+    final instances = ref.read(instanceProvider);
+    final connection = ref.read(authProvider).valueOrNull?.connection;
+    if (widget.mediaType == MediaType.movie) {
+      return instances.activeRadarrInstance?.id ??
+          connection?.defaultRadarrInstance?.id;
+    }
+    return instances.activeSonarrInstance?.id ??
+        connection?.defaultSonarrInstance?.id;
   }
 
   void _showStatusSheet(

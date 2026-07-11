@@ -9,7 +9,7 @@ import '../logic/issues_provider.dart';
 
 /// Admin screen for the AI-remediation settings. Clones
 /// `RequestSettingsScreen`'s load → edit → Save shape: a master Enabled
-/// switch, sub-toggles, an autonomy dropdown, free-text provider/model
+/// switch, sub-toggles, a remediation-mode dropdown, free-text provider/model
 /// overrides, and numeric bound fields.
 class AiRemediationSettingsScreen extends ConsumerStatefulWidget {
   const AiRemediationSettingsScreen({super.key});
@@ -25,6 +25,7 @@ class _AiRemediationSettingsScreenState
   bool _isLoading = true;
   String? _error;
   bool _saving = false;
+  int _loadEpoch = 0;
 
   // Free-text controllers for provider/model so a blank means "server
   // default". The agent is provider-agnostic — no fixed dropdown here.
@@ -50,13 +51,14 @@ class _AiRemediationSettingsScreenState
   }
 
   Future<void> _load() async {
+    final epoch = ++_loadEpoch;
     setState(() {
       _isLoading = _edited == null;
       _error = null;
     });
     try {
       final settings = await ref.read(issuesServiceProvider).getSettings();
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _edited = settings;
         _providerController.text = settings.provider;
@@ -64,7 +66,7 @@ class _AiRemediationSettingsScreenState
         _isLoading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -209,29 +211,29 @@ class _AiRemediationSettingsScreenState
         ),
         ListTile(
           title: const Text(
-            'Autonomy',
+            'Mode',
             style: TextStyle(
                 color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
           ),
           subtitle: const Text(
-            'How far the assistant may go on its own.',
+            'Whether the assistant may prepare a fix for an admin to review.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
-          trailing: DropdownButton<RemediationAutonomy>(
-            value: s.autonomy,
+          trailing: DropdownButton<RemediationMode>(
+            value: s.mode,
             dropdownColor: AppTheme.surface,
             underline: const SizedBox.shrink(),
             style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
             items: [
-              for (final a in RemediationAutonomy.values)
-                DropdownMenuItem<RemediationAutonomy>(
+              for (final a in RemediationMode.values)
+                DropdownMenuItem<RemediationMode>(
                   value: a,
                   child: Text(a.label),
                 ),
             ],
             onChanged: (v) {
               if (v == null) return;
-              setState(() => _edited = s.copyWith(autonomy: v));
+              setState(() => _edited = s.copyWith(mode: v));
             },
           ),
         ),
@@ -253,6 +255,12 @@ class _AiRemediationSettingsScreenState
           label: 'Max steps per run',
           value: s.maxSteps,
           onChanged: (v) => setState(() => _edited = s.copyWith(maxSteps: v)),
+        ),
+        _NumberTile(
+          label: 'Max output tokens per turn',
+          value: s.maxTurnTokens,
+          onChanged: (v) =>
+              setState(() => _edited = s.copyWith(maxTurnTokens: v)),
         ),
         _NumberTile(
           label: 'Max wall-clock (seconds)',
@@ -277,6 +285,18 @@ class _AiRemediationSettingsScreenState
           value: s.dailyCostCeilingMicros,
           onChanged: (v) =>
               setState(() => _edited = s.copyWith(dailyCostCeilingMicros: v)),
+        ),
+        _NumberTile(
+          label: 'Wait for a user reply (hours)',
+          value: s.maxUserWaitHours,
+          onChanged: (v) =>
+              setState(() => _edited = s.copyWith(maxUserWaitHours: v)),
+        ),
+        _NumberTile(
+          label: 'Failed auto investigations before pausing',
+          value: s.circuitBreakerGiveups,
+          onChanged: (v) =>
+              setState(() => _edited = s.copyWith(circuitBreakerGiveups: v)),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),

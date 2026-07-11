@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import 'package:dio/dio.dart';
+
 import 'package:go_router/go_router.dart';
 
 import '../../../core/layout/adaptive.dart';
@@ -13,6 +15,7 @@ import '../../auth/logic/auth_provider.dart';
 import '../data/agent_action_models.dart';
 import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
+import 'issue_refresh_banner.dart';
 import 'proposed_action_card.dart';
 
 /// The issue conversation: a read-mostly transcript rendered with the AI-chat
@@ -21,10 +24,8 @@ import 'proposed_action_card.dart';
 /// Provenance drives layout — a reporter/admin message is a right-aligned
 /// bubble; an agent/system message is left/centered. Every message body is
 /// rendered as PASSIVE, selectable text only (never a control or label),
-/// because a `user` body is untrusted. Wave 1 only ever shows user/admin and
-/// agent/system messages; proposed-action/decision arms are stubbed for a
-/// later wave and intentionally render as a plain notice so unused cases can't
-/// fail `flutter analyze`.
+/// because a `user` body is untrusted. Admins also see the durable agent-run
+/// and action audit trail, including terminal actions after the issue closes.
 class IssueThreadScreen extends ConsumerStatefulWidget {
   final int issueId;
 
@@ -34,36 +35,57 @@ class IssueThreadScreen extends ConsumerStatefulWidget {
   ConsumerState<IssueThreadScreen> createState() => _IssueThreadScreenState();
 }
 
-class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
+class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
+    with WidgetsBindingObserver {
   IssueThread? _thread;
   bool _isLoading = true;
   String? _error;
+  String? _activityError;
 
-  /// Proposed actions for this issue, fetched alongside the thread for admins
-  /// so an admin can approve/deny from the conversation. Empty for non-admins
-  /// (the queue endpoint is admin-only) and when nothing is pending.
+  /// Durable action history for this issue. Unlike the old proposal-only
+  /// query, this keeps executed/failed/superseded evidence in the thread.
   List<AgentAction> _actions = const [];
+  List<AgentRun> _runs = const [];
 
   final _replyController = TextEditingController();
   final _scrollController = ScrollController();
   bool _sending = false;
+  bool _dismissing = false;
+  bool _completing = false;
+  int _loadEpoch = 0;
 
   /// A short REST re-poll while the issue is still being worked, so steps that
   /// arrive without a WS ping (socket down) still surface. Best-effort.
   Timer? _poll;
+  Timer? _realtimeDebounce;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load(initial: true));
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // WebSocket events are not replayed after a disconnect/background stint.
+    // Reconcile the open thread from REST as soon as it becomes visible again.
+    if (state == AppLifecycleState.resumed) _load();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _poll?.cancel();
+    _realtimeDebounce?.cancel();
     _replyController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _scheduleRealtimeLoad() {
+    _realtimeDebounce?.cancel();
+    _realtimeDebounce = Timer(const Duration(milliseconds: 250), _load);
   }
 
   String _friendlyError(Object e) {
@@ -72,48 +94,61 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
   }
 
   Future<void> _load({bool initial = false}) async {
+    if (!mounted) return;
+    final epoch = ++_loadEpoch;
     if (initial) setState(() => _isLoading = _thread == null);
     try {
       final service = ref.read(issuesServiceProvider);
       final thread = await service.getThread(widget.issueId);
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
 
-      // For an admin, also pull any proposed actions for this issue so the
-      // ProposedActionCard can be surfaced inline. Best-effort and admin-only
-      // (the endpoint is admin-gated); failures leave the actions empty.
+      // Admins get the permanent audit surface: every action status plus run
+      // summaries. Reporter accounts cannot call the admin-only endpoint.
       final isAdmin =
           ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
-      List<AgentAction> actions = const [];
+      List<AgentAction> actions = isAdmin ? _actions : const [];
+      List<AgentRun> runs = isAdmin ? _runs : const [];
+      String? activityError;
       if (isAdmin) {
         try {
-          actions = await service.pendingActionsForIssue(widget.issueId);
-        } catch (_) {
-          // Leave actions empty; the thread still renders.
+          final activity = await service.getIssueActivity(widget.issueId);
+          actions = activity.actions;
+          runs = activity.runs;
+        } catch (e) {
+          // Preserve the last audit snapshot, but never make that fallback look
+          // like an authoritative empty history.
+          activityError = e.toString();
         }
-        if (!mounted) return;
+        if (!mounted || epoch != _loadEpoch) return;
       }
 
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _thread = thread;
         _actions = actions;
+        _runs = runs;
         _isLoading = false;
         _error = null;
+        _activityError = activityError;
       });
-      _syncPolling(thread.issue.status);
+      _syncPolling(thread.issue);
       if (initial) _scrollToBottomSoon();
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _isLoading = false;
-        if (_thread == null) _error = e.toString();
+        _error = e.toString();
       });
     }
   }
 
-  /// Keep a low-frequency poll running only while the issue is actively being
-  /// worked; stop it once the issue parks or terminates.
-  void _syncPolling(IssueStatus status) {
-    if (status.isActive) {
+  /// Keep a low-frequency poll running for every open state; stop only once the
+  /// issue closes.
+  void _syncPolling(Issue issue) {
+    // Parked issues can still change on another device, through the reply TTL,
+    // or when an approval is decided. Poll every open state so a missed socket
+    // event cannot leave stale decision controls on screen indefinitely.
+    if (!issue.status.isTerminal && issue.closedAt == null) {
       _poll ??= Timer.periodic(
         const Duration(seconds: 10),
         (_) => _load(),
@@ -151,18 +186,154 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
     }
   }
 
+  Future<void> _dismissIssue() async {
+    final issue = _thread?.issue;
+    if (issue == null ||
+        issue.status.isTerminal ||
+        _dismissing ||
+        _completing) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text(
+          'Dismiss this issue?',
+          style: TextStyle(color: AppTheme.textPrimary),
+        ),
+        content: const Text(
+          'This closes the issue without applying any pending fixes. Pending fixes will no longer be available for approval.',
+          style: TextStyle(color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.error,
+              foregroundColor: AppTheme.background,
+            ),
+            child: const Text('Dismiss issue'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _dismissing = true);
+    try {
+      await ref.read(issuesServiceProvider).dismiss(widget.issueId);
+      await _load();
+      if (!mounted) return;
+      ref.read(openIssuesProvider.notifier).refresh();
+      ref.read(pendingAgentActionsProvider.notifier).refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Issue dismissed.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_friendlyError(e))),
+      );
+    } finally {
+      if (mounted) setState(() => _dismissing = false);
+    }
+  }
+
+  Future<void> _resolveIssue(AdminIssueDisposition disposition) async {
+    final issue = _thread?.issue;
+    if (issue == null ||
+        issue.status.isTerminal ||
+        _completing ||
+        _dismissing) {
+      return;
+    }
+    final note = await showDialog<String>(
+      context: context,
+      builder: (_) => _AdminResolutionDialog(
+        disposition: disposition,
+        needsVerification: issue.status == IssueStatus.needsAdmin,
+      ),
+    );
+    if (note == null || !mounted) return;
+
+    setState(() => _completing = true);
+    try {
+      await ref.read(issuesServiceProvider).resolveIssue(
+            widget.issueId,
+            disposition: disposition,
+            note: note,
+          );
+      await _load();
+      if (!mounted) return;
+      ref.read(openIssuesProvider.notifier).refresh();
+      ref.read(pendingAgentActionsProvider.notifier).refresh();
+      _showSnack(
+        disposition == AdminIssueDisposition.resolved
+            ? 'Issue marked resolved.'
+            : 'Issue closed without a fix.',
+      );
+    } catch (e) {
+      // A terminal transition is a CAS. If another admin/agent or an approval
+      // won, reload before saying what happened; our attempted disposition may
+      // not be the one that became durable.
+      final conflict = e is DioException && e.response?.statusCode == 409;
+      await _load();
+      if (!mounted) return;
+      final current = _thread?.issue;
+      if (conflict || current?.status.isTerminal == true) {
+        _showSnack(
+            'The issue changed before completion. Showing its current state.');
+      } else {
+        _showSnack(_friendlyError(e));
+      }
+    } finally {
+      if (mounted) setState(() => _completing = false);
+    }
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Refetch the thread over REST when this issue pings (the server emits a
     // thin `issue_updated` per persisted step, not full bodies).
-    ref.listen(issueEventsProvider(widget.issueId), (_, __) => _load());
+    ref.listen(
+      issueEventsProvider(widget.issueId),
+      (_, __) => _scheduleRealtimeLoad(),
+    );
 
     final thread = _thread;
+    final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
     return Scaffold(
       appBar: AppBar(
         title: Text(thread?.issue.title.isNotEmpty == true
             ? thread!.issue.title
             : 'Issue'),
+        actions: [
+          if (isAdmin && thread != null && !thread.issue.status.isTerminal)
+            IconButton(
+              onPressed: _dismissing || _completing ? null : _dismissIssue,
+              tooltip: 'Dismiss issue',
+              icon: _dismissing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppTheme.textSecondary,
+                      ),
+                    )
+                  : const Icon(Icons.close),
+            ),
+        ],
       ),
       body: _isLoading
           ? const Center(
@@ -186,18 +357,12 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
                     ),
                   ),
                 )
-              : _buildBody(thread),
+              : _buildBody(thread, isAdmin: isAdmin),
     );
   }
 
-  Widget _buildBody(IssueThread thread) {
+  Widget _buildBody(IssueThread thread, {required bool isAdmin}) {
     final issue = thread.issue;
-    // The most recent run linked to a proposal on this issue, used for the
-    // "View agent activity" affordance (the issue payload itself carries no
-    // run id). Null when no proposal carries one.
-    final runId = _actions
-        .map((a) => a.runId)
-        .firstWhere((id) => id != null, orElse: () => null);
     return Column(
       children: [
         Expanded(
@@ -216,32 +381,56 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
                 padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 16),
                 children: [
                   _IssueSummaryCard(issue: issue),
-                  if (runId != null) ...[
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: () => context.push('/agent-runs/$runId'),
-                        icon: const Icon(Icons.timeline, size: 16),
-                        style: TextButton.styleFrom(
-                          foregroundColor: AppTheme.textSecondary,
-                          padding: EdgeInsets.zero,
-                          minimumSize: const Size(0, 32),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        label: const Text('View agent activity'),
-                      ),
+                  if (isAdmin && !issue.status.isTerminal) ...[
+                    const SizedBox(height: 10),
+                    _AdminCompletionPanel(
+                      issue: issue,
+                      busy: _completing || _dismissing,
+                      onDisposition: _resolveIssue,
+                    ),
+                  ],
+                  if (_error != null) ...[
+                    const SizedBox(height: 10),
+                    IssueRefreshBanner(
+                      message:
+                          "Couldn't refresh this issue. Showing the last update.",
+                      onRetry: _load,
+                    ),
+                  ],
+                  if (_activityError != null) ...[
+                    const SizedBox(height: 10),
+                    IssueRefreshBanner(
+                      message:
+                          "Agent activity couldn't be refreshed. History may be incomplete.",
+                      onRetry: _load,
                     ),
                   ],
                   const SizedBox(height: 16),
                   for (final msg in thread.messages) _MessageRow(message: msg),
-                  // Proposed-action cards surfaced inline so an admin can act from
-                  // the conversation. Each freezes on decide; the list reloads.
+                  if (_runs.isNotEmpty) ...[
+                    const _ActivityHeading('Agent investigations'),
+                    for (final run in _runs)
+                      _RunSummaryTile(
+                        run: run,
+                        onTap: () => context.push('/agent-runs/${run.id}'),
+                      ),
+                  ],
+                  if (_actions.isNotEmpty)
+                    const _ActivityHeading('Agent fixes'),
+                  // Every historical action remains visible here. Only a
+                  // server-authorized, locally valid proposal renders controls.
                   for (final action in _actions)
                     ProposedActionCard(
-                      key: ValueKey(action.id),
+                      key: ValueKey(
+                        '${action.id}-${action.statusRaw}-${action.canDecide}',
+                      ),
                       action: action,
+                      decisionsEnabled:
+                          _error == null && _activityError == null,
                       onDecided: (_) => _load(),
+                      onViewActivity: action.runId == null
+                          ? null
+                          : () => context.push('/agent-runs/${action.runId}'),
                     ),
                   if (issue.status.isActive) const _WorkingIndicator(),
                 ],
@@ -257,6 +446,183 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen> {
               ? 'Answer the question…'
               : 'Add a reply…',
           onSend: _sendReply,
+        ),
+      ],
+    );
+  }
+}
+
+class _AdminCompletionPanel extends StatelessWidget {
+  final Issue issue;
+  final bool busy;
+  final ValueChanged<AdminIssueDisposition> onDisposition;
+
+  const _AdminCompletionPanel({
+    required this.issue,
+    required this.busy,
+    required this.onDisposition,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final needsReview = issue.status == IssueStatus.needsAdmin;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: needsReview ? AppTheme.requested : AppTheme.border,
+          width: needsReview ? 1 : 0.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            needsReview ? 'Complete after admin review' : 'Complete this issue',
+            style: const TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            needsReview
+                ? 'Verify the current arr state, then record the honest outcome and what you checked.'
+                : 'Record a final human judgment and required note. This is separate from dismissing the report.',
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            children: [
+              ElevatedButton.icon(
+                onPressed: busy
+                    ? null
+                    : () => onDisposition(AdminIssueDisposition.resolved),
+                icon: const Icon(Icons.check_circle_outline, size: 18),
+                label: const Text('Mark resolved'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.available,
+                  foregroundColor: AppTheme.background,
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: busy
+                    ? null
+                    : () => onDisposition(AdminIssueDisposition.wontFix),
+                icon: const Icon(Icons.do_not_disturb_alt_outlined, size: 18),
+                label: const Text('Close without fix'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.textPrimary,
+                  side: const BorderSide(color: AppTheme.border),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminResolutionDialog extends StatefulWidget {
+  final AdminIssueDisposition disposition;
+  final bool needsVerification;
+
+  const _AdminResolutionDialog({
+    required this.disposition,
+    required this.needsVerification,
+  });
+
+  @override
+  State<_AdminResolutionDialog> createState() => _AdminResolutionDialogState();
+}
+
+class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
+  static const maxNoteLength = 2048;
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final resolved = widget.disposition == AdminIssueDisposition.resolved;
+    final noteReady = _controller.text.trim().isNotEmpty;
+    return AlertDialog(
+      backgroundColor: AppTheme.surface,
+      title: Text(
+        resolved ? 'Mark this issue resolved?' : 'Close without a fix?',
+        style: const TextStyle(color: AppTheme.textPrimary),
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              resolved
+                  ? 'Confirm only after checking that the reported problem is no longer present.'
+                  : 'Use this when you reviewed the issue but cannot or should not apply a fix.',
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                height: 1.35,
+              ),
+            ),
+            if (widget.needsVerification) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'An uncertain or partial agent outcome must be verified manually before completion.',
+                style: TextStyle(
+                  color: AppTheme.requested,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            const SizedBox(height: 14),
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 5,
+              maxLength: maxNoteLength,
+              onChanged: (_) => setState(() {}),
+              style: const TextStyle(color: AppTheme.textPrimary),
+              decoration: const InputDecoration(
+                labelText: 'Completion note (required)',
+                hintText: 'What did you verify, or why is no fix appropriate?',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: noteReady
+              ? () => Navigator.of(context).pop(_controller.text.trim())
+              : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: resolved ? AppTheme.available : AppTheme.error,
+            foregroundColor: AppTheme.background,
+          ),
+          child: Text(resolved ? 'Mark resolved' : 'Close without fix'),
         ),
       ],
     );
@@ -297,6 +663,52 @@ class _IssueSummaryCard extends StatelessWidget {
                 fontSize: 13,
                 fontWeight: FontWeight.w600),
           ),
+          if (issue.status.isTerminal) ...[
+            const SizedBox(height: 6),
+            Text(
+              issue.resolutionKind.label +
+                  (issue.closedAt == null
+                      ? ''
+                      : ' · ${DateFormat('MMM d, h:mm a').format(issue.closedAt!)}'),
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (issue.resolutionLabel.trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              SelectableText(
+                issue.resolutionLabel.trim(),
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
+            ],
+          ],
+          if (issue.status == IssueStatus.needsAdmin &&
+              issue.resolutionLabel.trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Admin action needed',
+              style: TextStyle(
+                color: AppTheme.requested,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            SelectableText(
+              issue.resolutionLabel.trim(),
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ],
           if (issue.detail.isNotEmpty) ...[
             const SizedBox(height: 10),
             // UNTRUSTED reporter/diagnosis text — passive, selectable only.
@@ -307,6 +719,63 @@ class _IssueSummaryCard extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _ActivityHeading extends StatelessWidget {
+  final String label;
+
+  const _ActivityHeading(this.label);
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(2, 14, 2, 4),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: AppTheme.textPrimary,
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+}
+
+class _RunSummaryTile extends StatelessWidget {
+  final AgentRun run;
+  final VoidCallback onTap;
+
+  const _RunSummaryTile({required this.run, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = <String>[
+      '${run.stepCount} ${run.stepCount == 1 ? 'step' : 'steps'}',
+      run.costLabel,
+      if (run.startedAt != null)
+        DateFormat('MMM d, h:mm a').format(run.startedAt!),
+    ];
+    return Card(
+      color: AppTheme.surface,
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: ListTile(
+        onTap: onTap,
+        leading: const Icon(Icons.timeline, color: AppTheme.accent),
+        title: Text(
+          run.statusLabel,
+          style: const TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          detail.join(' · '),
+          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+        ),
+        trailing:
+            const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
       ),
     );
   }

@@ -253,19 +253,7 @@ func normalizeAnthropicStop(r anthropic.StopReason) string {
 // executing nothing. It streams one completion of its own (it does NOT reuse the
 // chat loop) so the chat path stays untouched while this seam also reads usage.
 func (s *openAIService) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error) {
-	messages := []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(p.System)}
-	messages = append(messages, toOpenAIMessages(p.History.toPrivate())...)
-
-	params := openai.ChatCompletionNewParams{
-		Model:               s.model,
-		Messages:            messages,
-		MaxCompletionTokens: openai.Int(int64(turnMaxTokens(p))),
-	}
-	if !p.ForceNoTools && len(p.Tools) > 0 {
-		params.Tools = toOpenAITools(p.Tools)
-	} else {
-		params.ToolChoice.OfAuto = openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone))
-	}
+	params := openAINextTurnParams(s.model, p)
 
 	stream := s.client.Chat.Completions.NewStreaming(ctx, params)
 	defer stream.Close()
@@ -289,6 +277,31 @@ func (s *openAIService) NextTurn(ctx context.Context, p TurnParams) (TurnResult,
 		Usage:      openAIUsage(acc.Usage),
 		StopReason: normalizeOpenAIStop(string(choice.FinishReason)),
 	}, nil
+}
+
+// openAINextTurnParams builds the exact request used by the remediation
+// single-turn stream. Streaming chat completions omit their final usage-only
+// chunk unless include_usage is explicitly requested; without it every OpenAI
+// remediation run records zero tokens and the cost guardrails cannot engage.
+func openAINextTurnParams(model openai.ChatModel, p TurnParams) openai.ChatCompletionNewParams {
+	messages := []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(p.System)}
+	messages = append(messages, toOpenAIMessages(p.History.toPrivate())...)
+
+	params := openai.ChatCompletionNewParams{
+		Model:               model,
+		Messages:            messages,
+		MaxCompletionTokens: openai.Int(int64(turnMaxTokens(p))),
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openai.Bool(true),
+		},
+	}
+	if !p.ForceNoTools && len(p.Tools) > 0 {
+		params.Tools = toOpenAITools(p.Tools)
+	} else {
+		params.ToolChoice.OfAuto = openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone))
+	}
+
+	return params
 }
 
 func openAIUsage(u openai.CompletionUsage) Usage {

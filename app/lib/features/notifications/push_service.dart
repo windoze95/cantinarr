@@ -158,6 +158,8 @@ class PushService {
       case 'issue_updated':
       case 'issue_resolved':
       case 'agent_action_decided':
+      case 'agent_action_terminal':
+      case 'agent_action_superseded':
         final issueId = _asInt(data['issue_id']);
         if (issueId == null || issueId <= 0) return;
         router.push('/issues/$issueId');
@@ -308,7 +310,9 @@ String describePushTest(PushTestResult r, {String? username}) {
   }
   if (r.sent > 0 && r.failed == 0) {
     final n = r.sent == 1 ? '1 device' : '${r.sent} devices';
-    return username == null ? 'Test sent to $n.' : 'Test sent to $username ($n).';
+    return username == null
+        ? 'Test sent to $n.'
+        : 'Test sent to $username ($n).';
   }
   if (r.sent == 0 && r.failed == 0) {
     // Tokens exist locally but the gateway accepted none — usually a desync

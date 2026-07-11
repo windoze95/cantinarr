@@ -7,10 +7,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
+)
+
+const (
+	maxIssueTitleBytes  = 512
+	maxIssueDetailBytes = 8192
+	maxIssueReplyBytes  = 8192
 )
 
 // Notifier delivers realtime events about issues. The websocket hub (and the
@@ -82,11 +89,36 @@ func validCategory(c string) bool {
 // is 0 but tvdb_id is set, a best-effort reverse lookup of the cached
 // tmdb<->tvdb mapping is attempted; otherwise the ids are stored as given.
 func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*CreateIssueResponse, error) {
+	instanceID := strings.TrimSpace(req.InstanceID)
+	if instanceID == "" {
+		return nil, fmt.Errorf("instance_id is required")
+	}
 	if req.MediaType != "movie" && req.MediaType != "tv" {
 		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
 	}
+	if s.registry == nil {
+		return nil, fmt.Errorf("instance registry unavailable")
+	}
+	var instanceErr error
+	if req.MediaType == "movie" {
+		_, instanceErr = s.registry.GetRadarrClient(instanceID)
+	} else {
+		_, instanceErr = s.registry.GetSonarrClient(instanceID)
+	}
+	if instanceErr != nil {
+		return nil, fmt.Errorf("invalid instance_id for %s: %w", req.MediaType, instanceErr)
+	}
 	if !validCategory(req.Category) {
 		return nil, fmt.Errorf("invalid category: %s", req.Category)
+	}
+	if req.TmdbID < 0 || req.TvdbID < 0 || req.SeasonNumber < 0 || req.EpisodeNumber < 0 {
+		return nil, fmt.Errorf("media ids and episode scope must not be negative")
+	}
+	if req.MediaType == "tv" && req.EpisodeNumber > 0 && req.SeasonNumber == 0 {
+		return nil, fmt.Errorf("episode_number requires a positive season_number")
+	}
+	if len(req.Title) > maxIssueTitleBytes || len(req.Reason) > maxIssueDetailBytes {
+		return nil, fmt.Errorf("issue title or detail is too long")
 	}
 
 	tmdbID := req.TmdbID
@@ -116,15 +148,15 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	// statement under the single-writer DB, mirroring createPending.
 	res, err := s.db.Exec(
 		`INSERT INTO issues
-			(source, status, category, reporter_id, tmdb_id, tvdb_id, media_type, title, season_number, episode_number, detail)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			(source, status, category, reporter_id, tmdb_id, tvdb_id, media_type, title, season_number, episode_number, instance_id, detail)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 WHERE NOT EXISTS (
 			SELECT 1 FROM issues
-			WHERE source = ? AND reporter_id = ? AND tmdb_id = ? AND media_type = ?
+			WHERE source = ? AND reporter_id = ? AND instance_id = ? AND tmdb_id = ? AND media_type = ?
 			  AND season_number = ? AND episode_number = ? AND category = ? AND closed_at IS NULL
 		 )`,
-		SourceUser, IssueOpen, req.Category, reporterID, tmdbID, sqlNullInt(tvdbID), req.MediaType, req.Title, season, episode, req.Reason,
-		SourceUser, reporterID, tmdbID, req.MediaType, season, episode, req.Category,
+		SourceUser, IssueOpen, req.Category, reporterID, tmdbID, sqlNullInt(tvdbID), req.MediaType, req.Title, season, episode, instanceID, req.Reason,
+		SourceUser, reporterID, instanceID, tmdbID, req.MediaType, season, episode, req.Category,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create issue: %w", err)
@@ -134,11 +166,11 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	if n == 0 {
 		// Duplicate open report: bump occurrences + refresh updated_at on the
 		// existing open issue, and return it.
-		id, derr := s.bumpDuplicateUserIssue(reporterID, req, tmdbID, season, episode)
+		id, status, derr := s.bumpDuplicateUserIssue(reporterID, req, instanceID, tmdbID, season, episode)
 		if derr != nil {
 			return nil, derr
 		}
-		return &CreateIssueResponse{IssueID: id, Status: IssueOpen}, nil
+		return &CreateIssueResponse{IssueID: id, Status: status}, nil
 	}
 
 	id, err := res.LastInsertId()
@@ -156,27 +188,68 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	return &CreateIssueResponse{IssueID: id, Status: IssueOpen}, nil
 }
 
-// bumpDuplicateUserIssue increments occurrences on the existing open issue that
-// matched the dedupe predicate and returns its id.
-func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueRequest, tmdbID, season, episode int) (int64, error) {
+// bumpDuplicateUserIssue increments occurrences AND appends the newly submitted
+// reason in one transaction. Keeping every report as an AuthorUser thread event
+// prevents an active agent from continuing against only the original detail.
+func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueRequest, instanceID string, tmdbID, season, episode int) (int64, string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, "", fmt.Errorf("begin duplicate issue: %w", err)
+	}
+	defer tx.Rollback()
 	var id int64
-	err := s.db.QueryRow(
-		`SELECT id FROM issues
-		 WHERE source = ? AND reporter_id = ? AND tmdb_id = ? AND media_type = ?
+	var status string
+	err = tx.QueryRow(
+		`SELECT id, status FROM issues
+		 WHERE source = ? AND reporter_id = ? AND instance_id = ? AND tmdb_id = ? AND media_type = ?
 		   AND season_number = ? AND episode_number = ? AND category = ? AND closed_at IS NULL
 		 ORDER BY id DESC LIMIT 1`,
-		SourceUser, reporterID, tmdbID, req.MediaType, season, episode, req.Category,
-	).Scan(&id)
+		SourceUser, reporterID, instanceID, tmdbID, req.MediaType, season, episode, req.Category,
+	).Scan(&id, &status)
 	if err != nil {
-		return 0, fmt.Errorf("find duplicate issue: %w", err)
+		return 0, "", fmt.Errorf("find duplicate issue: %w", err)
 	}
-	if _, err := s.db.Exec(
-		"UPDATE issues SET occurrences = occurrences + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+	res, err := tx.Exec(
+		`UPDATE issues SET occurrences = occurrences + 1, read = 0, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND closed_at IS NULL`,
 		id,
-	); err != nil {
-		return 0, fmt.Errorf("bump duplicate issue: %w", err)
+	)
+	if err != nil {
+		return 0, "", fmt.Errorf("bump duplicate issue: %w", err)
 	}
-	return id, nil
+	if n, _ := res.RowsAffected(); n != 1 {
+		return 0, "", fmt.Errorf("duplicate issue closed before it could be updated")
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+		 VALUES (?, ?, ?, ?)`,
+		id, AuthorUser, reporterID, req.Reason,
+	); err != nil {
+		return 0, "", fmt.Errorf("append duplicate issue reason: %w", err)
+	}
+	resumeReady := false
+	switch status {
+	case IssueAwaitingUser:
+		resumeReady, err = stageReporterReplyTx(tx, id, req.Reason, true)
+	case IssueAwaitingApproval:
+		resumeReady, err = stageApprovalThreadUpdateTx(tx, id)
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("stage duplicate report update: %w", err)
+	}
+	if (status == IssueAwaitingUser || status == IssueAwaitingApproval) && !resumeReady {
+		return 0, "", fmt.Errorf("duplicate report raced an invalid agent gate")
+	}
+	if resumeReady {
+		status = IssueInvestigating
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, "", fmt.Errorf("commit duplicate issue: %w", err)
+	}
+	if resumeReady {
+		s.EnqueueResume(id)
+	}
+	return id, status, nil
 }
 
 // OpenAutoIssue is the poller hook for auto-detected problems (later waves; no
@@ -186,8 +259,8 @@ func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueReque
 // returns created=false. A terminal (closed) issue does not block a genuinely
 // new recurrence: once closed_at is set the partial unique index no longer
 // guards that key, so the same download re-failing later opens a fresh issue.
-func (s *Service) OpenAutoIssue(serviceType, instanceID, downloadID string, d arr.Diagnosis) (created bool, id int64) {
-	sum := sha256.Sum256([]byte(instanceID + "|" + downloadID + "|" + d.Problem))
+func (s *Service) OpenAutoIssue(serviceType, instanceID, downloadID string, media arr.QueueMediaContext, d arr.Diagnosis) (created bool, id int64) {
+	sum := sha256.Sum256([]byte(instanceID + "|" + downloadID))
 	dedupeKey := hex.EncodeToString(sum[:])
 
 	// The poller hands us the *service* type, but media_type on an issues row is
@@ -203,14 +276,26 @@ func (s *Service) OpenAutoIssue(serviceType, instanceID, downloadID string, d ar
 		mediaType = "book"
 	}
 
+	tmdbID := media.TmdbID
+	if tmdbID == 0 && media.TvdbID != 0 {
+		_ = s.db.QueryRow("SELECT tmdb_id FROM tmdb_tvdb_cache WHERE tvdb_id = ?", media.TvdbID).Scan(&tmdbID)
+	}
+	title := media.Title
+	if title == "" {
+		title = d.Problem
+	}
+
 	res, err := s.db.Exec(
 		`INSERT INTO issues
-			(source, status, media_type, tmdb_id, title, instance_id, download_id, detail, dedupe_key)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+			(source, status, media_type, tmdb_id, tvdb_id, title, season_number, episode_number,
+			 instance_id, download_id, arr_queue_id, detail, dedupe_key)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 WHERE NOT EXISTS (
 			SELECT 1 FROM issues WHERE dedupe_key = ? AND closed_at IS NULL
 		 )`,
-		SourceAuto, IssueOpen, mediaType, 0, d.Problem, sqlNullStr(instanceID), sqlNullStr(downloadID), d.Transparency, dedupeKey,
+		SourceAuto, IssueOpen, mediaType, tmdbID, sqlNullInt(media.TvdbID), title,
+		media.SeasonNumber, media.EpisodeNumber, sqlNullStr(instanceID), sqlNullStr(downloadID),
+		sqlNullInt(media.QueueID), d.Transparency, dedupeKey,
 		dedupeKey,
 	)
 	if err != nil {
@@ -222,8 +307,12 @@ func (s *Service) OpenAutoIssue(serviceType, instanceID, downloadID string, d ar
 		// occurrence, so we don't bump occurrences (it only inflated a confusing
 		// per-poll counter that climbed with time-open, not severity).
 		s.db.Exec(
-			"UPDATE issues SET updated_at = CURRENT_TIMESTAMP WHERE dedupe_key = ? AND closed_at IS NULL",
-			dedupeKey,
+			`UPDATE issues SET title = ?, tmdb_id = CASE WHEN ? > 0 THEN ? ELSE tmdb_id END,
+			 tvdb_id = COALESCE(?, tvdb_id), season_number = ?, episode_number = ?,
+			 arr_queue_id = COALESCE(?, arr_queue_id), detail = ?, updated_at = CURRENT_TIMESTAMP
+			 WHERE dedupe_key = ? AND closed_at IS NULL`,
+			title, tmdbID, tmdbID, sqlNullInt(media.TvdbID), media.SeasonNumber,
+			media.EpisodeNumber, sqlNullInt(media.QueueID), d.Transparency, dedupeKey,
 		)
 		return false, 0
 	}
@@ -235,6 +324,8 @@ func (s *Service) OpenAutoIssue(serviceType, instanceID, downloadID string, d ar
 	return true, newID
 }
 
+const arrStateClearedResolution = "Cantinarr stopped detecting the original stuck or blocked download. Sonarr/Radarr may have recovered it, replaced it, or removed it."
+
 // CloseAutoIssueForDownload resolves the open auto issue for a download whose
 // problem the poller no longer detects (it recovered or left the queue). A
 // no-op when there's no matching open issue. Idempotent via ConcludeIssue's CAS.
@@ -242,18 +333,57 @@ func (s *Service) CloseAutoIssueForDownload(instanceID, downloadID string) {
 	if downloadID == "" {
 		return
 	}
-	var issueID int64
-	err := s.db.QueryRow(
+	rows, err := s.db.Query(
 		`SELECT id FROM issues
 		 WHERE source = ? AND instance_id = ? AND download_id = ? AND closed_at IS NULL
-		 LIMIT 1`,
+		 ORDER BY id`,
 		SourceAuto, instanceID, downloadID,
-	).Scan(&issueID)
+	)
 	if err != nil {
-		return // sql.ErrNoRows (nothing open) or a read error: nothing to do.
+		return
 	}
-	_ = s.ConcludeIssue(context.Background(), issueID, IssueResolved,
-		"Auto-resolved: the download is no longer stuck or blocked — the problem cleared.")
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	for _, issueID := range ids {
+		_ = s.concludeIssue(context.Background(), issueID, IssueResolved,
+			arrStateClearedResolution,
+			ResolutionArrStateCleared)
+	}
+}
+
+// ReconcileAutoIssues closes incidents that are absent from a successful full
+// problem snapshot. This makes recovery durable across process restarts; a
+// failed queue fetch never reaches this method.
+func (s *Service) ReconcileAutoIssues(instanceID string, activeDownloadIDs []string) {
+	active := make(map[string]bool, len(activeDownloadIDs))
+	for _, id := range activeDownloadIDs {
+		active[id] = true
+	}
+	rows, err := s.db.Query(
+		`SELECT DISTINCT download_id FROM issues
+		 WHERE source = ? AND instance_id = ? AND download_id IS NOT NULL AND closed_at IS NULL`,
+		SourceAuto, instanceID,
+	)
+	if err != nil {
+		return
+	}
+	var stale []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil && !active[id] {
+			stale = append(stale, id)
+		}
+	}
+	rows.Close()
+	for _, id := range stale {
+		s.CloseAutoIssueForDownload(instanceID, id)
+	}
 }
 
 // notifyIssueCreated fires the issue_created admin notification carrying the
@@ -278,8 +408,10 @@ func (s *Service) notifyIssueCreated(issueID int64, title string) {
 func (s *Service) GetIssue(issueID int64) (*Issue, error) {
 	row := s.db.QueryRow(
 		`SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
-		        i.tmdb_id, i.media_type, i.title, i.season_number, i.episode_number,
-		        i.detail, i.occurrences, i.read, i.created_at, i.updated_at
+		        i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,
+		        i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
+		        i.created_at, i.updated_at, i.closed_at,
+		        i.instance_id, i.download_id, i.arr_queue_id
 		 FROM issues i LEFT JOIN users u ON u.id = i.reporter_id
 		 WHERE i.id = ?`,
 		issueID,
@@ -334,26 +466,76 @@ func (s *Service) IssueThread(issueID int64) ([]IssueMessage, error) {
 // tool_result and a resume is enqueued so the agent continues. A reply from
 // anyone else, or on a non-parked issue, only threads the message.
 func (s *Service) PostReply(issueID int64, authorKind string, authorID int64, body string) error {
+	if len(body) > maxIssueReplyBytes {
+		return fmt.Errorf("reply is too long")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin reply: %w", err)
+	}
+	defer tx.Rollback()
+
 	// Confirm the issue exists (and read its reporter + status for routing).
 	var (
 		reporterID sql.NullInt64
 		status     string
+		closedAt   sql.NullTime
 	)
-	err := s.db.QueryRow("SELECT reporter_id, status FROM issues WHERE id = ?", issueID).Scan(&reporterID, &status)
+	err = tx.QueryRow("SELECT reporter_id, status, closed_at FROM issues WHERE id = ?", issueID).Scan(&reporterID, &status, &closedAt)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("issue not found")
 	}
 	if err != nil {
 		return fmt.Errorf("load issue: %w", err)
 	}
+	if closedAt.Valid {
+		return fmt.Errorf("issue is closed")
+	}
 
-	if _, err := s.db.Exec(
+	if _, err := tx.Exec(
 		"INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, ?, ?, ?)",
 		issueID, authorKind, sqlNullInt64(authorID), body,
 	); err != nil {
 		return fmt.Errorf("post reply: %w", err)
 	}
-	s.db.Exec("UPDATE issues SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", issueID)
+
+	resumeReady := false
+	approvalInvalidated := false
+	if status == IssueAwaitingUser && (authorKind == AuthorUser || authorKind == AuthorAdmin) {
+		// The reply and its transcript handoff are one transaction. A reporter's
+		// reply is a non-admin change and re-flags the issue unread; an admin reply
+		// preserves the current read state.
+		resumeReady, err = stageReporterReplyTx(tx, issueID, body, authorKind == AuthorUser)
+		if err != nil {
+			_ = tx.Rollback()
+			return s.saveUnresumableReply(issueID, authorKind, authorID, body)
+		}
+		if !resumeReady {
+			// Roll back the tentative insert and use the fallback aggregate
+			// transition, which saves the reply exactly once and aborts the orphaned
+			// waiting run in the same transaction.
+			_ = tx.Rollback()
+			return s.saveUnresumableReply(issueID, authorKind, authorID, body)
+		}
+	} else if status == IssueAwaitingApproval && (authorKind == AuthorUser || authorKind == AuthorAdmin) {
+		// A reply committed after the Runner parked must invalidate the stale
+		// proposal gate in this same transaction. The reply remains in the thread;
+		// Resume syncs it as untrusted data before the model can propose again.
+		resumeReady, err = stageApprovalThreadUpdateTx(tx, issueID)
+		if err != nil || !resumeReady {
+			_ = tx.Rollback()
+			return s.saveUnresumableApprovalReply(issueID, authorKind, authorID, body)
+		}
+		approvalInvalidated = true
+	} else if _, err := tx.Exec(
+		`UPDATE issues SET read = CASE WHEN ? THEN 0 ELSE read END, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		authorKind == AuthorUser, issueID,
+	); err != nil {
+		return fmt.Errorf("touch issue reply: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit reply: %w", err)
+	}
 
 	// Ping the counterpart so a live thread refreshes. Body text is never put on
 	// the notification; only the issue id + a fixed event string travel.
@@ -365,18 +547,172 @@ func (s *Service) PostReply(issueID int64, authorKind string, authorID int64, bo
 		}
 	}
 
-	// Resume a parked investigation: a reporter (or admin) reply to an
-	// awaiting_user issue answers the agent's ask_reporter question. Feed the reply
-	// to the run keyed to the ask tool_use, then enqueue the resume. (Defined in
-	// approvals.go alongside the W3 approval-resume helper, which it mirrors.)
-	if status == IssueAwaitingUser && (authorKind == AuthorUser || authorKind == AuthorAdmin) {
-		// A reporter's reply resumes the agent — a non-admin status change — so the
-		// issue flips back to unread for admins. An admin replying is an admin
-		// action (resumeOnReporterReply serves both), so it must NOT re-flag unread.
-		if authorKind == AuthorUser {
-			s.db.Exec("UPDATE issues SET read = 0 WHERE id = ?", issueID)
+	if resumeReady {
+		s.EnqueueResume(issueID)
+	}
+	if approvalInvalidated {
+		s.notifyActionsChanged(issueID, ActionSuperseded)
+	}
+	return nil
+}
+
+func stageApprovalThreadUpdateTx(tx *sql.Tx, issueID int64) (bool, error) {
+	var actionID, runID int64
+	var toolUseID string
+	if err := tx.QueryRow(
+		`SELECT a.id, a.run_id, COALESCE(a.tool_use_id, '')
+		 FROM agent_actions a JOIN issues i ON i.id = a.issue_id
+		 JOIN agent_runs r ON r.id = a.run_id
+		 WHERE a.issue_id = ? AND a.status = ? AND i.status = ? AND i.closed_at IS NULL
+		   AND r.status = ? ORDER BY a.id DESC LIMIT 1`,
+		issueID, ActionProposed, IssueAwaitingApproval, runStatusWaitingApproval,
+	).Scan(&actionID, &runID, &toolUseID); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
 		}
-		s.resumeOnReporterReply(issueID, body)
+		return false, err
+	}
+	res, err := tx.Exec(
+		`UPDATE agent_actions SET status = ?, decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
+		 result_text = 'Superseded because new issue-thread information arrived before an admin decision.'
+		 WHERE id = ? AND status = ?`,
+		ActionSuperseded, actionID, ActionProposed,
+	)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return false, nil
+	}
+	return stageResumeResultTx(tx, issueID, runID,
+		IssueAwaitingApproval, runStatusWaitingApproval,
+		"propose_action", toolUseID,
+		"Proposal superseded because new issue-thread information arrived; read it before proposing another fix.", true)
+}
+
+func (s *Service) saveUnresumableApprovalReply(issueID int64, authorKind string, authorID int64, body string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin fallback approval reply: %w", err)
+	}
+	defer tx.Rollback()
+	var reporterID sql.NullInt64
+	var closedAt sql.NullTime
+	if err := tx.QueryRow("SELECT reporter_id, closed_at FROM issues WHERE id = ?", issueID).Scan(&reporterID, &closedAt); err == sql.ErrNoRows {
+		return fmt.Errorf("issue not found")
+	} else if err != nil {
+		return err
+	} else if closedAt.Valid {
+		return fmt.Errorf("issue is closed")
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, ?, ?, ?)",
+		issueID, authorKind, sqlNullInt64(authorID), body,
+	); err != nil {
+		return fmt.Errorf("save fallback approval reply: %w", err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE agent_actions SET status = ?, decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
+		 result_text = 'Superseded because new issue-thread information arrived but the agent transcript could not resume.'
+		 WHERE issue_id = ? AND status = ?`,
+		ActionSuperseded, issueID, ActionProposed,
+	); err != nil {
+		return err
+	}
+	res, err := tx.Exec(
+		`UPDATE issues SET status = ?, read = CASE WHEN ? THEN 0 ELSE read END,
+		 active_run_id = NULL,
+		 resolution = 'A reply arrived while approval was pending, but the agent transcript could not resume. An administrator needs to review it.',
+		 resolution_kind = '', updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND status = ? AND closed_at IS NULL`,
+		IssueNeedsAdmin, authorKind == AuthorUser, issueID, IssueAwaitingApproval,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		if _, err := tx.Exec(
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript',
+			 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			 WHERE issue_id = ? AND status IN (?, ?)`,
+			issueID, runStatusWaitingApproval, runStatusResumePending,
+		); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.notifyActionsChanged(issueID, ActionSuperseded)
+	if s.notifier != nil {
+		if authorKind == AuthorAdmin && reporterID.Valid {
+			s.notifier.NotifyUser(reporterID.Int64, "issue_updated", map[string]interface{}{"issue_id": issueID})
+		} else if authorKind == AuthorUser {
+			s.notifier.NotifyAdmins("issue_updated", map[string]interface{}{"issue_id": issueID})
+		}
+	}
+	return nil
+}
+
+func (s *Service) saveUnresumableReply(issueID int64, authorKind string, authorID int64, body string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin fallback reply: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
+		`UPDATE issues SET status = ?, read = CASE WHEN ? THEN 0 ELSE read END,
+		 active_run_id = NULL,
+		 resolution = 'The reply was saved, but the original agent transcript could not be resumed. An administrator needs to review it.',
+		 resolution_kind = '', updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND status = ? AND closed_at IS NULL`,
+		IssueNeedsAdmin, authorKind == AuthorUser, issueID, IssueAwaitingUser,
+	)
+	if err != nil {
+		return fmt.Errorf("escalate fallback reply: %w", err)
+	}
+	escalated, _ := res.RowsAffected()
+	var reporterID sql.NullInt64
+	var closedAt sql.NullTime
+	if err := tx.QueryRow("SELECT reporter_id, closed_at FROM issues WHERE id = ?", issueID).Scan(&reporterID, &closedAt); err == sql.ErrNoRows {
+		return fmt.Errorf("issue not found")
+	} else if err != nil {
+		return fmt.Errorf("reload fallback issue: %w", err)
+	} else if closedAt.Valid {
+		return fmt.Errorf("issue is closed")
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, ?, ?, ?)",
+		issueID, authorKind, sqlNullInt64(authorID), body,
+	); err != nil {
+		return fmt.Errorf("save fallback reply: %w", err)
+	}
+	if escalated > 0 {
+		if _, err := tx.Exec(
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript',
+			 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			 WHERE issue_id = ? AND status IN (?, ?)`,
+			issueID, runStatusWaitingUser, runStatusResumePending,
+		); err != nil {
+			return fmt.Errorf("stop unresumable reporter run: %w", err)
+		}
+	} else if _, err := tx.Exec(
+		`UPDATE issues SET read = CASE WHEN ? THEN 0 ELSE read END,
+		 updated_at = CURRENT_TIMESTAMP WHERE id = ? AND closed_at IS NULL`,
+		authorKind == AuthorUser, issueID,
+	); err != nil {
+		return fmt.Errorf("touch raced fallback reply: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit fallback reply: %w", err)
+	}
+	s.pingIssueUpdated(issueID)
+	if s.notifier != nil {
+		if authorKind == AuthorAdmin && reporterID.Valid {
+			s.notifier.NotifyUser(reporterID.Int64, "issue_updated", map[string]interface{}{"issue_id": issueID})
+		} else if authorKind == AuthorUser {
+			s.notifier.NotifyAdmins("issue_updated", map[string]interface{}{"issue_id": issueID})
+		}
 	}
 	return nil
 }
@@ -422,22 +758,15 @@ func (s *Service) SweepStaleAwaitingUser(ctx context.Context, maxWaitHours int) 
 
 	closed := 0
 	for _, id := range stale {
-		// Finalize any run still parked waiting on this reporter so it doesn't sit in
-		// waiting_user forever (best-effort; the run is no longer resumable once the
-		// issue is terminal).
-		s.db.ExecContext(ctx,
-			"UPDATE agent_runs SET status = ?, stop_reason = ?, finished_at = CURRENT_TIMESTAMP WHERE issue_id = ? AND status = ?",
-			runStatusGaveUp, stopUserUnresponsive, id, runStatusWaitingUser,
-		)
-		// Plain-language closing message, then move the issue terminal. ConcludeIssue
-		// stamps closed_at, releases the claim, and notifies the reporter + admins.
-		_ = s.PostIssueMessage(ctx, id, "I didn't hear back, so I'm closing this for now. If it's still a problem, please report it again and I'll take another look.")
-		if err := s.ConcludeIssue(ctx, id, IssueWontFix, ResolutionUserUnresponsive); err != nil {
-			// Already closed (raced with a reply) or gone: skip without failing the
-			// whole sweep.
+		transitioned, err := s.concludeIssueCAS(ctx, id, IssueWontFix,
+			ResolutionUserUnresponsive, ResolutionReporterTimeout,
+			IssueAwaitingUser, cutoff)
+		if err != nil {
 			continue
 		}
-		closed++
+		if transitioned {
+			closed++
+		}
 	}
 	return closed, nil
 }
@@ -446,8 +775,10 @@ func (s *Service) SweepStaleAwaitingUser(ctx context.Context, maxWaitHours int) 
 // filtered by status. An empty/blank status returns all issues.
 func (s *Service) ListIssues(status string) ([]Issue, error) {
 	query := `SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
-	                 i.tmdb_id, i.media_type, i.title, i.season_number, i.episode_number,
-	                 i.detail, i.occurrences, i.read, i.created_at, i.updated_at
+	                 i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,
+	                 i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
+	                 i.created_at, i.updated_at, i.closed_at,
+	                 i.instance_id, i.download_id, i.arr_queue_id
 	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id`
 	var (
 		rows *sql.Rows
@@ -479,22 +810,8 @@ func (s *Service) ListIssues(status string) ([]Issue, error) {
 // action, so the issue is also marked read (an admin status change never re-flags
 // it unread).
 func (s *Service) DismissIssue(issueID int64) error {
-	res, err := s.db.Exec(
-		"UPDATE issues SET status = ?, read = 1, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND closed_at IS NULL",
-		IssueDismissed, issueID,
-	)
-	if err != nil {
-		return fmt.Errorf("dismiss issue: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		// Either no such issue or already closed; treat as idempotent success
-		// only when the issue exists.
-		var exists int
-		if qerr := s.db.QueryRow("SELECT 1 FROM issues WHERE id = ?", issueID).Scan(&exists); qerr == sql.ErrNoRows {
-			return fmt.Errorf("issue not found")
-		}
-	}
-	return nil
+	return s.concludeIssue(context.Background(), issueID, IssueDismissed,
+		"Dismissed by an administrator.", ResolutionAdminDismissed)
 }
 
 // MarkIssueRead clears the admin unread flag on an issue. It is a side effect of
@@ -529,15 +846,23 @@ type rowScanner interface {
 // Issue, mapping NULL category/reporter to nil pointers for the JSON contract.
 func scanIssue(row rowScanner) (*Issue, error) {
 	var (
-		iss        Issue
-		category   sql.NullString
-		reporterID sql.NullInt64
-		reporter   sql.NullString
+		iss            Issue
+		category       sql.NullString
+		reporterID     sql.NullInt64
+		reporter       sql.NullString
+		resolution     sql.NullString
+		resolutionKind sql.NullString
+		closedAt       sql.NullTime
+		tvdbID         sql.NullInt64
+		instanceID     sql.NullString
+		downloadID     sql.NullString
+		arrQueueID     sql.NullInt64
 	)
 	if err := row.Scan(
 		&iss.ID, &iss.Source, &iss.Status, &category, &reporterID, &reporter,
-		&iss.TmdbID, &iss.MediaType, &iss.Title, &iss.SeasonNumber, &iss.EpisodeNumber,
-		&iss.Detail, &iss.Occurrences, &iss.Read, &iss.CreatedAt, &iss.UpdatedAt,
+		&iss.TmdbID, &tvdbID, &iss.MediaType, &iss.Title, &iss.SeasonNumber, &iss.EpisodeNumber,
+		&iss.Detail, &iss.Occurrences, &iss.Read, &resolution, &resolutionKind,
+		&iss.CreatedAt, &iss.UpdatedAt, &closedAt, &instanceID, &downloadID, &arrQueueID,
 	); err != nil {
 		return nil, err
 	}
@@ -552,6 +877,18 @@ func scanIssue(row rowScanner) (*Issue, error) {
 	if reporter.Valid && reporter.String != "" {
 		v := reporter.String
 		iss.ReporterName = &v
+	}
+	iss.Resolution = resolution.String
+	iss.ResolutionKind = resolutionKind.String
+	if closedAt.Valid {
+		v := closedAt.Time
+		iss.ClosedAt = &v
+	}
+	iss.InstanceID = instanceID.String
+	iss.DownloadID = downloadID.String
+	iss.TvdbID = int(tvdbID.Int64)
+	if arrQueueID.Valid {
+		iss.ArrQueueID = int(arrQueueID.Int64)
 	}
 	return &iss, nil
 }

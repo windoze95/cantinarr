@@ -1,6 +1,7 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/layout/adaptive.dart';
@@ -49,7 +50,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _isSaving = false;
   bool _isTesting = false;
   String? _testResult;
-  String? _webhookToken;
+  bool _isConfiguringWebhook = false;
+  bool? _webhookConfigured;
+  String? _webhookResult;
 
   /// Fresh instance list from the server — the login-time copy in the auth
   /// state can be stale, and both the first-of-type auto-default and the
@@ -96,6 +99,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// `/api/v3/system/status`); the rest — including Chaptarr, which is `/api/v1`
   /// — are validated by the backend when saving.
   bool get _supportsDirectTest =>
+      _serviceType == 'radarr' || _serviceType == 'sonarr';
+
+  bool get _supportsWebhook =>
       _serviceType == 'radarr' || _serviceType == 'sonarr';
 
   bool get _isChaptarr => _serviceType == 'chaptarr';
@@ -239,7 +245,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
-        _webhookToken = details['webhook_token'] as String?;
       });
     } catch (_) {
       // Best-effort prefill; the form still works with manual entry.
@@ -297,12 +302,38 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String _errorMessage(Object e) {
     if (e is DioException) {
       final data = e.response?.data;
-      if (data is Map<String, dynamic> && data['error'] is String) {
-        return data['error'] as String;
-      }
+      final responseMessage = _responseErrorMessage(data);
+      if (responseMessage != null) return responseMessage;
       return e.message ?? e.toString();
     }
     return e.toString();
+  }
+
+  /// Several instance handlers use Go's `http.Error`, which labels even a JSON
+  /// error body as text/plain. Dio intentionally leaves that response as a
+  /// string, so decode the small app-owned `{ "error": ... }` envelope here
+  /// before falling back to its generic status-code message.
+  String? _responseErrorMessage(Object? data) {
+    Object? decoded = data;
+    if (data is String) {
+      final text = data.trim();
+      if (text.isEmpty) return null;
+      try {
+        decoded = jsonDecode(text);
+      } catch (_) {
+        // A concise plain-text backend error is still more useful than Dio's
+        // generic validateStatus explanation. Avoid surfacing HTML/proxy pages.
+        if (text.length <= 500 && !text.toLowerCase().contains('<html')) {
+          return text;
+        }
+        return null;
+      }
+    }
+    if (decoded is Map && decoded['error'] is String) {
+      final message = (decoded['error'] as String).trim();
+      return message.isEmpty ? null : message;
+    }
+    return null;
   }
 
   /// The sibling instance currently holding the global default for the
@@ -662,27 +693,32 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     }
   }
 
-  /// The ready-to-paste webhook URL for this arr instance: the app's backend
-  /// base + the webhook route + the per-instance token the details fetch
-  /// returned. Null until the token loads (or for non-arr services).
-  String? get _webhookUrl {
-    final token = _webhookToken;
+  Future<void> _configureWebhook() async {
     final id = widget.instanceId;
-    if (token == null || token.isEmpty || id == null) return null;
-    final base = ref
-        .read(backendClientProvider)
-        .options
-        .baseUrl
-        .replaceAll(RegExp(r'/+$'), '');
-    return '$base/api/webhooks/arr/$id?token=$token';
-  }
-
-  Future<void> _copyWebhookUrl(String url) async {
-    await Clipboard.setData(ClipboardData(text: url));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Webhook URL copied')),
-    );
+    if (id == null) return;
+    setState(() {
+      _isConfiguringWebhook = true;
+      _webhookConfigured = null;
+      _webhookResult = null;
+    });
+    try {
+      final service =
+          InstanceApiService(backendDio: ref.read(backendClientProvider));
+      await service.configureWebhook(id);
+      if (!mounted) return;
+      setState(() {
+        _isConfiguringWebhook = false;
+        _webhookConfigured = true;
+        _webhookResult = 'Instant updates are configured.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isConfiguringWebhook = false;
+        _webhookConfigured = false;
+        _webhookResult = _errorMessage(e);
+      });
+    }
   }
 
   String get _urlHint {
@@ -914,10 +950,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 : Text(widget.isEditing ? 'Save Changes' : 'Add Instance'),
           ),
 
-          // Webhook setup (Radarr/Sonarr, editing only): without it, changes
-          // made directly in the arr are only caught on the next poll or
-          // refresh trigger; with it they reach Cantinarr instantly.
-          if (_webhookUrl != null) ...[
+          // Webhook setup (Radarr/Sonarr, editing only). Cantinarr installs
+          // its own Connect record; the callback credential never reaches the
+          // app or clipboard.
+          if (widget.isEditing && _supportsWebhook) ...[
             const SizedBox(height: 32),
             const Text('Instant updates',
                 style: TextStyle(
@@ -926,43 +962,39 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Text(
-              'Paste this URL into ${_serviceType == 'sonarr' ? 'Sonarr' : 'Radarr'} '
-              '→ Settings → Connect → Webhook (method POST) so imports, deletes '
-              'and adds made directly in ${_serviceType == 'sonarr' ? 'Sonarr' : 'Radarr'} '
-              'reach Cantinarr the moment they happen.',
+              'Cantinarr can create or refresh its Connect → Webhook record in '
+              '${_serviceType == 'sonarr' ? 'Sonarr' : 'Radarr'}. Imports, '
+              'deletes and adds made there will reach Cantinarr immediately. '
+              'The callback credential stays securely on the server.',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
             ),
             const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppTheme.surfaceVariant,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _webhookUrl!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.copy,
-                        size: 18, color: AppTheme.textSecondary),
-                    tooltip: 'Copy webhook URL',
-                    onPressed: () => _copyWebhookUrl(_webhookUrl!),
-                  ),
-                ],
-              ),
+            OutlinedButton.icon(
+              onPressed: _isConfiguringWebhook ? null : _configureWebhook,
+              icon: _isConfiguringWebhook
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppTheme.accent),
+                    )
+                  : const Icon(Icons.sync),
+              label: const Text('Configure instant updates'),
             ),
+            if (_webhookResult != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _webhookResult!,
+                style: TextStyle(
+                  color: _webhookConfigured == true
+                      ? AppTheme.available
+                      : AppTheme.error,
+                  fontSize: 12,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ],
         ],
       )),

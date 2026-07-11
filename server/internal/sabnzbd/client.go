@@ -25,7 +25,8 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:       30 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }

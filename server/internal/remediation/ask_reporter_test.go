@@ -31,7 +31,7 @@ func askCycleRunner(t *testing.T, withReporter bool) (*Runner, *Service, *fakeEx
 	svc := NewService(database, nil, nil, &fakeNotifier{})
 	fx := &fakeExecutor{out: "Release sent to the download client."}
 	svc.executor = fx
-	if _, err := svc.SetSettings(Settings{Enabled: true, Autonomy: AutonomyPropose, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000, MaxUserWaitHours: 72}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000, MaxUserWaitHours: 72}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 	if _, err := database.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (?, 'admin', '', 'admin')", testAdminID); err != nil {
@@ -60,7 +60,9 @@ func askCycleRunner(t *testing.T, withReporter bool) (*Runner, *Service, *fakeEx
 		// awaiting_user after dispatching ask_reporter.
 		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("r1", "get_manual_import_candidates")}},
 		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{{Type: ai.BlockToolUse, ID: askToolUseID, Name: mcp.ToolAskReporter, Input: askInput}}},
-		// Turn 2 (resume, after the reply): propose a grab of the English release.
+		// Resume after the reply: refresh exact release candidates, then propose
+		// the selected release so server-observed metadata is bound to the gate.
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("release-search", "search_releases")}},
 		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{{Type: ai.BlockToolUse, ID: "prop1", Name: mcp.ToolProposeAction, Input: grabInput}}},
 	}}
 
@@ -163,6 +165,12 @@ func TestReporterReplyResumesKeyedToAskToolUse(t *testing.T) {
 	if err := svc.PostReply(issueID, AuthorUser, reporterID, "Yes, English please."); err != nil {
 		t.Fatalf("PostReply: %v", err)
 	}
+	// A second message can arrive after the exact ask/reply handoff has already
+	// been staged. It must still be delivered to the model on resume instead of
+	// remaining visible only in the UI thread.
+	if err := svc.PostReply(issueID, AuthorAdmin, testAdminID, "Prefer a release without forced subtitles too."); err != nil {
+		t.Fatalf("PostReply follow-up: %v", err)
+	}
 
 	// The reply is keyed to the ask_reporter tool_use_id, exactly one tool_result
 	// for it, and the transcript a real provider would accept (the W3 guard reused).
@@ -183,6 +191,20 @@ func TestReporterReplyResumesKeyedToAskToolUse(t *testing.T) {
 	if err := r.Resume(context.Background(), issueID); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
+	transcriptJSON := loadTranscript(t, svc, issueID)
+	if !strings.Contains(transcriptJSON, "Prefer a release without forced subtitles too.") ||
+		!strings.Contains(transcriptJSON, threadCursorPrefix) {
+		t.Fatalf("resumed transcript did not consume the follow-up thread message: %s", transcriptJSON)
+	}
+	var history ai.Transcript
+	if err := json.Unmarshal([]byte(transcriptJSON), &history); err != nil {
+		t.Fatalf("decode resumed transcript: %v", err)
+	}
+	for i := 1; i < len(history); i++ {
+		if history[i-1].Role == ai.RoleUser && history[i].Role == ai.RoleUser {
+			t.Fatalf("thread sync produced adjacent user turns at %d: %s", i, transcriptJSON)
+		}
+	}
 	issue, _ := svc.GetIssue(issueID)
 	if issue.Status != IssueAwaitingApproval {
 		t.Fatalf("issue status after resume = %q, want awaiting_approval (agent proposed per the reply)", issue.Status)
@@ -193,6 +215,150 @@ func TestReporterReplyResumesKeyedToAskToolUse(t *testing.T) {
 	}
 	if fx.count() != 0 {
 		t.Fatalf("executor ran %d times, want 0 (the proposal still needs admin approval)", fx.count())
+	}
+}
+
+func TestReporterReplyResumeSurvivesDroppedQueueHint(t *testing.T) {
+	r, svc, _, issueID, reporterID := askCycleRunner(t, true)
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := svc.PostReply(issueID, AuthorUser, reporterID, "Yes, English please."); err != nil {
+		t.Fatalf("PostReply: %v", err)
+	}
+
+	// Simulate an in-memory queue loss after the HTTP transaction committed.
+	select {
+	case <-svc.jobs:
+	default:
+		t.Fatal("expected initial resume hint")
+	}
+	var issueStatus, runStatus string
+	if err := svc.db.QueryRow(
+		`SELECT i.status, r.status FROM issues i JOIN agent_runs r ON r.issue_id = i.id
+		 WHERE i.id = ? ORDER BY r.id DESC LIMIT 1`, issueID,
+	).Scan(&issueStatus, &runStatus); err != nil {
+		t.Fatalf("load durable handoff: %v", err)
+	}
+	if issueStatus != IssueInvestigating || runStatus != runStatusResumePending {
+		t.Fatalf("durable handoff = issue %q run %q", issueStatus, runStatus)
+	}
+
+	// Startup/periodic recovery reconstructs only the queue hint; the answered
+	// gate and transcript were already durable.
+	svc.recoverWork(r)
+	select {
+	case job := <-svc.jobs:
+		if !job.resume || job.issueID != issueID {
+			t.Fatalf("recovered job = %+v", job)
+		}
+	default:
+		t.Fatal("resume_pending handoff was not recovered")
+	}
+}
+
+func TestResumeCannotBypassUnansweredReporterGate(t *testing.T) {
+	r, svc, _, issueID, _ := askCycleRunner(t, true)
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := r.Resume(context.Background(), issueID); err != nil {
+		t.Fatalf("stale Resume: %v", err)
+	}
+	issue, _ := svc.GetIssue(issueID)
+	if issue.Status != IssueAwaitingUser {
+		t.Fatalf("unanswered gate status = %q, want awaiting_user", issue.Status)
+	}
+	var runStatus string
+	if err := svc.db.QueryRow("SELECT status FROM agent_runs WHERE issue_id = ?", issueID).Scan(&runStatus); err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if runStatus != runStatusWaitingUser {
+		t.Fatalf("unanswered run status = %q, want waiting_user", runStatus)
+	}
+}
+
+func TestCorruptReporterGateSavesReplyAndStopsRun(t *testing.T) {
+	r, svc, _, issueID, reporterID := askCycleRunner(t, true)
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		"UPDATE agent_runs SET transcript_json = '[]' WHERE issue_id = ? AND status = ?",
+		issueID, runStatusWaitingUser,
+	); err != nil {
+		t.Fatalf("corrupt transcript: %v", err)
+	}
+	const reply = "Save this answer even though the transcript is broken."
+	if err := svc.PostReply(issueID, AuthorUser, reporterID, reply); err != nil {
+		t.Fatalf("PostReply: %v", err)
+	}
+
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	var runStatus string
+	if err := svc.db.QueryRow("SELECT status FROM agent_runs WHERE issue_id = ?", issueID).Scan(&runStatus); err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	thread, err := svc.IssueThread(issueID)
+	if err != nil {
+		t.Fatalf("IssueThread: %v", err)
+	}
+	replies := 0
+	for _, message := range thread {
+		if message.Body == reply {
+			replies++
+		}
+	}
+	if issue.Status != IssueNeedsAdmin || runStatus != "aborted" || replies != 1 {
+		t.Fatalf("fallback = issue %q run %q reply count %d", issue.Status, runStatus, replies)
+	}
+}
+
+func TestFallbackReplyDoesNotClobberNewerResumeState(t *testing.T) {
+	r, svc, _, issueID, reporterID := askCycleRunner(t, true)
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Model another reply winning between PostReply's failed staging transaction
+	// and its fallback transaction. The fallback must append this reply without
+	// overwriting the newer durable resume handoff.
+	if _, err := svc.db.Exec("UPDATE issues SET status = ? WHERE id = ?", IssueInvestigating, issueID); err != nil {
+		t.Fatalf("advance issue: %v", err)
+	}
+	if _, err := svc.db.Exec("UPDATE agent_runs SET status = ? WHERE issue_id = ?", runStatusResumePending, issueID); err != nil {
+		t.Fatalf("advance run: %v", err)
+	}
+	const reply = "A second answer arrived during resume staging."
+	if err := svc.saveUnresumableReply(issueID, AuthorUser, reporterID, reply); err != nil {
+		t.Fatalf("saveUnresumableReply: %v", err)
+	}
+
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	var runStatus string
+	if err := svc.db.QueryRow("SELECT status FROM agent_runs WHERE issue_id = ?", issueID).Scan(&runStatus); err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if issue.Status != IssueInvestigating || runStatus != runStatusResumePending {
+		t.Fatalf("fallback clobbered newer state: issue %q run %q", issue.Status, runStatus)
+	}
+	thread, err := svc.IssueThread(issueID)
+	if err != nil {
+		t.Fatalf("IssueThread: %v", err)
+	}
+	count := 0
+	for _, message := range thread {
+		if message.Body == reply {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("raced reply stored %d times, want once", count)
 	}
 }
 
@@ -319,6 +485,33 @@ func TestSweepLeavesFreshAwaitingUserUntouched(t *testing.T) {
 	}
 	if issue, _ := svc.GetIssue(issueID); issue.Status != IssueAwaitingUser {
 		t.Fatalf("fresh issue status = %q, want still awaiting_user", issue.Status)
+	}
+}
+
+func TestReporterReplyWinsStaleTimeoutSnapshot(t *testing.T) {
+	r, svc, _, issueID, reporterID := askCycleRunner(t, true)
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := svc.db.Exec("UPDATE issues SET updated_at = datetime('now','-100 hours') WHERE id = ?", issueID); err != nil {
+		t.Fatalf("age issue: %v", err)
+	}
+	// Model the sweeper having selected this id, then losing the race to a reply.
+	if err := svc.PostReply(issueID, AuthorUser, reporterID, "Here is the answer."); err != nil {
+		t.Fatalf("PostReply: %v", err)
+	}
+	transitioned, err := svc.concludeIssueCAS(context.Background(), issueID,
+		IssueWontFix, ResolutionUserUnresponsive, ResolutionReporterTimeout,
+		IssueAwaitingUser, "-72 hours")
+	if err != nil {
+		t.Fatalf("stale timeout CAS: %v", err)
+	}
+	if transitioned {
+		t.Fatal("timeout closed an issue after its reporter replied")
+	}
+	issue, _ := svc.GetIssue(issueID)
+	if issue.ClosedAt != nil || issue.Status != IssueInvestigating {
+		t.Fatalf("answered issue = status %q closed_at %v", issue.Status, issue.ClosedAt)
 	}
 }
 

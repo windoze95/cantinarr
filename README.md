@@ -46,12 +46,12 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **Books too** -- A Chaptarr (Readarr-API) module with per-format smarts: request the ebook, the audiobook, or both; owned-aware search; per-format monitoring from the author page. Access is granted per user.
 - **Request approvals** -- Optional approval queue, globally or per user. Admins also control per-user season choice, quality choice, and default quality profiles. Approve/deny lands as a push notification for the requester.
 - **AI assistant** -- "What should I watch tonight?" Bring Anthropic, OpenAI, or Gemini; the assistant searches your library, checks availability, and can request for you. Admins can also manage the server conversationally: check the queue, kick off searches, grab a specific release, or diagnose and fix stuck imports.
-- **AI remediation agent** -- Users tap "Report a problem" (or Cantinarr detects one in the queue); a budgeted AI agent investigates, asks the reporter questions when it needs to, and proposes fixes that wait for admin approval -- with a full audit trail of every step and its cost. Auto-detected issues close themselves when the problem clears.
+- **AI remediation agent** -- Users tap "Report a problem" (or Cantinarr detects one in the queue); each report is bound to the exact Radarr/Sonarr instance, then a budgeted AI agent investigates, asks the reporter questions when it needs to, and proposes fixes that always wait for admin approval. Actions and runs remain in the issue's audit history, and a proposal is automatically invalidated if the underlying issue closes before approval. Auto-detected issues record when Cantinarr merely observes that the arr problem cleared instead of claiming the agent fixed it; uncertain cases stay open until an admin records an explicit reviewed outcome and note.
 - **MCP server** -- The same 26 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, with OAuth discovery, browser/passkey login, dynamic client registration, and persistent rotating refresh tokens. Every tool can be toggled on/off from Settings > AI Tools.
 - **Deep *arr control** -- SABnzbd, qBittorrent, NZBGet, and Transmission modules with live queue management, plus drill-down Radarr/Sonarr control: series → season → episode with per-item progress, quality, and history; episode multi-select with batch search; long-press action menus; Edit Series; interactive release search everywhere.
 - **Import Doctor** -- when a download is stuck, Cantinarr explains *why* in plain English (sample file, un-extracted archive, unconfirmed TheXEM mapping, "not an upgrade", unparseable/invalid file, remote-path-mapping or download-client problems, stalled torrent, permissions...) and offers **one-click fixes** with full transparency: manual/force import with the candidate files shown, remove + blocklist + re-search, hand-off to a tool like Unpackerr, or rescan. The same diagnosis backs the app, the AI assistant, the remediation agent, and MCP.
 - **Flexible requests** -- request a whole title in one tap, or pick exactly which **seasons** (or book **formats**) you want; partially-available shows surface per-season availability and a one-tap path to request the rest.
-- **Always in sync** -- availability is computed live from the arrs (never from a stale snapshot), and per-instance webhooks (copy one URL into Radarr/Sonarr > Connect) push manual imports, deletes, and adds into the app the moment they happen.
+- **Always in sync** -- availability is computed live from the arrs (never from a stale snapshot), and one-tap, server-managed Radarr/Sonarr webhooks push manual imports, deletes, and adds into the app the moment they happen without exposing callback credentials to a device.
 - **Push notifications** -- APNs via a self-hosted push gateway with zero-config auto-enrollment: new-content alerts for everyone, approval/issue alerts for admins, per-user preference toggles, deep links into the right screen.
 - **Plex onboarding** -- new users request access right from the in-app guide with their Plex email. Link your Plex account once and the server invite is one tap from the Users screen -- or fully automatic, with the user pushed a "check your inbox" the moment it's sent.
 - **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
@@ -135,6 +135,7 @@ Optional server env vars for deployment tuning:
 |---|---|---|
 | `CANTINARR_PORT` | `8585` | HTTP listen port |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
+| `CANTINARR_PUBLIC_URL` | direct request origin | Trusted public origin (for example `https://cantinarr.example.com`) used when installing authenticated Radarr/Sonarr webhooks; recommended behind a reverse proxy |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for signing short-lived access tokens. Device sessions do not depend on it: changing it never signs anyone out |
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
 | `CANTINARR_AI_PROVIDER` | `anthropic` | Fallback AI provider when none is saved in the admin UI |
@@ -168,7 +169,7 @@ By default, users are passwordless and passkeyless: a connect link starts a perm
 2. Add your API credentials and service instances from Settings
 3. Generate connect links for your household; pin per-user default instances if you run several
 4. Optionally require approval for requests -- pending ones arrive as push notifications
-5. Copy each instance's webhook URL into Radarr/Sonarr > Connect so external changes sync instantly
+5. Tap **Configure instant updates** on each Radarr/Sonarr instance so the server installs its authenticated webhook
 6. Manage everything from the app -- queues, stuck imports, issues, agent fixes. No config files.
 7. When a newer release ships, an in-app banner points you to it; optionally set an **Update Portal** link (**Settings > Admin**) to jump straight to your container manager. See [`docs/updating.md`](docs/updating.md).
 

@@ -31,7 +31,8 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:       30 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }
@@ -61,7 +62,10 @@ func Enroll(baseURL, name, enrollToken string) (EnrollResponse, error) {
 	if enrollToken != "" {
 		req.Header.Set("X-Enroll-Token", enrollToken)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{
+		Timeout:       15 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return out, err

@@ -81,6 +81,92 @@ func (s *Service) StartWorkers(ctx context.Context, runner *Runner, n int) {
 			}
 		}(i)
 	}
+	// Recover work that an earlier process left between durable states, then
+	// periodically retry still-open unclaimed issues (for example after a daily
+	// budget ceiling deferred them). The DB states are authoritative; duplicate
+	// jobs are harmless because Runner claims with a CAS.
+	s.recoverWork(runner)
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.recoverWork(runner)
+			}
+		}
+	}()
+}
+
+func (s *Service) recoverWork(runner *Runner) {
+	if runner == nil {
+		return
+	}
+	// A running row from another process generation cannot still own a goroutine.
+	// Always release these claims, even while remediation is disabled, so turning
+	// the feature back on cannot inherit a phantom worker.
+	s.db.Exec(
+		`UPDATE agent_runs SET status = 'aborted', stop_reason = 'server_restarted',
+		 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		 WHERE status = 'running' AND proc_generation != ?`, runner.procToken,
+	)
+	s.db.Exec(
+		`UPDATE issues SET status = ?, active_run_id = NULL, updated_at = CURRENT_TIMESTAMP
+		 WHERE closed_at IS NULL AND active_run_id IN (
+		   SELECT id FROM agent_runs WHERE status = 'aborted' AND stop_reason = 'server_restarted'
+		 )`, IssueOpen,
+	)
+	// Defensive repair for any older/non-atomic transition that left an issue
+	// claimed by a run which is already terminal or parked.
+	s.db.Exec(
+		`UPDATE issues SET status = ?, read = 0, active_run_id = NULL,
+		 resolution = 'The previous agent run ended before its issue claim was released. An administrator needs to review it.',
+		 resolution_kind = '', updated_at = CURRENT_TIMESTAMP
+		 WHERE closed_at IS NULL AND active_run_id IN (
+		   SELECT id FROM agent_runs WHERE status != ?
+		 )`, IssueNeedsAdmin, runStatusRunning,
+	)
+	if !s.Settings().Enabled {
+		return
+	}
+
+	// Approval/denial may have become durable immediately before a process loss.
+	// Rebuild its model-facing result first; never resume a stale "awaiting
+	// approval" placeholder and never repeat the external action.
+	s.recoverDecisionHandoffs()
+
+	rows, err := s.db.Query(
+		`SELECT i.id, 0 FROM issues i
+		 WHERE i.closed_at IS NULL AND i.active_run_id IS NULL AND i.status IN (?, ?)
+		   AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.issue_id = i.id AND r.status = ?)
+		 UNION ALL
+		 SELECT i.id, 1 FROM issues i JOIN agent_runs r ON r.issue_id = i.id
+		 WHERE i.closed_at IS NULL AND i.active_run_id IS NULL AND i.status = ?
+		   AND r.status = ?`,
+		IssueOpen, IssueInvestigating, runStatusResumePending,
+		IssueInvestigating, runStatusResumePending,
+	)
+	if err != nil {
+		return
+	}
+	type recoveredJob struct {
+		id     int64
+		resume bool
+	}
+	var jobs []recoveredJob
+	for rows.Next() {
+		var id int64
+		var resume int
+		if rows.Scan(&id, &resume) == nil {
+			jobs = append(jobs, recoveredJob{id: id, resume: resume != 0})
+		}
+	}
+	rows.Close()
+	for _, recovered := range jobs {
+		s.enqueue(job{issueID: recovered.id, resume: recovered.resume})
+	}
 }
 
 // StartReplyTTLSweeper launches a cheap periodic sweep (W4 reply-TTL) that closes

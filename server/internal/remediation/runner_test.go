@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -35,6 +37,7 @@ type fakeToolHost struct {
 	executeToolNames []string // every name passed to ExecuteTool, in order
 	concludeCalled   bool
 	proposeCalled    bool
+	queuePresent     *bool // when set, get_queue returns typed exact-scope evidence
 }
 
 func (f *fakeToolHost) ToolsByName(names []string) []mcp.Tool {
@@ -49,7 +52,15 @@ func (f *fakeToolHost) ExecuteTool(ctx context.Context, name string, input json.
 	f.mu.Lock()
 	f.executeToolNames = append(f.executeToolNames, name)
 	f.mu.Unlock()
-	return &mcp.ToolResult{Text: "ok: " + name}, nil
+	result := &mcp.ToolResult{Text: "ok: " + name}
+	if name == "get_queue" && f.queuePresent != nil {
+		result.Verification = &mcp.ToolVerification{
+			Kind:          mcp.VerificationQueueTarget,
+			ExactScope:    true,
+			TargetPresent: *f.queuePresent,
+		}
+	}
+	return result, nil
 }
 
 func (f *fakeToolHost) ExecuteAgentTool(ctx context.Context, name string, input json.RawMessage, issueID int64, toolUseID string) (*mcp.AgentToolResult, error) {
@@ -63,7 +74,7 @@ func (f *fakeToolHost) ExecuteAgentTool(ctx context.Context, name string, input 
 		// Mirror the real tool: it also writes the terminal issue state via the
 		// IssueStore. The Runner injects the real Service for that side effect, so
 		// here we only signal Concluded.
-		return &mcp.AgentToolResult{Text: "concluded", Concluded: true, Status: mcp.ConcludeResolved}, nil
+		return &mcp.AgentToolResult{Text: "conclusion requested", Concluded: true, Status: mcp.ConcludeResolved, Resolution: "verified"}, nil
 	case mcp.ToolProposeAction:
 		f.mu.Lock()
 		f.proposeCalled = true
@@ -136,7 +147,7 @@ func newTestRunner(t *testing.T, host toolHost, script *scriptedTurn) (*Runner, 
 	svc := NewService(database, nil, nil, &fakeNotifier{})
 	// Enable the feature and pin a tiny step budget by default; individual tests
 	// override bounds as needed.
-	if _, err := svc.SetSettings(Settings{Enabled: true, Autonomy: AutonomyPropose, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 
@@ -183,6 +194,12 @@ func TestRunnerNeverOffersOrDispatchesMutatingTools(t *testing.T) {
 	}}
 	host := &fakeToolHost{}
 	r, svc, issueID := newTestRunner(t, host, script)
+	if _, err := svc.db.Exec(
+		"UPDATE issues SET source = ?, arr_queue_id = 7, download_id = 'download-7' WHERE id = ?",
+		SourceAuto, issueID,
+	); err != nil {
+		t.Fatalf("scope issue as detector incident: %v", err)
+	}
 
 	if err := r.Run(context.Background(), issueID); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -219,13 +236,14 @@ func TestRunnerNeverOffersOrDispatchesMutatingTools(t *testing.T) {
 		t.Fatalf("expected the allow-listed get_queue to reach ExecuteTool, got %v", host.executedNames())
 	}
 
-	// The run concluded resolved; the issue is terminal.
+	// A user-reported issue cannot be terminally closed solely on the model's
+	// judgment, even after a read; it remains visible for an administrator.
 	issue, err := svc.GetIssue(issueID)
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
 	}
-	if issue.Status != IssueResolved {
-		t.Fatalf("issue status = %q, want resolved", issue.Status)
+	if issue.Status != IssueNeedsAdmin {
+		t.Fatalf("issue status = %q, want needs_admin", issue.Status)
 	}
 }
 
@@ -243,7 +261,7 @@ func TestRunnerMaxStepsGivesUp(t *testing.T) {
 	r, svc, issueID := newTestRunner(t, host, script)
 
 	// Tighten the step bound to 2.
-	if _, err := svc.SetSettings(Settings{Enabled: true, Autonomy: AutonomyPropose, MaxSteps: 2, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 2, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 
@@ -251,13 +269,14 @@ func TestRunnerMaxStepsGivesUp(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// The issue is terminal (wont_fix) and was never resolved.
+	// Exhaustion remains visible for an administrator; it is not misreported as
+	// a terminal resolution.
 	issue, err := svc.GetIssue(issueID)
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
 	}
-	if issue.Status != IssueWontFix {
-		t.Fatalf("issue status = %q, want wont_fix after max steps", issue.Status)
+	if issue.Status != IssueNeedsAdmin {
+		t.Fatalf("issue status = %q, want needs_admin after max steps", issue.Status)
 	}
 
 	// A giveup audit step was recorded with the max_steps stop reason.
@@ -289,6 +308,346 @@ func TestRunnerMaxStepsGivesUp(t *testing.T) {
 	}
 	if agentMsgs == 0 {
 		t.Fatalf("expected at least one agent message on the thread after give-up")
+	}
+}
+
+func TestConclusionRejectsFreshReadWithoutTypedResolutionProof(t *testing.T) {
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("too-early", mcp.ToolConcludeIssue)}},
+		// General health is diagnostic context, not proof that this media issue is
+		// currently fixed, so it must not unlock conclusion either.
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("health", "get_arr_health")}},
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("still-too-early", mcp.ToolConcludeIssue)}},
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("fresh-state", "get_queue")}},
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("verified", mcp.ToolConcludeIssue)}},
+	}}
+	host := &fakeToolHost{}
+	r, svc, issueID := newTestRunner(t, host, script)
+	if _, err := svc.db.Exec(
+		"UPDATE issues SET source = ?, arr_queue_id = 7, download_id = 'download-7' WHERE id = ?",
+		SourceAuto, issueID,
+	); err != nil {
+		t.Fatalf("scope issue as detector incident: %v", err)
+	}
+
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if script.idx != len(script.turns) {
+		t.Fatalf("model turns consumed = %d, want %d; an early conclusion bypassed the read gate", script.idx, len(script.turns))
+	}
+	if got := host.executedNames(); !contains(got, "get_arr_health") || !contains(got, "get_queue") {
+		t.Fatalf("reads executed = %v, want health and scoped state verification", got)
+	}
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Status != IssueNeedsAdmin || issue.Resolution != "Agent needs administrator review: "+stopUnverifiedClose {
+		t.Fatalf("conclusion = status %q resolution %q", issue.Status, issue.Resolution)
+	}
+}
+
+func TestAutoConclusionAcceptsExactTypedClearedQueueProof(t *testing.T) {
+	present := false
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("fresh-state", "get_queue")}},
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("verified", mcp.ToolConcludeIssue)}},
+	}}
+	host := &fakeToolHost{queuePresent: &present}
+	r, svc, issueID := newTestRunner(t, host, script)
+	if _, err := svc.db.Exec(
+		"UPDATE issues SET source = ?, instance_id = ?, arr_queue_id = ?, download_id = ? WHERE id = ?",
+		SourceAuto, "radarr-1", 7, "download-7", issueID,
+	); err != nil {
+		t.Fatalf("scope auto issue: %v", err)
+	}
+
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Status != IssueResolved || issue.Resolution != arrStateClearedResolution || issue.ResolutionKind != ResolutionArrStateCleared {
+		t.Fatalf("conclusion = status %q resolution %q kind %q", issue.Status, issue.Resolution, issue.ResolutionKind)
+	}
+}
+
+func TestAutoConclusionRejectsTypedQueueTargetStillPresent(t *testing.T) {
+	present := true
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("fresh-state", "get_queue")}},
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("premature", mcp.ToolConcludeIssue)}},
+	}}
+	host := &fakeToolHost{queuePresent: &present}
+	r, svc, issueID := newTestRunner(t, host, script)
+	if _, err := svc.db.Exec(
+		"UPDATE issues SET source = ?, instance_id = ?, arr_queue_id = ?, download_id = ? WHERE id = ?",
+		SourceAuto, "radarr-1", 7, "download-7", issueID,
+	); err != nil {
+		t.Fatalf("scope auto issue: %v", err)
+	}
+
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Status != IssueNeedsAdmin {
+		t.Fatalf("issue status = %q, want needs_admin", issue.Status)
+	}
+}
+
+func TestSuccessfulGenericReadDoesNotProveUserIssueResolved(t *testing.T) {
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("history", "get_history")}},
+		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("conclude", mcp.ToolConcludeIssue)}},
+	}}
+	r, svc, issueID := newTestRunner(t, &fakeToolHost{}, script)
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Status == IssueResolved {
+		t.Fatal("generic history text falsely resolved a subjective user issue")
+	}
+}
+
+func TestRunnerEnforcesStepBudgetWithinOneTurn(t *testing.T) {
+	blocks := make([]ai.TranscriptBlock, 0, 8)
+	for i := 0; i < 8; i++ {
+		blocks = append(blocks, toolUse(fmt.Sprintf("read-%d", i), "get_queue"))
+	}
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{{
+		Role: ai.RoleAssistant, Content: blocks,
+	}}}
+	host := &fakeToolHost{}
+	r, svc, issueID := newTestRunner(t, host, script)
+	settings := svc.Settings()
+	settings.MaxSteps = 2
+	if _, err := svc.SetSettings(settings); err != nil {
+		t.Fatalf("SetSettings: %v", err)
+	}
+
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := len(host.executedNames()); got != 2 {
+		t.Fatalf("read tools executed = %d, want exactly the two-call budget", got)
+	}
+	var stepCount int
+	if err := svc.db.QueryRow("SELECT step_count FROM agent_runs WHERE issue_id = ?", issueID).Scan(&stepCount); err != nil {
+		t.Fatalf("load run: %v", err)
+	}
+	if stepCount != 2 {
+		t.Fatalf("persisted step_count = %d, want 2", stepCount)
+	}
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Status != IssueNeedsAdmin {
+		t.Fatalf("issue status = %q, want needs_admin after budget exhaustion", issue.Status)
+	}
+}
+
+func TestInvestigateOnlyDoesNotOfferProposalTool(t *testing.T) {
+	script := &scriptedTurn{}
+	r, svc, issueID := newTestRunner(t, &fakeToolHost{}, script)
+	settings := svc.Settings()
+	settings.Enabled = true
+	settings.Mode = ModeInvestigateOnly
+	if _, err := svc.SetSettings(settings); err != nil {
+		t.Fatalf("SetSettings: %v", err)
+	}
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(script.offeredTool) == 0 {
+		t.Fatal("model received no turn")
+	}
+	for _, name := range script.offeredTool[0] {
+		if name == mcp.ToolProposeAction {
+			t.Fatal("investigate-only mode offered propose_action")
+		}
+	}
+}
+
+func TestOneHumanGatePerModelTurn(t *testing.T) {
+	host := &fakeToolHost{}
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{{
+		Role: ai.RoleAssistant,
+		Content: []ai.TranscriptBlock{
+			{Type: ai.BlockToolUse, ID: "p1", Name: mcp.ToolProposeAction, Input: json.RawMessage(`{}`)},
+			{Type: ai.BlockToolUse, ID: "c1", Name: mcp.ToolConcludeIssue, Input: json.RawMessage(`{"status":"resolved"}`)},
+		},
+	}}}
+	r, svc, issueID := newTestRunner(t, host, script)
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !host.proposeCalled || host.concludeCalled {
+		t.Fatalf("propose=%v conclude=%v, want first gate only", host.proposeCalled, host.concludeCalled)
+	}
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Status != IssueAwaitingApproval {
+		t.Fatalf("issue status = %q, want awaiting_approval", issue.Status)
+	}
+}
+
+func TestAutoIssueRunTriggerIsAuto(t *testing.T) {
+	r, svc, issueID := newTestRunner(t, &fakeToolHost{}, &scriptedTurn{})
+	if _, err := svc.db.Exec("UPDATE issues SET source = ? WHERE id = ?", SourceAuto, issueID); err != nil {
+		t.Fatalf("set source: %v", err)
+	}
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var trigger string
+	if err := svc.db.QueryRow("SELECT trigger FROM agent_runs WHERE issue_id = ?", issueID).Scan(&trigger); err != nil {
+		t.Fatalf("load trigger: %v", err)
+	}
+	if trigger != "auto" {
+		t.Fatalf("trigger = %q, want auto", trigger)
+	}
+}
+
+func TestScopeReadToolInputBindsUserQueueReadsToMediaAndEpisode(t *testing.T) {
+	issue := &Issue{
+		MediaType: "tv", TmdbID: 42, TvdbID: 4242,
+		SeasonNumber: 2, EpisodeNumber: 7,
+	}
+	raw, err := scopeReadToolInput(issue, "diagnose_queue", json.RawMessage(
+		`{"media_type":"movie","queue_id":91,"tmdb_id":999,"tvdb_id":998,"season_number":9,"episode_number":9}`,
+	))
+	if err != nil {
+		t.Fatalf("scopeReadToolInput: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode scoped input: %v", err)
+	}
+	if got["media_type"] != "tv" || got["tmdb_id"] != float64(42) || got["tvdb_id"] != float64(4242) ||
+		got["season_number"] != float64(2) || got["episode_number"] != float64(7) {
+		t.Fatalf("authoritative scope was not imposed: %s", raw)
+	}
+	// A user issue has no detector queue id, so the model may narrow the read
+	// to one candidate. The MCP handler still intersects it with every identity
+	// field above; it can never expose an unrelated row.
+	if got["queue_id"] != float64(91) {
+		t.Fatalf("candidate queue id = %v, want 91: %s", got["queue_id"], raw)
+	}
+}
+
+func TestScopeReadToolInputExactQueueOverridesModelAndStripsUnknownIdentity(t *testing.T) {
+	issue := &Issue{MediaType: "movie", TmdbID: 42, ArrQueueID: 7}
+	raw, err := scopeReadToolInput(issue, "get_manual_import_candidates", json.RawMessage(
+		`{"queue_id":999,"tmdb_id":999,"tvdb_id":888,"book_id":4,"author_id":5}`,
+	))
+	if err != nil {
+		t.Fatalf("scopeReadToolInput: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode scoped input: %v", err)
+	}
+	if got["queue_id"] != float64(7) || got["tmdb_id"] != float64(42) || got["media_type"] != "movie" {
+		t.Fatalf("exact scope was not imposed: %s", raw)
+	}
+	for _, forbidden := range []string{"tvdb_id", "book_id", "author_id"} {
+		if _, ok := got[forbidden]; ok {
+			t.Fatalf("model-selected %s survived scoping: %s", forbidden, raw)
+		}
+	}
+}
+
+func TestScopeReadToolInputDoesNotInventTMDBForTVDBOnlyIssue(t *testing.T) {
+	issue := &Issue{MediaType: "tv", TvdbID: 1234, SeasonNumber: 1, EpisodeNumber: 3}
+	raw, err := scopeReadToolInput(issue, "search_releases", json.RawMessage(
+		`{"tmdb_id":999,"season_number":9,"book_id":1}`,
+	))
+	if err != nil {
+		t.Fatalf("scopeReadToolInput: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode scoped input: %v", err)
+	}
+	if _, ok := got["tmdb_id"]; ok {
+		t.Fatalf("untrusted tmdb_id survived: %s", raw)
+	}
+	if got["season_number"] != float64(1) || got["episode_number"] != float64(3) || got["media_type"] != "tv" {
+		t.Fatalf("TV scope = %s", raw)
+	}
+}
+
+func TestScopeReadToolInputFailsClosedWithoutUsableIdentity(t *testing.T) {
+	if _, err := scopeReadToolInput(&Issue{MediaType: "movie"}, "get_queue", json.RawMessage(`{"queue_id":9}`)); err == nil {
+		t.Fatal("unscoped movie queue read was accepted")
+	}
+	if _, err := scopeReadToolInput(&Issue{MediaType: "book", ArrQueueID: 7, DownloadID: "download-7"}, "get_history", nil); err == nil {
+		t.Fatal("book history without durable book identity was accepted")
+	}
+	raw, err := scopeReadToolInput(
+		&Issue{MediaType: "book", ArrQueueID: 7, DownloadID: "download-7"},
+		"get_queue", nil,
+	)
+	if err != nil {
+		t.Fatalf("exact book queue scope rejected: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode scoped book input: %v", err)
+	}
+	if got["queue_id"] != float64(7) || got["download_id"] != "download-7" {
+		t.Fatalf("book queue scope = %s", raw)
+	}
+}
+
+func TestBindReleaseCandidateMetadataUsesServerObservation(t *testing.T) {
+	input := json.RawMessage(`{"kind":"grab_release","params":{"media_type":"movie","guid":"safe-ref","indexer_id":3,"release_title":"model lie"},"rationale":"replace it"}`)
+	candidate := mcp.ReleaseCandidate{
+		Reference: "safe-ref", IndexerID: 3, Title: "Movie.2026.1080p",
+		Quality: "WEBDL-1080p", Size: 2048, Protocol: "usenet", Indexer: "Example",
+		Rejected: true, Rejections: []string{"Not an upgrade"},
+	}
+	bound, err := bindReleaseCandidateMetadata(input, map[string]mcp.ReleaseCandidate{
+		releaseCandidateKey(candidate.Reference, candidate.IndexerID): candidate,
+	})
+	if err != nil {
+		t.Fatalf("bindReleaseCandidateMetadata: %v", err)
+	}
+	var envelope struct {
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(bound, &envelope); err != nil {
+		t.Fatalf("decode bound proposal: %v", err)
+	}
+	canonical, err := validateActionParams(ActionGrabRelease, envelope.Params)
+	if err != nil {
+		t.Fatalf("validate bound params: %v", err)
+	}
+	var got GrabReleaseParams
+	if err := json.Unmarshal(canonical, &got); err != nil {
+		t.Fatalf("decode canonical params: %v", err)
+	}
+	if got.GUID != releaseGUIDFingerprint("safe-ref") || got.ReleaseTitle != candidate.Title ||
+		got.Quality != candidate.Quality || got.Size != candidate.Size || got.Protocol != candidate.Protocol ||
+		got.Indexer != candidate.Indexer || !got.Rejected || len(got.Rejections) != 1 {
+		t.Fatalf("bound params = %+v", got)
+	}
+	if _, err := bindReleaseCandidateMetadata(input, nil); err == nil || !strings.Contains(err.Error(), "fresh issue-scoped") {
+		t.Fatalf("missing-candidate error = %v", err)
 	}
 }
 

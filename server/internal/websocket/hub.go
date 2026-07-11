@@ -65,13 +65,18 @@ type IssueOpener interface {
 	// consecutive polls. serviceType is "radarr"|"sonarr"; downloadID is the
 	// stable download-client hash; d is the classifier's verdict. It must not
 	// block the poll goroutine (the Runner is enqueued, never run inline).
-	OpenAutoIssue(serviceType, instanceID, downloadID string, d arr.Diagnosis)
+	OpenAutoIssue(serviceType, instanceID, downloadID string, media arr.QueueMediaContext, d arr.Diagnosis)
 
 	// CloseAutoIssue is called when a download that WAS a confirmed problem is no
 	// longer detected on a successful poll (it recovered or left the queue). The
 	// implementation resolves the matching open auto-issue; a no-op when there's
 	// none. Must not block the poll goroutine.
 	CloseAutoIssue(serviceType, instanceID, downloadID string)
+
+	// ReconcileAutoIssues receives every currently-problematic download after a
+	// successful full queue read. It lets the database recover closure state
+	// across a Cantinarr restart instead of relying only on this process's map.
+	ReconcileAutoIssues(serviceType, instanceID string, activeDownloadIDs []string)
 }
 
 // queueSignalItem bundles a queue item's stable download-client id with the
@@ -80,6 +85,7 @@ type IssueOpener interface {
 // logic is exercised with a fake queue source (no live arr client).
 type queueSignalItem struct {
 	downloadID string
+	media      arr.QueueMediaContext
 	signal     arr.QueueSignal
 }
 
@@ -503,6 +509,7 @@ func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []queu
 	// instances' polls (mirrors pollDownloadClientInstance's discipline).
 	type dispatch struct {
 		downloadID string
+		media      arr.QueueMediaContext
 		diagnosis  arr.Diagnosis
 	}
 	var toOpen []dispatch
@@ -521,7 +528,7 @@ func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []queu
 		current[key] = d.Problem
 		// Fire only if the SAME problem persisted from the previous poll.
 		if h.prevArrProblems[key] == d.Problem {
-			toOpen = append(toOpen, dispatch{downloadID: it.downloadID, diagnosis: d})
+			toOpen = append(toOpen, dispatch{downloadID: it.downloadID, media: it.media, diagnosis: d})
 		}
 	}
 	// Replace the remembered problems for THIS instance: drop stale keys (other
@@ -547,11 +554,16 @@ func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []queu
 	h.pollMu.Unlock()
 
 	for _, d := range toOpen {
-		h.opener.OpenAutoIssue(serviceType, instanceID, d.downloadID, d.diagnosis)
+		h.opener.OpenAutoIssue(serviceType, instanceID, d.downloadID, d.media, d.diagnosis)
 	}
 	for _, downloadID := range toClose {
 		h.opener.CloseAutoIssue(serviceType, instanceID, downloadID)
 	}
+	activeIDs := make([]string, 0, len(current))
+	for key := range current {
+		activeIDs = append(activeIDs, strings.TrimPrefix(key, prefix))
+	}
+	h.opener.ReconcileAutoIssues(serviceType, instanceID, activeIDs)
 }
 
 // radarrQueueSignal projects a Radarr detailed queue item into the neutral
@@ -562,8 +574,14 @@ func radarrQueueSignal(item radarr.DetailedQueueItem) queueSignalItem {
 	for _, m := range item.StatusMessages {
 		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
 	}
+	media := arr.QueueMediaContext{QueueID: item.ID, Title: item.Title}
+	if item.Movie != nil {
+		media.Title = item.Movie.Title
+		media.TmdbID = item.Movie.TmdbID
+	}
 	return queueSignalItem{
 		downloadID: item.DownloadID,
+		media:      media,
 		signal: arr.QueueSignal{
 			Status:                item.Status,
 			TrackedDownloadStatus: item.TrackedDownloadStatus,
@@ -582,8 +600,19 @@ func sonarrQueueSignal(item sonarr.DetailedQueueItem) queueSignalItem {
 	for _, m := range item.StatusMessages {
 		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
 	}
+	media := arr.QueueMediaContext{QueueID: item.ID, Title: item.Title}
+	if item.Series != nil {
+		media.Title = item.Series.Title
+		media.TmdbID = item.Series.TmdbID
+		media.TvdbID = item.Series.TvdbID
+	}
+	if item.Episode != nil {
+		media.SeasonNumber = item.Episode.SeasonNumber
+		media.EpisodeNumber = item.Episode.EpisodeNumber
+	}
 	return queueSignalItem{
 		downloadID: item.DownloadID,
+		media:      media,
 		signal: arr.QueueSignal{
 			Status:                item.Status,
 			TrackedDownloadStatus: item.TrackedDownloadStatus,

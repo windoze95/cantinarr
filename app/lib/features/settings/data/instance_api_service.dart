@@ -70,6 +70,12 @@ class InstanceApiService {
     await _dio.delete('/api/instances/$id');
   }
 
+  /// Create or refresh Cantinarr's server-managed Radarr/Sonarr Connect
+  /// webhook. Its callback credential remains entirely server-side.
+  Future<void> configureWebhook(String id) async {
+    await _dio.post('/api/instances/$id/webhook');
+  }
+
   /// Per-user default pins for this instance's service type, keyed by user id.
   /// The pinned id may be a sibling instance of the same type, so the edit
   /// screen can show who is currently assigned where.

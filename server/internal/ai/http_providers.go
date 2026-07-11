@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -33,6 +32,7 @@ func NewOpenAIService(apiKey, model string, toolServer *mcp.ToolServer) *openAIS
 	return &openAIService{
 		client: openai.NewClient(
 			openaioption.WithAPIKey(apiKey),
+			openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
 			openaioption.WithRequestTimeout(httpProviderStreamTimeout),
 		),
 		model:      openai.ChatModel(model),
@@ -321,7 +321,7 @@ func NewGeminiService(apiKey, model string, toolServer *mcp.ToolServer) *geminiS
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
 		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,
-		HTTPClient: &http.Client{Timeout: httpProviderStreamTimeout},
+		HTTPClient: newCredentialHTTPClient(httpProviderStreamTimeout),
 		HTTPOptions: genai.HTTPOptions{
 			Timeout: genai.Ptr(httpProviderStreamTimeout),
 		},

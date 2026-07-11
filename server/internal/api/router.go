@@ -61,7 +61,7 @@ func NewRouter(
 	// Middleware
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(safeRequestLogger)
 	r.Use(middleware.Recoverer)
 
 	oauthHandler := auth.NewOAuthHandler(authService)
@@ -102,8 +102,8 @@ func NewRouter(
 		})
 
 		// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook). No session:
-		// the per-instance webhook token is the auth (query param or the webhook
-		// form's basic-auth password).
+		// the server-only per-instance credential is supplied through Basic Auth;
+		// query-string credentials are rejected so access logs cannot retain them.
 		r.Post("/webhooks/arr/{instanceID}", webhookHandler.HandleArr)
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
@@ -206,13 +206,16 @@ func NewRouter(
 			// AI remediation: issue queue + dismissal + global settings (Wave 1).
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/issues", remediationHandler.ListAdmin)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/dismiss", remediationHandler.Dismiss)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/resolve", remediationHandler.ResolveIssue)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/issues/{id}/activity", remediationHandler.GetIssueActivity)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/remediation-settings", remediationHandler.GetSettings)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Put("/remediation-settings", remediationHandler.UpdateSettings)
 
 			// AI remediation: agent-action approval queue + run audit (Wave 3 —
-			// propose→approve→execute). Approve replays a stored proposal exactly
-			// once; deny resumes the investigation.
+			// propose→approve→execute). Approval claims a stored proposal for
+			// at-most-once dispatch; denial resumes the investigation.
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-actions", remediationHandler.ListActions)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-actions/{id}", remediationHandler.GetAction)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-actions/{id}/approve", remediationHandler.ApproveAction)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-actions/{id}/deny", remediationHandler.DenyAction)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-runs/{id}", remediationHandler.GetRun)
@@ -327,6 +330,9 @@ func NewRouter(
 				// type, and (PUT) assign this instance to an exact set of users.
 				r.Get("/instances/{instanceID}/users", instanceHandler.GetInstanceUsers)
 				r.Put("/instances/{instanceID}/users", instanceHandler.UpdateInstanceUsers)
+				// Configure the server-managed Radarr/Sonarr Connect webhook
+				// without ever returning its callback credential to the app.
+				r.Post("/instances/{instanceID}/webhook", instanceHandler.ConfigureWebhook)
 			})
 
 			// Instance proxy — forward to specific instance. Read-only

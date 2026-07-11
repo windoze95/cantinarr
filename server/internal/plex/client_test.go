@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -17,6 +18,32 @@ func testClient(t *testing.T, handler http.Handler) *Client {
 	c := NewClient()
 	c.baseURL = srv.URL
 	return c
+}
+
+func TestClientDoesNotFollowRedirects(t *testing.T) {
+	var redirectedRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedRequests.Add(1)
+		if got := r.Header.Get("X-Plex-Token"); got != "" {
+			t.Errorf("redirect destination received X-Plex-Token %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(destination.Close)
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/credential-sink", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	client := NewClient()
+	client.baseURL = source.URL
+	if _, err := client.GetUser(context.Background(), "client-id", "plex-secret"); err == nil {
+		t.Fatal("GetUser accepted an upstream redirect")
+	}
+	if got := redirectedRequests.Load(); got != 0 {
+		t.Fatalf("redirect destination received %d requests, want 0", got)
+	}
 }
 
 func TestCreateAndCheckPin(t *testing.T) {

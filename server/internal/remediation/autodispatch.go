@@ -3,7 +3,6 @@ package remediation
 import (
 	"database/sql"
 	"log"
-	"strconv"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 )
@@ -43,7 +42,7 @@ func NewAutoDispatcher(svc *Service) *AutoDispatcher {
 //
 // It never runs the agent inline: Enqueue pushes onto the worker channel and
 // returns immediately, so a slow investigation can't stall the poll goroutine.
-func (a *AutoDispatcher) OpenAutoIssue(serviceType, instanceID, downloadID string, d arr.Diagnosis) {
+func (a *AutoDispatcher) OpenAutoIssue(serviceType, instanceID, downloadID string, media arr.QueueMediaContext, d arr.Diagnosis) {
 	if a == nil || a.svc == nil {
 		return
 	}
@@ -55,12 +54,23 @@ func (a *AutoDispatcher) OpenAutoIssue(serviceType, instanceID, downloadID strin
 		return
 	}
 
-	created, id := a.svc.OpenAutoIssue(serviceType, instanceID, downloadID, d)
+	created, id := a.svc.OpenAutoIssue(serviceType, instanceID, downloadID, media, d)
 	if !created {
 		return // existing open issue (or a write error): nothing new to run.
 	}
 	// Kick off the read-only investigation off the poll goroutine.
 	a.svc.Enqueue(id)
+}
+
+// ReconcileAutoIssues closes database incidents absent from a successful full
+// queue diagnosis snapshot. It is intentionally not gated by Enabled or
+// AutoDispatch: those switches control opening new work, not keeping already
+// recorded incident state truthful across restarts.
+func (a *AutoDispatcher) ReconcileAutoIssues(serviceType, instanceID string, activeDownloadIDs []string) {
+	if a == nil || a.svc == nil {
+		return
+	}
+	a.svc.ReconcileAutoIssues(instanceID, activeDownloadIDs)
 }
 
 // CloseAutoIssue resolves the open auto issue for a download the poller no longer
@@ -135,12 +145,21 @@ func (s *Service) resetAutoGiveupStreak() {
 	s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, '0')", autoGiveupStreakKey)
 }
 
-// bumpAutoGiveupStreak increments and persists the counter, returning the new
-// value. Under the single-writer SQLite DB the read-then-write is atomic enough
-// for this coarse guardrail (the breaker only needs to trip eventually).
+// bumpAutoGiveupStreak increments and persists the counter in one SQL statement,
+// so concurrent terminalizations cannot lose an increment between a separate
+// read and write.
 func (s *Service) bumpAutoGiveupStreak() int {
-	n := s.readAutoGiveupStreak() + 1
-	if _, err := s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", autoGiveupStreakKey, strconv.Itoa(n)); err != nil {
+	var n int
+	err := s.db.QueryRow(
+		`INSERT INTO settings (key, value) VALUES (?, '1')
+		 ON CONFLICT(key) DO UPDATE SET value = CAST(
+		   CASE WHEN CAST(settings.value AS INTEGER) < 0 THEN 1
+		        ELSE CAST(settings.value AS INTEGER) + 1 END AS TEXT
+		 )
+		 RETURNING CAST(value AS INTEGER)`,
+		autoGiveupStreakKey,
+	).Scan(&n)
+	if err != nil {
 		log.Printf("remediation: bump auto give-up streak: %v", err)
 	}
 	return n

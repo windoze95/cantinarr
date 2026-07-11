@@ -35,7 +35,10 @@ type Client struct {
 
 func NewClient() *Client {
 	return &Client{
-		http:    &http.Client{Timeout: 15 * time.Second},
+		http: &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		baseURL: "https://plex.tv",
 		product: "Cantinarr",
 	}
@@ -94,8 +97,8 @@ func (c *Client) CheckPin(ctx context.Context, clientID string, id int64) (*Pin,
 // plex.tv app, never baseURL: it is user-facing, not an API call.
 func (c *Client) AuthURL(clientID, code string) string {
 	v := url.Values{
-		"clientID":                {clientID},
-		"code":                    {code},
+		"clientID":                 {clientID},
+		"code":                     {code},
 		"context[device][product]": {c.product},
 	}
 	return "https://app.plex.tv/auth#?" + v.Encode()

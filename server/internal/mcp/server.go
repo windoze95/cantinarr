@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/request"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
@@ -32,8 +32,9 @@ type Tool struct {
 
 // CallContext carries per-call user identity into tool execution.
 type CallContext struct {
-	UserID int64
-	Role   string
+	UserID     int64
+	Role       string
+	InstanceID string // authoritative arr instance for scoped remediation reads
 }
 
 // ToolServer executes tools in-process on behalf of the AI.
@@ -65,7 +66,18 @@ func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, reg
 
 // GetRadarr returns the default Radarr client.
 func (s *ToolServer) GetRadarr() *radarr.Client {
+	return s.GetRadarrFor("")
+}
+
+func (s *ToolServer) GetRadarrFor(instanceID string) *radarr.Client {
 	if s.registry != nil {
+		if instanceID != "" {
+			client, err := s.registry.GetRadarrClient(instanceID)
+			if err == nil {
+				return client
+			}
+			return nil
+		}
 		client, _, err := s.registry.GetDefaultRadarrClient()
 		if err == nil && client != nil {
 			return client
@@ -76,7 +88,18 @@ func (s *ToolServer) GetRadarr() *radarr.Client {
 
 // GetSonarr returns the default Sonarr client.
 func (s *ToolServer) GetSonarr() *sonarr.Client {
+	return s.GetSonarrFor("")
+}
+
+func (s *ToolServer) GetSonarrFor(instanceID string) *sonarr.Client {
 	if s.registry != nil {
+		if instanceID != "" {
+			client, err := s.registry.GetSonarrClient(instanceID)
+			if err == nil {
+				return client
+			}
+			return nil
+		}
 		client, _, err := s.registry.GetDefaultSonarrClient()
 		if err == nil && client != nil {
 			return client
@@ -89,7 +112,18 @@ func (s *ToolServer) GetSonarr() *sonarr.Client {
 // default flag, so GetDefaultChaptarrClient resolves an arbitrary configured
 // instance (and returns a nil client, no error, when none is configured).
 func (s *ToolServer) GetChaptarr() *chaptarr.Client {
+	return s.GetChaptarrFor("")
+}
+
+func (s *ToolServer) GetChaptarrFor(instanceID string) *chaptarr.Client {
 	if s.registry != nil {
+		if instanceID != "" {
+			client, err := s.registry.GetChaptarrClient(instanceID)
+			if err == nil {
+				return client
+			}
+			return nil
+		}
 		client, _, err := s.registry.GetDefaultChaptarrClient()
 		if err == nil && client != nil {
 			return client
@@ -151,21 +185,32 @@ func (t Tool) IsAdminOnly() bool {
 func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.RawMessage, callCtx CallContext) (result *ToolResult, err error) {
 	debug := s.IsAIDebugEnabled()
 	start := time.Now()
+	logName := safeToolLogName(name)
 	if debug {
-		log.Printf("ai debug: tool start name=%s user_id=%d role=%s input=%s", name, callCtx.UserID, callCtx.Role, truncateLog(string(input), 2000))
-		defer func() {
+		// Tool input can contain credentials (notably release GUIDs). Debug mode
+		// records shape/size only; it is never permission to log request data.
+		log.Printf("ai debug: tool start name=%s user_id=%d role=%s input_bytes=%d", logName, callCtx.UserID, callCtx.Role, len(input))
+	}
+	defer func() {
+		errorType := ""
+		if err != nil {
+			errorType = fmt.Sprintf("%T", err)
+		}
+		structuredDropped := sanitizeToolResult(result)
+		err = secrets.RedactError(err)
+		if debug {
 			status := "ok"
 			if err != nil {
 				status = "error"
 			}
-			log.Printf("ai debug: tool end name=%s status=%s duration_ms=%d result=%s err=%v",
-				name, status, time.Since(start).Milliseconds(), toolResultLog(result), err)
-		}()
-	}
+			log.Printf("ai debug: tool end name=%s status=%s duration_ms=%d %s error_type=%s",
+				logName, status, time.Since(start).Milliseconds(), toolResultMetadata(result, structuredDropped), errorType)
+		}
+	}()
 
 	def := findToolDefinition(name)
 	if def == nil {
-		return nil, fmt.Errorf("unknown tool: %s", name)
+		return nil, fmt.Errorf("unknown tool")
 	}
 	if !s.IsToolEnabled(name) {
 		return &ToolResult{Text: "This tool is disabled by the administrator."}, nil
@@ -198,17 +243,17 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "display_media":
 		return s.displayMedia(input)
 	case "get_queue":
-		return s.getQueue(input)
+		return s.getQueue(input, callCtx.InstanceID)
 	case "get_calendar":
 		return s.getCalendar(input)
 	case "get_library":
-		return s.getLibrary(input)
+		return s.getLibrary(input, callCtx.InstanceID)
 	case "get_history":
-		return s.getHistory(input)
+		return s.getHistory(input, callCtx.InstanceID)
 	case "trigger_search":
 		return s.triggerSearch(input)
 	case "search_releases":
-		return s.searchReleases(input)
+		return s.searchReleases(input, callCtx.InstanceID)
 	case "grab_release":
 		return s.grabRelease(input)
 	case "remove_queue_item":
@@ -216,11 +261,11 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "get_disk_space":
 		return s.getDiskSpace()
 	case "get_arr_health":
-		return s.getArrHealth(input)
+		return s.getArrHealth(input, callCtx.InstanceID)
 	case "diagnose_queue":
-		return s.diagnoseQueue(input)
+		return s.diagnoseQueue(input, callCtx.InstanceID)
 	case "get_manual_import_candidates":
-		return s.getManualImportCandidates(input)
+		return s.getManualImportCandidates(input, callCtx.InstanceID)
 	case "execute_manual_import":
 		return s.executeManualImport(input)
 	case "remediate_queue_item":
@@ -228,33 +273,52 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "rescan_media":
 		return s.rescanMedia(input)
 	default:
-		return nil, fmt.Errorf("unknown tool: %s", name)
+		return nil, fmt.Errorf("unknown tool")
 	}
 }
 
-func toolResultLog(result *ToolResult) string {
+// sanitizeToolResult is the single output boundary for every ordinary MCP tool.
+// The result may flow to an MCP client, a chat provider, or the remediation
+// agent, so both its text and optional rich UI payload must be safe first.
+// true means an unencodable structured value was dropped fail-closed.
+func sanitizeToolResult(result *ToolResult) (structuredDropped bool) {
 	if result == nil {
-		return ""
+		return false
 	}
-	var parts []string
-	if result.Text != "" {
-		parts = append(parts, "text="+truncateLog(result.Text, 2000))
-	}
-	if result.StructuredData != nil {
-		switch v := result.StructuredData.(type) {
-		case []MediaResultItem:
-			parts = append(parts, fmt.Sprintf("structured_media_items=%d", len(v)))
-		default:
-			parts = append(parts, fmt.Sprintf("structured_type=%T", result.StructuredData))
+	result.Text = secrets.RedactText(result.Text)
+	for i := range result.ReleaseCandidates {
+		candidate := &result.ReleaseCandidates[i]
+		candidate.Reference = secrets.RedactText(candidate.Reference)
+		candidate.Title = secrets.RedactText(candidate.Title)
+		candidate.Quality = secrets.RedactText(candidate.Quality)
+		candidate.Protocol = secrets.RedactText(candidate.Protocol)
+		candidate.Indexer = secrets.RedactText(candidate.Indexer)
+		for j := range candidate.Rejections {
+			candidate.Rejections[j] = secrets.RedactText(candidate.Rejections[j])
 		}
 	}
-	return strings.Join(parts, " ")
+	if result.StructuredData != nil {
+		redacted, err := secrets.RedactJSONValue(result.StructuredData)
+		if err != nil {
+			result.StructuredData = nil
+			return true
+		}
+		result.StructuredData = redacted
+	}
+	return false
 }
 
-func truncateLog(value string, max int) string {
-	value = strings.ReplaceAll(value, "\n", "\\n")
-	if len(value) <= max {
-		return value
+func toolResultMetadata(result *ToolResult, structuredDropped bool) string {
+	if result == nil {
+		return "result_present=false text_bytes=0 structured_present=false structured_dropped=false"
 	}
-	return value[:max] + "..."
+	return fmt.Sprintf("result_present=true text_bytes=%d structured_present=%t structured_dropped=%t",
+		len(result.Text), result.StructuredData != nil, structuredDropped)
+}
+
+func safeToolLogName(name string) string {
+	if findToolDefinition(name) == nil {
+		return "<unknown>"
+	}
+	return name
 }
