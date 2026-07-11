@@ -22,6 +22,8 @@ import (
 // create) and IssueDismissed (admin dismiss). The rest are defined now so the
 // API contract and later waves agree.
 const (
+	IssueObserving        = "observing"
+	IssueRecovering       = "recovering"
 	IssueOpen             = "open"
 	IssueInvestigating    = "investigating"
 	IssueAwaitingUser     = "awaiting_user"
@@ -119,7 +121,7 @@ type Issue struct {
 	TmdbID         int        `json:"tmdb_id"`
 	MediaType      string     `json:"media_type"` // "movie" | "tv"
 	Title          string     `json:"title"`
-	SeasonNumber   int        `json:"season_number"`  // 0 = whole series / movie
+	SeasonNumber   int        `json:"season_number"`  // 0 = whole series only when episode_number=0; otherwise specials
 	EpisodeNumber  int        `json:"episode_number"` // 0 = whole season / movie
 	Detail         string     `json:"detail"`         // UNTRUSTED free text
 	Occurrences    int        `json:"occurrences"`
@@ -155,8 +157,8 @@ type IssueDetail struct {
 }
 
 // CreateIssueRequest is the POST /api/issues body (snake_case wire contract).
-// Reason/Title are UNTRUSTED. SeasonNumber 0 = whole series; EpisodeNumber 0 =
-// whole season.
+// Reason/Title are UNTRUSTED. EpisodeNumber 0 means whole season/series;
+// SeasonNumber 0 with a positive episode is an exact special (S00E##).
 type CreateIssueRequest struct {
 	InstanceID    string `json:"instance_id"` // exact Radarr/Sonarr instance
 	MediaType     string `json:"media_type"`  // "movie" | "tv"
@@ -223,10 +225,10 @@ type AgentAction struct {
 }
 
 // MarshalJSON is the wire boundary for action params. Release GUIDs are opaque
-// indexer capabilities: some are signed URLs or embed API credentials, and the
-// app never needs the raw value because approval replays the server's stored
-// params. Keep the executable copy in SQLite while returning only a stable,
-// one-way fingerprint in every detail/list/activity/decision response.
+// indexer capabilities: some are signed URLs or embed API credentials. Only a
+// stable one-way reference is persisted or returned; approval resolves the raw
+// capability from a fresh exact-scope search and keeps it in memory only for
+// the immediate dispatch.
 func (a AgentAction) MarshalJSON() ([]byte, error) {
 	type wireAction AgentAction
 	wire := wireAction(a)
@@ -278,15 +280,27 @@ func releaseGUIDFingerprint(guid string) string {
 const releaseGUIDFingerprintPrefix = "[REDACTED release sha256:"
 
 func isReleaseGUIDFingerprint(guid string) bool {
-	return strings.HasPrefix(guid, releaseGUIDFingerprintPrefix) && strings.HasSuffix(guid, "]")
+	const digestHexLen = 16
+	if len(guid) != len(releaseGUIDFingerprintPrefix)+digestHexLen+1 ||
+		!strings.HasPrefix(guid, releaseGUIDFingerprintPrefix) || guid[len(guid)-1] != ']' {
+		return false
+	}
+	for _, char := range guid[len(releaseGUIDFingerprintPrefix) : len(guid)-1] {
+		if char < '0' || char > '9' {
+			if char < 'a' || char > 'f' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // normalizeReleaseGUIDReference is the persistence boundary. Plain/raw release
-// capabilities become one-way fingerprints. A URL already scrubbed by the MCP
-// boundary stays usable as a safe reference and is resolved against the fresh
-// raw search result only in memory immediately before dispatch.
+// capabilities, including partially redacted URLs, become one-way fingerprints.
+// The executor can match either hash(raw) or hash(redacted(raw)) against its
+// fresh scoped search, so no capability-shaped string needs to be persisted.
 func normalizeReleaseGUIDReference(guid string) string {
-	if isReleaseGUIDFingerprint(guid) || strings.Contains(guid, secrets.RedactedValue) {
+	if isReleaseGUIDFingerprint(guid) {
 		return guid
 	}
 	return releaseGUIDFingerprint(guid)

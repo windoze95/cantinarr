@@ -169,7 +169,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
     });
     final scope = widget.scope;
     try {
-      await ref.read(issuesServiceProvider).reportProblem(
+      final result = await ref.read(issuesServiceProvider).reportProblem(
             instanceId: scope.instanceId,
             mediaType: scope.mediaType,
             tmdbId: scope.tmdbId,
@@ -183,7 +183,7 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
       if (!mounted) return;
       Navigator.of(context).pop(true);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Thanks — we're looking into it")),
+        SnackBar(content: Text(_successMessage(result.status))),
       );
     } catch (e) {
       if (!mounted) return;
@@ -198,6 +198,14 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
     return m != null ? m.group(1)! : 'Could not send your report.';
   }
+
+  String _successMessage(IssueStatus status) => switch (status) {
+        IssueStatus.observing ||
+        IssueStatus.recovering =>
+          'Thanks — we’re tracking this quietly and will step in if it still '
+              'needs help.',
+        _ => "Thanks — we're looking into it",
+      };
 
   @override
   Widget build(BuildContext context) {

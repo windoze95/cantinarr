@@ -4,55 +4,23 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/db"
 )
 
-func TestConcurrentCircuitBreakerIncrementsAreNotLost(t *testing.T) {
-	svc, _, _ := setupTestService(t)
-	const workers = 24
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			svc.bumpAutoGiveupStreak()
-		}()
-	}
-	wg.Wait()
-	if got := svc.readAutoGiveupStreak(); got != workers {
-		t.Fatalf("concurrent streak = %d, want %d", got, workers)
-	}
-}
-
-// enableAutoDispatch turns on both the master switch and the auto-dispatch
-// sub-toggle with a known circuit-breaker threshold, returning the saved value.
 func enableAutoDispatch(t *testing.T, svc *Service, breakerGiveups int) {
 	t.Helper()
-	s := Defaults()
-	s.Enabled = true
-	s.AutoDispatch = true
-	s.CircuitBreakerGiveups = breakerGiveups
-	if _, err := svc.SetSettings(s); err != nil {
+	settings := Defaults()
+	settings.Enabled = true
+	settings.AutoDispatch = true
+	settings.CircuitBreakerGiveups = breakerGiveups
+	if _, err := svc.SetSettings(settings); err != nil {
 		t.Fatalf("enable auto-dispatch: %v", err)
 	}
 }
 
-// countOpenAutoIssues returns how many open (closed_at IS NULL) auto-sourced
-// issues exist — the invariant the dedupe must hold to one per stuck download.
-func countOpenAutoIssues(t *testing.T, svc *Service) int {
-	t.Helper()
-	var n int
-	if err := svc.db.QueryRow("SELECT COUNT(*) FROM issues WHERE source = ? AND closed_at IS NULL", SourceAuto).Scan(&n); err != nil {
-		t.Fatalf("count open auto issues: %v", err)
-	}
-	return n
-}
-
-// drainJobs counts how many jobs are currently queued (non-blocking), draining
-// the channel. Used to assert the Runner was enqueued exactly once for a new
-// auto issue and never for a duplicate.
 func drainJobs(svc *Service) int {
 	n := 0
 	for {
@@ -65,188 +33,215 @@ func drainJobs(svc *Service) int {
 	}
 }
 
-func stalledDiagnosis() arr.Diagnosis {
-	return arr.Diagnose(arr.QueueSignal{
-		TrackedDownloadStatus: "error",
-		ErrorMessage:          "The download is stalled with no connections",
+func observedProblem(downloadID string, queueID int, sizeLeft float64) arr.QueueObservation {
+	signal := arr.QueueSignal{
+		TrackedDownloadStatus: "error", TrackedDownloadState: "importPending",
+		ErrorMessage: "The download is stalled with no connections", Size: 100, SizeLeft: sizeLeft,
+	}
+	return arr.QueueObservation{
+		DownloadID: downloadID,
+		Media:      arr.QueueMediaContext{QueueID: queueID, Title: "Example", TmdbID: 42},
+		Signal:     signal, Diagnosis: arr.Diagnose(signal),
+	}
+}
+
+func TestObservationStartsSilentAndPromotesExactlyOnce(t *testing.T) {
+	svc, notifier, _ := setupObservationService(t, false)
+	const instanceID = "radarr-observe"
+	enableAutoDispatch(t, svc, 5)
+	settings := svc.Settings()
+	settings.ObservationMinMinutes = 10
+	settings.ObservationQuietMinutes = 5
+	if _, err := svc.SetSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	item := observedProblem("download-a", 7, 100)
+	if err := svc.observeQueueSnapshot("radarr", instanceID, []arr.QueueObservation{item}, base); err != nil {
+		t.Fatal(err)
+	}
+	issues, _ := svc.ListIssues("")
+	if len(issues) != 1 || issues[0].Status != IssueObserving || !issues[0].Read {
+		t.Fatalf("initial issue = %+v, want silent observing/read", issues)
+	}
+	if count, _ := svc.OpenIssueCount(); count != 0 {
+		t.Fatalf("attention count = %d, want 0", count)
+	}
+	if len(notifier.adminEvents) != 0 || drainJobs(svc) != 0 {
+		t.Fatalf("silent observation emitted events/jobs: %v", notifier.adminEvents)
+	}
+	if err := svc.observeQueueSnapshot("radarr", instanceID, []arr.QueueObservation{item}, base.Add(11*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	issue, _ := svc.GetIssue(issues[0].ID)
+	if issue.Status != IssueOpen || issue.Read {
+		t.Fatalf("promoted issue = %+v", issue)
+	}
+	if count, _ := svc.OpenIssueCount(); count != 1 {
+		t.Fatalf("promoted attention count = %d, want 1", count)
+	}
+	if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_created" || drainJobs(svc) != 1 {
+		t.Fatalf("promotion events/jobs = %v", notifier.adminEvents)
+	}
+	if err := svc.observeQueueSnapshot("radarr", instanceID, []arr.QueueObservation{item}, base.Add(12*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.adminEvents) != 1 || drainJobs(svc) != 0 {
+		t.Fatalf("repeat poll re-promoted: events=%v", notifier.adminEvents)
+	}
+}
+
+func TestReplacementStaysOneSilentRecoveringIncident(t *testing.T) {
+	svc, notifier, _ := setupTestService(t)
+	enableAutoDispatch(t, svc, 5)
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	problem := observedProblem("old", 7, 100)
+	if err := svc.observeQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{problem}, base); err != nil {
+		t.Fatal(err)
+	}
+	replacement := problem
+	replacement.DownloadID = "replacement"
+	replacement.Media.QueueID = 8
+	replacement.Signal = arr.QueueSignal{Status: "downloading", TrackedDownloadStatus: "ok", Size: 100, SizeLeft: 80}
+	replacement.Diagnosis = arr.Diagnose(replacement.Signal)
+	if err := svc.observeQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{replacement}, base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	issues, _ := svc.ListIssues("")
+	if len(issues) != 1 || issues[0].Status != IssueRecovering || issues[0].DownloadID != "replacement" {
+		t.Fatalf("replacement incident = %+v", issues)
+	}
+	if len(notifier.adminEvents) != 0 || drainJobs(svc) != 0 {
+		t.Fatalf("recovery emitted attention: %v", notifier.adminEvents)
+	}
+}
+
+func TestDispatcherCoalescesToNewestCompleteSnapshotPerInstance(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	dispatcher := NewAutoDispatcher(svc)
+	old := observedProblem("old", 1, 100)
+	newer := old
+	newer.DownloadID = "replacement"
+	newer.Signal = arr.QueueSignal{Status: "downloading", TrackedDownloadStatus: "ok", Size: 100, SizeLeft: 75}
+	newer.Diagnosis = arr.Diagnose(newer.Signal)
+	dispatcher.ObserveQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{old})
+	dispatcher.ObserveQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{newer})
+	dispatcher.snapshotMu.Lock()
+	defer dispatcher.snapshotMu.Unlock()
+	if len(dispatcher.pendingSnapshots) != 1 {
+		t.Fatalf("pending snapshots=%d, want one latest value", len(dispatcher.pendingSnapshots))
+	}
+	pending := dispatcher.pendingSnapshots["radarr\x00"+testRadarrInstanceID]
+	if len(pending) != 1 {
+		t.Fatalf("pending event sequence=%d, want one newest success", len(pending))
+	}
+	got := pending[0]
+	if len(got.items) != 1 || got.items[0].DownloadID != "replacement" {
+		t.Fatalf("coalesced snapshot=%+v, want newest recovery evidence", got)
+	}
+}
+
+func TestDispatcherPreservesSuccessResetBeforeLatestFailure(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	dispatcher := NewAutoDispatcher(svc)
+	now := time.Now().UTC()
+	dispatcher.enqueueSnapshotJob(queueSnapshotJob{serviceType: "radarr", instanceID: testRadarrInstanceID, failure: context.DeadlineExceeded, observedAt: now})
+	dispatcher.enqueueSnapshotJob(queueSnapshotJob{serviceType: "radarr", instanceID: testRadarrInstanceID, items: []arr.QueueObservation{}, observedAt: now.Add(time.Second)})
+	dispatcher.enqueueSnapshotJob(queueSnapshotJob{serviceType: "radarr", instanceID: testRadarrInstanceID, failure: context.DeadlineExceeded, observedAt: now.Add(2 * time.Second)})
+	dispatcher.snapshotMu.Lock()
+	defer dispatcher.snapshotMu.Unlock()
+	pending := dispatcher.pendingSnapshots["radarr\x00"+testRadarrInstanceID]
+	if len(pending) != 2 || pending[0].failure != nil || pending[1].failure == nil {
+		t.Fatalf("pending sequence=%+v, want success reset then latest failure", pending)
+	}
+}
+
+func TestDispatcherCoalescesByObservationTimeNotArrivalOrder(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	dispatcher := NewAutoDispatcher(svc)
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	newer := observedProblem("newer", 1, 100)
+	older := observedProblem("older", 1, 100)
+
+	// Simulate a newer success/failure already queued, followed by an older slow
+	// success and failure arriving late. The older arrivals must not replace or
+	// discard either newer event before the DB watermark sees them.
+	dispatcher.enqueueSnapshotJob(queueSnapshotJob{
+		serviceType: "radarr", instanceID: testRadarrInstanceID,
+		items: []arr.QueueObservation{newer}, observedAt: base.Add(2 * time.Second),
 	})
+	dispatcher.enqueueSnapshotJob(queueSnapshotJob{
+		serviceType: "radarr", instanceID: testRadarrInstanceID,
+		failure: context.DeadlineExceeded, observedAt: base.Add(3 * time.Second),
+	})
+	dispatcher.enqueueSnapshotJob(queueSnapshotJob{
+		serviceType: "radarr", instanceID: testRadarrInstanceID,
+		items: []arr.QueueObservation{older}, observedAt: base.Add(time.Second),
+	})
+	dispatcher.enqueueSnapshotJob(queueSnapshotJob{
+		serviceType: "radarr", instanceID: testRadarrInstanceID,
+		failure: context.Canceled, observedAt: base,
+	})
+
+	dispatcher.snapshotMu.Lock()
+	defer dispatcher.snapshotMu.Unlock()
+	pending := dispatcher.pendingSnapshots["radarr\x00"+testRadarrInstanceID]
+	if len(pending) != 2 || pending[0].failure != nil || pending[1].failure == nil {
+		t.Fatalf("pending sequence=%+v, want newer success then newer failure", pending)
+	}
+	if len(pending[0].items) != 1 || pending[0].items[0].DownloadID != "newer" ||
+		!pending[0].observedAt.Equal(base.Add(2*time.Second)) ||
+		!pending[1].observedAt.Equal(base.Add(3*time.Second)) {
+		t.Fatalf("out-of-order arrivals regressed pending evidence: %+v", pending)
+	}
 }
 
-// TestAutoDispatcherOpensExactlyOneIssueAcrossPolls is the core dedupe guarantee:
-// the hub may call OpenAutoIssue once per confirming poll, but the DB partial-
-// unique index collapses every repeat for the same stuck download into a SINGLE
-// open issue, and the Runner is enqueued only for the first (genuinely new) one.
-func TestAutoDispatcherOpensExactlyOneIssueAcrossPolls(t *testing.T) {
+func TestObservationWatermarkRejectsOlderSuccessAndFailure(t *testing.T) {
 	svc, _, _ := setupTestService(t)
-	enableAutoDispatch(t, svc, 5)
-	ad := NewAutoDispatcher(svc)
-
-	d := stalledDiagnosis()
-	// Simulate many confirming polls of the SAME stuck download.
-	for i := 0; i < 6; i++ {
-		ad.OpenAutoIssue("radarr", "inst1", "stuckHash", arr.QueueMediaContext{}, d)
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	newer := base.Add(2 * time.Minute)
+	if err := svc.observeQueueSnapshot("radarr", testRadarrInstanceID, nil, newer); err != nil {
+		t.Fatal(err)
+	}
+	svc.noteObservationFailure("radarr", testRadarrInstanceID, context.DeadlineExceeded, base.Add(time.Minute))
+	var failures int
+	_ = svc.db.QueryRow("SELECT COUNT(*) FROM remediation_observation_failures WHERE instance_id=?", testRadarrInstanceID).Scan(&failures)
+	if failures != 0 {
+		t.Fatalf("older failure overwrote newer success")
 	}
 
-	if got := countOpenAutoIssues(t, svc); got != 1 {
-		t.Fatalf("open auto issues after repeated polls = %d, want exactly 1", got)
+	latest := base.Add(3 * time.Minute)
+	svc.noteObservationFailure("radarr", testRadarrInstanceID, context.DeadlineExceeded, latest)
+	if err := svc.observeQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{observedProblem("old", 1, 100)}, newer.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
 	}
-	// Re-detecting the same ongoing problem each poll is not a new occurrence, so
-	// the counter stays at 1 (it used to climb per poll, which was just a confusing
-	// time-open counter).
-	var occ int
-	if err := svc.db.QueryRow("SELECT occurrences FROM issues WHERE source = ? AND closed_at IS NULL", SourceAuto).Scan(&occ); err != nil {
-		t.Fatalf("read occurrences: %v", err)
+	var failedAt time.Time
+	if err := svc.db.QueryRow("SELECT last_failed_at FROM remediation_observation_failures WHERE instance_id=?", testRadarrInstanceID).Scan(&failedAt); err != nil {
+		t.Fatal(err)
 	}
-	if occ != 1 {
-		t.Fatalf("occurrences = %d, want 1 (re-polls don't bump)", occ)
-	}
-	// The Runner was enqueued exactly once (only the create path enqueues).
-	if jobs := drainJobs(svc); jobs != 1 {
-		t.Fatalf("enqueued jobs = %d, want exactly 1 (only the new issue)", jobs)
+	if !failedAt.Equal(latest) {
+		t.Fatalf("older success cleared newer failure: failed_at=%s want=%s", failedAt, latest)
 	}
 }
 
-// TestOpenAutoIssueStoresMediaTypeNotServiceType pins the wire contract: the
-// poller reports the *service* type, but the stored media_type must be the
-// client-facing 'movie'|'tv' value (a raw "sonarr" made clients render the
-// fallback "Movie" label on TV issues).
-func TestOpenAutoIssueStoresMediaTypeNotServiceType(t *testing.T) {
+func TestConcurrentCircuitBreakerIncrementsAreNotLost(t *testing.T) {
 	svc, _, _ := setupTestService(t)
-	enableAutoDispatch(t, svc, 5)
-	ad := NewAutoDispatcher(svc)
-
-	d := stalledDiagnosis()
-	ad.OpenAutoIssue("sonarr", "inst1", "tvHash", arr.QueueMediaContext{}, d)
-	ad.OpenAutoIssue("radarr", "inst1", "movieHash", arr.QueueMediaContext{}, d)
-	drainJobs(svc)
-
-	for downloadID, want := range map[string]string{"tvHash": "tv", "movieHash": "movie"} {
-		var got string
-		if err := svc.db.QueryRow(
-			"SELECT media_type FROM issues WHERE source = ? AND download_id = ?",
-			SourceAuto, downloadID,
-		).Scan(&got); err != nil {
-			t.Fatalf("read media_type for %s: %v", downloadID, err)
-		}
-		if got != want {
-			t.Fatalf("media_type for %s = %q, want %q", downloadID, got, want)
-		}
+	const workers = 24
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); svc.bumpAutoGiveupStreak() }()
+	}
+	wg.Wait()
+	if got := svc.readAutoGiveupStreak(); got != workers {
+		t.Fatalf("concurrent streak = %d, want %d", got, workers)
 	}
 }
 
-func TestOpenAutoIssuePreservesMediaContext(t *testing.T) {
-	svc, _, _ := setupTestService(t)
-	enableAutoDispatch(t, svc, 5)
-	ad := NewAutoDispatcher(svc)
-	media := arr.QueueMediaContext{
-		QueueID: 77, Title: "Example Series", TmdbID: 1920, TvdbID: 70533,
-		SeasonNumber: 1, EpisodeNumber: 1,
-	}
-	ad.OpenAutoIssue("sonarr", "sonarr-a", "download-a", media, stalledDiagnosis())
-	var title string
-	var tmdbID, tvdbID, season, episode, queueID int
-	if err := svc.db.QueryRow(
-		`SELECT title, tmdb_id, tvdb_id, season_number, episode_number, arr_queue_id
-		 FROM issues WHERE download_id = 'download-a'`,
-	).Scan(&title, &tmdbID, &tvdbID, &season, &episode, &queueID); err != nil {
-		t.Fatalf("load auto issue: %v", err)
-	}
-	if title != "Example Series" || tmdbID != 1920 || tvdbID != 70533 || season != 1 || episode != 1 || queueID != 77 {
-		t.Fatalf("stored context = %q/%d/%d S%dE%d queue=%d", title, tmdbID, tvdbID, season, episode, queueID)
-	}
-}
-
-func TestReconcileAutoIssuesClosesAcrossRestartSnapshot(t *testing.T) {
-	svc, _, _ := setupTestService(t)
-	enableAutoDispatch(t, svc, 5)
-	ad := NewAutoDispatcher(svc)
-	ad.OpenAutoIssue("sonarr", "sonarr-a", "gone", arr.QueueMediaContext{}, stalledDiagnosis())
-	ad.ReconcileAutoIssues("sonarr", "sonarr-a", nil)
-	issue, err := svc.ListIssues(IssueResolved)
-	if err != nil || len(issue) != 1 {
-		t.Fatalf("resolved issues = %d, err=%v", len(issue), err)
-	}
-	if issue[0].ResolutionKind != ResolutionArrStateCleared {
-		t.Fatalf("resolution_kind = %q, want %q", issue[0].ResolutionKind, ResolutionArrStateCleared)
-	}
-}
-
-// TestCloseAutoIssueResolvesRecoveredDownload proves that when the poller stops
-// flagging a download, the matching open auto issue is resolved and closed.
-func TestCloseAutoIssueResolvesRecoveredDownload(t *testing.T) {
-	svc, _, _ := setupTestService(t)
-	enableAutoDispatch(t, svc, 5)
-	ad := NewAutoDispatcher(svc)
-
-	d := stalledDiagnosis()
-	ad.OpenAutoIssue("radarr", "inst1", "stuckHash", arr.QueueMediaContext{}, d)
-	ad.OpenAutoIssue("radarr", "inst1", "stuckHash", arr.QueueMediaContext{}, d) // dedupe, still one open
-	drainJobs(svc)
-	if got := countOpenAutoIssues(t, svc); got != 1 {
-		t.Fatalf("open auto issues = %d, want 1", got)
-	}
-
-	// The download recovered / left the queue → close.
-	ad.CloseAutoIssue("radarr", "inst1", "stuckHash")
-	if got := countOpenAutoIssues(t, svc); got != 0 {
-		t.Fatalf("open auto issues after recovery = %d, want 0", got)
-	}
-	var n int
-	if err := svc.db.QueryRow(
-		"SELECT COUNT(*) FROM issues WHERE source = ? AND status = ? AND closed_at IS NOT NULL",
-		SourceAuto, IssueResolved,
-	).Scan(&n); err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	if n != 1 {
-		t.Fatalf("resolved+closed auto issues = %d, want 1", n)
-	}
-
-	// A second close for a download with no open issue is a harmless no-op.
-	ad.CloseAutoIssue("radarr", "inst1", "stuckHash")
-}
-
-// TestAutoDispatcherGatedOff proves the opener is a no-op unless BOTH the master
-// switch and the auto-dispatch sub-toggle are on — checked at call time so a live
-// toggle takes effect without a restart.
-func TestAutoDispatcherGatedOff(t *testing.T) {
-	svc, _, _ := setupTestService(t)
-	ad := NewAutoDispatcher(svc)
-	d := stalledDiagnosis()
-
-	// Default settings: Enabled=false, AutoDispatch=false -> no-op.
-	ad.OpenAutoIssue("radarr", "inst1", "h1", arr.QueueMediaContext{}, d)
-	if got := countOpenAutoIssues(t, svc); got != 0 {
-		t.Fatalf("with feature off, opened %d issue(s), want 0", got)
-	}
-
-	// Enabled but AutoDispatch off -> still no-op (the sub-toggle independently
-	// gates the poll path).
-	s := Defaults()
-	s.Enabled = true
-	s.AutoDispatch = false
-	if _, err := svc.SetSettings(s); err != nil {
-		t.Fatalf("set settings: %v", err)
-	}
-	ad.OpenAutoIssue("radarr", "inst1", "h1", arr.QueueMediaContext{}, d)
-	if got := countOpenAutoIssues(t, svc); got != 0 {
-		t.Fatalf("with AutoDispatch off, opened %d issue(s), want 0", got)
-	}
-
-	// Both on -> opens.
-	enableAutoDispatch(t, svc, 5)
-	ad.OpenAutoIssue("radarr", "inst1", "h1", arr.QueueMediaContext{}, d)
-	if got := countOpenAutoIssues(t, svc); got != 1 {
-		t.Fatalf("with both on, opened %d issue(s), want 1", got)
-	}
-}
-
-// seedAutoIssue inserts an open auto-sourced issue and returns its id, so the
-// circuit-breaker tests can drive terminal outcomes through ConcludeIssue.
 func seedAutoIssue(t *testing.T, svc *Service, downloadID string) int64 {
 	t.Helper()
 	res, err := svc.db.Exec(
-		"INSERT INTO issues (source, status, media_type, tmdb_id, title, instance_id, download_id, dedupe_key) VALUES (?,?,?,?,?,?,?,?)",
+		"INSERT INTO issues (source,status,media_type,tmdb_id,title,instance_id,download_id,dedupe_key) VALUES (?,?,?,?,?,?,?,?)",
 		SourceAuto, IssueOpen, "movie", 0, "Stuck", "inst1", downloadID, downloadID,
 	)
 	if err != nil {
@@ -256,151 +251,68 @@ func seedAutoIssue(t *testing.T, svc *Service, downloadID string) int64 {
 	return id
 }
 
-// TestCircuitBreakerDisablesAutoDispatchAfterNGiveups proves that N consecutive
-// auto-dispatch give-ups (auto issues concluded non-resolved) flip AutoDispatch
-// OFF (persisted) and fire the admin notification, while leaving the master
-// Enabled switch untouched. User-reported give-ups never feed the breaker.
 func TestCircuitBreakerDisablesAutoDispatchAfterNGiveups(t *testing.T) {
-	svc, notif, reporterID := setupTestService(t)
-	const threshold = 3
-	enableAutoDispatch(t, svc, threshold)
+	svc, notifier, reporterID := setupTestService(t)
+	enableAutoDispatch(t, svc, 3)
 	ctx := context.Background()
-
-	// A user-reported give-up must NOT count toward the breaker.
-	userIssue, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
-		InstanceID: testRadarrInstanceID, MediaType: "movie", TmdbID: 99, Category: CategoryOther,
-	})
+	userIssue, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "movie", TmdbID: 99, Category: CategoryOther})
 	if err != nil {
-		t.Fatalf("create user issue: %v", err)
+		t.Fatal(err)
 	}
 	if err := svc.ConcludeIssue(ctx, userIssue.IssueID, IssueWontFix, "user give-up"); err != nil {
-		t.Fatalf("conclude user issue: %v", err)
+		t.Fatal(err)
 	}
 	if svc.readAutoGiveupStreak() != 0 {
-		t.Fatalf("user give-up bumped the streak to %d, want 0", svc.readAutoGiveupStreak())
+		t.Fatal("user issue fed auto breaker")
 	}
-
-	// threshold-1 auto give-ups: AutoDispatch stays ON.
-	for i := 0; i < threshold-1; i++ {
-		id := seedAutoIssue(t, svc, "hash"+string(rune('a'+i)))
-		if err := svc.ConcludeIssue(ctx, id, IssueWontFix, "agent gave up"); err != nil {
-			t.Fatalf("conclude auto issue: %v", err)
+	for i := 0; i < 3; i++ {
+		if err := svc.ConcludeIssue(ctx, seedAutoIssue(t, svc, string(rune('a'+i))), IssueWontFix, "gave up"); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if !svc.Settings().AutoDispatch {
-		t.Fatalf("AutoDispatch flipped off too early (after %d give-ups, threshold %d)", threshold-1, threshold)
+	if svc.Settings().AutoDispatch || !svc.Settings().Enabled || svc.readAutoGiveupStreak() != 0 {
+		t.Fatalf("breaker state = %+v streak=%d", svc.Settings(), svc.readAutoGiveupStreak())
 	}
-	if svc.readAutoGiveupStreak() != threshold-1 {
-		t.Fatalf("streak = %d, want %d", svc.readAutoGiveupStreak(), threshold-1)
-	}
-
-	// The threshold-th auto give-up trips the breaker.
-	tripID := seedAutoIssue(t, svc, "tripHash")
-	if err := svc.ConcludeIssue(ctx, tripID, IssueWontFix, "agent gave up"); err != nil {
-		t.Fatalf("conclude tripping issue: %v", err)
-	}
-
-	final := svc.Settings()
-	if final.AutoDispatch {
-		t.Fatalf("AutoDispatch still on after %d consecutive give-ups, want off", threshold)
-	}
-	if !final.Enabled {
-		t.Fatalf("circuit breaker disabled the master Enabled switch, want only AutoDispatch off")
-	}
-	// The streak reset to 0 after tripping (a clean slate for a re-enable).
-	if svc.readAutoGiveupStreak() != 0 {
-		t.Fatalf("streak after trip = %d, want 0 (reset)", svc.readAutoGiveupStreak())
-	}
-	// An admin notification fired for the trip.
 	found := false
-	for _, e := range notif.adminEvents {
-		if e == "remediation_autodispatch_disabled" {
+	for _, event := range notifier.adminEvents {
+		if event == "remediation_autodispatch_disabled" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("admin events = %v, want a remediation_autodispatch_disabled event", notif.adminEvents)
+		t.Fatalf("events=%v", notifier.adminEvents)
 	}
 }
 
-// TestCircuitBreakerResetOnResolve proves a successful auto resolution clears the
-// give-up streak, so an intermittent problem that the agent sometimes fixes never
-// trips the breaker.
-func TestCircuitBreakerResetOnResolve(t *testing.T) {
-	svc, _, _ := setupTestService(t)
-	const threshold = 3
-	enableAutoDispatch(t, svc, threshold)
-	ctx := context.Background()
-
-	// Two give-ups, then a resolve, then two more give-ups: the resolve resets the
-	// streak so the breaker (threshold 3) never trips across this sequence.
-	g1 := seedAutoIssue(t, svc, "g1")
-	g2 := seedAutoIssue(t, svc, "g2")
-	if err := svc.ConcludeIssue(ctx, g1, IssueWontFix, "gave up"); err != nil {
-		t.Fatalf("conclude g1: %v", err)
-	}
-	if err := svc.ConcludeIssue(ctx, g2, IssueWontFix, "gave up"); err != nil {
-		t.Fatalf("conclude g2: %v", err)
-	}
-	if svc.readAutoGiveupStreak() != 2 {
-		t.Fatalf("streak before resolve = %d, want 2", svc.readAutoGiveupStreak())
-	}
-
-	r1 := seedAutoIssue(t, svc, "r1")
-	if err := svc.ConcludeIssue(ctx, r1, IssueResolved, "fixed"); err != nil {
-		t.Fatalf("conclude r1 resolved: %v", err)
-	}
-	if svc.readAutoGiveupStreak() != 0 {
-		t.Fatalf("streak after resolve = %d, want 0", svc.readAutoGiveupStreak())
-	}
-
-	g3 := seedAutoIssue(t, svc, "g3")
-	g4 := seedAutoIssue(t, svc, "g4")
-	if err := svc.ConcludeIssue(ctx, g3, IssueWontFix, "gave up"); err != nil {
-		t.Fatalf("conclude g3: %v", err)
-	}
-	if err := svc.ConcludeIssue(ctx, g4, IssueWontFix, "gave up"); err != nil {
-		t.Fatalf("conclude g4: %v", err)
-	}
-	if !svc.Settings().AutoDispatch {
-		t.Fatalf("AutoDispatch tripped despite a reset (streak should be 2, threshold 3)")
-	}
-	if svc.readAutoGiveupStreak() != 2 {
-		t.Fatalf("final streak = %d, want 2", svc.readAutoGiveupStreak())
-	}
-}
-
-// TestConcludeIdempotentDoesNotDoubleCountBreaker proves a double-conclude of the
-// same auto issue bumps the give-up streak only once (the second conclude is a
-// no-op transition).
-func TestConcludeIdempotentDoesNotDoubleCountBreaker(t *testing.T) {
+func TestCircuitBreakerResetAndIdempotence(t *testing.T) {
 	svc, _, _ := setupTestService(t)
 	enableAutoDispatch(t, svc, 5)
 	ctx := context.Background()
-
-	id := seedAutoIssue(t, svc, "once")
-	if err := svc.ConcludeIssue(ctx, id, IssueWontFix, "gave up"); err != nil {
-		t.Fatalf("first conclude: %v", err)
+	first := seedAutoIssue(t, svc, "first")
+	if err := svc.ConcludeIssue(ctx, first, IssueWontFix, "gave up"); err != nil {
+		t.Fatal(err)
 	}
-	if err := svc.ConcludeIssue(ctx, id, IssueWontFix, "gave up again"); err != nil {
-		t.Fatalf("second conclude (idempotent): %v", err)
+	if err := svc.ConcludeIssue(ctx, first, IssueWontFix, "again"); err != nil {
+		t.Fatal(err)
 	}
 	if svc.readAutoGiveupStreak() != 1 {
-		t.Fatalf("streak after double-conclude = %d, want 1 (no double count)", svc.readAutoGiveupStreak())
+		t.Fatal("double conclude double-counted")
+	}
+	if err := svc.ConcludeIssue(ctx, seedAutoIssue(t, svc, "fixed"), IssueResolved, "fixed"); err != nil {
+		t.Fatal(err)
+	}
+	if svc.readAutoGiveupStreak() != 0 {
+		t.Fatal("resolution did not reset breaker")
 	}
 }
 
-// Ensure the in-memory DB schema actually has the columns the seed uses (guards
-// against an initSQL drift breaking these tests silently).
 func TestAutoIssueSchemaSanity(t *testing.T) {
 	database, err := db.Open(":memory:")
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
-	if _, err := database.Exec(
-		"INSERT INTO issues (source, status, media_type, tmdb_id, title, instance_id, download_id, dedupe_key) VALUES ('auto','open','movie',0,'x','i','d','k')",
-	); err != nil {
-		t.Fatalf("insert auto issue with dedupe_key: %v", err)
+	defer database.Close()
+	if _, err := database.Exec("INSERT INTO issues (source,status,media_type,tmdb_id,title,instance_id,download_id,dedupe_key) VALUES ('auto','observing','movie',0,'x','i','d','k')"); err != nil {
+		t.Fatal(err)
 	}
 }

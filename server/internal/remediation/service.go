@@ -2,12 +2,12 @@ package remediation
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -28,10 +28,9 @@ type Notifier interface {
 	NotifyAdmins(eventType string, data map[string]interface{})
 }
 
-// Service records, threads, lists, and dismisses issues, and owns the global
-// remediation settings. It mirrors request.Service (db + registry + bridge +
-// notifier). No AI agent is wired in Wave 1: OpenAutoIssue exists and dedupes
-// correctly, but nothing calls it until auto-dispatch lands.
+// Service owns issue reporting, durable arr observation, agent work, approvals,
+// and the global remediation settings. It mirrors request.Service's dependency
+// shape (db + registry + bridge + notifier).
 type Service struct {
 	db       *sql.DB
 	registry *instance.Registry
@@ -43,6 +42,17 @@ type Service struct {
 	// interface so a test can inject a fake seam (no network), satisfied in
 	// production by *Executor.
 	executor actionExecutor
+
+	// recoveryProbe is a deterministic test seam for the two synchronous
+	// approval/runner safety reads. Production leaves it nil and uses live arr
+	// clients through probeArrRecovery.
+	recoveryProbe func(*Issue) (arrRecoveryProbe, error)
+
+	// Serializes durable observation lifecycle reconciliation with synchronous
+	// execution preflights. The DB watermark supplies restart durability; this
+	// mutex prevents an older already-claimed in-process poll from finishing
+	// after a newer one.
+	observationMu sync.Mutex
 
 	// jobs is the buffered queue of investigation/resume jobs. The Runner drains
 	// it via StartWorkers; Enqueue/EnqueueResume push onto it. Buffered so the
@@ -83,12 +93,18 @@ func validCategory(c string) bool {
 // CreateUserIssue records a user-reported problem. It validates the media type
 // and category, dedupes a duplicate open report from the same reporter+scope+
 // category (bumping occurrences rather than inserting a second row), inserts
-// otherwise, notifies admins, and returns the issue id + status.
+// otherwise in a silent tracking state, and returns the issue id + status.
 //
 // All free text (Reason, Title) is UNTRUSTED and stored verbatim. When tmdb_id
 // is 0 but tvdb_id is set, a best-effort reverse lookup of the cached
 // tmdb<->tvdb mapping is attempted; otherwise the ids are stored as given.
 func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*CreateIssueResponse, error) {
+	// Serialize report creation with complete-snapshot reconciliation. Without
+	// this boundary, an auto observation can be created from a stale in-memory
+	// record set while the same exact user report is committing.
+	s.observationMu.Lock()
+	defer s.observationMu.Unlock()
+
 	instanceID := strings.TrimSpace(req.InstanceID)
 	if instanceID == "" {
 		return nil, fmt.Errorf("instance_id is required")
@@ -114,15 +130,23 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	if req.TmdbID < 0 || req.TvdbID < 0 || req.SeasonNumber < 0 || req.EpisodeNumber < 0 {
 		return nil, fmt.Errorf("media ids and episode scope must not be negative")
 	}
-	if req.MediaType == "tv" && req.EpisodeNumber > 0 && req.SeasonNumber == 0 {
-		return nil, fmt.Errorf("episode_number requires a positive season_number")
+	if req.MediaType == "movie" && req.TmdbID == 0 {
+		return nil, fmt.Errorf("tmdb_id is required for a movie issue")
 	}
+	if req.MediaType == "tv" && req.TmdbID == 0 && req.TvdbID == 0 {
+		return nil, fmt.Errorf("tmdb_id or tvdb_id is required for a tv issue")
+	}
+	// episode_number > 0 disambiguates an exact S00 special from the
+	// season_number=0 whole-series sentinel.
 	if len(req.Title) > maxIssueTitleBytes || len(req.Reason) > maxIssueDetailBytes {
 		return nil, fmt.Errorf("issue title or detail is too long")
 	}
 
 	tmdbID := req.TmdbID
 	tvdbID := req.TvdbID
+	if req.MediaType == "movie" {
+		tvdbID = 0 // TVDB is not a canonical movie identity or dedupe key.
+	}
 	// Resolve a missing tmdb_id from a known tvdb_id via the cached mapping the
 	// ID bridge maintains (request flows populate tmdb_tvdb_cache). There is no
 	// live reverse resolver, so this is best-effort: on a miss the ids are stored
@@ -133,6 +157,9 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 			tmdbID = cached
 		}
 	}
+	if tvdbID == 0 && tmdbID != 0 && req.MediaType == "tv" {
+		_ = s.db.QueryRow("SELECT tvdb_id FROM tmdb_tvdb_cache WHERE tmdb_id = ?", tmdbID).Scan(&tvdbID)
+	}
 
 	season := req.SeasonNumber
 	episode := req.EpisodeNumber
@@ -142,21 +169,119 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 		episode = 0
 	}
 
+	// Every explicit report begins quietly. A recent successful snapshot can
+	// classify it immediately; otherwise the background observer performs the
+	// first live read before any admin notification or agent work.
+	issueStatus := IssueObserving
+	issueRead := 1
+	var observedGroup observationGroup
+	observedGroup, observed := s.recentQueueObservationForUser(instanceID, req.MediaType, arr.QueueMediaContext{
+		Title: req.Title, TmdbID: tmdbID, TvdbID: tvdbID,
+		SeasonNumber: season, EpisodeNumber: episode,
+	}, time.Now().UTC())
+	if observed {
+		if groupIsRecovery(observedGroup, "") {
+			issueStatus = IssueRecovering
+		}
+	}
+
 	// Dedupe a duplicate open report: the same reporter re-reporting the same
 	// scope (tmdb + media_type + season + episode) with the same category bumps
 	// occurrences instead of opening a second issue. The check + insert is one
 	// statement under the single-writer DB, mirroring createPending.
-	res, err := s.db.Exec(
+	now := time.Now().UTC()
+	selected := selectObservation(observedGroup, "")
+	signature := ""
+	state := observationStateObserving
+	var problemSince any
+	var lastSeen any
+	if observed {
+		signature = observationSignature(observedGroup.items)
+		problemSince = now
+		lastSeen = now
+	}
+	if issueStatus == IssueRecovering {
+		state = observationStateRecovering
+		problemSince = nil
+	}
+	scopeKey := userIncidentScopeKey(instanceID, req.MediaType, arr.QueueMediaContext{
+		TmdbID: tmdbID, TvdbID: tvdbID, SeasonNumber: season, EpisodeNumber: episode,
+	})
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin issue: %w", err)
+	}
+	defer tx.Rollback()
+
+	// If auto-detection won the serialization race first but has not yet become
+	// visible/actionable, adopt that exact incident as the user's report instead
+	// of creating two independent observers and eventually two alerts/agents.
+	// The user's subjective category means the adopted incident is thereafter a
+	// user issue and is never auto-closed merely because a replacement imported.
+	var adoptedID int64
+	var adoptedStatus string
+	adoptErr := tx.QueryRow(
+		`SELECT id,status FROM issues
+		 WHERE source=? AND instance_id=? AND media_type=? AND closed_at IS NULL
+		   AND status IN (?,?)
+		   AND ((? > 0 AND tmdb_id=?) OR (? > 0 AND tvdb_id=?))
+		   AND season_number=? AND episode_number=?
+		 ORDER BY id LIMIT 1`,
+		SourceAuto, instanceID, req.MediaType, IssueObserving, IssueRecovering,
+		tmdbID, tmdbID, tvdbID, tvdbID, season, episode,
+	).Scan(&adoptedID, &adoptedStatus)
+	if adoptErr != nil && adoptErr != sql.ErrNoRows {
+		return nil, fmt.Errorf("find matching automatic observation: %w", adoptErr)
+	}
+	if adoptErr == nil {
+		res, err := tx.Exec(
+			`UPDATE issues SET source=?,category=?,reporter_id=?,
+			 tmdb_id=CASE WHEN ?>0 THEN ? ELSE tmdb_id END,
+			 tvdb_id=CASE WHEN ?>0 THEN ? ELSE tvdb_id END,
+			 title=CASE WHEN ?!='' THEN ? ELSE title END,
+			 detail=?,dedupe_key=NULL,read=1,updated_at=?
+			 WHERE id=? AND source=? AND status IN (?,?) AND closed_at IS NULL`,
+			SourceUser, req.Category, reporterID,
+			tmdbID, tmdbID, tvdbID, tvdbID, req.Title, req.Title,
+			req.Reason, now, adoptedID, SourceAuto, IssueObserving, IssueRecovering,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("adopt automatic observation: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			if _, err := tx.Exec(
+				"UPDATE issue_observations SET scope_key=?,updated_at=? WHERE issue_id=?",
+				scopeKey, now, adoptedID,
+			); err != nil {
+				return nil, fmt.Errorf("bind adopted user observation: %w", err)
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO issue_observation_attempts(issue_id,state,note,created_at)
+				 VALUES (?,?,'automatic observation adopted by an exact user report',?)`,
+				adoptedID, state, now,
+			); err != nil {
+				return nil, fmt.Errorf("record adopted user observation: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return nil, fmt.Errorf("commit adopted user observation: %w", err)
+			}
+			return &CreateIssueResponse{IssueID: adoptedID, Status: adoptedStatus}, nil
+		}
+	}
+
+	res, err := tx.Exec(
 		`INSERT INTO issues
-			(source, status, category, reporter_id, tmdb_id, tvdb_id, media_type, title, season_number, episode_number, instance_id, detail)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			(source, status, category, reporter_id, tmdb_id, tvdb_id, media_type, title, season_number, episode_number, instance_id, detail, read)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 WHERE NOT EXISTS (
 			SELECT 1 FROM issues
-			WHERE source = ? AND reporter_id = ? AND instance_id = ? AND tmdb_id = ? AND media_type = ?
+			WHERE source = ? AND reporter_id = ? AND instance_id = ? AND media_type = ?
+			  AND ((? > 0 AND tmdb_id = ?) OR (? > 0 AND tvdb_id = ?))
 			  AND season_number = ? AND episode_number = ? AND category = ? AND closed_at IS NULL
 		 )`,
-		SourceUser, IssueOpen, req.Category, reporterID, tmdbID, sqlNullInt(tvdbID), req.MediaType, req.Title, season, episode, instanceID, req.Reason,
-		SourceUser, reporterID, instanceID, tmdbID, req.MediaType, season, episode, req.Category,
+		SourceUser, issueStatus, req.Category, reporterID, tmdbID, sqlNullInt(tvdbID), req.MediaType, req.Title, season, episode, instanceID, req.Reason, issueRead,
+		SourceUser, reporterID, instanceID, req.MediaType,
+		tmdbID, tmdbID, tvdbID, tvdbID, season, episode, req.Category,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create issue: %w", err)
@@ -164,11 +289,19 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		_ = tx.Rollback()
 		// Duplicate open report: bump occurrences + refresh updated_at on the
 		// existing open issue, and return it.
-		id, status, derr := s.bumpDuplicateUserIssue(reporterID, req, instanceID, tmdbID, season, episode)
+		id, status, derr := s.bumpDuplicateUserIssue(reporterID, req, instanceID, tmdbID, tvdbID, season, episode)
 		if derr != nil {
 			return nil, derr
+		}
+		if observed {
+			if attachedStatus, attachErr := s.attachUserObservation(id, observedGroup, time.Now().UTC()); attachErr != nil {
+				return nil, attachErr
+			} else if attachedStatus != "" {
+				status = attachedStatus
+			}
 		}
 		return &CreateIssueResponse{IssueID: id, Status: status}, nil
 	}
@@ -177,21 +310,49 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	if err != nil {
 		return nil, fmt.Errorf("create issue: %w", err)
 	}
-
-	s.notifyIssueCreated(id, req.Title)
-	// Kick off the read-only investigation for a GENUINELY NEW issue (not a
-	// duplicate that only bumped occurrences) when the feature is enabled. NO
-	// auto-dispatch and NO propose/approve happen here — just the read-only loop.
-	if s.Settings().Enabled {
-		s.Enqueue(id)
+	if _, err := tx.Exec(
+		`INSERT INTO issue_observations
+		 (issue_id,service_type,scope_key,state,signature,first_seen_at,problem_since_at,
+		  last_seen_at,last_activity_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		id, mediaServiceType(req.MediaType), scopeKey, state, signature,
+		now, problemSince, lastSeen, now, now,
+	); err != nil {
+		return nil, fmt.Errorf("start issue observation: %w", err)
 	}
-	return &CreateIssueResponse{IssueID: id, Status: IssueOpen}, nil
+	note := "user report awaiting first successful arr snapshot"
+	if observed {
+		note = "user report matched active arr queue work"
+	}
+	for _, item := range observedGroup.items {
+		if item.DownloadID == "" {
+			continue
+		}
+		if _, err := tx.Exec(
+			"INSERT OR IGNORE INTO issue_observation_downloads(issue_id,download_id,first_seen_at) VALUES (?,?,?)",
+			id, item.DownloadID, now,
+		); err != nil {
+			return nil, fmt.Errorf("record issue download identity: %w", err)
+		}
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO issue_observation_attempts
+		 (issue_id,state,signature,download_id,arr_queue_id,note,created_at)
+		 VALUES (?,?,?,?,?,?,?)`,
+		id, state, signature, selected.DownloadID, sqlNullInt(selected.Media.QueueID), note, now,
+	); err != nil {
+		return nil, fmt.Errorf("record initial issue observation: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit issue observation: %w", err)
+	}
+	return &CreateIssueResponse{IssueID: id, Status: issueStatus}, nil
 }
 
 // bumpDuplicateUserIssue increments occurrences AND appends the newly submitted
 // reason in one transaction. Keeping every report as an AuthorUser thread event
 // prevents an active agent from continuing against only the original detail.
-func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueRequest, instanceID string, tmdbID, season, episode int) (int64, string, error) {
+func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueRequest, instanceID string, tmdbID, tvdbID, season, episode int) (int64, string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, "", fmt.Errorf("begin duplicate issue: %w", err)
@@ -201,18 +362,22 @@ func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueReque
 	var status string
 	err = tx.QueryRow(
 		`SELECT id, status FROM issues
-		 WHERE source = ? AND reporter_id = ? AND instance_id = ? AND tmdb_id = ? AND media_type = ?
+		 WHERE source = ? AND reporter_id = ? AND instance_id = ? AND media_type = ?
+		   AND ((? > 0 AND tmdb_id = ?) OR (? > 0 AND tvdb_id = ?))
 		   AND season_number = ? AND episode_number = ? AND category = ? AND closed_at IS NULL
 		 ORDER BY id DESC LIMIT 1`,
-		SourceUser, reporterID, instanceID, tmdbID, req.MediaType, season, episode, req.Category,
+		SourceUser, reporterID, instanceID, req.MediaType,
+		tmdbID, tmdbID, tvdbID, tvdbID, season, episode, req.Category,
 	).Scan(&id, &status)
 	if err != nil {
 		return 0, "", fmt.Errorf("find duplicate issue: %w", err)
 	}
 	res, err := tx.Exec(
-		`UPDATE issues SET occurrences = occurrences + 1, read = 0, updated_at = CURRENT_TIMESTAMP
+		`UPDATE issues SET occurrences = occurrences + 1,
+		 read = CASE WHEN status IN (?, ?) THEN 1 ELSE 0 END,
+		 updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND closed_at IS NULL`,
-		id,
+		IssueObserving, IssueRecovering, id,
 	)
 	if err != nil {
 		return 0, "", fmt.Errorf("bump duplicate issue: %w", err)
@@ -252,151 +417,24 @@ func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueReque
 	return id, status, nil
 }
 
-// OpenAutoIssue is the poller hook for auto-detected problems (later waves; no
-// caller in Wave 1). It conditionally inserts an issue keyed by a stable
-// dedupe_key so the same stuck download opens at most one open issue across many
-// polls, mirroring createPending. On a duplicate it bumps occurrences and
-// returns created=false. A terminal (closed) issue does not block a genuinely
-// new recurrence: once closed_at is set the partial unique index no longer
-// guards that key, so the same download re-failing later opens a fresh issue.
-func (s *Service) OpenAutoIssue(serviceType, instanceID, downloadID string, media arr.QueueMediaContext, d arr.Diagnosis) (created bool, id int64) {
-	sum := sha256.Sum256([]byte(instanceID + "|" + downloadID))
-	dedupeKey := hex.EncodeToString(sum[:])
-
-	// The poller hands us the *service* type, but media_type on an issues row is
-	// the client-facing 'movie'|'tv' contract — storing it raw made clients fall
-	// back to a "Movie" label on Sonarr issues.
-	mediaType := serviceType
-	switch serviceType {
-	case "radarr":
-		mediaType = "movie"
-	case "sonarr":
-		mediaType = "tv"
-	case "chaptarr":
-		mediaType = "book"
-	}
-
-	tmdbID := media.TmdbID
-	if tmdbID == 0 && media.TvdbID != 0 {
-		_ = s.db.QueryRow("SELECT tmdb_id FROM tmdb_tvdb_cache WHERE tvdb_id = ?", media.TvdbID).Scan(&tmdbID)
-	}
-	title := media.Title
-	if title == "" {
-		title = d.Problem
-	}
-
-	res, err := s.db.Exec(
-		`INSERT INTO issues
-			(source, status, media_type, tmdb_id, tvdb_id, title, season_number, episode_number,
-			 instance_id, download_id, arr_queue_id, detail, dedupe_key)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-		 WHERE NOT EXISTS (
-			SELECT 1 FROM issues WHERE dedupe_key = ? AND closed_at IS NULL
-		 )`,
-		SourceAuto, IssueOpen, mediaType, tmdbID, sqlNullInt(media.TvdbID), title,
-		media.SeasonNumber, media.EpisodeNumber, sqlNullStr(instanceID), sqlNullStr(downloadID),
-		sqlNullInt(media.QueueID), d.Transparency, dedupeKey,
-		dedupeKey,
-	)
-	if err != nil {
-		return false, 0
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		// Existing open issue for this key: just refresh last-seen, no new issue.
-		// Re-detecting the same ongoing problem on every 30s poll is NOT a new
-		// occurrence, so we don't bump occurrences (it only inflated a confusing
-		// per-poll counter that climbed with time-open, not severity).
-		s.db.Exec(
-			`UPDATE issues SET title = ?, tmdb_id = CASE WHEN ? > 0 THEN ? ELSE tmdb_id END,
-			 tvdb_id = COALESCE(?, tvdb_id), season_number = ?, episode_number = ?,
-			 arr_queue_id = COALESCE(?, arr_queue_id), detail = ?, updated_at = CURRENT_TIMESTAMP
-			 WHERE dedupe_key = ? AND closed_at IS NULL`,
-			title, tmdbID, tmdbID, sqlNullInt(media.TvdbID), media.SeasonNumber,
-			media.EpisodeNumber, sqlNullInt(media.QueueID), d.Transparency, dedupeKey,
-		)
-		return false, 0
-	}
-	newID, err := res.LastInsertId()
-	if err != nil {
-		return false, 0
-	}
-	s.notifyIssueCreated(newID, d.Problem)
-	return true, newID
-}
-
-const arrStateClearedResolution = "Cantinarr stopped detecting the original stuck or blocked download. Sonarr/Radarr may have recovered it, replaced it, or removed it."
-
-// CloseAutoIssueForDownload resolves the open auto issue for a download whose
-// problem the poller no longer detects (it recovered or left the queue). A
-// no-op when there's no matching open issue. Idempotent via ConcludeIssue's CAS.
-func (s *Service) CloseAutoIssueForDownload(instanceID, downloadID string) {
-	if downloadID == "" {
-		return
-	}
-	rows, err := s.db.Query(
-		`SELECT id FROM issues
-		 WHERE source = ? AND instance_id = ? AND download_id = ? AND closed_at IS NULL
-		 ORDER BY id`,
-		SourceAuto, instanceID, downloadID,
-	)
-	if err != nil {
-		return
-	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
-	for _, issueID := range ids {
-		_ = s.concludeIssue(context.Background(), issueID, IssueResolved,
-			arrStateClearedResolution,
-			ResolutionArrStateCleared)
-	}
-}
-
-// ReconcileAutoIssues closes incidents that are absent from a successful full
-// problem snapshot. This makes recovery durable across process restarts; a
-// failed queue fetch never reaches this method.
-func (s *Service) ReconcileAutoIssues(instanceID string, activeDownloadIDs []string) {
-	active := make(map[string]bool, len(activeDownloadIDs))
-	for _, id := range activeDownloadIDs {
-		active[id] = true
-	}
-	rows, err := s.db.Query(
-		`SELECT DISTINCT download_id FROM issues
-		 WHERE source = ? AND instance_id = ? AND download_id IS NOT NULL AND closed_at IS NULL`,
-		SourceAuto, instanceID,
-	)
-	if err != nil {
-		return
-	}
-	var stale []string
-	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil && !active[id] {
-			stale = append(stale, id)
-		}
-	}
-	rows.Close()
-	for _, id := range stale {
-		s.CloseAutoIssueForDownload(instanceID, id)
-	}
-}
-
 // notifyIssueCreated fires the issue_created admin notification carrying the
 // live open-issue count for badging. The title is passed as a structured field
 // (arr/user-sourced) — the push layer builds the human-readable body from fixed
 // templates, never by interpolating it.
 func (s *Service) notifyIssueCreated(issueID int64, title string) {
+	s.notifyIssueCreatedWithSource(issueID, title, "")
+}
+
+func (s *Service) notifyIssueCreatedWithSource(issueID int64, title, source string) {
 	if s.notifier == nil {
 		return
 	}
 	data := map[string]interface{}{
 		"issue_id": issueID,
 		"title":    title,
+	}
+	if source != "" {
+		data["source"] = source
 	}
 	if count, err := s.OpenIssueCount(); err == nil {
 		data["open_count"] = count
@@ -826,11 +864,15 @@ func (s *Service) MarkIssueRead(issueID int64) error {
 	return nil
 }
 
-// OpenIssueCount counts issues that are not in a terminal/closed state. It backs
-// the admin badge, mirroring request.PendingCount.
+// OpenIssueCount counts nonterminal issues that currently need attention. Quiet
+// observing/recovering incidents remain visible in Tracking but stay out of the
+// admin badge.
 func (s *Service) OpenIssueCount() (int, error) {
 	var n int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM issues WHERE closed_at IS NULL").Scan(&n); err != nil {
+	if err := s.db.QueryRow(
+		"SELECT COUNT(*) FROM issues WHERE closed_at IS NULL AND status NOT IN (?, ?)",
+		IssueObserving, IssueRecovering,
+	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count open issues: %w", err)
 	}
 	return n, nil

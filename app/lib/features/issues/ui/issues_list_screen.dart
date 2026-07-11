@@ -82,7 +82,7 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
         _error = null;
       });
       // Keep the drawer badge in sync with the list we just loaded.
-      final open = issues.where((i) => !i.status.isTerminal).length;
+      final open = issues.where((i) => i.status.needsAttention).length;
       ref.read(openIssuesProvider.notifier).setCount(open);
     } catch (e) {
       if (!mounted || epoch != _loadEpoch) return;
@@ -112,6 +112,10 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
                     ButtonSegment(
                       value: _IssueFilter.needsAttention,
                       label: Text('Needs attention'),
+                    ),
+                    ButtonSegment(
+                      value: _IssueFilter.tracking,
+                      label: Text('Tracking'),
                     ),
                     ButtonSegment(
                       value: _IssueFilter.closed,
@@ -167,9 +171,14 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
                                     const SizedBox(height: 120),
                                     Center(
                                       child: Text(
-                                        _filter == _IssueFilter.needsAttention
-                                            ? 'No issues need attention.'
-                                            : 'No closed issues yet.',
+                                        switch (_filter) {
+                                          _IssueFilter.needsAttention =>
+                                            'No issues need attention.',
+                                          _IssueFilter.tracking =>
+                                            'Nothing is being tracked.',
+                                          _IssueFilter.closed =>
+                                            'No closed issues yet.',
+                                        },
                                         style: const TextStyle(
                                             color: AppTheme.textSecondary),
                                       ),
@@ -210,14 +219,16 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
     final issues = _issues ?? const <Issue>[];
     return switch (_filter) {
       _IssueFilter.needsAttention =>
-        issues.where((issue) => !issue.status.isTerminal).toList(),
+        issues.where((issue) => issue.status.needsAttention).toList(),
+      _IssueFilter.tracking =>
+        issues.where((issue) => issue.status.isTracking).toList(),
       _IssueFilter.closed =>
         issues.where((issue) => issue.status.isTerminal).toList(),
     };
   }
 }
 
-enum _IssueFilter { needsAttention, closed }
+enum _IssueFilter { needsAttention, tracking, closed }
 
 class _IssueTile extends StatelessWidget {
   final Issue issue;
@@ -228,6 +239,7 @@ class _IssueTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final category = issue.category;
+    final tracking = issue.status.isTracking;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       // Unread affordance: a small filled accent dot. The slot is reserved in
@@ -236,7 +248,7 @@ class _IssueTile extends StatelessWidget {
         width: 8,
         height: 8,
         decoration: BoxDecoration(
-          color: issue.read ? Colors.transparent : AppTheme.accent,
+          color: issue.read || tracking ? Colors.transparent : AppTheme.accent,
           shape: BoxShape.circle,
         ),
       ),
@@ -245,8 +257,9 @@ class _IssueTile extends StatelessWidget {
       title: Text(
         issue.title.isEmpty ? 'Issue #${issue.id}' : issue.title,
         style: TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: issue.read ? FontWeight.w600 : FontWeight.w800,
+          color: tracking ? AppTheme.textSecondary : AppTheme.textPrimary,
+          fontWeight:
+              issue.read || tracking ? FontWeight.w600 : FontWeight.w800,
         ),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -348,6 +361,8 @@ class _IssueTile extends StatelessWidget {
       case IssueStatus.open:
       case IssueStatus.investigating:
         return AppTheme.downloading;
+      case IssueStatus.observing:
+      case IssueStatus.recovering:
       case IssueStatus.unknown:
         return AppTheme.textSecondary;
     }

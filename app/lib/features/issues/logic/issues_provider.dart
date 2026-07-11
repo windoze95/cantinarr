@@ -13,7 +13,7 @@ final issuesServiceProvider = Provider<IssuesService>((ref) {
   return IssuesService(backendDio: ref.watch(backendClientProvider));
 });
 
-/// Tracks the number of open issues awaiting an admin, for admins only.
+/// Tracks the number of issues needing admin attention, for admins only.
 ///
 /// Drives the drawer "Issues" entry badge (and could feed an app-bar dot the
 /// same way the approvals count does). It is seeded from REST, kept live by
@@ -59,23 +59,16 @@ class OpenIssuesNotifier extends StateNotifier<int> {
         .listen(_onPing);
   }
 
-  /// Applies the authoritative count carried by the event when present,
-  /// otherwise refetches (the badge must stay correct, and a ping doesn't
-  /// always carry the queue depth for issues).
-  void _onPing(WsEvent event) {
-    final raw = event.data['open_count'];
-    if (raw is num) {
-      _refreshDebounce?.cancel();
-      _refreshEpoch++;
-      _set(raw.toInt());
-    } else {
-      _refreshDebounce?.cancel();
-      _refreshDebounce = Timer(const Duration(milliseconds: 300), refresh);
-    }
+  /// Refetches rather than applying the legacy `open_count` event field: that
+  /// total cannot tell actionable issues from passive tracking on an older
+  /// server. The REST list lets the app derive the attention badge safely.
+  void _onPing(WsEvent _) {
+    _refreshDebounce?.cancel();
+    _refreshDebounce = Timer(const Duration(milliseconds: 300), refresh);
   }
 
-  /// Re-reads the open-issue count from the backend. Call after a dismiss so
-  /// the badge reflects the resolved queue immediately.
+  /// Re-reads the attention count from the backend. Passively observed/retried
+  /// issues remain open but do not contribute to the drawer badge.
   Future<void> refresh() async {
     if (!_isAdmin) return;
     final epoch = ++_refreshEpoch;
@@ -85,7 +78,7 @@ class OpenIssuesNotifier extends StateNotifier<int> {
       // would keep calling the old server.
       final issues = await _ref.read(issuesServiceProvider).listIssues();
       if (!_isAdmin || epoch != _refreshEpoch) return;
-      final open = issues.where((i) => !i.status.isTerminal).length;
+      final open = issues.where((i) => i.status.needsAttention).length;
       _set(open);
     } catch (_) {
       // Best-effort: keep the last known count on a transient failure (covers
@@ -112,7 +105,7 @@ class OpenIssuesNotifier extends StateNotifier<int> {
   }
 }
 
-/// Open-issue count for the signed-in admin (0 for non-admins).
+/// Attention-needed issue count for the signed-in admin (0 for non-admins).
 final openIssuesProvider =
     StateNotifierProvider<OpenIssuesNotifier, int>(OpenIssuesNotifier.new);
 

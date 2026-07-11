@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
@@ -39,17 +40,25 @@ func (s *Service) PostIssueMessage(ctx context.Context, issueID int64, body stri
 		return fmt.Errorf("agent message is too long")
 	}
 	body = secrets.RedactText(body)
+	expectedRunID := mcp.AgentRunOwnership(ctx)
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
 		 SELECT ?, ?, NULL, ? WHERE EXISTS (
-		   SELECT 1 FROM issues WHERE id = ? AND closed_at IS NULL
+		   SELECT 1 FROM issues i WHERE i.id = ? AND i.closed_at IS NULL
+		     AND (? = 0 OR (i.status = ? AND i.active_run_id = ? AND EXISTS (
+		       SELECT 1 FROM agent_runs r WHERE r.id = ? AND r.issue_id = i.id AND r.status = ?
+		     )))
 		 )`,
 		issueID, AuthorAgent, body, issueID,
+		expectedRunID, IssueInvestigating, expectedRunID, expectedRunID, runStatusRunning,
 	)
 	if err != nil {
 		return fmt.Errorf("post agent message: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		if expectedRunID != 0 {
+			return fmt.Errorf("agent run no longer owns this issue")
+		}
 		return nil // external/admin closure won the race; do not append afterward.
 	}
 	s.db.ExecContext(ctx, "UPDATE issues SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", issueID)
@@ -96,10 +105,12 @@ func (s *Service) concludeIssueCAS(ctx context.Context, issueID int64, status, r
 }
 
 type issueClosureOptions struct {
-	expectedStatus   string
-	ageModifier      string
-	conflictIfClosed bool
-	adminID          int64
+	expectedStatus      string
+	expectedRunID       int64
+	ageModifier         string
+	conflictIfClosed    bool
+	adminID             int64
+	silentNotifications bool
 }
 
 // ResolveIssueByAdmin records a human-reviewed terminal disposition. It is
@@ -204,9 +215,14 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		 active_run_id = NULL, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND closed_at IS NULL
 		   AND (? = '' OR status = ?)
+		   AND (? = 0 OR (status = ? AND active_run_id = ? AND EXISTS (
+		     SELECT 1 FROM agent_runs r WHERE r.id = ? AND r.issue_id = issues.id AND r.status = 'running'
+		   )))
 		   AND (? = '' OR updated_at <= datetime('now', ?))`,
 		status, resolution, resolutionKind, read, issueID,
-		opts.expectedStatus, opts.expectedStatus, opts.ageModifier, opts.ageModifier,
+		opts.expectedStatus, opts.expectedStatus,
+		opts.expectedRunID, IssueInvestigating, opts.expectedRunID, opts.expectedRunID,
+		opts.ageModifier, opts.ageModifier,
 	)
 	if err != nil {
 		return false, fmt.Errorf("conclude issue: %w", err)
@@ -225,7 +241,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 			}
 			return false, nil
 		}
-		if opts.expectedStatus != "" || opts.ageModifier != "" {
+		if opts.expectedStatus != "" || opts.expectedRunID != 0 || opts.ageModifier != "" {
 			return false, nil
 		}
 		var exists int
@@ -261,9 +277,10 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE agent_runs SET status = 'aborted', stop_reason = ?, deadline_at = NULL,
-			 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
-			 WHERE issue_id = ? AND status IN ('running','waiting_user','waiting_approval','resume_pending')`,
-			stopReason, issueID,
+				 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+				 WHERE issue_id = ? AND status IN ('running','waiting_user','waiting_approval','resume_pending')
+				   AND (? = 0 OR id != ?)`,
+			stopReason, issueID, opts.expectedRunID, opts.expectedRunID,
 		); err != nil {
 			return false, fmt.Errorf("abort issue runs: %w", err)
 		}
@@ -298,9 +315,11 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	if resolutionKind != ResolutionAdminDismissed && resolutionKind != ResolutionAdminCompleted {
 		s.noteAutoTerminal(issueID, status)
 	}
-	s.notifyIssueResolved(issueID, status)
-	if superseded > 0 {
-		s.notifyActionsChanged(issueID, "superseded")
+	if !opts.silentNotifications {
+		s.notifyIssueResolved(issueID, status)
+		if superseded > 0 {
+			s.notifyActionsChanged(issueID, "superseded")
+		}
 	}
 	return true, nil
 }
@@ -474,11 +493,13 @@ func (s *Service) ProposeAction(ctx context.Context, issueID int64, kindStr stri
 	// validation and insert share this transaction, so a concurrent close/park
 	// cannot leave a new proposal attached to a closed or unowned issue.
 	var runID int64
+	expectedRunID := mcp.AgentRunOwnership(ctx)
 	if err := tx.QueryRowContext(ctx,
 		`SELECT i.active_run_id FROM issues i JOIN agent_runs r ON r.id = i.active_run_id
 		 WHERE i.id = ? AND i.status = ? AND i.closed_at IS NULL
-		   AND i.active_run_id IS NOT NULL AND r.status = ?`,
-		issueID, IssueInvestigating, runStatusRunning,
+		   AND i.active_run_id IS NOT NULL AND r.status = ?
+		   AND (? = 0 OR i.active_run_id = ?)`,
+		issueID, IssueInvestigating, runStatusRunning, expectedRunID, expectedRunID,
 	).Scan(&runID); err != nil {
 		if err == sql.ErrNoRows {
 			return 0, false, fmt.Errorf("issue has no active investigation gate")

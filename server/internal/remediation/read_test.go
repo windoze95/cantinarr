@@ -28,16 +28,15 @@ func readFlag(t *testing.T, svc *Service, issueID int64) bool {
 	return iss.Read
 }
 
-// TestNewIssueStartsUnread confirms the column default: a freshly reported issue
-// is unread until an admin views it.
-func TestNewIssueStartsUnread(t *testing.T) {
+// A freshly reported issue is passive/read while live arr state is observed.
+func TestNewIssueStartsPassiveRead(t *testing.T) {
 	svc, _, reporterID := setupTestService(t)
 	r, err := svc.CreateUserIssue(reporterID, movieReq(1))
 	if err != nil {
 		t.Fatalf("CreateUserIssue: %v", err)
 	}
-	if readFlag(t, svc, r.IssueID) {
-		t.Fatal("a new issue should start unread")
+	if !readFlag(t, svc, r.IssueID) {
+		t.Fatal("an observing issue should stay read until promotion")
 	}
 }
 
@@ -195,7 +194,7 @@ func getIssueDetail(t *testing.T, h *Handler, issueID int64, claims *auth.Claims
 
 // TestAdminGetMarksReadReporterDoesNot confirms the handler side effect: an admin
 // opening the thread marks the issue read (and the payload reflects it), while the
-// reporter viewing their own issue leaves it unread.
+// reporter viewing their own issue leaves its passive read state unchanged.
 func TestAdminGetMarksReadReporterDoesNot(t *testing.T) {
 	svc, _, reporterID := setupTestService(t)
 	h := NewHandler(svc)
@@ -206,11 +205,11 @@ func TestAdminGetMarksReadReporterDoesNot(t *testing.T) {
 
 	// The reporter viewing their own issue must NOT mark it read.
 	reporterView := getIssueDetail(t, h, r.IssueID, &auth.Claims{UserID: reporterID, Role: auth.RoleUser})
-	if reporterView.Issue.Read {
-		t.Fatal("reporter view payload should report unread")
+	if !reporterView.Issue.Read {
+		t.Fatal("reporter view payload should preserve passive read state")
 	}
-	if readFlag(t, svc, r.IssueID) {
-		t.Fatal("reporter view must not mark the issue read")
+	if !readFlag(t, svc, r.IssueID) {
+		t.Fatal("reporter view must not alter the issue read state")
 	}
 
 	// An admin opening the thread marks it read, reflected in the payload and DB.

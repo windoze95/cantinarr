@@ -419,35 +419,39 @@ type DetailedQueueItem struct {
 	Episode *EpisodeContext `json:"episode,omitempty"`
 }
 
-// queuePageSize is the per-request page size for queue pagination, and
-// queueMaxRecords is a safety cap on the total records accumulated.
-const (
-	queuePageSize   = 100
-	queueMaxRecords = 1000
-)
+// queueMaxRecords is both the requested single-page size and a safety cap.
+// Offset pagination can mix queue generations during same-count churn, so a
+// multi-page read is never accepted as an authoritative absence witness.
+const queueMaxRecords = 1000
 
-// GetQueueDetailed returns the full download queue with series and episode
-// context, paginating until all records are fetched (capped at queueMaxRecords).
+// GetQueueDetailed returns one bounded, internally consistent queue page with
+// series/episode context. A server that clamps/truncates it fails closed.
 func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
-	var all []DetailedQueueItem
-	for page := 1; ; page++ {
-		var resp struct {
-			TotalRecords int                 `json:"totalRecords"`
-			Records      []DetailedQueueItem `json:"records"`
-		}
-		path := fmt.Sprintf("/api/v3/queue?page=%d&pageSize=%d&includeSeries=true&includeEpisode=true", page, queuePageSize)
-		if err := c.do("GET", path, nil, &resp); err != nil {
-			return nil, fmt.Errorf("sonarr queue: %w", err)
-		}
-		all = append(all, resp.Records...)
-		if len(resp.Records) == 0 || len(all) >= resp.TotalRecords || len(all) >= queueMaxRecords {
-			break
-		}
+	var resp struct {
+		TotalRecords int                 `json:"totalRecords"`
+		Records      []DetailedQueueItem `json:"records"`
 	}
-	if len(all) > queueMaxRecords {
-		all = all[:queueMaxRecords]
+	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeSeries=true&includeEpisode=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return nil, fmt.Errorf("sonarr queue: %w", err)
 	}
-	return all, nil
+	if resp.TotalRecords < 0 || resp.TotalRecords > queueMaxRecords {
+		return nil, fmt.Errorf("sonarr queue snapshot incomplete: invalid or oversized total %d (safety cap %d)", resp.TotalRecords, queueMaxRecords)
+	}
+	if len(resp.Records) != resp.TotalRecords {
+		return nil, fmt.Errorf("sonarr queue snapshot incomplete: received %d of %d records in bounded page", len(resp.Records), resp.TotalRecords)
+	}
+	seenIDs := make(map[int]struct{})
+	for _, item := range resp.Records {
+		if item.ID <= 0 {
+			return nil, fmt.Errorf("sonarr queue snapshot incomplete: record has invalid id")
+		}
+		if _, duplicate := seenIDs[item.ID]; duplicate {
+			return nil, fmt.Errorf("sonarr queue snapshot incomplete: duplicate record id %d", item.ID)
+		}
+		seenIDs[item.ID] = struct{}{}
+	}
+	return resp.Records, nil
 }
 
 // RemoveQueueItem removes an item from the download queue. removeFromClient
@@ -465,9 +469,13 @@ func (c *Client) RemoveQueueItem(id int, removeFromClient, blocklist, skipRedown
 }
 
 type HistoryRecord struct {
-	EventType   string    `json:"eventType"`
-	SourceTitle string    `json:"sourceTitle"`
-	Date        time.Time `json:"date"`
+	ID          int64             `json:"id"`
+	EpisodeID   int               `json:"episodeId"`
+	EventType   string            `json:"eventType"`
+	SourceTitle string            `json:"sourceTitle"`
+	Date        time.Time         `json:"date"`
+	DownloadID  string            `json:"downloadId"`
+	Data        map[string]string `json:"data"`
 	Quality     struct {
 		Quality struct {
 			Name string `json:"name"`
@@ -485,6 +493,22 @@ func (c *Client) GetHistory(pageSize int) ([]HistoryRecord, error) {
 	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&includeSeries=true&includeEpisode=true", pageSize)
 	if err := c.do("GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("sonarr history: %w", err)
+	}
+	return resp.Records, nil
+}
+
+func (c *Client) GetImportHistory(episodeID int, downloadID string, pageSize int) ([]HistoryRecord, error) {
+	var resp struct {
+		TotalRecords int             `json:"totalRecords"`
+		Records      []HistoryRecord `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&includeSeries=true&includeEpisode=true&eventType=3&episodeId=%d&downloadId=%s",
+		pageSize, episodeID, url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return nil, fmt.Errorf("sonarr import history: %w", err)
+	}
+	if resp.TotalRecords > pageSize {
+		return nil, fmt.Errorf("sonarr import history incomplete: %d records exceeds bound %d", resp.TotalRecords, pageSize)
 	}
 	return resp.Records, nil
 }
@@ -661,6 +685,7 @@ type Episode struct {
 	Title         string     `json:"title"`
 	AirDateUtc    *time.Time `json:"airDateUtc,omitempty"`
 	HasFile       bool       `json:"hasFile"`
+	EpisodeFileID int        `json:"episodeFileId"`
 	Monitored     bool       `json:"monitored"`
 }
 

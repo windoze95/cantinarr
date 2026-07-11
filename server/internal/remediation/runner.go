@@ -166,6 +166,9 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	if isTerminalStatus(issue.Status) {
 		return nil // already closed.
 	}
+	if issue.Status == IssueObserving || issue.Status == IssueRecovering {
+		return nil // the arr still owns this retry; observation is intentionally silent.
+	}
 	if issue.Status == IssueNeedsAdmin {
 		return nil // deliberately parked for manual administrator handling.
 	}
@@ -173,6 +176,14 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	// owned by the resume path, not a fresh investigation: Run must never start a
 	// second run over a pending proposal. Resume re-enters those.
 	if issue.Status == IssueAwaitingApproval || issue.Status == IssueAwaitingUser {
+		return nil
+	}
+	if recovering, preflightErr := r.svc.preflightArrRecovery(issueID); preflightErr != nil {
+		if _, parkErr := r.svc.moveIssueToObservationNeedsAdmin(issue, observationNeedsCloserLook, time.Now().UTC()); parkErr != nil {
+			return fmt.Errorf("park issue %d after arr recovery preflight failed: %v (preflight: %w)", issueID, parkErr, preflightErr)
+		}
+		return fmt.Errorf("defer issue %d while arr recovery cannot be verified: %w", issueID, preflightErr)
+	} else if recovering {
 		return nil
 	}
 
@@ -191,6 +202,12 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	}
 	if !claimed {
 		return nil // another worker won the race.
+	}
+	if recovering, preflightErr := r.svc.preflightArrRecovery(issueID); preflightErr != nil {
+		_ = r.abortClaimForRecoveryPreflight(issueID, runID, preflightErr)
+		return fmt.Errorf("abort issue %d after final recovery preflight: %w", issueID, preflightErr)
+	} else if recovering {
+		return nil
 	}
 
 	// Bound active wall-clock with a context timeout.
@@ -217,6 +234,19 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 		return err
 	}
 	return nil
+}
+
+func (r *Runner) runOwnsIssue(runID, issueID int64) bool {
+	var owns int
+	err := r.db.QueryRow(
+		`SELECT EXISTS(
+		 SELECT 1 FROM issues i JOIN agent_runs r ON r.id=i.active_run_id
+		 WHERE i.id=? AND i.status=? AND i.active_run_id=?
+		   AND i.closed_at IS NULL AND r.issue_id=i.id AND r.status=?
+		)`,
+		issueID, IssueInvestigating, runID, runStatusRunning,
+	).Scan(&owns)
+	return err == nil && owns != 0
 }
 
 // resolveTurn resolves the provider/model/key from remediation settings (empty
@@ -269,6 +299,17 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 	if isTerminalStatus(issue.Status) {
 		return nil // already closed (e.g. admin dismissed while parked).
 	}
+	if issue.Status == IssueObserving || issue.Status == IssueRecovering {
+		return nil
+	}
+	if recovering, preflightErr := r.svc.preflightArrRecovery(issueID); preflightErr != nil {
+		if _, parkErr := r.svc.moveIssueToObservationNeedsAdmin(issue, observationNeedsCloserLook, time.Now().UTC()); parkErr != nil {
+			return fmt.Errorf("park issue %d resume after arr recovery preflight failed: %v (preflight: %w)", issueID, parkErr, preflightErr)
+		}
+		return fmt.Errorf("defer issue %d resume while arr recovery cannot be verified: %w", issueID, preflightErr)
+	} else if recovering {
+		return nil
+	}
 
 	// Claim and load the exact durable handoff in one transaction. No worker can
 	// preload generation A, lose the race, then later claim generation B while
@@ -281,6 +322,12 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 		return nil
 	}
 	runID := resume.runID
+	if recovering, preflightErr := r.svc.preflightArrRecovery(issueID); preflightErr != nil {
+		_ = r.abortClaimForRecoveryPreflight(issueID, runID, preflightErr)
+		return fmt.Errorf("abort issue %d resume after final recovery preflight: %w", issueID, preflightErr)
+	} else if recovering {
+		return nil
+	}
 
 	turn, model, err := r.resolveTurn(settings)
 	if err != nil {
@@ -321,6 +368,37 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 			"The investigation hit an internal error while saving its resumed state. An administrator needs to review it; no pending proposal can be approved.")
 		return err
 	}
+	return nil
+}
+
+func (r *Runner) abortClaimForRecoveryPreflight(issueID, runID int64, cause error) error {
+	reason := observationNeedsCloserLook
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	runRes, err := tx.Exec(
+		`UPDATE agent_runs SET status='aborted',stop_reason='recovery_preflight_failed',
+		 deadline_at=NULL,finished_at=CURRENT_TIMESTAMP
+		 WHERE id=? AND issue_id=? AND status=?`, runID, issueID, runStatusRunning)
+	if err != nil {
+		return err
+	}
+	if n, _ := runRes.RowsAffected(); n != 1 {
+		return nil
+	}
+	if _, err := tx.Exec(
+		`UPDATE issues SET status=?,read=0,active_run_id=NULL,resolution=?,resolution_kind='',updated_at=CURRENT_TIMESTAMP
+		 WHERE id=? AND status=? AND active_run_id=? AND closed_at IS NULL`,
+		IssueNeedsAdmin, reason, issueID, IssueInvestigating, runID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("remediation: issue %d recovery preflight unavailable after claim: %v", issueID, cause)
+	r.svc.pingIssueUpdated(issueID)
 	return nil
 }
 
@@ -436,6 +514,12 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			return r.giveUp(context.Background(), issue.ID, st.runID, model, stopModelError,
 				giveUpMessage(issue, st.postedAnyMsg))
 		}
+		// A queue snapshot can move the issue back to recovery while the provider
+		// is thinking. Discard that stale response before it can write a message,
+		// proposal, audit ping, or state transition.
+		if !r.runOwnsIssue(st.runID, issue.ID) {
+			return nil
+		}
 
 		// Accumulate usage/cost onto the run (best-effort). An unknown model means
 		// the cost bound can't be enforced — skip the check, never crash.
@@ -465,7 +549,7 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 				if strings.TrimSpace(body) == "" {
 					body = "I looked into this but didn't find anything conclusive."
 				}
-				_ = r.svc.PostIssueMessage(ctx, issue.ID, body)
+				_ = r.svc.PostIssueMessage(mcp.WithAgentRunOwnership(ctx, st.runID), issue.ID, body)
 			}
 			return r.giveUp(ctx, issue.ID, st.runID, model, stopNoDiagnosis,
 				"I couldn't verify a resolution automatically, so this still needs an administrator to review it.")
@@ -485,6 +569,9 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 		parkCursor := int64(0)
 		parkToolUseID := ""
 		for _, tu := range toolUses {
+			if !r.runOwnsIssue(st.runID, issue.ID) {
+				return nil
+			}
 			st.seq++
 
 			var out string
@@ -513,6 +600,22 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 					out = "Skipped because a new reporter/admin reply arrived during this turn. Read the thread update on the next turn before reaching a conclusion or human gate."
 					isErr = true
 				} else {
+					// The provider may have spent most of the wall-clock window thinking.
+					// Re-read the arr immediately before any proposal/question/conclusion
+					// can be persisted or notified. If the arr began retrying, observation
+					// takes ownership and this stale model response is discarded.
+					if isHumanGateTool(tu.Name) {
+						recovering, preflightErr := r.svc.preflightArrRecovery(issue.ID)
+						if preflightErr != nil {
+							if err := r.abortClaimForRecoveryPreflight(issue.ID, st.runID, preflightErr); err != nil {
+								return fmt.Errorf("park issue after %s recovery preflight: %w", tu.Name, err)
+							}
+							return nil
+						}
+						if recovering || !r.runOwnsIssue(st.runID, issue.ID) {
+							return nil
+						}
+					}
 					st.stepCount++
 					if tu.Name == mcp.ToolProposeAction {
 						boundInput, bindErr := bindReleaseCandidateMetadata(tu.Input, st.releaseCandidates)
@@ -521,10 +624,10 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 							isErr = true
 						} else {
 							tu.Input = boundInput
-							out, isErr, ctrl = r.dispatchTool(ctx, issue, tu)
+							out, isErr, ctrl = r.dispatchTool(ctx, issue, st.runID, tu)
 						}
 					} else {
-						out, isErr, ctrl = r.dispatchTool(ctx, issue, tu)
+						out, isErr, ctrl = r.dispatchTool(ctx, issue, st.runID, tu)
 					}
 				}
 			}
@@ -602,12 +705,22 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 		}
 
 		if concluded {
-			// The only accepted terminal intent is an auto incident whose exact
-			// detector target is now absent. Record the server-authored observation
-			// provenance and wording; never let model text imply who fixed it.
-			if _, err := r.svc.concludeIssueCAS(ctx, issue.ID, IssueResolved,
-				arrStateClearedResolution, ResolutionArrStateCleared, "", ""); err != nil {
+			// Queue disappearance alone is not a terminal witness. Require the exact
+			// movie/episode to be present in the live arr library before accepting
+			// even a typed auto-incident conclusion.
+			proven, known, proofErr := r.svc.exactRecoveryProven(issue)
+			if proofErr != nil || !known || !proven {
+				return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
+					"The queue target changed, but Cantinarr could not verify the exact file in the arr library. An administrator needs to review it.")
+			}
+			transitioned, err := r.svc.concludeIssueAggregate(ctx, issue.ID, IssueResolved,
+				arrStateClearedResolution, ResolutionArrStateCleared,
+				issueClosureOptions{expectedRunID: st.runID})
+			if err != nil {
 				return fmt.Errorf("conclude issue %d: %w", issue.ID, err)
+			}
+			if !transitioned {
+				return nil // live observation/admin work took ownership during proof.
 			}
 			return r.finalizeRun(st.runID, runStatusSucceeded, stopResolved)
 		}
@@ -977,13 +1090,14 @@ type dispatchControl struct {
 // agent-only tool it calls ExecuteAgentTool (which writes issue rows, never arr).
 // For ANY other name (every mutating tool) it returns a benign refusal and NEVER
 // calls ExecuteTool.
-func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, tu ai.TranscriptBlock) (out string, isErr bool, ctrl dispatchControl) {
+func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu ai.TranscriptBlock) (out string, isErr bool, ctrl dispatchControl) {
 	switch {
 	case mcp.IsAgentTool(tu.Name):
 		if tu.Name == mcp.ToolProposeAction && r.svc.Settings().Mode != ModeSupervised {
 			return "This installation is in investigate-only mode; no proposal was recorded.", true, ctrl
 		}
-		res, err := r.toolServer.ExecuteAgentTool(ctx, tu.Name, tu.Input, issue.ID, tu.ID)
+		ownedCtx := mcp.WithAgentRunOwnership(ctx, runID)
+		res, err := r.toolServer.ExecuteAgentTool(ownedCtx, tu.Name, tu.Input, issue.ID, tu.ID)
 		if err != nil {
 			return "Error: " + secrets.RedactText(err.Error()), true, ctrl
 		}
@@ -1014,6 +1128,9 @@ func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, tu ai.Transcrip
 			mcp.CallContext{UserID: 0, Role: auth.RoleAdmin, InstanceID: issue.InstanceID})
 		if err != nil {
 			return "Error: " + secrets.RedactText(err.Error()), true, ctrl
+		}
+		if tu.Name == "search_releases" {
+			res.Text, res.ReleaseCandidates = prepareReleaseCandidatesForAgent(res.ReleaseCandidates)
 		}
 		ctrl.readEvidence = isVerificationRead(tu.Name, res)
 		if res.Verification != nil && res.Verification.Kind == mcp.VerificationQueueTarget && res.Verification.ExactScope {
@@ -1166,7 +1283,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.TvdbID > 0 {
 			params["tvdb_id"] = issue.TvdbID
 		}
-		if issue.SeasonNumber > 0 {
+		if issue.SeasonNumber > 0 || issue.EpisodeNumber > 0 {
 			params["season_number"] = issue.SeasonNumber
 		}
 		if issue.EpisodeNumber > 0 {
@@ -1176,7 +1293,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.TmdbID > 0 {
 			params["tmdb_id"] = issue.TmdbID
 		}
-		if issue.MediaType == "tv" && issue.SeasonNumber > 0 {
+		if issue.MediaType == "tv" && (issue.SeasonNumber > 0 || issue.EpisodeNumber > 0) {
 			params["season_number"] = issue.SeasonNumber
 		}
 		if issue.MediaType == "tv" && issue.EpisodeNumber > 0 {
@@ -1200,7 +1317,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.TvdbID > 0 {
 			params["tvdb_id"] = issue.TvdbID
 		}
-		if issue.SeasonNumber > 0 {
+		if issue.SeasonNumber > 0 || issue.EpisodeNumber > 0 {
 			params["season_number"] = issue.SeasonNumber
 		}
 		if issue.EpisodeNumber > 0 {

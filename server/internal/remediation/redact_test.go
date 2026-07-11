@@ -3,6 +3,7 @@ package remediation
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -161,6 +162,28 @@ func TestApprovalResumeRedactsTranscriptAndAuditOutcome(t *testing.T) {
 	}
 	if !strings.Contains(combined, "id=9") || !strings.Contains(combined, "REDACTED") {
 		t.Fatalf("approval resume lost useful outcome: %s", combined)
+	}
+}
+
+func TestReleaseReferenceOnlyTrustsCanonicalFingerprint(t *testing.T) {
+	canonical := releaseGUIDFingerprint("opaque-capability")
+	if !isReleaseGUIDFingerprint(canonical) || normalizeReleaseGUIDReference(canonical) != canonical {
+		t.Fatalf("canonical fingerprint was not idempotent: %q", canonical)
+	}
+
+	for _, unsafe := range []string{
+		"[REDACTED release sha256:opaque-secret]",
+		"https://idx.invalid/[REDACTED]?unrecognized=opaque-secret",
+		"[REDACTED release sha256:0123456789abcdef]suffix",
+	} {
+		normalized := normalizeReleaseGUIDReference(unsafe)
+		if normalized == unsafe || strings.Contains(normalized, "opaque-secret") || !isReleaseGUIDFingerprint(normalized) {
+			t.Fatalf("unsafe release reference survived normalization: input=%q output=%q", unsafe, normalized)
+		}
+		wire := string(actionParamsForWire(string(ActionGrabRelease), json.RawMessage(`{"guid":`+strconv.Quote(unsafe)+`}`)))
+		if strings.Contains(wire, "opaque-secret") || strings.Contains(wire, "unrecognized") {
+			t.Fatalf("unsafe release reference reached wire JSON: %s", wire)
+		}
 	}
 }
 

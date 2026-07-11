@@ -5,6 +5,20 @@ import (
 	"encoding/json"
 )
 
+type agentRunContextKey struct{}
+
+// WithAgentRunOwnership binds agent-only writes to the exact run that produced
+// them. IssueStore implementations use this to reject a provider response that
+// arrives after recovery/admin state aborted that run.
+func WithAgentRunOwnership(ctx context.Context, runID int64) context.Context {
+	return context.WithValue(ctx, agentRunContextKey{}, runID)
+}
+
+func AgentRunOwnership(ctx context.Context) int64 {
+	value, _ := ctx.Value(agentRunContextKey{}).(int64)
+	return value
+}
+
 // IssueStore is the narrow write surface the remediation agent's agent-only
 // tools call. Defining it HERE (and injecting a value at ToolServer
 // construction, the same way request.Service is injected) breaks the import

@@ -531,7 +531,7 @@ func (e *Executor) validateGrabReleaseCandidate(p GrabReleaseParams, ic issueCon
 			return "", fmt.Errorf("cannot establish the issue's Sonarr series for release validation; not executing")
 		}
 		if episodeID == 0 && ic.episodeNumber > 0 {
-			if seasonNumber <= 0 {
+			if seasonNumber < 0 {
 				return "", fmt.Errorf("an episode-scoped release requires an authoritative season; not executing")
 			}
 			episodes, err := sc.GetEpisodes(seriesID, seasonNumber)

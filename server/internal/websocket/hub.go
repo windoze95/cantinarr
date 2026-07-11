@@ -48,45 +48,24 @@ type ContentNotifier interface {
 	NotifyNewEpisode(seriesTitle string, tmdbID int)
 }
 
-// IssueOpener is the auto-dispatch seam: the poller hands a stuck/blocked
-// download to it so the remediation feature can open an issue and kick off the
-// read-only agent. *remediation.AutoDispatcher satisfies it. It is declared here
+// IssueOpener is the auto-dispatch seam: after every successful detailed queue
+// read, the poller hands one complete diagnosed snapshot to the remediation
+// feature. *remediation.AutoDispatcher satisfies it. It is declared here
 // (rather than importing remediation) so the hub stays decoupled and is wired
-// EXACTLY like ContentNotifier: nil (the zero value) means auto-dispatch is off,
-// so the poll path skips the detailed-queue diagnosis entirely.
+// exactly like ContentNotifier: nil (the zero value) means auto-dispatch is off,
+// so the poll path skips the detailed-queue fetch and diagnosis entirely.
 //
-// The implementation is responsible for the real gate (Settings.Enabled &&
-// Settings.AutoDispatch, read fresh each call so a toggle takes effect without a
-// restart), the DB-backed dedupe, the Runner enqueue, and the circuit breaker.
-// The hub only contributes the lightweight 2-consecutive-poll debounce so a
-// transient post-download state never reaches the opener.
+// The observer owns all temporal policy and issue lifecycle decisions. The hub
+// deliberately does not debounce, open, or close issues: it reports arr state,
+// including healthy items and empty snapshots, without interpreting whether an
+// in-flight retry has had enough time to recover.
 type IssueOpener interface {
-	// OpenAutoIssue is called once per problematic download confirmed on two
-	// consecutive polls. serviceType is "radarr"|"sonarr"; downloadID is the
-	// stable download-client hash; d is the classifier's verdict. It must not
-	// block the poll goroutine (the Runner is enqueued, never run inline).
-	OpenAutoIssue(serviceType, instanceID, downloadID string, media arr.QueueMediaContext, d arr.Diagnosis)
-
-	// CloseAutoIssue is called when a download that WAS a confirmed problem is no
-	// longer detected on a successful poll (it recovered or left the queue). The
-	// implementation resolves the matching open auto-issue; a no-op when there's
-	// none. Must not block the poll goroutine.
-	CloseAutoIssue(serviceType, instanceID, downloadID string)
-
-	// ReconcileAutoIssues receives every currently-problematic download after a
-	// successful full queue read. It lets the database recover closure state
-	// across a Cantinarr restart instead of relying only on this process's map.
-	ReconcileAutoIssues(serviceType, instanceID string, activeDownloadIDs []string)
-}
-
-// queueSignalItem bundles a queue item's stable download-client id with the
-// service-neutral classifier signal. The poll path builds these from the
-// detailed queue; a test builds them directly so the diagnose/debounce/dispatch
-// logic is exercised with a fake queue source (no live arr client).
-type queueSignalItem struct {
-	downloadID string
-	media      arr.QueueMediaContext
-	signal     arr.QueueSignal
+	// ObserveQueueSnapshot is called exactly once for each successful detailed
+	// queue read. serviceType is "radarr" or "sonarr". items is the full queue,
+	// including healthy entries, and is empty when the successful read found no
+	// entries. Failed reads do not call this method. Implementations must not block
+	// the poll goroutine.
+	ObserveQueueSnapshot(serviceType, instanceID string, items []arr.QueueObservation)
 }
 
 // Client represents a connected WebSocket client.
@@ -124,17 +103,6 @@ type Hub struct {
 	prevRadarrQueue map[string]map[int]float64 // instanceID -> movieId -> progress
 	prevSonarrQueue map[string]map[int]float64 // instanceID -> seriesId -> progress
 
-	// prevArrProblems debounces auto-dispatch: it remembers the diagnosed
-	// problem label per download from the previous poll, keyed
-	// serviceType:instanceID:downloadID. The opener is called only when the SAME
-	// problem persists across two consecutive polls, so a transient post-download
-	// state (e.g. a bare importPending, normal for a few seconds) never
-	// false-triggers. This is debounce ONLY; the DB partial-unique index in
-	// OpenAutoIssue is the real one-issue-per-download guarantee. The map is
-	// reset to the current poll's problems each pass, so a resolved download
-	// drops out and a genuinely new recurrence re-confirms over two polls.
-	prevArrProblems map[string]string
-
 	// prevArrQueueHash tracks the queue composition (id/status/sizeleft
 	// tuples) per arr instance so any change can emit an invalidation ping.
 	prevArrQueueHash map[string]string // instanceID -> composition hash
@@ -170,7 +138,6 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		prevRadarrQueue:    make(map[string]map[int]float64),
 		prevSonarrQueue:    make(map[string]map[int]float64),
 		prevArrQueueHash:   make(map[string]string),
-		prevArrProblems:    make(map[string]string),
 		prevDownloadsHash:  make(map[string]string),
 		downloadsErrLogged: make(map[string]bool),
 	}
@@ -486,90 +453,30 @@ func (h *Hub) noteArrQueueComposition(instanceID, serviceType string, tuples []s
 // only the cheap "is it even wired" short-circuit.
 func (h *Hub) autoDispatchEnabled() bool { return h.opener != nil }
 
-// dispatchDetailedItems runs the Import Doctor over one instance's detailed
-// queue and forwards confirmed problems to the opener. It applies the
-// 2-consecutive-poll debounce: a problem fires only when the SAME problem label
-// for the same download was present on the previous poll too. It rebuilds the
-// per-download problem map for this instance each pass (keyed
-// serviceType:instanceID:downloadID), so a download that recovered or left the
-// queue drops out of the map and any later recurrence must re-confirm over two
-// polls. Items with no download id yet (not handed to the client) are skipped:
-// they have no stable dedupe key and are expected to be transient.
-//
-// The poll path supplies items from GetQueueDetailed(); a test supplies them
-// directly with a fake queue source. The opener is invoked synchronously here
-// but is required to be non-blocking (it enqueues the Runner, never runs it).
-func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []queueSignalItem) {
+// dispatchDetailedItems runs the Import Doctor over every item in one
+// successful detailed queue snapshot and forwards the complete observation to
+// the remediation observer exactly once. Healthy entries and entries without a
+// download id are intentionally preserved: they are evidence that an arr is
+// still working, and temporal issue policy belongs to the observer rather than
+// this transport layer. An empty successful snapshot is forwarded as an empty
+// (non-nil) slice. Fetch failures return before this function is called.
+func (h *Hub) dispatchDetailedItems(serviceType, instanceID string, items []arr.QueueObservation) {
 	if h.opener == nil {
 		return
 	}
 
-	// Build this poll's problem set and decide dispatches under the lock, but
-	// invoke the opener AFTER releasing it so a slow opener can't stall other
-	// instances' polls (mirrors pollDownloadClientInstance's discipline).
-	type dispatch struct {
-		downloadID string
-		media      arr.QueueMediaContext
-		diagnosis  arr.Diagnosis
+	observations := make([]arr.QueueObservation, len(items))
+	copy(observations, items)
+	for i := range observations {
+		observations[i].Diagnosis = arr.Diagnose(observations[i].Signal)
 	}
-	var toOpen []dispatch
-	current := make(map[string]string)
-
-	h.pollMu.Lock()
-	for _, it := range items {
-		if it.downloadID == "" {
-			continue // no stable dedupe key yet; expected to be transient.
-		}
-		d := arr.Diagnose(it.signal)
-		if d.Severity != arr.SeverityWarning && d.Severity != arr.SeverityError {
-			continue
-		}
-		key := serviceType + ":" + instanceID + ":" + it.downloadID
-		current[key] = d.Problem
-		// Fire only if the SAME problem persisted from the previous poll.
-		if h.prevArrProblems[key] == d.Problem {
-			toOpen = append(toOpen, dispatch{downloadID: it.downloadID, media: it.media, diagnosis: d})
-		}
-	}
-	// Replace the remembered problems for THIS instance: drop stale keys (other
-	// downloads/instances are untouched), record the current ones. A key that
-	// drops out — was a problem last poll, absent on this (successful) poll —
-	// means the download recovered or left the queue, so its issue can close.
-	// This only runs after a successful queue fetch (the caller returns on
-	// error), so a failed poll can never mass-close an instance's issues.
-	prefix := serviceType + ":" + instanceID + ":"
-	var toClose []string
-	for k := range h.prevArrProblems {
-		if !strings.HasPrefix(k, prefix) {
-			continue
-		}
-		if _, stillAProblem := current[k]; !stillAProblem {
-			toClose = append(toClose, strings.TrimPrefix(k, prefix))
-		}
-		delete(h.prevArrProblems, k)
-	}
-	for k, v := range current {
-		h.prevArrProblems[k] = v
-	}
-	h.pollMu.Unlock()
-
-	for _, d := range toOpen {
-		h.opener.OpenAutoIssue(serviceType, instanceID, d.downloadID, d.media, d.diagnosis)
-	}
-	for _, downloadID := range toClose {
-		h.opener.CloseAutoIssue(serviceType, instanceID, downloadID)
-	}
-	activeIDs := make([]string, 0, len(current))
-	for key := range current {
-		activeIDs = append(activeIDs, strings.TrimPrefix(key, prefix))
-	}
-	h.opener.ReconcileAutoIssues(serviceType, instanceID, activeIDs)
+	h.opener.ObserveQueueSnapshot(serviceType, instanceID, observations)
 }
 
 // radarrQueueSignal projects a Radarr detailed queue item into the neutral
 // classifier signal plus its stable download id. It mirrors mcp.radarrSignal
 // (kept local so the hub need not import the mcp package).
-func radarrQueueSignal(item radarr.DetailedQueueItem) queueSignalItem {
+func radarrQueueSignal(item radarr.DetailedQueueItem) arr.QueueObservation {
 	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
 	for _, m := range item.StatusMessages {
 		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
@@ -579,23 +486,25 @@ func radarrQueueSignal(item radarr.DetailedQueueItem) queueSignalItem {
 		media.Title = item.Movie.Title
 		media.TmdbID = item.Movie.TmdbID
 	}
-	return queueSignalItem{
-		downloadID: item.DownloadID,
-		media:      media,
-		signal: arr.QueueSignal{
+	return arr.QueueObservation{
+		DownloadID: item.DownloadID,
+		Media:      media,
+		Signal: arr.QueueSignal{
 			Status:                item.Status,
 			TrackedDownloadStatus: item.TrackedDownloadStatus,
 			TrackedDownloadState:  item.TrackedDownloadState,
 			ErrorMessage:          item.ErrorMessage,
 			StatusMessages:        messages,
 			Protocol:              item.Protocol,
+			Size:                  item.Size,
+			SizeLeft:              item.Sizeleft,
 		},
 	}
 }
 
 // sonarrQueueSignal projects a Sonarr detailed queue item into the neutral
 // classifier signal plus its stable download id. It mirrors mcp.sonarrSignal.
-func sonarrQueueSignal(item sonarr.DetailedQueueItem) queueSignalItem {
+func sonarrQueueSignal(item sonarr.DetailedQueueItem) arr.QueueObservation {
 	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
 	for _, m := range item.StatusMessages {
 		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
@@ -610,25 +519,28 @@ func sonarrQueueSignal(item sonarr.DetailedQueueItem) queueSignalItem {
 		media.SeasonNumber = item.Episode.SeasonNumber
 		media.EpisodeNumber = item.Episode.EpisodeNumber
 	}
-	return queueSignalItem{
-		downloadID: item.DownloadID,
-		media:      media,
-		signal: arr.QueueSignal{
+	return arr.QueueObservation{
+		DownloadID: item.DownloadID,
+		Media:      media,
+		Signal: arr.QueueSignal{
 			Status:                item.Status,
 			TrackedDownloadStatus: item.TrackedDownloadStatus,
 			TrackedDownloadState:  item.TrackedDownloadState,
 			ErrorMessage:          item.ErrorMessage,
 			StatusMessages:        messages,
 			Protocol:              item.Protocol,
+			Size:                  item.Size,
+			SizeLeft:              item.Sizeleft,
 		},
 	}
 }
 
 // autoDispatchRadarr fetches the detailed queue (the lightweight GetQueue used
 // for progress lacks tracked-download fields, so it cannot drive Diagnose) and
-// runs the diagnose/debounce/dispatch pass. A fetch error is logged and skipped;
-// the progress poll above already ran off the lightweight queue, so a detailed
-// fetch failure never affects download_progress events.
+// delivers one complete diagnosed snapshot. A fetch error is logged and
+// skipped: it produces no observation and cannot be mistaken for an empty
+// queue. The progress poll above already ran off the lightweight queue, so a
+// detailed fetch failure never affects download_progress events.
 func (h *Hub) autoDispatchRadarr(instanceID string, client *radarr.Client) {
 	if !h.autoDispatchEnabled() {
 		return
@@ -638,11 +550,11 @@ func (h *Hub) autoDispatchRadarr(instanceID string, client *radarr.Client) {
 		log.Printf("websocket: auto-dispatch radarr detailed queue (%s): %v", instanceID, err)
 		return
 	}
-	signals := make([]queueSignalItem, 0, len(items))
+	observations := make([]arr.QueueObservation, 0, len(items))
 	for _, item := range items {
-		signals = append(signals, radarrQueueSignal(item))
+		observations = append(observations, radarrQueueSignal(item))
 	}
-	h.dispatchDetailedItems("radarr", instanceID, signals)
+	h.dispatchDetailedItems("radarr", instanceID, observations)
 }
 
 // autoDispatchSonarr is the Sonarr analogue of autoDispatchRadarr.
@@ -655,11 +567,11 @@ func (h *Hub) autoDispatchSonarr(instanceID string, client *sonarr.Client) {
 		log.Printf("websocket: auto-dispatch sonarr detailed queue (%s): %v", instanceID, err)
 		return
 	}
-	signals := make([]queueSignalItem, 0, len(items))
+	observations := make([]arr.QueueObservation, 0, len(items))
 	for _, item := range items {
-		signals = append(signals, sonarrQueueSignal(item))
+		observations = append(observations, sonarrQueueSignal(item))
 	}
-	h.dispatchDetailedItems("sonarr", instanceID, signals)
+	h.dispatchDetailedItems("sonarr", instanceID, observations)
 }
 
 func (h *Hub) pollAllRadarr() {
@@ -780,9 +692,9 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	h.prevRadarrQueue[instanceID] = currentQueue
 	h.noteArrQueueComposition(instanceID, "radarr", tuples)
 
-	// Auto-dispatch pass: diagnose the detailed queue and open issues for
-	// confirmed stuck/blocked downloads. No-op (and no extra fetch) when the
-	// opener is nil. Runs on this poll goroutine; the opener is non-blocking.
+	// Auto-dispatch observation pass: diagnose and deliver the full detailed
+	// queue. No-op (and no extra fetch) when the observer is nil. Runs on this
+	// poll goroutine; the observer is required to be non-blocking.
 	h.autoDispatchRadarr(instanceID, client)
 }
 

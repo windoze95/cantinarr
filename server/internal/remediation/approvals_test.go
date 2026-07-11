@@ -267,8 +267,10 @@ func TestClearedAutoSignalDoesNotCloseUnknownOutcome(t *testing.T) {
 		t.Fatalf("ApproveAction: %v", err)
 	}
 
-	svc.CloseAutoIssueForDownload("sonarr-1", "download-1")
-	svc.CloseAutoIssueForDownload("sonarr-1", "download-1") // evidence is idempotent
+	_ = svc.concludeIssue(context.Background(), issueID, IssueResolved,
+		"The exact episode is now present in Sonarr.", ResolutionArrStateCleared)
+	_ = svc.concludeIssue(context.Background(), issueID, IssueResolved,
+		"The exact episode is now present in Sonarr.", ResolutionArrStateCleared) // evidence is idempotent
 	issue, err := svc.GetIssue(issueID)
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
@@ -923,14 +925,15 @@ func TestProposeApproveExecuteResumeCycle(t *testing.T) {
 		t.Fatalf("expected a resume job after approval")
 	}
 
-	// 3) Resume: the agent sees the approval tool_result (keyed to its proposal),
-	// verifies read-only, and concludes resolved.
+	// 3) Resume: the agent sees the approval tool_result and verifies read-only.
+	// This fixture has no live arr library, so queue absence is not enough to
+	// claim resolution; the honest outcome is needs_admin.
 	if err := r.Resume(context.Background(), issueID); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
 	issue, _ = svc.GetIssue(issueID)
-	if issue.Status != IssueResolved {
-		t.Fatalf("issue status after resume = %q, want resolved", issue.Status)
+	if issue.Status != IssueNeedsAdmin {
+		t.Fatalf("issue status after resume = %q, want needs_admin without an exact library witness", issue.Status)
 	}
 
 	// The action ended executed exactly once (no re-exec across the resume).
@@ -1060,7 +1063,8 @@ func newProposeCycleRunner(t *testing.T) (*Runner, *Service, *fakeExecutor, int6
 	}
 	issueID, _ := res.LastInsertId()
 
-	grabInput := json.RawMessage(`{"kind":"grab_release","params":{"media_type":"movie","guid":"abc-guid","indexer_id":3,"queue_id_to_replace":7},"rationale":"better release"}`)
+	grabInput := json.RawMessage(`{"kind":"grab_release","params":{"media_type":"movie","guid":"` +
+		releaseGUIDFingerprint("abc-guid") + `","indexer_id":3,"queue_id_to_replace":7},"rationale":"better release"}`)
 	script := &scriptedTurn{turns: []ai.TranscriptMessage{
 		// Turn 1: investigate (a read), then propose a grab_release. The Runner
 		// parks after dispatching propose_action.

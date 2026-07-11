@@ -184,6 +184,7 @@ Request statuses: `unavailable`, `requested`, `pending` (awaiting approval), `de
 ```
 POST   /api/issues                         # user: report a problem; requires instance_id plus movie/tv media scope
                                            #   (instance must be Radarr for movie, Sonarr for tv; gated by allow_reporting)
+                                           #   returns {issue_id,status}; initial status is observing or recovering
 GET    /api/issues/{id}                    # reporter or admin: issue thread (an admin viewing marks it read)
 POST   /api/issues/{id}/reply              # reporter or admin: reply (answers agent questions)
 GET    /api/admin/issues?status=           # admin: issue queue (user-reported + auto-detected; each row carries read/unread)
@@ -192,7 +193,9 @@ POST   /api/admin/issues/{id}/resolve      # admin: { disposition: resolved|wont
                                            #   transactional reviewed completion; races return 409
 GET    /api/admin/issues/{id}/activity     # admin: durable action + run history for one issue
 GET|PUT /api/admin/remediation-settings    # admin: master switch, auto-dispatch, reporting,
-                                           #   mark-resolved-as-read, mode, provider/model, run budgets
+                                           #   mark-resolved-as-read, mode, provider/model, run budgets,
+                                           #   observation_min_minutes (10), observation_quiet_minutes (5),
+                                           #   observation_settle_minutes (2)
 GET    /api/admin/agent-actions?status=    # admin: awaiting queue, or status=all for history;
                                            #   actions include immutable instance_id + instance name/service;
                                            #   release GUIDs are one-way fingerprints, never raw indexer capabilities
@@ -334,16 +337,16 @@ The instance registry supports eight service types: `radarr`, `sonarr`, `chaptar
 
 The issue system turns "my episode won't download" into a supervised agent workflow:
 
-1. **Report or detect** -- users tap "Report a problem" on media (admin-toggleable); every report names the exact active/detail Radarr or Sonarr instance, and otherwise-identical reports against different instances remain distinct. The queue-poll witness can also auto-open an issue scoped to the exact instance, queue row, download, and media. A successful full queue snapshot reconciles auto issues even after a restart. If the signal disappears, Cantinarr closes every matching duplicate with the `arr_state_cleared` provenance; it does not claim the agent performed the recovery.
+1. **Observe, then report or detect** -- users tap "Report a problem" on media (admin-toggleable); every report names the exact active/detail Radarr or Sonarr instance, and otherwise-identical reports against different instances remain distinct. Every user report and auto detection starts silently as `observing`/`recovering`: read, excluded from the badge, no push, no agent run, and no proposal. Successful complete queue snapshots are cached briefly and drive durable observation; incomplete/capped or failed reads are never interpreted as an empty queue. Replacement download IDs stay in one incident keyed by exact instance + movie/episode scope (including exact S00 specials), and every observed ID is retained for recovery attribution. A problem is promoted once only after both the configured minimum age (10 minutes) and unchanged quiet window (5 minutes); absence must also pass the settle window (2 minutes). Continuous connection/proof uncertainty lasting the minimum window becomes `needs_admin` without starting the agent, so reports neither alert prematurely nor disappear forever. Queue disappearance and a pre-existing file never prove resolution. `arr_state_cleared` requires a changed exact live file plus a post-incident, exact-media import-history record tied to one observed download ID; Cantinarr persists only the compact validated receipt (history/download/file IDs and timestamp), never raw history data.
 2. **Investigate** -- an AI agent (provider/model configurable, defaulting to the chat provider) runs a budgeted tool loop against read-only arr state bound to that issue's instance and media scope. Budgets cover total tool calls, accumulated active wall-clock time across approval/reporter pauses, per-run cost, daily run count, and daily cost.
 3. **Ask** -- if the agent needs information only the reporter has, the issue flips to `awaiting_user` and the reporter answers in the issue thread.
 4. **Propose** -- in `supervised` mode, mutating fixes (grab release, remediate queue, manual import, trigger search, rescan) become typed `agent_actions` that always require admin confirmation. `investigate_only` mode records no proposal. The server validates the action against the issue's authoritative instance/media/queue/download/episode scope, permits only one active proposal, and stores an admin override separately from the agent's immutable proposal. For a release grab, the server binds title, quality, size, protocol, indexer, and rejection details from the latest exact scoped search; the approval card shows that server-observed metadata. Raw indexer capabilities are replaced by one-way references before persistence or API delivery. Approval refreshes the exact movie, season, or episode search, requires both the reference and metadata to match, and resolves the live capability only in memory for immediate dispatch; episode reports also trigger only an episode search. A manual import filters the just-fetched candidates by the same movie/series/episode identity even when `force` is approved. Book issues currently permit only exact queue/manual-import actions; title-level book mutations fail closed until issues store a durable book id.
-5. **Decide** -- every approval card and confirmation names the exact target service, instance name, and immutable instance ID. Approval uses a compare-and-swap claim so retries reconcile the durable state instead of dispatching again; denial (with an optional note) resumes the investigation. A losing concurrent decision returns `409 Conflict`, prompting the app to re-read the winner instead of claiming the attempted decision succeeded. Closing or dismissing an issue supersedes an unexecuted proposal and aborts its parked run. A process loss after dispatch cannot prove the remote outcome, so startup marks that action `outcome_unknown` and never guesses or silently replays it. Partial or unknown outcomes stop at `needs_admin` and abort the parked run; the model cannot propose another mutation until a human has verified remote state.
+5. **Decide** -- every approval card and confirmation names the exact target service, instance name, and immutable instance ID. Approval uses a compare-and-swap claim so retries reconcile the durable state instead of dispatching again; denial (with an optional note) resumes the investigation. A fresh exact-scope recovery check runs both before and immediately after the execution claim: if the arr has begun retrying/replacing, the proposal is superseded, its run is aborted, the issue returns silently to `recovering`, and the executor is never called. A losing concurrent decision returns `409 Conflict`, prompting the app to re-read the winner instead of claiming the attempted decision succeeded. Recovery never hides `needs_admin`, `executing`, or `outcome_unknown`. A process loss after dispatch cannot prove the remote outcome, so startup marks that action `outcome_unknown` and never guesses or silently replays it. Partial or unknown outcomes stop at `needs_admin` and abort the parked run; the model cannot propose another mutation until a human has verified remote state.
 6. **Complete or audit** -- when judgment or manual verification is required (especially `needs_admin`/`outcome_unknown`), an admin can explicitly mark the issue `resolved` or `wont_fix` with a required bounded note. The note, admin actor, aggregate close, proposed-action supersession, and parked-run abort commit together under `admin_completed`; a race returns `409` and the app reloads the winner. **Dismiss** remains a separate `admin_dismissed` workflow and does not claim review. Every action and run remains reachable from the issue, and runs persist their ordered step ledger (`agent_runs`/`agent_steps`) with token counts, cost, and stop reason. Model-facing issue text, tool results/errors, resume outcomes, transcripts, and audit text are credential-scrubbed before they are sent or stored; the reporter's original thread message remains intact for the reporter/admin UI.
 
-Auto-dispatch has a circuit breaker: repeated agent give-ups disable it and notify admins. A tool-less answer or exhausted investigation becomes `needs_admin` rather than falsely resolving the report. Issue statuses: `open`, `investigating`, `awaiting_user`, `awaiting_approval`, `needs_admin`, `resolved`, `wont_fix`, `failed`, `dismissed`. Terminal issues also expose `resolution`, `resolution_kind`, and `closed_at`; current provenance kinds are `agent_concluded`, `arr_state_cleared`, `reporter_timeout`, `admin_completed`, `admin_dismissed`, and `legacy_unknown`.
+Auto-dispatch has a circuit breaker: repeated agent give-ups disable it and notify admins. A tool-less answer or exhausted investigation becomes `needs_admin` rather than falsely resolving the report. Issue statuses: `observing`, `recovering`, `open`, `investigating`, `awaiting_user`, `awaiting_approval`, `needs_admin`, `resolved`, `wont_fix`, `failed`, `dismissed`. Terminal issues also expose `resolution`, `resolution_kind`, and `closed_at`; current provenance kinds are `agent_concluded`, `arr_state_cleared`, `reporter_timeout`, `admin_completed`, `admin_dismissed`, and `legacy_unknown`.
 
-Each issue also carries an admin **read/unread** flag: new issues start unread, any non-admin (agent/system/reporter) status change re-flags it unread, and an admin opening the thread (or dismissing it) marks it read. The `mark_resolved_as_read` setting (default on) keeps a cleanly resolved issue read instead of re-flagging it. The drawer's Issues badge still counts *open* issues, not unread ones.
+Each issue also carries an admin **read/unread** flag: promoted issues start unread, any non-admin (agent/system/reporter) status change re-flags it unread, and an admin opening the thread (or dismissing it) marks it read. Passive `observing`/`recovering` incidents stay read and do not count in the drawer's Issues badge. The `mark_resolved_as_read` setting (default on) keeps a cleanly resolved issue read instead of re-flagging it.
 
 ### Import Doctor
 
@@ -361,7 +364,7 @@ Notification categories (per-user preferences; admin-scoped ones are enforced in
 | `request_pending` | on | admins | a new request needs review (badge = queue depth) |
 | `new_movie` | on | everyone | a movie finishes importing (collapse-keyed per title) |
 | `new_episode` | on | everyone | new episode(s) import for a series |
-| `issue_created` | on | admins | a problem is reported/detected |
+| `issue_created` | on | admins | a tracked problem becomes actionable after the quiet recovery window, or durable status proof remains unavailable |
 | `agent_action_pending` | on | admins | the agent proposed a fix needing approval |
 | `plex_access_request` | on | admins | a user shared their Plex email for a server invite (collapse-keyed per user; body says whether auto-invite already handled it) |
 | `plex_invite_sent` | on | requester | their Plex invite email went out (one-tap or auto) |
@@ -391,7 +394,7 @@ The MCP server also publishes prompt templates and a `guide://cantinarr/agent-gu
 
 ### MCP tools
 
-The same 26 tools power the in-app AI assistant, the remediation agent's toolbox, and `/mcp`. Every tool can be disabled from Settings > AI Tools. Tools marked **admin** require the admin role (either flagged directly or gated by a permission the user role doesn't hold):
+The same 26 tools power the in-app AI assistant and `/mcp`; the remediation agent receives a constrained read-only subset plus issue-scoped human gates. Every shared tool can be disabled from Settings > AI Tools. Tools marked **admin** require the admin role (either flagged directly or gated by a permission the user role doesn't hold):
 
 | Tool | Description |
 |---|---|
@@ -411,8 +414,8 @@ The same 26 tools power the in-app AI assistant, the remediation agent's toolbox
 | `get_library` | What's on the server, filterable (admin) |
 | `get_history` | Recent grabs/imports/failures (admin) |
 | `trigger_search` | Kick off an automatic download search (admin) |
-| `search_releases` | Exact movie, season, episode, or book indexer release search (admin) |
-| `grab_release` | Download a specific release (admin) |
+| `search_releases` | Exact movie, season, episode, or book indexer search; returns one-way release references, never raw GUID capabilities (admin) |
+| `grab_release` | Freshly re-search the supplied exact media scope and download the unique release matching its one-way reference + indexer id (admin) |
 | `remove_queue_item` | Remove/blocklist a queue item (admin) |
 | `get_disk_space` | Disk space across instances (admin) |
 | `get_arr_health` | Arr system health: download client, remote path mapping, indexers, disk, root folders (admin) |
@@ -432,7 +435,7 @@ SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db
 | Requests | `request_log` (approval + season/quality/book-format capture), `user_request_settings` |
 | Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials), `user_default_instances` |
 | Push | `push_tokens` (one per device), `notification_prefs` |
-| Remediation | `issues` (exact arr scope + closure provenance), `issue_messages`, `agent_runs`, `agent_steps`, `agent_actions` (one active proposal per issue; immutable proposal + approved params) |
+| Remediation | `issues` (exact arr scope + closure provenance), `issue_observations` (durable retry/settle clocks, baseline + compact import receipt), `issue_observation_downloads` (all incident download IDs), `issue_observation_attempts` (transition audit), `remediation_queue_snapshots` (latest successful minimal typed snapshot), `remediation_observation_failures` (bounded outage timer), `remediation_observation_watermarks` (monotonic per-instance success/failure ordering), `issue_messages`, `agent_runs`, `agent_steps`, `agent_actions` (one active proposal per issue; immutable proposal + approved params) |
 | MCP OAuth | `oauth_clients`, `oauth_authorization_codes`, `oauth_refresh_tokens` |
 | Misc | `settings` (encrypted KV: JWT secret, push key, request policy, Plex token + invite config), `tmdb_tvdb_cache` (30-day TTL) |
 
@@ -474,7 +477,7 @@ server/
 │   ├── transmission/         # Transmission RPC client
 │   ├── web/                  # Flutter web embed (go:embed) + SPA file server
 │   ├── webhooks/             # Arr webhook receiver (server-managed per-instance Basic auth)
-│   └── websocket/            # Hub: queue polling, event fan-out, auto-issue witness
+│   └── websocket/            # Hub: queue polling, event fan-out, complete observation feed
 ├── Dockerfile                # API-only build
 └── go.mod
 ```

@@ -236,7 +236,8 @@ type ToolResult struct {
 	StructuredData any // nil for tools without UI; []MediaResultItem for search/browse tools
 	// ReleaseCandidates is internal, server-observed metadata used to bind a
 	// remediation proposal to the exact candidate the model just saw. Reference
-	// is credential-scrubbed; raw release capabilities never cross this boundary.
+	// is a strict one-way SHA-256 selector; raw release capabilities never cross
+	// this boundary.
 	ReleaseCandidates []ReleaseCandidate
 	// Verification is server-authored, typed evidence for safety-sensitive
 	// callers. It is never inferred from the model-facing Text field.

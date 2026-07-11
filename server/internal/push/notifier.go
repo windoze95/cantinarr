@@ -134,8 +134,9 @@ func (n *Notifier) notifyRequestPending(client *Client, data map[string]interfac
 
 // notifyIssueCreated pushes a new AI-remediation issue to opted-in admins. The
 // body is a fixed template (the untrusted issue title is NOT placed on the
-// lock screen); issue_id rides along for tap deep-linking and open_count badges
-// the icon.
+// lock screen); issue_id rides along for tap deep-linking. Issue state does not
+// write the global app-icon badge: recovery can silently remove issue attention,
+// while the app icon has one independent owner (pending request approvals).
 func (n *Notifier) notifyIssueCreated(client *Client, data map[string]interface{}) {
 	recipients, err := n.prefs.usersOptedInto(CategoryIssueCreated)
 	if err != nil {
@@ -149,17 +150,20 @@ func (n *Notifier) notifyIssueCreated(client *Client, data map[string]interface{
 	if v, ok := data["issue_id"]; ok {
 		out["issue_id"] = v
 	}
-	var opts SendOptions
-	if count, ok := intval(data["open_count"]); ok {
-		opts.Badge = &count
+	title := "New problem reported"
+	body := "Someone reported a problem with their media"
+	if str(data["source"]) == "auto" {
+		title = "Problem needs attention"
+		body = "Cantinarr found a media problem that did not recover automatically"
 	}
-	n.sendWithOptions(client, recipients, "New problem reported", "Someone reported a problem with their media", out, opts)
+	n.sendWithOptions(client, recipients, title, body, out, SendOptions{})
 }
 
 // notifyAgentActionPending pushes "the AI proposed a fix, approve it" to opted-in
 // admins. The body is a FIXED template — the agent's rationale and any release
-// name are UNTRUSTED and never placed on the lock screen; issue_id (for tap deep-
-// linking) and the pending-count badge ride along as structured fields only.
+// name are UNTRUSTED and never placed on the lock screen; issue_id rides along
+// for tap deep-linking. Like issue-created pushes, this queue does not overwrite
+// the global app-icon badge owned by pending request approvals.
 func (n *Notifier) notifyAgentActionPending(client *Client, data map[string]interface{}) {
 	recipients, err := n.prefs.usersOptedInto(CategoryAgentActionPending)
 	if err != nil {
@@ -173,11 +177,7 @@ func (n *Notifier) notifyAgentActionPending(client *Client, data map[string]inte
 	if v, ok := data["issue_id"]; ok {
 		out["issue_id"] = v
 	}
-	var opts SendOptions
-	if count, ok := intval(data["pending_count"]); ok {
-		opts.Badge = &count
-	}
-	n.sendWithOptions(client, recipients, "A fix needs your approval", "The assistant proposed a fix for a problem and needs you to approve it", out, opts)
+	n.sendWithOptions(client, recipients, "A fix needs your approval", "The assistant proposed a fix for a problem and needs you to approve it", out, SendOptions{})
 }
 
 // notifyPlexAccessRequested pushes "a user shared their Plex email" to

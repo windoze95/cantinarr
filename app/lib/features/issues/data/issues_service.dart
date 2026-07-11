@@ -15,9 +15,10 @@ class IssuesService {
 
   // ---- Reporter-facing -----------------------------------------------------
 
-  /// Submit a problem report. Returns the new issue id (the server also echoes
-  /// the initial status, which the caller doesn't currently need).
-  Future<int> reportProblem({
+  /// Submit a problem report. Returns the issue id and authoritative initial
+  /// status so the caller can distinguish passive arr recovery from agent
+  /// investigation.
+  Future<IssueReportResult> reportProblem({
     required String instanceId,
     required String mediaType, // 'movie' | 'tv'
     required int tmdbId,
@@ -35,7 +36,11 @@ class IssuesService {
       'category': category.value,
     };
     if (tvdbId != null && tvdbId != 0) body['tvdb_id'] = tvdbId;
-    if (seasonNumber != null && seasonNumber > 0) {
+    // Season zero is a real Sonarr season (Specials). A positive episode makes
+    // the zero unambiguous, so preserve it instead of collapsing S00E## into a
+    // series-wide report.
+    if (seasonNumber != null &&
+        (seasonNumber > 0 || (episodeNumber != null && episodeNumber > 0))) {
       body['season_number'] = seasonNumber;
     }
     if (episodeNumber != null && episodeNumber > 0) {
@@ -48,8 +53,9 @@ class IssuesService {
     if (title != null && title.isNotEmpty) body['title'] = title;
 
     final resp = await _dio.post('/api/issues', data: body);
-    final data = resp.data as Map<String, dynamic>?;
-    return (data?['issue_id'] as num?)?.toInt() ?? 0;
+    return IssueReportResult.fromJson(
+      resp.data as Map<String, dynamic>? ?? const {},
+    );
   }
 
   /// Fetch one issue plus its full message thread (reporter or admin).

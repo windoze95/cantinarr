@@ -209,15 +209,15 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
 CREATE TABLE IF NOT EXISTS issues (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,                       -- 'auto' | 'user'
-    status TEXT NOT NULL DEFAULT 'open',        -- open|investigating|awaiting_user|awaiting_approval|needs_admin|resolved|wont_fix|failed|dismissed
+    status TEXT NOT NULL DEFAULT 'open',        -- observing|recovering|open|investigating|awaiting_user|awaiting_approval|needs_admin|resolved|wont_fix|failed|dismissed
     category TEXT,                              -- user pick: wrong_content|bad_copy|wrong_audio|other ; NULL for auto
     reporter_id INTEGER REFERENCES users(id),  -- NULL for auto-detected
     tmdb_id INTEGER NOT NULL,
     tvdb_id INTEGER,
     media_type TEXT NOT NULL,                   -- 'movie' | 'tv' | 'book'
     title TEXT NOT NULL DEFAULT '',
-    season_number INTEGER NOT NULL DEFAULT 0,   -- TV scope (0 = whole series / movie)
-    episode_number INTEGER NOT NULL DEFAULT 0,  -- TV scope (0 = whole season / movie)
+    season_number INTEGER NOT NULL DEFAULT 0,   -- TV scope (0 = whole series unless episode_number > 0, which means Specials)
+    episode_number INTEGER NOT NULL DEFAULT 0,  -- TV scope (0 = whole season / movie; >0 = exact episode)
     instance_id TEXT,                          -- exact owning arr instance (auto or user report)
     download_id TEXT,                          -- stable download-client hash (auto); keys dedupe + doctor tools
     arr_queue_id INTEGER,                      -- arr queue row observed for this exact incident (auto)
@@ -238,6 +238,87 @@ CREATE TABLE IF NOT EXISTS issues (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_open_dedupe
     ON issues(dedupe_key) WHERE dedupe_key IS NOT NULL AND closed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+
+-- Durable retry-aware observation state. An issue can exist here while it is
+-- intentionally invisible to the admin attention queue: the arr still has a
+-- live download/retry for the exact media scope, so Cantinarr observes before
+-- asking either an agent or a human to intervene.
+CREATE TABLE IF NOT EXISTS issue_observations (
+    issue_id INTEGER PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+    service_type TEXT NOT NULL,                  -- radarr|sonarr
+    scope_key TEXT NOT NULL,                     -- sha256(instance + exact media scope)
+    state TEXT NOT NULL DEFAULT 'observing',     -- observing|recovering|settling
+    signature TEXT NOT NULL DEFAULT '',          -- last complete matching queue signature
+    first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    problem_since_at DATETIME,
+    last_seen_at DATETIME,
+    last_activity_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    settling_since DATETIME,
+    promoted_at DATETIME,
+    baseline_has_file INTEGER,
+    baseline_file_id INTEGER,
+    baseline_captured_at DATETIME,
+    import_history_id INTEGER,
+    import_download_id TEXT,
+    import_file_id INTEGER,
+    recovery_proven_at DATETIME,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_issue_observations_scope
+    ON issue_observations(scope_key, issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_observations_service
+    ON issue_observations(service_type, issue_id);
+
+CREATE TABLE IF NOT EXISTS issue_observation_downloads (
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    download_id TEXT NOT NULL,
+    first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(issue_id, download_id)
+);
+
+-- Most recent successful COMPLETE queue snapshot per instance. This small,
+-- bounded cache lets a user report join an already-observed arr retry without
+-- putting a network round trip on the report request path. Failed queue reads
+-- never update it, so absence in a stale/failed snapshot cannot close or hide
+-- work.
+CREATE TABLE IF NOT EXISTS remediation_queue_snapshots (
+    instance_id TEXT PRIMARY KEY,
+    service_type TEXT NOT NULL,
+    observed_at DATETIME NOT NULL,
+    items_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS remediation_observation_failures (
+    instance_id TEXT PRIMARY KEY,
+    service_type TEXT NOT NULL,
+    first_failed_at DATETIME NOT NULL,
+    last_failed_at DATETIME NOT NULL,
+    error_text TEXT NOT NULL DEFAULT ''
+);
+
+-- Monotonic per-instance processing watermark shared by websocket snapshots,
+-- synchronous execution preflights, and the restart sweeper. Older queued
+-- work can never overwrite or reconcile after a newer success/failure.
+CREATE TABLE IF NOT EXISTS remediation_observation_watermarks (
+    instance_id TEXT PRIMARY KEY,
+    service_type TEXT NOT NULL,
+    observed_at DATETIME NOT NULL
+);
+
+-- Transition-only audit trail. Repeated identical polls do not append rows;
+-- each entry explains why the observer changed phase or promoted the issue.
+CREATE TABLE IF NOT EXISTS issue_observation_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    state TEXT NOT NULL,
+    signature TEXT NOT NULL DEFAULT '',
+    download_id TEXT NOT NULL DEFAULT '',
+    arr_queue_id INTEGER,
+    note TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_issue_observation_attempts_issue
+    ON issue_observation_attempts(issue_id, id);
 
 -- The user <-> agent <-> admin thread. Append-only. author_kind tags provenance
 -- so agent code NEVER treats a 'user'/'system' message as an instruction. body
@@ -635,7 +716,7 @@ func safeReleaseActionJSON(raw string) (string, bool, error) {
 	if !ok || guid == "" {
 		return "", false, fmt.Errorf("missing guid")
 	}
-	if !strings.HasPrefix(guid, "[REDACTED release sha256:") && !strings.Contains(guid, "[REDACTED]") {
+	if !isCanonicalReleaseFingerprint(guid) {
 		digest := sha256.Sum256([]byte(guid))
 		params["guid"] = fmt.Sprintf("[REDACTED release sha256:%x]", digest[:8])
 	}
@@ -650,6 +731,22 @@ func safeReleaseActionJSON(raw string) (string, bool, error) {
 	hasMetadata := titleOK && title != "" && protocolOK && protocol != "" &&
 		indexerOK && indexer != "" && sizeOK && size >= 0
 	return string(encoded), hasMetadata, nil
+}
+
+func isCanonicalReleaseFingerprint(value string) bool {
+	const prefix = "[REDACTED release sha256:"
+	const digestHexLen = 16
+	if len(value) != len(prefix)+digestHexLen+1 || !strings.HasPrefix(value, prefix) || value[len(value)-1] != ']' {
+		return false
+	}
+	for _, char := range value[len(prefix) : len(value)-1] {
+		if char < '0' || char > '9' {
+			if char < 'a' || char > 'f' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // repairAutoIssueDedupe migrates the pre-scope key (which included a diagnosis

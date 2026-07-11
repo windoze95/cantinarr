@@ -48,3 +48,50 @@ func TestClientErrorDoesNotEchoUpstreamBody(t *testing.T) {
 		t.Fatalf("error echoed upstream response secret: %v", err)
 	}
 }
+
+func TestGetImportHistoryUsesExactBoundedFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("eventType") != "3" || q.Get("movieIds") != "42" || q.Get("downloadId") != "ABC/Case+ID" || q.Get("pageSize") != "20" {
+			t.Errorf("query = %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"totalRecords":1,"records":[{"id":7,"movieId":42,"downloadId":"ABC/Case+ID"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	records, err := NewClient(server.URL, "key").GetImportHistory(42, "ABC/Case+ID", 20)
+	if err != nil || len(records) != 1 || records[0].MovieID != 42 {
+		t.Fatalf("records=%+v err=%v", records, err)
+	}
+}
+
+func TestGetImportHistoryRejectsTruncatedResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"totalRecords":21,"records":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	if _, err := NewClient(server.URL, "key").GetImportHistory(42, "id", 20); err == nil {
+		t.Fatal("accepted incomplete filtered history")
+	}
+}
+
+func TestGetQueueDetailedRejectsClampedSinglePage(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Query().Get("sortKey") != "id" || r.URL.Query().Get("sortDirection") != "ascending" {
+			t.Errorf("queue snapshot is not stably sorted: %s", r.URL.RawQuery)
+		}
+		if r.URL.Query().Get("page") != "1" || r.URL.Query().Get("pageSize") != "1000" {
+			t.Errorf("queue snapshot was not requested in one bounded page: %s", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"totalRecords":2,"records":[{"id":1}]}`))
+	}))
+	t.Cleanup(server.Close)
+	if _, err := NewClient(server.URL, "key").GetQueueDetailed(); err == nil {
+		t.Fatal("accepted a truncated queue as a complete snapshot")
+	}
+	if requests != 1 {
+		t.Fatalf("queue requests=%d, want one atomic bounded page", requests)
+	}
+}

@@ -30,10 +30,11 @@ func TestFilterRadarrQueueIntersectsCandidateQueueAndTMDB(t *testing.T) {
 	}
 }
 
-func TestReleaseCandidateMetadataUsesCredentialSafeReference(t *testing.T) {
+func TestReleaseCandidateMetadataUsesOneWayReference(t *testing.T) {
 	const secret = "indexer-capability-secret"
+	rawGUID := "https://indexer.invalid/download/signed-path-sentinel?id=7&apikey=" + secret
 	release := radarr.Release{
-		GUID:      "https://indexer.invalid/download?id=7&apikey=" + secret,
+		GUID:      rawGUID,
 		IndexerID: 3, Indexer: "Example", Title: "Movie.2026.1080p", Size: 1024,
 		Protocol: "usenet", Rejected: true, Rejections: []string{"Not an upgrade"},
 	}
@@ -43,7 +44,8 @@ func TestReleaseCandidateMetadataUsesCredentialSafeReference(t *testing.T) {
 		t.Fatalf("candidates = %+v", candidates)
 	}
 	got := candidates[0]
-	if strings.Contains(got.Reference, secret) || !strings.Contains(got.Reference, "REDACTED") {
+	if got.Reference != releaseGUIDReference(rawGUID) || !isReleaseGUIDReference(got.Reference) ||
+		strings.Contains(got.Reference, secret) || strings.Contains(got.Reference, "signed-path-sentinel") {
 		t.Fatalf("unsafe release reference = %q", got.Reference)
 	}
 	if got.Title != release.Title || got.Quality != "WEBDL-1080p" || got.Size != 1024 ||

@@ -3,6 +3,8 @@ package remediation
 import (
 	"database/sql"
 	"log"
+	"sync"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 )
@@ -26,65 +28,78 @@ const autoGiveupStreakKey = "remediation_auto_giveup_streak"
 // *AutoDispatcher only when remediation is wired, and a nil *AutoDispatcher (or
 // leaving the hub's opener unset) cleanly disables the whole path.
 type AutoDispatcher struct {
-	svc *Service
+	svc              *Service
+	now              func() time.Time
+	snapshotMu       sync.Mutex
+	pendingSnapshots map[string][]queueSnapshotJob
+	snapshotWake     chan struct{}
+	startOnce        sync.Once
 }
 
 // NewAutoDispatcher wraps a remediation Service as the hub's IssueOpener.
 func NewAutoDispatcher(svc *Service) *AutoDispatcher {
-	return &AutoDispatcher{svc: svc}
+	return &AutoDispatcher{
+		svc: svc, now: time.Now,
+		pendingSnapshots: make(map[string][]queueSnapshotJob),
+		snapshotWake:     make(chan struct{}, 1),
+	}
 }
 
-// OpenAutoIssue is the poller hook (implements websocket.IssueOpener). It gates
-// on the LIVE settings (read fresh each call), records a deduped auto issue via
-// the Service, and enqueues the Runner when a NEW issue was created. The DB
-// partial-unique index in Service.OpenAutoIssue is the real one-issue-per-stuck-
-// download guarantee; the hub's 2-poll debounce only reduces noise upstream.
-//
-// It never runs the agent inline: Enqueue pushes onto the worker channel and
-// returns immediately, so a slow investigation can't stall the poll goroutine.
-func (a *AutoDispatcher) OpenAutoIssue(serviceType, instanceID, downloadID string, media arr.QueueMediaContext, d arr.Diagnosis) {
+// ObserveQueueSnapshot accepts one successful, complete detailed-queue read.
+// It only copies and queues the value: DB reconciliation and exact-library
+// witnesses run on the observation worker, never on the websocket poller.
+func (a *AutoDispatcher) ObserveQueueSnapshot(serviceType, instanceID string, items []arr.QueueObservation) {
 	if a == nil || a.svc == nil {
 		return
 	}
-	s := a.svc.Settings()
-	// Gate at CALL time on BOTH switches, read fresh so toggling takes effect
-	// without a restart. AutoDispatch independently gates only this poll path; the
-	// circuit breaker flips AutoDispatch off (not Enabled) when it trips.
-	if !s.Enabled || !s.AutoDispatch {
-		return
+	copyItems := append([]arr.QueueObservation(nil), items...)
+	now := time.Now().UTC()
+	if a.now != nil {
+		now = a.now().UTC()
 	}
-
-	created, id := a.svc.OpenAutoIssue(serviceType, instanceID, downloadID, media, d)
-	if !created {
-		return // existing open issue (or a write error): nothing new to run.
-	}
-	// Kick off the read-only investigation off the poll goroutine.
-	a.svc.Enqueue(id)
+	job := queueSnapshotJob{serviceType: serviceType, instanceID: instanceID, items: copyItems, observedAt: now}
+	a.enqueueSnapshotJob(job)
 }
 
-// ReconcileAutoIssues closes database incidents absent from a successful full
-// queue diagnosis snapshot. It is intentionally not gated by Enabled or
-// AutoDispatch: those switches control opening new work, not keeping already
-// recorded incident state truthful across restarts.
-func (a *AutoDispatcher) ReconcileAutoIssues(serviceType, instanceID string, activeDownloadIDs []string) {
-	if a == nil || a.svc == nil {
-		return
+func (a *AutoDispatcher) enqueueSnapshotJob(job queueSnapshotJob) {
+	a.snapshotMu.Lock()
+	key := job.serviceType + "\x00" + job.instanceID
+	// Arrival order is not observation order: a slow older fetch can complete
+	// after a newer websocket/sweeper read. Retain the chronologically latest
+	// success and latest failure only, then preserve success -> failure when the
+	// failure actually happened later. This keeps the queue small without
+	// dropping newer evidence before the durable DB watermark can inspect it.
+	candidates := append(append([]queueSnapshotJob(nil), a.pendingSnapshots[key]...), job)
+	var latestSuccess, latestFailure queueSnapshotJob
+	hasSuccess, hasFailure := false, false
+	for _, candidate := range candidates {
+		if candidate.failure == nil {
+			if !hasSuccess || candidate.observedAt.After(latestSuccess.observedAt) {
+				latestSuccess, hasSuccess = candidate, true
+			}
+			continue
+		}
+		if !hasFailure || candidate.observedAt.After(latestFailure.observedAt) {
+			latestFailure, hasFailure = candidate, true
+		}
 	}
-	a.svc.ReconcileAutoIssues(instanceID, activeDownloadIDs)
-}
-
-// CloseAutoIssue resolves the open auto issue for a download the poller no longer
-// flags (it recovered or left the queue). Gated only on the master switch — NOT
-// AutoDispatch — so a recovered issue still auto-closes even after the circuit
-// breaker disarmed dispatch. A no-op when there's no matching open issue.
-func (a *AutoDispatcher) CloseAutoIssue(serviceType, instanceID, downloadID string) {
-	if a == nil || a.svc == nil {
-		return
+	pending := make([]queueSnapshotJob, 0, 2)
+	if hasSuccess {
+		pending = append(pending, latestSuccess)
+		if hasFailure && latestFailure.observedAt.After(latestSuccess.observedAt) {
+			pending = append(pending, latestFailure)
+		}
+	} else if hasFailure {
+		pending = append(pending, latestFailure)
 	}
-	if !a.svc.Settings().Enabled {
-		return
+	a.pendingSnapshots[key] = pending
+	a.snapshotMu.Unlock()
+	select {
+	case a.snapshotWake <- struct{}{}:
+	default:
+		// A wake is already pending. The newest per-instance snapshot replaced
+		// any older pending value above, so recovery/progress evidence wins.
 	}
-	a.svc.CloseAutoIssueForDownload(instanceID, downloadID)
 }
 
 // --- circuit breaker ---

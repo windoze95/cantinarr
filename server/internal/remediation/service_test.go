@@ -99,11 +99,11 @@ func TestUserIssueLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUserIssue: %v", err)
 	}
-	if resp.IssueID == 0 || resp.Status != IssueOpen {
-		t.Fatalf("CreateUserIssue resp = %+v, want non-zero id + open", resp)
+	if resp.IssueID == 0 || resp.Status != IssueObserving {
+		t.Fatalf("CreateUserIssue resp = %+v, want non-zero id + observing", resp)
 	}
-	if len(notif.adminEvents) != 1 || notif.adminEvents[0] != "issue_created" {
-		t.Fatalf("admin events = %v, want one issue_created", notif.adminEvents)
+	if len(notif.adminEvents) != 0 {
+		t.Fatalf("admin events = %v, want silent observation", notif.adminEvents)
 	}
 
 	// Duplicate report (same reporter, scope, category): bumps occurrences,
@@ -118,8 +118,8 @@ func TestUserIssueLifecycle(t *testing.T) {
 	if dup.IssueID != resp.IssueID {
 		t.Fatalf("duplicate issue id = %d, want same as original %d", dup.IssueID, resp.IssueID)
 	}
-	if len(notif.adminEvents) != 1 {
-		t.Fatalf("admin events after duplicate = %v, want still just one", notif.adminEvents)
+	if len(notif.adminEvents) != 0 {
+		t.Fatalf("admin events after duplicate = %v, want still silent", notif.adminEvents)
 	}
 
 	issue, err := svc.GetIssue(resp.IssueID)
@@ -187,15 +187,15 @@ func TestUserIssueLifecycle(t *testing.T) {
 	if len(all) != 2 {
 		t.Fatalf("ListIssues all = %d, want 2 open issues", len(all))
 	}
-	openOnly, err := svc.ListIssues(IssueOpen)
+	openOnly, err := svc.ListIssues(IssueObserving)
 	if err != nil {
 		t.Fatalf("ListIssues(open): %v", err)
 	}
 	if len(openOnly) != 2 {
 		t.Fatalf("ListIssues(open) = %d, want 2", len(openOnly))
 	}
-	if n, err := svc.OpenIssueCount(); err != nil || n != 2 {
-		t.Fatalf("OpenIssueCount = %d (err %v), want 2", n, err)
+	if n, err := svc.OpenIssueCount(); err != nil || n != 0 {
+		t.Fatalf("OpenIssueCount = %d (err %v), want 0 passive", n, err)
 	}
 
 	// Dismiss closes the issue: it leaves the open set and is idempotent.
@@ -212,8 +212,8 @@ func TestUserIssueLifecycle(t *testing.T) {
 	if dismissed.Status != IssueDismissed {
 		t.Fatalf("status after dismiss = %q, want dismissed", dismissed.Status)
 	}
-	if n, err := svc.OpenIssueCount(); err != nil || n != 1 {
-		t.Fatalf("OpenIssueCount after dismiss = %d (err %v), want 1", n, err)
+	if n, err := svc.OpenIssueCount(); err != nil || n != 0 {
+		t.Fatalf("OpenIssueCount after dismiss = %d (err %v), want 0", n, err)
 	}
 
 	// A dismissed issue may be re-reported, opening a fresh row (closed rows no
@@ -409,21 +409,24 @@ func TestSettingsRoundTrip(t *testing.T) {
 
 	// Round-trip a populated settings value.
 	in := Settings{
-		Enabled:                true,
-		AutoDispatch:           true,
-		AllowReporting:         false,
-		MarkResolvedAsRead:     false, // explicit false must override the true default and round-trip
-		Mode:                   ModeInvestigateOnly,
-		Provider:               "openai",
-		Model:                  "gpt-x",
-		MaxSteps:               20,
-		MaxTurnTokens:          8000,
-		MaxWallClockSecs:       600,
-		MaxCostMicros:          123456,
-		DailyRunCap:            10,
-		DailyCostCeilingMicros: 999999,
-		CircuitBreakerGiveups:  3,
-		MaxUserWaitHours:       48,
+		Enabled:                  true,
+		AutoDispatch:             true,
+		AllowReporting:           false,
+		MarkResolvedAsRead:       false, // explicit false must override the true default and round-trip
+		Mode:                     ModeInvestigateOnly,
+		Provider:                 "openai",
+		Model:                    "gpt-x",
+		MaxSteps:                 20,
+		MaxTurnTokens:            8000,
+		MaxWallClockSecs:         600,
+		MaxCostMicros:            123456,
+		DailyRunCap:              10,
+		DailyCostCeilingMicros:   999999,
+		CircuitBreakerGiveups:    3,
+		MaxUserWaitHours:         48,
+		ObservationMinMinutes:    20,
+		ObservationQuietMinutes:  8,
+		ObservationSettleMinutes: 4,
 	}
 	saved, err := svc.SetSettings(in)
 	if err != nil {
@@ -459,6 +462,8 @@ func TestSettingsRoundTrip(t *testing.T) {
 		MaxWallClockSecs: 1 << 30, MaxCostMicros: 1 << 30,
 		DailyRunCap: 1 << 30, DailyCostCeilingMicros: 1 << 30,
 		CircuitBreakerGiveups: 1 << 30, MaxUserWaitHours: 1 << 30,
+		ObservationMinMinutes: 1 << 30, ObservationQuietMinutes: 1 << 30,
+		ObservationSettleMinutes: 1 << 30,
 	})
 	if err != nil {
 		t.Fatalf("SetSettings high values: %v", err)
@@ -466,7 +471,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if high.MaxSteps != maxConfiguredSteps || high.MaxTurnTokens != maxConfiguredTurnTokens ||
 		high.MaxWallClockSecs != maxConfiguredWallClockSecs || high.MaxCostMicros != maxConfiguredRunCostMicros ||
 		high.DailyRunCap != maxConfiguredDailyRuns || high.DailyCostCeilingMicros != maxConfiguredDailyCost ||
-		high.CircuitBreakerGiveups != maxConfiguredBreakerGiveups || high.MaxUserWaitHours != maxConfiguredUserWaitHours {
+		high.CircuitBreakerGiveups != maxConfiguredBreakerGiveups || high.MaxUserWaitHours != maxConfiguredUserWaitHours ||
+		high.ObservationMinMinutes != maxObservationMinMinutes || high.ObservationQuietMinutes != maxObservationQuietMinutes ||
+		high.ObservationSettleMinutes != maxObservationSettleMinutes {
 		t.Fatalf("high settings were not safely capped: %+v", high)
 	}
 }

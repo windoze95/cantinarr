@@ -64,6 +64,27 @@ AgentAction _episodeSearch() => AgentAction.fromJson({
       'instance_service_type': 'sonarr',
     });
 
+AgentAction _specialSearch() => AgentAction.fromJson({
+      'id': 14,
+      'issue_id': 5,
+      'kind': 'trigger_search',
+      'params': {
+        'media_type': 'tv',
+        'tmdb_id': 42,
+        'season': 0,
+        'episode': 1,
+      },
+      'rationale': 'Search only for the reported special.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Show',
+      'issue_media_type': 'tv',
+      'instance_id': 'sonarr-living-room',
+      'instance_name': 'Living Room TV',
+      'instance_service_type': 'sonarr',
+    });
+
 /// A fake service that returns canned decision results without any network I/O.
 class _FakeIssuesService extends IssuesService {
   _FakeIssuesService() : super(backendDio: Dio());
@@ -246,6 +267,22 @@ void main() {
     expect(find.text('2'), findsOneWidget);
     expect(find.text('Episode'), findsOneWidget);
     expect(find.text('7'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
+  });
+
+  testWidgets('renders an exact S00 special as an approvable proposal',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _specialSearch(),
+    );
+
+    expect(find.text('Season'), findsOneWidget);
+    expect(find.text('0'), findsOneWidget);
+    expect(find.text('Episode'), findsOneWidget);
+    expect(find.text('1'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
   });
 

@@ -29,6 +29,8 @@ type QueueSignal struct {
 	ErrorMessage          string
 	StatusMessages        []StatusMessage
 	Protocol              string
+	Size                  float64
+	SizeLeft              float64
 }
 
 // QueueMediaContext is the stable media identity the arr already returned with
@@ -42,6 +44,17 @@ type QueueMediaContext struct {
 	TvdbID        int
 	SeasonNumber  int
 	EpisodeNumber int
+}
+
+// QueueObservation is one complete, service-neutral queue observation. Queue
+// pollers deliver every item from a successful detailed queue snapshot,
+// including healthy items, so the observer can distinguish an arr that is
+// actively progressing or retrying from one that needs intervention.
+type QueueObservation struct {
+	DownloadID string
+	Media      QueueMediaContext
+	Signal     QueueSignal
+	Diagnosis  Diagnosis
 }
 
 // Diagnosis is the classifier's verdict for one queue item.

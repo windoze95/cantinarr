@@ -534,7 +534,7 @@ func manualImportCandidateMatchesTVScope(candidate sonarr.ManualImportCandidate,
 		if episode.ID == 0 {
 			return false
 		}
-		if scope.SeasonNumber > 0 && episode.SeasonNumber != scope.SeasonNumber {
+		if (scope.SeasonNumber > 0 || scope.EpisodeNumber > 0) && episode.SeasonNumber != scope.SeasonNumber {
 			return false
 		}
 		if scope.EpisodeNumber > 0 && episode.EpisodeNumber != scope.EpisodeNumber {

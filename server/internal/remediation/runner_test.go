@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
+	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
@@ -247,6 +248,34 @@ func TestRunnerNeverOffersOrDispatchesMutatingTools(t *testing.T) {
 	}
 }
 
+func TestRunnerPostClaimRecoveryRaceStartsNoModelTurn(t *testing.T) {
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("msg", mcp.ToolPostIssueMessage)}}}}
+	r, svc, issueID := newTestRunner(t, &fakeToolHost{}, script)
+	probes := 0
+	svc.recoveryProbe = func(*Issue) (arrRecoveryProbe, error) {
+		probes++
+		if probes == 1 {
+			return arrRecoveryProbe{}, nil
+		}
+		return arrRecoveryProbe{active: true, item: arr.QueueObservation{DownloadID: "retry", Media: arr.QueueMediaContext{QueueID: 7, TmdbID: 42}}}, nil
+	}
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatal(err)
+	}
+	if script.idx != 0 {
+		t.Fatalf("provider turns=%d, want zero after post-claim recovery", script.idx)
+	}
+	issue, _ := svc.GetIssue(issueID)
+	if issue.Status != IssueRecovering {
+		t.Fatalf("issue=%+v", issue)
+	}
+	var runStatus string
+	_ = svc.db.QueryRow("SELECT status FROM agent_runs WHERE issue_id=? ORDER BY id DESC LIMIT 1", issueID).Scan(&runStatus)
+	if runStatus != "aborted" {
+		t.Fatalf("run status=%q", runStatus)
+	}
+}
+
 // TestRunnerMaxStepsGivesUp asserts the MaxSteps bound terminates a run that
 // keeps calling tools without concluding, via the give-up terminal path.
 func TestRunnerMaxStepsGivesUp(t *testing.T) {
@@ -348,7 +377,7 @@ func TestConclusionRejectsFreshReadWithoutTypedResolutionProof(t *testing.T) {
 	}
 }
 
-func TestAutoConclusionAcceptsExactTypedClearedQueueProof(t *testing.T) {
+func TestAutoConclusionRejectsQueueAbsenceWithoutExactLibraryProof(t *testing.T) {
 	present := false
 	script := &scriptedTurn{turns: []ai.TranscriptMessage{
 		{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{toolUse("fresh-state", "get_queue")}},
@@ -370,7 +399,7 @@ func TestAutoConclusionAcceptsExactTypedClearedQueueProof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
 	}
-	if issue.Status != IssueResolved || issue.Resolution != arrStateClearedResolution || issue.ResolutionKind != ResolutionArrStateCleared {
+	if issue.Status != IssueNeedsAdmin || issue.ResolutionKind != "" {
 		t.Fatalf("conclusion = status %q resolution %q kind %q", issue.Status, issue.Resolution, issue.ResolutionKind)
 	}
 }
@@ -417,6 +446,72 @@ func TestSuccessfulGenericReadDoesNotProveUserIssueResolved(t *testing.T) {
 	}
 	if issue.Status == IssueResolved {
 		t.Fatal("generic history text falsely resolved a subjective user issue")
+	}
+}
+
+func TestRecoveryStartingDuringModelTurnPreventsHumanGate(t *testing.T) {
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{{
+		Role: ai.RoleAssistant,
+		Content: []ai.TranscriptBlock{{Type: ai.BlockToolUse, ID: "proposal", Name: mcp.ToolProposeAction,
+			Input: json.RawMessage(`{"kind":"trigger_search","params":{"media_type":"movie","tmdb_id":42},"rationale":"retry"}`)}},
+	}}}
+	host := &fakeToolHost{}
+	r, svc, issueID := newTestRunner(t, host, script)
+	calls := 0
+	svc.recoveryProbe = func(*Issue) (arrRecoveryProbe, error) {
+		calls++
+		if calls < 3 {
+			return arrRecoveryProbe{}, nil
+		}
+		return arrRecoveryProbe{active: true, item: arr.QueueObservation{
+			DownloadID: "arr-retry", Media: arr.QueueMediaContext{QueueID: 88, TmdbID: 42},
+		}}, nil
+	}
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatal(err)
+	}
+	host.mu.Lock()
+	proposed := host.proposeCalled
+	host.mu.Unlock()
+	if proposed {
+		t.Fatal("stale model proposal reached the human gate after arr recovery began")
+	}
+	var actions int
+	_ = svc.db.QueryRow("SELECT COUNT(*) FROM agent_actions WHERE issue_id=?", issueID).Scan(&actions)
+	issue, _ := svc.GetIssue(issueID)
+	if actions != 0 || issue.Status != IssueRecovering {
+		t.Fatalf("actions=%d issue=%+v", actions, issue)
+	}
+}
+
+func TestRunOwnedClosureCannotWinAfterObservationSuspendsRun(t *testing.T) {
+	r, svc, issueID := newTestRunner(t, &fakeToolHost{}, &scriptedTurn{})
+	res, err := svc.db.Exec(
+		"INSERT INTO agent_runs(issue_id,trigger,status,model) VALUES (?,'auto','running','m')", issueID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, _ := res.LastInsertId()
+	if _, err := svc.db.Exec("UPDATE issues SET status=?,active_run_id=? WHERE id=?", IssueInvestigating, runID, issueID); err != nil {
+		t.Fatal(err)
+	}
+	// This is the state change that may occur after exactRecoveryProven returns
+	// but before the runner begins its close transaction.
+	if _, err := svc.db.Exec("UPDATE agent_runs SET status='aborted' WHERE id=?", runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec("UPDATE issues SET status=?,active_run_id=NULL WHERE id=?", IssueRecovering, issueID); err != nil {
+		t.Fatal(err)
+	}
+	transitioned, err := r.svc.concludeIssueAggregate(context.Background(), issueID, IssueResolved,
+		arrStateClearedResolution, ResolutionArrStateCleared, issueClosureOptions{expectedRunID: runID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, _ := svc.GetIssue(issueID)
+	if transitioned || issue.ClosedAt != nil || issue.Status != IssueRecovering {
+		t.Fatalf("stale run closed issue after ownership loss: transitioned=%t issue=%+v", transitioned, issue)
 	}
 }
 
@@ -546,6 +641,23 @@ func TestScopeReadToolInputBindsUserQueueReadsToMediaAndEpisode(t *testing.T) {
 	// field above; it can never expose an unrelated row.
 	if got["queue_id"] != float64(91) {
 		t.Fatalf("candidate queue id = %v, want 91: %s", got["queue_id"], raw)
+	}
+}
+
+func TestScopeReadToolInputPreservesExactSpecialSeasonZero(t *testing.T) {
+	issue := &Issue{MediaType: "tv", TmdbID: 42, TvdbID: 4242, SeasonNumber: 0, EpisodeNumber: 1}
+	for _, toolName := range []string{"diagnose_queue", "search_releases", "get_history"} {
+		raw, err := scopeReadToolInput(issue, toolName, json.RawMessage(`{"season_number":9,"episode_number":9}`))
+		if err != nil {
+			t.Fatalf("%s: %v", toolName, err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["season_number"] != float64(0) || got["episode_number"] != float64(1) {
+			t.Fatalf("%s widened special scope: %s", toolName, raw)
+		}
 	}
 }
 

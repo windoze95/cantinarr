@@ -2,6 +2,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
+import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/issues/data/agent_action_models.dart';
 import 'package:cantinarr/features/issues/data/issue_models.dart';
@@ -259,7 +260,7 @@ void main() {
     // Ensure the admin auth state has settled before the audit request.
     await _resumeApp(tester);
 
-    expect(find.text('Admin action needed'), findsOneWidget);
+    expect(find.text('Needs a closer look'), findsWidgets);
     expect(find.text(instruction), findsOneWidget);
     expect(
       find.text(
@@ -320,7 +321,7 @@ void main() {
     expect(service.resolveCalls, 1);
     expect(service.lastDisposition, AdminIssueDisposition.resolved);
     expect(service.lastResolutionNote, note);
-    expect(find.textContaining('Completed by an admin'), findsOneWidget);
+    expect(find.textContaining('Completed after review'), findsOneWidget);
     expect(find.text(note), findsOneWidget);
     expect(find.text('Complete after admin review'), findsNothing);
     expect(find.text('Issue marked resolved.'), findsOneWidget);
@@ -378,8 +379,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.resolveCalls, 1);
-    expect(
-        find.textContaining('Original queue signal cleared'), findsOneWidget);
+    expect(find.textContaining('Media became available'), findsOneWidget);
     expect(
       find.text(
           'The issue changed before completion. Showing its current state.'),
@@ -443,6 +443,100 @@ void main() {
       find.text("Couldn't refresh issues. Showing the last update."),
       findsOneWidget,
     );
+  });
+
+  testWidgets('tracking filter separates passive arr recovery from attention',
+      (tester) async {
+    final attention = Issue.fromJson({
+      ..._issueJson(status: 'awaiting_approval'),
+      'id': 5,
+      'title': 'Needs Review',
+    });
+    final observing = Issue.fromJson({
+      ..._issueJson(status: 'observing'),
+      'id': 6,
+      'title': 'Quiet Watch',
+      'read': false,
+    });
+    final recovering = Issue.fromJson({
+      ..._issueJson(status: 'recovering'),
+      'id': 7,
+      'title': 'Retry In Flight',
+      'read': false,
+    });
+    final service = _FakeIssuesService(
+      thread: IssueThread(issue: attention, messages: const []),
+      issues: [attention, observing, recovering],
+    );
+
+    await _pumpScreen(
+      tester,
+      service: service,
+      screen: const IssuesListScreen(),
+    );
+
+    expect(find.text('Needs Review'), findsOneWidget);
+    expect(find.text('Quiet Watch'), findsNothing);
+    expect(find.text('Retry In Flight'), findsNothing);
+
+    await tester.tap(find.text('Tracking'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Needs Review'), findsNothing);
+    expect(find.text('Quiet Watch'), findsOneWidget);
+    expect(find.text('Retry In Flight'), findsOneWidget);
+    final mutedTitle = tester.widget<Text>(find.text('Quiet Watch'));
+    expect(mutedTitle.style?.color, AppTheme.textSecondary);
+    expect(mutedTitle.style?.fontWeight, FontWeight.w600);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Container &&
+            widget.constraints?.minWidth == 8 &&
+            widget.constraints?.maxWidth == 8 &&
+            widget.constraints?.minHeight == 8 &&
+            widget.constraints?.maxHeight == 8 &&
+            (widget.decoration as BoxDecoration?)?.color == Colors.transparent,
+      ),
+      findsNWidgets(2),
+    );
+  });
+
+  testWidgets('tracking thread is passive while arr recovery is in flight',
+      (tester) async {
+    final service = _FakeIssuesService(
+      thread: IssueThread.fromJson({
+        'issue': _issueJson(status: 'recovering'),
+        'thread': const [],
+      }),
+    );
+
+    await _pumpScreen(
+      tester,
+      service: service,
+      screen: const IssueThreadScreen(issueId: 5),
+    );
+    await _resumeApp(tester);
+
+    expect(find.text('Download recovery in progress'), findsWidgets);
+    expect(
+      find.textContaining('tracking this quietly'),
+      findsOneWidget,
+    );
+    expect(find.text('Complete this issue'), findsNothing);
+    expect(find.text('Complete after admin review'), findsNothing);
+    expect(find.text('Add a reply…'), findsNothing);
+    expect(find.byIcon(Icons.send_rounded), findsNothing);
+    expect(find.text('Working on it…'), findsNothing);
+    for (final implementationTerm in [
+      'Radarr',
+      'Sonarr',
+      'agent',
+      'proposal',
+      'admin',
+    ]) {
+      expect(find.textContaining(implementationTerm), findsNothing);
+    }
   });
 
   testWidgets('agent fixes keeps cards and warns when resume refresh fails',

@@ -25,6 +25,28 @@ void main() {
       expect(IssueStatus.resolved.isTerminal, isTrue);
       expect(IssueStatus.investigating.isActive, isTrue);
       expect(IssueStatus.investigating.isTerminal, isFalse);
+      expect(IssueStatus.observing.isTerminal, isFalse);
+      expect(IssueStatus.observing.label, 'Watching the download');
+      expect(IssueStatus.observing.isActive, isFalse);
+      expect(IssueStatus.observing.isTracking, isTrue);
+      expect(IssueStatus.observing.needsAttention, isFalse);
+      expect(IssueStatus.recovering.isTracking, isTrue);
+      expect(IssueStatus.recovering.label, 'Download recovery in progress');
+      expect(IssueStatus.recovering.needsAttention, isFalse);
+      expect(IssueStatus.awaitingApproval.needsAttention, isTrue);
+    });
+
+    test('shared status labels use requester vocabulary', () {
+      final forbidden = RegExp(
+        r'radarr|sonarr|agent|proposal|admin',
+        caseSensitive: false,
+      );
+      for (final status in IssueStatus.values) {
+        expect(status.label, isNot(matches(forbidden)));
+      }
+      for (final kind in IssueResolutionKind.values) {
+        expect(kind.label, isNot(matches(forbidden)));
+      }
     });
   });
 
@@ -52,6 +74,17 @@ void main() {
       expect(tv.category, IssueCategory.wrongAudio);
       expect(tv.instanceId, 'sonarr-main');
       expect(tv.scopeLabel, 'S2·E4');
+
+      final special = Issue.fromJson({
+        'id': 8,
+        'status': 'observing',
+        'media_type': 'tv',
+        'tmdb_id': 1399,
+        'title': 'Special',
+        'season_number': 0,
+        'episode_number': 1,
+      });
+      expect(special.scopeLabel, 'S0·E1');
       expect(tv.read, isTrue); // absent 'read' defaults true (older server)
 
       final unread = Issue.fromJson({
@@ -88,7 +121,7 @@ void main() {
         'resolution_kind': 'admin_completed',
       });
       expect(adminCompleted.resolutionKind, IssueResolutionKind.adminCompleted);
-      expect(adminCompleted.resolutionKind.label, 'Completed by an admin');
+      expect(adminCompleted.resolutionKind.label, 'Completed after review');
     });
 
     test('never claims "Movie" for a non-movie media_type', () {
@@ -141,6 +174,9 @@ void main() {
         dailyCostCeilingMicros: 5000000,
         circuitBreakerGiveups: 5,
         maxUserWaitHours: 48,
+        observationMinMinutes: 12,
+        observationQuietMinutes: 7,
+        observationSettleMinutes: 3,
       );
       final back = RemediationSettings.fromJson(s.toJson());
       expect(back.provider, 'openai');
@@ -148,6 +184,9 @@ void main() {
       expect(back.mode, RemediationMode.supervised);
       expect(back.maxCostMicros, 500000);
       expect(back.maxUserWaitHours, 48);
+      expect(back.observationMinMinutes, 12);
+      expect(back.observationQuietMinutes, 7);
+      expect(back.observationSettleMinutes, 3);
       expect(back.markResolvedAsRead, isFalse); // explicit false round-trips
     });
 
@@ -157,6 +196,9 @@ void main() {
       expect(s.model, '');
       expect(s.mode, RemediationMode.supervised); // tolerant safe default
       expect(s.maxUserWaitHours, 72);
+      expect(s.observationMinMinutes, 10);
+      expect(s.observationQuietMinutes, 5);
+      expect(s.observationSettleMinutes, 2);
       expect(s.markResolvedAsRead, isTrue); // defaults on when absent
     });
   });

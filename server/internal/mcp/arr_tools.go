@@ -139,7 +139,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "search_releases",
 		AdminOnly:   true,
 		Permission:  auth.PermissionArrSearch,
-		Description: "Interactively search indexers for downloadable releases of a library item and list them with the guid and indexer_id needed to grab one. For movies/TV pass tmdb_id (TV also requires season_number and may include episode_number). For books pass book_id (books have no tmdb_id). Admin only",
+		Description: "Interactively search indexers for downloadable releases of a library item and list them with a one-way release reference and indexer_id. Raw release GUID capabilities are never exposed. For movies/TV pass tmdb_id (TV also requires season_number and may include episode_number). For books pass book_id (books have no tmdb_id). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -172,16 +172,18 @@ var arrToolDefinitions = []Tool{
 		Name:        "grab_release",
 		AdminOnly:   true,
 		Permission:  auth.PermissionDownloadsManage,
-		Description: "Send a specific release from a previous search_releases call to the download client. Admin only",
+		Description: "Freshly re-search the exact movie, TV season/episode, or book scope and send the release matching a one-way reference from search_releases to the download client. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"guid": map[string]interface{}{
 					"type":        "string",
-					"description": "The guid of the release, from search_releases",
+					"pattern":     `^\[REDACTED release sha256:[0-9a-f]{16}\]$`,
+					"description": "The exact one-way release reference from search_releases (raw GUIDs are rejected)",
 				},
 				"indexer_id": map[string]interface{}{
 					"type":        "integer",
+					"minimum":     1,
 					"description": "The indexer_id of the release, from search_releases",
 				},
 				"media_type": map[string]interface{}{
@@ -189,8 +191,42 @@ var arrToolDefinitions = []Tool{
 					"enum":        []string{"movie", "tv", "book"},
 					"description": "Whether the release is for a movie, TV show, or book",
 				},
+				"tmdb_id": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     1,
+					"description": "Required for movie/TV: the exact TMDB id used for the fresh scoped search",
+				},
+				"season_number": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     0,
+					"description": "Required for TV: the exact season used for the fresh scoped search (0 is Specials)",
+				},
+				"episode_number": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     1,
+					"description": "TV only: the exact episode used for the fresh scoped search",
+				},
+				"book_id": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     1,
+					"description": "Required for book: the exact Chaptarr book id used for the fresh scoped search",
+				},
 			},
 			"required": []string{"guid", "indexer_id", "media_type"},
+			"oneOf": []interface{}{
+				map[string]interface{}{
+					"properties": map[string]interface{}{"media_type": map[string]interface{}{"const": "movie"}},
+					"required":   []string{"tmdb_id"},
+				},
+				map[string]interface{}{
+					"properties": map[string]interface{}{"media_type": map[string]interface{}{"const": "tv"}},
+					"required":   []string{"tmdb_id", "season_number"},
+				},
+				map[string]interface{}{
+					"properties": map[string]interface{}{"media_type": map[string]interface{}{"const": "book"}},
+					"required":   []string{"book_id"},
+				},
+			},
 		},
 	},
 	{
@@ -1153,6 +1189,7 @@ func (s *ToolServer) triggerSearch(input json.RawMessage) (*ToolResult, error) {
 const maxReleaseResults = 15
 
 func formatRadarrReleases(releases []radarr.Release) string {
+	capabilities := radarrReleaseCapabilities(releases)
 	sort.SliceStable(releases, func(i, j int) bool {
 		if releases[i].Rejected != releases[j].Rejected {
 			return !releases[i].Rejected
@@ -1176,12 +1213,13 @@ func formatRadarrReleases(releases []radarr.Release) string {
 		if rel.Rejected {
 			fmt.Fprintf(&sb, "   rejected: %s\n", strings.Join(rel.Rejections, "; "))
 		}
-		fmt.Fprintf(&sb, "   guid: %s\n", rel.GUID)
+		fmt.Fprintf(&sb, "   reference: %s\n", releaseGUIDReference(rel.GUID))
 	}
-	return sb.String()
+	return scrubRawReleaseGUIDs(sb.String(), capabilities)
 }
 
 func formatSonarrReleases(releases []sonarr.Release) string {
+	capabilities := sonarrReleaseCapabilities(releases)
 	sort.SliceStable(releases, func(i, j int) bool {
 		if releases[i].Rejected != releases[j].Rejected {
 			return !releases[i].Rejected
@@ -1205,9 +1243,9 @@ func formatSonarrReleases(releases []sonarr.Release) string {
 		if rel.Rejected {
 			fmt.Fprintf(&sb, "   rejected: %s\n", strings.Join(rel.Rejections, "; "))
 		}
-		fmt.Fprintf(&sb, "   guid: %s\n", rel.GUID)
+		fmt.Fprintf(&sb, "   reference: %s\n", releaseGUIDReference(rel.GUID))
 	}
-	return sb.String()
+	return scrubRawReleaseGUIDs(sb.String(), capabilities)
 }
 
 // chaptarrSeeders dereferences a Chaptarr release's optional seeder/leecher
@@ -1220,6 +1258,7 @@ func chaptarrSeeders(n *int) int {
 }
 
 func formatChaptarrReleases(releases []chaptarr.Release) string {
+	capabilities := chaptarrReleaseCapabilities(releases)
 	sort.SliceStable(releases, func(i, j int) bool {
 		if releases[i].Rejected != releases[j].Rejected {
 			return !releases[i].Rejected
@@ -1244,64 +1283,69 @@ func formatChaptarrReleases(releases []chaptarr.Release) string {
 		if rel.Rejected {
 			fmt.Fprintf(&sb, "   rejected: %s\n", strings.Join(rel.Rejections, "; "))
 		}
-		fmt.Fprintf(&sb, "   guid: %s\n", rel.GUID)
+		fmt.Fprintf(&sb, "   reference: %s\n", releaseGUIDReference(rel.GUID))
 	}
-	return sb.String()
+	return scrubRawReleaseGUIDs(sb.String(), capabilities)
 }
 
-func safeReleaseText(value string) string { return secrets.RedactText(value) }
+func safeReleaseText(value string, releases []releaseCapability) string {
+	return secrets.RedactText(scrubRawReleaseGUIDs(value, releases))
+}
 
-func safeReleaseRejections(values []string) []string {
+func safeReleaseRejections(values []string, releases []releaseCapability) []string {
 	out := make([]string, len(values))
 	for i, value := range values {
-		out[i] = safeReleaseText(value)
+		out[i] = safeReleaseText(value, releases)
 	}
 	return out
 }
 
 func radarrReleaseCandidates(releases []radarr.Release) []ReleaseCandidate {
+	capabilities := radarrReleaseCapabilities(releases)
 	if len(releases) > maxReleaseResults {
 		releases = releases[:maxReleaseResults]
 	}
 	out := make([]ReleaseCandidate, 0, len(releases))
 	for _, release := range releases {
 		out = append(out, ReleaseCandidate{
-			Reference: safeReleaseText(release.GUID), IndexerID: release.IndexerID,
-			Title: safeReleaseText(release.Title), Quality: safeReleaseText(release.Quality.Quality.Name),
-			Size: release.Size, Protocol: safeReleaseText(release.Protocol), Indexer: safeReleaseText(release.Indexer),
-			Rejected: release.Rejected, Rejections: safeReleaseRejections(release.Rejections),
+			Reference: releaseGUIDReference(release.GUID), IndexerID: release.IndexerID,
+			Title: safeReleaseText(release.Title, capabilities), Quality: safeReleaseText(release.Quality.Quality.Name, capabilities),
+			Size: release.Size, Protocol: safeReleaseText(release.Protocol, capabilities), Indexer: safeReleaseText(release.Indexer, capabilities),
+			Rejected: release.Rejected, Rejections: safeReleaseRejections(release.Rejections, capabilities),
 		})
 	}
 	return out
 }
 
 func sonarrReleaseCandidates(releases []sonarr.Release) []ReleaseCandidate {
+	capabilities := sonarrReleaseCapabilities(releases)
 	if len(releases) > maxReleaseResults {
 		releases = releases[:maxReleaseResults]
 	}
 	out := make([]ReleaseCandidate, 0, len(releases))
 	for _, release := range releases {
 		out = append(out, ReleaseCandidate{
-			Reference: safeReleaseText(release.GUID), IndexerID: release.IndexerID,
-			Title: safeReleaseText(release.Title), Quality: safeReleaseText(release.Quality.Quality.Name),
-			Size: release.Size, Protocol: safeReleaseText(release.Protocol), Indexer: safeReleaseText(release.Indexer),
-			Rejected: release.Rejected, Rejections: safeReleaseRejections(release.Rejections),
+			Reference: releaseGUIDReference(release.GUID), IndexerID: release.IndexerID,
+			Title: safeReleaseText(release.Title, capabilities), Quality: safeReleaseText(release.Quality.Quality.Name, capabilities),
+			Size: release.Size, Protocol: safeReleaseText(release.Protocol, capabilities), Indexer: safeReleaseText(release.Indexer, capabilities),
+			Rejected: release.Rejected, Rejections: safeReleaseRejections(release.Rejections, capabilities),
 		})
 	}
 	return out
 }
 
 func chaptarrReleaseCandidates(releases []chaptarr.Release) []ReleaseCandidate {
+	capabilities := chaptarrReleaseCapabilities(releases)
 	if len(releases) > maxReleaseResults {
 		releases = releases[:maxReleaseResults]
 	}
 	out := make([]ReleaseCandidate, 0, len(releases))
 	for _, release := range releases {
 		out = append(out, ReleaseCandidate{
-			Reference: safeReleaseText(release.GUID), IndexerID: release.IndexerID,
-			Title: safeReleaseText(release.Title), Size: release.Size,
-			Protocol: safeReleaseText(release.Protocol), Indexer: safeReleaseText(release.Indexer),
-			Rejected: release.Rejected, Rejections: safeReleaseRejections(release.Rejections),
+			Reference: releaseGUIDReference(release.GUID), IndexerID: release.IndexerID,
+			Title: safeReleaseText(release.Title, capabilities), Size: release.Size,
+			Protocol: safeReleaseText(release.Protocol, capabilities), Indexer: safeReleaseText(release.Indexer, capabilities),
+			Rejected: release.Rejected, Rejections: safeReleaseRejections(release.Rejections, capabilities),
 		})
 	}
 	return out
@@ -1321,6 +1365,9 @@ func (s *ToolServer) searchReleases(input json.RawMessage, instanceID string) (*
 
 	switch params.MediaType {
 	case "movie":
+		if params.TmdbID <= 0 || params.SeasonNumber != nil || params.EpisodeNumber != nil || params.BookID != 0 {
+			return &ToolResult{Text: "Movie release search requires only a positive tmdb_id as its media scope."}, nil
+		}
 		radarrClient := s.GetRadarrFor(instanceID)
 		if radarrClient == nil {
 			return &ToolResult{Text: "Radarr is not configured."}, nil
@@ -1332,6 +1379,9 @@ func (s *ToolServer) searchReleases(input json.RawMessage, instanceID string) (*
 		if movie == nil {
 			return &ToolResult{Text: "This movie is not in the library yet. Use request_media to add it first."}, nil
 		}
+		if movie.ID <= 0 || movie.TmdbID != params.TmdbID {
+			return nil, fmt.Errorf("Radarr returned a movie outside the requested TMDB scope")
+		}
 		releases, err := radarrClient.SearchReleases(movie.ID)
 		if err != nil {
 			return nil, err
@@ -1339,18 +1389,19 @@ func (s *ToolServer) searchReleases(input json.RawMessage, instanceID string) (*
 		if len(releases) == 0 {
 			return &ToolResult{Text: fmt.Sprintf("No releases found for %s (%d).", movie.Title, movie.Year)}, nil
 		}
-		header := fmt.Sprintf("Found %d release(s) for %s (%d), showing top %d. Use grab_release with a guid and indexer_id to download one.\n",
-			len(releases), movie.Title, movie.Year, min(len(releases), maxReleaseResults))
-		text := header + formatRadarrReleases(releases)
+		header := fmt.Sprintf("Found %d release(s) for %s (%d), showing top %d. Use grab_release with guid=<one-way reference>, indexer_id, media_type=movie, and tmdb_id=%d.\n",
+			len(releases), movie.Title, movie.Year, min(len(releases), maxReleaseResults), params.TmdbID)
+		text := scrubRawReleaseGUIDs(header+formatRadarrReleases(releases), radarrReleaseCapabilities(releases))
 		return &ToolResult{Text: text, ReleaseCandidates: radarrReleaseCandidates(releases)}, nil
 
 	case "tv":
+		if params.TmdbID <= 0 || params.SeasonNumber == nil || *params.SeasonNumber < 0 || params.BookID != 0 ||
+			(params.EpisodeNumber != nil && *params.EpisodeNumber <= 0) {
+			return &ToolResult{Text: "TV release search requires a positive tmdb_id, a non-negative season_number, and optionally a positive episode_number."}, nil
+		}
 		sonarrClient := s.GetSonarrFor(instanceID)
 		if sonarrClient == nil {
 			return &ToolResult{Text: "Sonarr is not configured."}, nil
-		}
-		if params.SeasonNumber == nil {
-			return &ToolResult{Text: "season_number is required when searching TV releases."}, nil
 		}
 		series, err := s.findSeriesByTMDB(sonarrClient, params.TmdbID)
 		if err != nil {
@@ -1359,23 +1410,28 @@ func (s *ToolServer) searchReleases(input json.RawMessage, instanceID string) (*
 		if series == nil {
 			return &ToolResult{Text: "This show is not in the library yet. Use request_media to add it first."}, nil
 		}
+		if series.ID <= 0 || series.TmdbID != params.TmdbID {
+			return nil, fmt.Errorf("Sonarr returned a series outside the requested TMDB scope")
+		}
 		var releases []sonarr.Release
 		if params.EpisodeNumber != nil {
 			episodes, err := sonarrClient.GetEpisodes(series.ID, *params.SeasonNumber)
 			if err != nil {
 				return nil, err
 			}
-			episodeID := 0
+			episodeIDs := make([]int, 0, 1)
 			for _, episode := range episodes {
-				if episode.EpisodeNumber == *params.EpisodeNumber {
-					episodeID = episode.ID
-					break
+				if episode.ID > 0 && episode.SeasonNumber == *params.SeasonNumber && episode.EpisodeNumber == *params.EpisodeNumber {
+					episodeIDs = append(episodeIDs, episode.ID)
 				}
 			}
-			if episodeID == 0 {
+			if len(episodeIDs) == 0 {
 				return &ToolResult{Text: fmt.Sprintf("Episode S%02dE%02d was not found in %s.", *params.SeasonNumber, *params.EpisodeNumber, series.Title)}, nil
 			}
-			releases, err = sonarrClient.SearchEpisodeReleases(episodeID)
+			if len(episodeIDs) != 1 {
+				return nil, fmt.Errorf("Sonarr returned an ambiguous episode inside the requested TV scope")
+			}
+			releases, err = sonarrClient.SearchEpisodeReleases(episodeIDs[0])
 		} else {
 			releases, err = sonarrClient.SearchReleases(series.ID, *params.SeasonNumber)
 		}
@@ -1389,23 +1445,23 @@ func (s *ToolServer) searchReleases(input json.RawMessage, instanceID string) (*
 			return &ToolResult{Text: fmt.Sprintf("No releases found for %s season %d.", series.Title, *params.SeasonNumber)}, nil
 		}
 		if params.EpisodeNumber != nil {
-			header := fmt.Sprintf("Found %d release(s) for %s S%02dE%02d, showing top %d. Use grab_release with a guid and indexer_id to download one.\n",
-				len(releases), series.Title, *params.SeasonNumber, *params.EpisodeNumber, min(len(releases), maxReleaseResults))
-			text := header + formatSonarrReleases(releases)
+			header := fmt.Sprintf("Found %d release(s) for %s S%02dE%02d, showing top %d. Use grab_release with guid=<one-way reference>, indexer_id, media_type=tv, tmdb_id=%d, season_number=%d, and episode_number=%d.\n",
+				len(releases), series.Title, *params.SeasonNumber, *params.EpisodeNumber, min(len(releases), maxReleaseResults), params.TmdbID, *params.SeasonNumber, *params.EpisodeNumber)
+			text := scrubRawReleaseGUIDs(header+formatSonarrReleases(releases), sonarrReleaseCapabilities(releases))
 			return &ToolResult{Text: text, ReleaseCandidates: sonarrReleaseCandidates(releases)}, nil
 		}
-		header := fmt.Sprintf("Found %d release(s) for %s season %d, showing top %d. Use grab_release with a guid and indexer_id to download one.\n",
-			len(releases), series.Title, *params.SeasonNumber, min(len(releases), maxReleaseResults))
-		text := header + formatSonarrReleases(releases)
+		header := fmt.Sprintf("Found %d release(s) for %s season %d, showing top %d. Use grab_release with guid=<one-way reference>, indexer_id, media_type=tv, tmdb_id=%d, and season_number=%d.\n",
+			len(releases), series.Title, *params.SeasonNumber, min(len(releases), maxReleaseResults), params.TmdbID, *params.SeasonNumber)
+		text := scrubRawReleaseGUIDs(header+formatSonarrReleases(releases), sonarrReleaseCapabilities(releases))
 		return &ToolResult{Text: text, ReleaseCandidates: sonarrReleaseCandidates(releases)}, nil
 
 	case "book":
+		if params.BookID <= 0 || params.TmdbID != 0 || params.SeasonNumber != nil || params.EpisodeNumber != nil {
+			return &ToolResult{Text: "Book release search requires only a positive book_id as its media scope."}, nil
+		}
 		chaptarrClient := s.GetChaptarrFor(instanceID)
 		if chaptarrClient == nil {
 			return &ToolResult{Text: "Chaptarr is not configured."}, nil
-		}
-		if params.BookID == 0 {
-			return &ToolResult{Text: "book_id is required when searching book releases."}, nil
 		}
 		releases, err := chaptarrClient.SearchReleases(params.BookID)
 		if err != nil {
@@ -1414,9 +1470,9 @@ func (s *ToolServer) searchReleases(input json.RawMessage, instanceID string) (*
 		if len(releases) == 0 {
 			return &ToolResult{Text: fmt.Sprintf("No releases found for book id %d.", params.BookID)}, nil
 		}
-		header := fmt.Sprintf("Found %d release(s) for book id %d, showing top %d. Use grab_release with a guid and indexer_id to download one.\n",
-			len(releases), params.BookID, min(len(releases), maxReleaseResults))
-		text := header + formatChaptarrReleases(releases)
+		header := fmt.Sprintf("Found %d release(s) for book id %d, showing top %d. Use grab_release with guid=<one-way reference>, indexer_id, media_type=book, and book_id=%d.\n",
+			len(releases), params.BookID, min(len(releases), maxReleaseResults), params.BookID)
+		text := scrubRawReleaseGUIDs(header+formatChaptarrReleases(releases), chaptarrReleaseCapabilities(releases))
 		return &ToolResult{Text: text, ReleaseCandidates: chaptarrReleaseCandidates(releases)}, nil
 
 	default:
@@ -1426,16 +1482,17 @@ func (s *ToolServer) searchReleases(input json.RawMessage, instanceID string) (*
 
 // --- grab_release (admin) ---
 
-func (s *ToolServer) grabRelease(input json.RawMessage) (*ToolResult, error) {
-	var params struct {
-		GUID      string `json:"guid"`
-		IndexerID int    `json:"indexer_id"`
-		MediaType string `json:"media_type"`
-	}
+func (s *ToolServer) grabRelease(input json.RawMessage, instanceID string) (*ToolResult, error) {
+	var params scopedReleaseGrabParams
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := GrabReleaseHelper(s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.GUID, params.IndexerID, 0)
+	text, err := grabFreshScopedRelease(
+		s.GetRadarrFor(instanceID),
+		s.GetSonarrFor(instanceID),
+		s.GetChaptarrFor(instanceID),
+		params,
+	)
 	if err != nil {
 		return nil, err
 	}

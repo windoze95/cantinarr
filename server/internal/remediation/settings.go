@@ -34,6 +34,9 @@ const (
 	maxConfiguredDailyCost      = 100_000_000
 	maxConfiguredBreakerGiveups = 100
 	maxConfiguredUserWaitHours  = 24 * 30
+	maxObservationMinMinutes    = 24 * 60
+	maxObservationQuietMinutes  = 6 * 60
+	maxObservationSettleMinutes = 60
 )
 
 // Settings is the global AI remediation configuration. It is stored as the
@@ -51,21 +54,24 @@ const (
 // AllowReporting (the user-visible "Report a problem" affordance, surfaced to
 // non-admin clients via /api/config).
 type Settings struct {
-	Enabled                bool   `json:"enabled"`                   // master switch — ships OFF
-	AutoDispatch           bool   `json:"auto_dispatch"`             // poller may open auto issues — ships OFF
-	AllowReporting         bool   `json:"allow_reporting"`           // user-visible "Report a problem" affordance
-	MarkResolvedAsRead     bool   `json:"mark_resolved_as_read"`     // mark an issue read when it resolves (default ON)
-	Mode                   string `json:"mode"`                      // investigate_only | supervised
-	Provider               string `json:"provider"`                  // "" = inherit the configured AI provider
-	Model                  string `json:"model"`                     // "" = inherit the configured AI model
-	MaxSteps               int    `json:"max_steps"`                 // total tool calls per investigation
-	MaxTurnTokens          int    `json:"max_turn_tokens"`           // per-turn output cap
-	MaxWallClockSecs       int    `json:"max_wall_clock_secs"`       // active wall-clock budget
-	MaxCostMicros          int    `json:"max_cost_micros"`           // per-run cost ceiling (millionths USD)
-	DailyRunCap            int    `json:"daily_run_cap"`             // max runs/day
-	DailyCostCeilingMicros int    `json:"daily_cost_ceiling_micros"` // global cost ceiling/day (millionths USD)
-	CircuitBreakerGiveups  int    `json:"circuit_breaker_giveups"`   // consecutive auto give-ups -> auto-dispatch off
-	MaxUserWaitHours       int    `json:"max_user_wait_hours"`       // W4: reply-TTL — close an awaiting_user issue with no reply within this window
+	Enabled                  bool   `json:"enabled"`                    // master switch — ships OFF
+	AutoDispatch             bool   `json:"auto_dispatch"`              // poller may open auto issues — ships OFF
+	AllowReporting           bool   `json:"allow_reporting"`            // user-visible "Report a problem" affordance
+	MarkResolvedAsRead       bool   `json:"mark_resolved_as_read"`      // mark an issue read when it resolves (default ON)
+	Mode                     string `json:"mode"`                       // investigate_only | supervised
+	Provider                 string `json:"provider"`                   // "" = inherit the configured AI provider
+	Model                    string `json:"model"`                      // "" = inherit the configured AI model
+	MaxSteps                 int    `json:"max_steps"`                  // total tool calls per investigation
+	MaxTurnTokens            int    `json:"max_turn_tokens"`            // per-turn output cap
+	MaxWallClockSecs         int    `json:"max_wall_clock_secs"`        // active wall-clock budget
+	MaxCostMicros            int    `json:"max_cost_micros"`            // per-run cost ceiling (millionths USD)
+	DailyRunCap              int    `json:"daily_run_cap"`              // max runs/day
+	DailyCostCeilingMicros   int    `json:"daily_cost_ceiling_micros"`  // global cost ceiling/day (millionths USD)
+	CircuitBreakerGiveups    int    `json:"circuit_breaker_giveups"`    // consecutive auto give-ups -> auto-dispatch off
+	MaxUserWaitHours         int    `json:"max_user_wait_hours"`        // W4: reply-TTL — close an awaiting_user issue with no reply within this window
+	ObservationMinMinutes    int    `json:"observation_min_minutes"`    // minimum persistent-problem age before promotion
+	ObservationQuietMinutes  int    `json:"observation_quiet_minutes"`  // unchanged time before promotion
+	ObservationSettleMinutes int    `json:"observation_settle_minutes"` // queue-absence settle window
 }
 
 // UnmarshalJSON accepts the pre-mode "autonomy" field so existing stored blobs
@@ -113,21 +119,24 @@ func legacyAutonomyMode(autonomy string) (string, bool) {
 // feature ships OFF. The cost ceilings are best-effort guardrails.
 func Defaults() Settings {
 	return Settings{
-		Enabled:                false,
-		AutoDispatch:           false,
-		AllowReporting:         true,
-		MarkResolvedAsRead:     true,
-		Mode:                   ModeSupervised,
-		Provider:               "",
-		Model:                  "",
-		MaxSteps:               12,
-		MaxTurnTokens:          4096,
-		MaxWallClockSecs:       300,
-		MaxCostMicros:          500000, // ~$0.50/run
-		DailyRunCap:            50,
-		DailyCostCeilingMicros: 5000000, // ~$5/day, global
-		CircuitBreakerGiveups:  5,
-		MaxUserWaitHours:       72, // W4: 3 days for a reporter to answer before wont_fix(user_unresponsive)
+		Enabled:                  false,
+		AutoDispatch:             false,
+		AllowReporting:           true,
+		MarkResolvedAsRead:       true,
+		Mode:                     ModeSupervised,
+		Provider:                 "",
+		Model:                    "",
+		MaxSteps:                 12,
+		MaxTurnTokens:            4096,
+		MaxWallClockSecs:         300,
+		MaxCostMicros:            500000, // ~$0.50/run
+		DailyRunCap:              50,
+		DailyCostCeilingMicros:   5000000, // ~$5/day, global
+		CircuitBreakerGiveups:    5,
+		MaxUserWaitHours:         72, // W4: 3 days for a reporter to answer before wont_fix(user_unresponsive)
+		ObservationMinMinutes:    10,
+		ObservationQuietMinutes:  5,
+		ObservationSettleMinutes: 2,
 	}
 }
 
@@ -189,6 +198,21 @@ func (g *Settings) normalize() {
 		g.MaxUserWaitHours = d.MaxUserWaitHours
 	} else if g.MaxUserWaitHours > maxConfiguredUserWaitHours {
 		g.MaxUserWaitHours = maxConfiguredUserWaitHours
+	}
+	if g.ObservationMinMinutes <= 0 {
+		g.ObservationMinMinutes = d.ObservationMinMinutes
+	} else if g.ObservationMinMinutes > maxObservationMinMinutes {
+		g.ObservationMinMinutes = maxObservationMinMinutes
+	}
+	if g.ObservationQuietMinutes <= 0 {
+		g.ObservationQuietMinutes = d.ObservationQuietMinutes
+	} else if g.ObservationQuietMinutes > maxObservationQuietMinutes {
+		g.ObservationQuietMinutes = maxObservationQuietMinutes
+	}
+	if g.ObservationSettleMinutes <= 0 {
+		g.ObservationSettleMinutes = d.ObservationSettleMinutes
+	} else if g.ObservationSettleMinutes > maxObservationSettleMinutes {
+		g.ObservationSettleMinutes = maxObservationSettleMinutes
 	}
 }
 

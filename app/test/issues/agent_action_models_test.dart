@@ -186,6 +186,56 @@ void main() {
       expect(action.canTakeAction, isTrue);
     });
 
+    test('S00 special search remains exact and actionable', () {
+      final action = AgentAction.fromJson({
+        'id': 33,
+        'issue_id': 4,
+        'kind': 'trigger_search',
+        'params': {
+          'media_type': 'tv',
+          'tmdb_id': 42,
+          'season': 0,
+          'episode': 1,
+        },
+        'status': 'proposed',
+        'can_decide': true,
+        'issue_status': 'awaiting_approval',
+        'issue_media_type': 'tv',
+        'instance_id': 'sonarr-living-room',
+        'instance_name': 'Living Room TV',
+        'instance_service_type': 'sonarr',
+      });
+
+      expect(action.params.season, 0);
+      expect(action.params.episode, 1);
+      expect(action.params.validationProblem(action.kind), isNull);
+      expect(action.canTakeAction, isTrue);
+    });
+
+    test('negative TV season is never actionable', () {
+      final action = AgentAction.fromJson({
+        'id': 34,
+        'issue_id': 4,
+        'kind': 'trigger_search',
+        'params': {
+          'media_type': 'tv',
+          'tmdb_id': 42,
+          'season': -1,
+        },
+        'status': 'proposed',
+        'can_decide': true,
+        'issue_status': 'awaiting_approval',
+        'issue_media_type': 'tv',
+        'instance_id': 'sonarr-living-room',
+        'instance_name': 'Living Room TV',
+        'instance_service_type': 'sonarr',
+      });
+
+      expect(action.params.season, isNull);
+      expect(action.params.validationProblem(action.kind), contains('season'));
+      expect(action.canTakeAction, isFalse);
+    });
+
     test('missing or mismatched target metadata blocks a proposal', () {
       Map<String, dynamic> proposal() => {
             'id': 32,
@@ -267,6 +317,26 @@ void main() {
         'stop_reason': 'admin_completed',
       });
       expect(completed.stopReasonLabel, 'Completed after admin review');
+    });
+
+    test('recovery-aborted runs do not claim the issue closed', () {
+      for (final entry in {
+        'arr_recovery_in_flight': 'resumed download recovery',
+        'media_state_changed': 'live media state changed',
+        'recovery_preflight_failed': 'could not be verified',
+      }.entries) {
+        final run = AgentRun.fromJson({
+          'id': 1,
+          'issue_id': 2,
+          'trigger': 'user_report',
+          'status': 'aborted',
+          'stop_reason': entry.key,
+        });
+
+        expect(run.statusLabel, 'Investigation stopped');
+        expect(run.stopReasonLabel, contains(entry.value));
+        expect(run.statusLabel, isNot(contains('closed')));
+      }
     });
 
     test('parses a run + ordered steps with a cost label', () {

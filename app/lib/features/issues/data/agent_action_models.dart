@@ -359,7 +359,7 @@ class AgentActionParams {
 
   String? get mediaType => _str('media_type');
 
-  /// grab_release: the release GUID (an opaque indexer id, shown truncated).
+  /// grab_release: the server-issued one-way release reference.
   String? get guid => _str('guid');
   int? get indexerId => _int('indexer_id');
   String? get releaseTitle => _str('release_title');
@@ -392,7 +392,10 @@ class AgentActionParams {
   int? get tmdbId => _int('tmdb_id');
   int? get season {
     final v = _int('season');
-    return (v != null && v > 0) ? v : null;
+    // An explicitly supplied zero is Sonarr's Specials season. Missing and
+    // negative values remain invalid, but S00 must survive parsing so an exact
+    // special does not become an undecidable proposal in the app.
+    return (v != null && v >= 0) ? v : null;
   }
 
   int? get episode {
@@ -528,8 +531,11 @@ class AgentActionParams {
               (_raw.containsKey('season') || _raw.containsKey('episode'))) {
             return 'The proposed movie search contains TV episode details.';
           }
+          if (_raw.containsKey('season') && season == null) {
+            return 'The proposed TV season is invalid.';
+          }
           if (_raw.containsKey('episode') &&
-              ((episode ?? 0) <= 0 || (season ?? 0) <= 0)) {
+              ((episode ?? 0) <= 0 || season == null)) {
             return 'The proposed episode search is missing its season or episode.';
           }
         }
@@ -601,7 +607,7 @@ class AgentRun {
         'waiting_user' => 'Waiting for a reply',
         'waiting_approval' => 'Waiting for fix review',
         'resume_pending' => 'Ready to continue after a reply or decision',
-        'aborted' => 'Investigation stopped when the issue closed',
+        'aborted' => 'Investigation stopped',
         _ => 'Investigation status unknown',
       };
 
@@ -612,7 +618,10 @@ class AgentRun {
         'timeout' => 'Reached the investigation time limit',
         'max_cost' => 'Reached the investigation cost limit',
         'model_error' => 'The AI provider returned an error',
+        'infrastructure_error' => 'The investigation service returned an error',
         'no_diagnosis' => 'No reliable diagnosis was found',
+        'unverified_conclusion' =>
+          'The proposed resolution could not be verified',
         'awaiting_approval' => 'Waiting for an admin to review a fix',
         'awaiting_user' => 'Waiting for the reporter to reply',
         'user_unresponsive' => 'Closed after no reply',
@@ -623,6 +632,15 @@ class AgentRun {
         'server_restarted' => 'Interrupted by a server restart',
         'action_outcome_unknown' =>
           'Stopped because an approved action needs manual verification',
+        'arr_recovery_in_flight' =>
+          'Stopped because the media service resumed download recovery',
+        'media_state_changed' => 'Stopped because the live media state changed',
+        'recovery_preflight_failed' =>
+          'Stopped because the latest media state could not be verified',
+        'unresumable_transcript' =>
+          'Stopped because the saved investigation could not be resumed',
+        'legacy_release_metadata' =>
+          'Stopped because a legacy fix lacked verified release details',
         _ => 'Stopped for an unrecognized reason',
       };
 

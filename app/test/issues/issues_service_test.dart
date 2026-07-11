@@ -12,7 +12,7 @@ void main() {
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
 
-    final issueId = await IssuesService(backendDio: dio).reportProblem(
+    final result = await IssuesService(backendDio: dio).reportProblem(
       instanceId: 'sonarr-living-room',
       mediaType: 'tv',
       tmdbId: 1399,
@@ -23,13 +23,34 @@ void main() {
       title: 'Some Show',
     );
 
-    expect(issueId, 42);
+    expect(result.issueId, 42);
+    expect(result.status, IssueStatus.observing);
     expect(adapter.path, '/api/issues');
     expect(adapter.body['instance_id'], 'sonarr-living-room');
     expect(adapter.body['media_type'], 'tv');
     expect(adapter.body['tmdb_id'], 1399);
     expect(adapter.body['season_number'], 2);
     expect(adapter.body['episode_number'], 4);
+  });
+
+  test('problem report preserves an exact Specials episode scope', () async {
+    final adapter = _CaptureAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    await IssuesService(backendDio: dio).reportProblem(
+      instanceId: 'sonarr-living-room',
+      mediaType: 'tv',
+      tmdbId: 1399,
+      tvdbId: 121361,
+      seasonNumber: 0,
+      episodeNumber: 1,
+      category: IssueCategory.badCopy,
+      title: 'Some Show',
+    );
+
+    expect(adapter.body['season_number'], 0);
+    expect(adapter.body['episode_number'], 1);
   });
 
   test('admin resolution sends typed disposition and required note', () async {
@@ -65,7 +86,7 @@ class _CaptureAdapter implements HttpClientAdapter {
   final Map<String, dynamic> response;
 
   _CaptureAdapter({
-    this.response = const {'issue_id': 42, 'status': 'open'},
+    this.response = const {'issue_id': 42, 'status': 'observing'},
   });
 
   @override

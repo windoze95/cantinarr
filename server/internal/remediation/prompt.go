@@ -57,7 +57,7 @@ func buildSystemPrompt(issue *Issue) string {
 		fmt.Fprintf(&sb, "authoritative_queue_id: %d\n", issue.ArrQueueID)
 	}
 	if issue.MediaType == "tv" {
-		fmt.Fprintf(&sb, "scope: season %d, episode %d (0 means whole series/season)\n", issue.SeasonNumber, issue.EpisodeNumber)
+		fmt.Fprintf(&sb, "scope: season %d, episode %d (episode 0 means whole season/series; season 0 + positive episode is an exact special)\n", issue.SeasonNumber, issue.EpisodeNumber)
 	}
 	return sb.String()
 }

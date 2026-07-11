@@ -174,3 +174,19 @@ func TestOpenRepairsUnsafeRemediationStates(t *testing.T) {
 		t.Fatalf("legacy release gate repair = action %q issue %q run %q", legacyActionStatus, legacyIssueStatus, legacyRunStatus)
 	}
 }
+
+func TestSafeReleaseActionJSONFingerprintsFakeRedactionMarkers(t *testing.T) {
+	for _, unsafe := range []string{
+		"[REDACTED release sha256:opaque-secret]",
+		"https://idx.invalid/[REDACTED]?unrecognized=opaque-secret",
+	} {
+		safe, _, err := safeReleaseActionJSON(`{"media_type":"movie","guid":"` + unsafe + `","indexer_id":3}`)
+		if err != nil {
+			t.Fatalf("safeReleaseActionJSON(%q): %v", unsafe, err)
+		}
+		if strings.Contains(safe, "opaque-secret") || strings.Contains(safe, "unrecognized") ||
+			!strings.Contains(safe, "[REDACTED release sha256:") {
+			t.Fatalf("unsafe release marker survived migration boundary: %s", safe)
+		}
+	}
+}

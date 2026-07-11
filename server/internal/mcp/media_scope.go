@@ -42,7 +42,7 @@ func (s mediaReadScope) matchesSonarrIdentity(tmdbID, tvdbID int) bool {
 }
 
 func (s mediaReadScope) matchesEpisode(ep *sonarr.EpisodeContext) bool {
-	if s.SeasonNumber > 0 && (ep == nil || ep.SeasonNumber != s.SeasonNumber) {
+	if (s.SeasonNumber > 0 || s.EpisodeNumber > 0) && (ep == nil || ep.SeasonNumber != s.SeasonNumber) {
 		return false
 	}
 	if s.EpisodeNumber > 0 && (ep == nil || ep.SeasonNumber != s.SeasonNumber || ep.EpisodeNumber != s.EpisodeNumber) {

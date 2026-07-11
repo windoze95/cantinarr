@@ -36,10 +36,12 @@ enum IssueCategory {
 /// server values (mapped to [unknown]) so a future status can't break parsing.
 enum IssueStatus {
   open('open', 'Reported'),
+  observing('observing', 'Watching the download'),
+  recovering('recovering', 'Download recovery in progress'),
   investigating('investigating', 'Checking the problem'),
   awaitingUser('awaiting_user', 'Needs your reply'),
   awaitingApproval('awaiting_approval', 'Fix ready for review'),
-  needsAdmin('needs_admin', 'Needs admin help'),
+  needsAdmin('needs_admin', 'Needs a closer look'),
   resolved('resolved', 'Resolved'),
   wontFix('wont_fix', 'Closed without a fix'),
   failed('failed', 'Could not resolve'),
@@ -58,6 +60,14 @@ enum IssueStatus {
       this == failed ||
       this == dismissed;
 
+  /// True while Cantinarr is passively tracking the arr's own recovery work.
+  /// These issues remain open for audit/history, but must not be presented as
+  /// agent or admin work that needs attention.
+  bool get isTracking => this == observing || this == recovering;
+
+  /// True when an open issue belongs in the admin's attention queue.
+  bool get needsAttention => !isTerminal && !isTracking;
+
   /// True while the issue is actively being worked (drives a typing/poll hint).
   bool get isActive => this == open || this == investigating;
 
@@ -71,11 +81,11 @@ enum IssueStatus {
 /// remains passive detail; this enum provides fixed, app-authored copy that
 /// makes it clear whether the agent acted or the arr state changed elsewhere.
 enum IssueResolutionKind {
-  agentConcluded('agent_concluded', 'Concluded by the agent'),
-  arrStateCleared('arr_state_cleared', 'Original queue signal cleared'),
+  agentConcluded('agent_concluded', 'Review completed'),
+  arrStateCleared('arr_state_cleared', 'Media became available'),
   reporterTimeout('reporter_timeout', 'Closed after no reply'),
-  adminDismissed('admin_dismissed', 'Dismissed by an admin'),
-  adminCompleted('admin_completed', 'Completed by an admin'),
+  adminDismissed('admin_dismissed', 'Closed after review'),
+  adminCompleted('admin_completed', 'Completed after review'),
   legacyUnknown('legacy_unknown', 'How it closed is unknown'),
   unknown('', 'How it closed is unknown');
 
@@ -167,9 +177,11 @@ class Issue {
   /// "S2·E4" / "Season 2" / "Movie".
   String get scopeLabel {
     if (isTv) {
+      // A positive episode disambiguates Sonarr Specials (season zero) from
+      // the season=0/episode=0 whole-series sentinel.
+      if (episodeNumber > 0) return 'S$seasonNumber·E$episodeNumber';
       if (seasonNumber <= 0) return 'Series';
-      if (episodeNumber <= 0) return 'Season $seasonNumber';
-      return 'S$seasonNumber·E$episodeNumber';
+      return 'Season $seasonNumber';
     }
     if (mediaType.isNotEmpty && mediaType != 'movie') {
       // 'book', or an off-contract value from an older server (auto issues
@@ -209,6 +221,22 @@ class Issue {
             DateTime.tryParse(json['updated_at'] as String? ?? '')?.toLocal(),
         closedAt:
             DateTime.tryParse(json['closed_at'] as String? ?? '')?.toLocal(),
+      );
+}
+
+/// Minimal acknowledgement returned when a reporter creates or adds to an
+/// issue. The initial server status lets the app explain that an arr recovery
+/// is already being watched instead of implying agent work has begun.
+class IssueReportResult {
+  final int issueId;
+  final IssueStatus status;
+
+  const IssueReportResult({required this.issueId, required this.status});
+
+  factory IssueReportResult.fromJson(Map<String, dynamic> json) =>
+      IssueReportResult(
+        issueId: (json['issue_id'] as num?)?.toInt() ?? 0,
+        status: IssueStatus.fromValue(json['status'] as String?),
       );
 }
 
@@ -324,6 +352,9 @@ class RemediationSettings {
   final int dailyCostCeilingMicros;
   final int circuitBreakerGiveups;
   final int maxUserWaitHours;
+  final int observationMinMinutes;
+  final int observationQuietMinutes;
+  final int observationSettleMinutes;
 
   const RemediationSettings({
     required this.enabled,
@@ -341,6 +372,9 @@ class RemediationSettings {
     required this.dailyCostCeilingMicros,
     required this.circuitBreakerGiveups,
     required this.maxUserWaitHours,
+    required this.observationMinMinutes,
+    required this.observationQuietMinutes,
+    required this.observationSettleMinutes,
   });
 
   factory RemediationSettings.fromJson(Map<String, dynamic> json) =>
@@ -363,6 +397,10 @@ class RemediationSettings {
         // Match the server default for older/partial responses; serializing 0
         // back would otherwise look like a deliberate timeout change.
         maxUserWaitHours: json['max_user_wait_hours'] as int? ?? 72,
+        observationMinMinutes: json['observation_min_minutes'] as int? ?? 10,
+        observationQuietMinutes: json['observation_quiet_minutes'] as int? ?? 5,
+        observationSettleMinutes:
+            json['observation_settle_minutes'] as int? ?? 2,
       );
 
   Map<String, dynamic> toJson() => {
@@ -381,6 +419,9 @@ class RemediationSettings {
         'daily_cost_ceiling_micros': dailyCostCeilingMicros,
         'circuit_breaker_giveups': circuitBreakerGiveups,
         'max_user_wait_hours': maxUserWaitHours,
+        'observation_min_minutes': observationMinMinutes,
+        'observation_quiet_minutes': observationQuietMinutes,
+        'observation_settle_minutes': observationSettleMinutes,
       };
 
   RemediationSettings copyWith({
@@ -399,6 +440,9 @@ class RemediationSettings {
     int? dailyCostCeilingMicros,
     int? circuitBreakerGiveups,
     int? maxUserWaitHours,
+    int? observationMinMinutes,
+    int? observationQuietMinutes,
+    int? observationSettleMinutes,
   }) =>
       RemediationSettings(
         enabled: enabled ?? this.enabled,
@@ -418,5 +462,11 @@ class RemediationSettings {
         circuitBreakerGiveups:
             circuitBreakerGiveups ?? this.circuitBreakerGiveups,
         maxUserWaitHours: maxUserWaitHours ?? this.maxUserWaitHours,
+        observationMinMinutes:
+            observationMinMinutes ?? this.observationMinMinutes,
+        observationQuietMinutes:
+            observationQuietMinutes ?? this.observationQuietMinutes,
+        observationSettleMinutes:
+            observationSettleMinutes ?? this.observationSettleMinutes,
       );
 }

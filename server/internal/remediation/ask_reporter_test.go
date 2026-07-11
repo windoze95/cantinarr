@@ -54,7 +54,8 @@ func askCycleRunner(t *testing.T, withReporter bool) (*Runner, *Service, *fakeEx
 	issueID, _ := res.LastInsertId()
 
 	askInput := json.RawMessage(`{"question":"This release is dual-audio English+Russian — do you want English specifically?"}`)
-	grabInput := json.RawMessage(`{"kind":"grab_release","params":{"media_type":"movie","guid":"abc-guid","indexer_id":3},"rationale":"reporter confirmed English"}`)
+	grabInput := json.RawMessage(`{"kind":"grab_release","params":{"media_type":"movie","guid":"` +
+		releaseGUIDFingerprint("abc-guid") + `","indexer_id":3},"rationale":"reporter confirmed English"}`)
 	script := &scriptedTurn{turns: []ai.TranscriptMessage{
 		// Turn 1: investigate (a read), then ask the reporter. The Runner parks
 		// awaiting_user after dispatching ask_reporter.

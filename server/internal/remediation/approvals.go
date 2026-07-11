@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -71,6 +72,14 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 		s.supersedeInvalidAction(actionID)
 		return s.GetAction(actionID)
 	}
+	if recovering, preflightErr := s.preflightArrRecovery(act.IssueID); preflightErr != nil {
+		if issue, issueErr := s.GetIssue(act.IssueID); issueErr == nil {
+			_, _ = s.moveIssueToObservationNeedsAdmin(issue, observationNeedsCloserLook, time.Now().UTC())
+		}
+		return nil, fmt.Errorf("%w: could not verify whether the arr is already retrying: %v", ErrActionDecisionConflict, preflightErr)
+	} else if recovering {
+		return nil, fmt.Errorf("%w: live media state changed or is still active; no fix was executed", ErrActionDecisionConflict)
+	}
 
 	// An admin may edit the proposal before approving. Re-validate the override
 	// against the kind's schema; the original proposal and fingerprint stay
@@ -111,6 +120,35 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 		// and return the authoritative state; never execute.
 		s.supersedeInvalidAction(actionID)
 		return s.GetAction(actionID)
+	}
+
+	// Close the only local TOCTOU gap: recovery may have started after the first
+	// read but before this action won its execution claim. Re-read immediately
+	// before Executor; a positive result cancels the claim as superseded, and a
+	// failed safety read records a definitive zero-mutation failure.
+	if s.registry != nil || s.recoveryProbe != nil {
+		issue, issueErr := s.GetIssue(act.IssueID)
+		if issueErr != nil {
+			_ = s.failExecutingRecoveryPreflight(act, issueErr)
+			return nil, fmt.Errorf("%w: final arr-recovery safety check failed; no fix was executed", ErrActionDecisionConflict)
+		}
+		probe, probeErr := s.probeArrRecovery(issue)
+		if probeErr != nil {
+			_ = s.failExecutingRecoveryPreflight(act, probeErr)
+			return nil, fmt.Errorf("%w: final arr-recovery safety check failed; no fix was executed", ErrActionDecisionConflict)
+		}
+		if probe.needsAdmin {
+			if err := s.cancelExecutingForObservationReview(act, probe.reason); err != nil {
+				return nil, fmt.Errorf("cancel action for changed media state: %w", err)
+			}
+			return nil, fmt.Errorf("%w: live media state changed before dispatch; no fix was executed", ErrActionDecisionConflict)
+		}
+		if probe.active || probe.completed {
+			if err := s.cancelExecutingForRecovery(act, probe); err != nil {
+				return nil, fmt.Errorf("cancel action for arr recovery: %w", err)
+			}
+			return nil, fmt.Errorf("%w: the arr began recovering before dispatch; no fix was executed", ErrActionDecisionConflict)
+		}
 	}
 
 	// Replay the approved action against the arr. This is the ONLY mutation path.

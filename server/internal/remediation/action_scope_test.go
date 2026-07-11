@@ -120,3 +120,14 @@ func TestEpisodeIssueRequiresEpisodeScopedTriggerSearch(t *testing.T) {
 		}
 	}
 }
+
+func TestTriggerSearchRejectsNegativeTVSeason(t *testing.T) {
+	if _, err := validateActionParams(ActionTriggerSearch,
+		json.RawMessage(`{"media_type":"tv","tmdb_id":42,"season":-1}`)); err == nil || !strings.Contains(err.Error(), "season") {
+		t.Fatalf("negative TV season validation error = %v", err)
+	}
+	if _, err := validateActionParams(ActionTriggerSearch,
+		json.RawMessage(`{"media_type":"tv","tmdb_id":42,"season":0,"episode":1}`)); err != nil {
+		t.Fatalf("exact S00 special rejected: %v", err)
+	}
+}

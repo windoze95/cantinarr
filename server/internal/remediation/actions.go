@@ -168,6 +168,9 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			if p.MediaType == "movie" && (p.Season != nil || p.Episode != nil) {
 				return nil, fmt.Errorf("season and episode apply only to media_type tv")
 			}
+			if p.Season != nil && *p.Season < 0 {
+				return nil, fmt.Errorf("season must not be negative")
+			}
 			if p.Episode != nil && (*p.Episode <= 0 || p.Season == nil) {
 				return nil, fmt.Errorf("an episode search requires a positive episode and a season")
 			}
@@ -268,7 +271,7 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 		if got != tmdbID {
 			return fmt.Errorf("tmdb_id %d does not match issue tmdb_id %d", got, tmdbID)
 		}
-		if mediaType == "tv" && season > 0 && (actionSeason == nil || *actionSeason != season) {
+		if mediaType == "tv" && (season > 0 || episode > 0) && (actionSeason == nil || *actionSeason != season) {
 			return fmt.Errorf("season %v does not match issue season %d", actionSeason, season)
 		}
 		if mediaType == "tv" && episode > 0 && (actionEpisode == nil || *actionEpisode != episode) {

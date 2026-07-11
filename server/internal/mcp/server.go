@@ -255,7 +255,7 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "search_releases":
 		return s.searchReleases(input, callCtx.InstanceID)
 	case "grab_release":
-		return s.grabRelease(input)
+		return s.grabRelease(input, callCtx.InstanceID)
 	case "remove_queue_item":
 		return s.removeQueueItem(input)
 	case "get_disk_space":
@@ -285,16 +285,22 @@ func sanitizeToolResult(result *ToolResult) (structuredDropped bool) {
 	if result == nil {
 		return false
 	}
-	result.Text = secrets.RedactText(result.Text)
+	releaseCapabilities := make([]releaseCapability, 0, len(result.ReleaseCandidates))
+	for _, candidate := range result.ReleaseCandidates {
+		if candidate.Reference != "" && !isReleaseGUIDReference(candidate.Reference) {
+			releaseCapabilities = append(releaseCapabilities, releaseCapability{guid: candidate.Reference, indexerID: candidate.IndexerID})
+		}
+	}
+	result.Text = secrets.RedactText(scrubRawReleaseGUIDs(result.Text, releaseCapabilities))
 	for i := range result.ReleaseCandidates {
 		candidate := &result.ReleaseCandidates[i]
-		candidate.Reference = secrets.RedactText(candidate.Reference)
-		candidate.Title = secrets.RedactText(candidate.Title)
-		candidate.Quality = secrets.RedactText(candidate.Quality)
-		candidate.Protocol = secrets.RedactText(candidate.Protocol)
-		candidate.Indexer = secrets.RedactText(candidate.Indexer)
+		candidate.Reference = canonicalReleaseGUIDReference(candidate.Reference)
+		candidate.Title = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Title, releaseCapabilities))
+		candidate.Quality = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Quality, releaseCapabilities))
+		candidate.Protocol = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Protocol, releaseCapabilities))
+		candidate.Indexer = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Indexer, releaseCapabilities))
 		for j := range candidate.Rejections {
-			candidate.Rejections[j] = secrets.RedactText(candidate.Rejections[j])
+			candidate.Rejections[j] = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Rejections[j], releaseCapabilities))
 		}
 	}
 	if result.StructuredData != nil {

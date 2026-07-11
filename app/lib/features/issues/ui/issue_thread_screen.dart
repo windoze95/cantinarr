@@ -168,6 +168,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
   }
 
   Future<void> _sendReply() async {
+    if (_thread?.issue.status.isTracking == true) return;
     final text = _replyController.text.trim();
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
@@ -247,6 +248,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
     final issue = _thread?.issue;
     if (issue == null ||
         issue.status.isTerminal ||
+        issue.status.isTracking ||
         _completing ||
         _dismissing) {
       return;
@@ -381,7 +383,11 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
                 padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 16),
                 children: [
                   _IssueSummaryCard(issue: issue),
-                  if (isAdmin && !issue.status.isTerminal) ...[
+                  if (issue.status.isTracking) ...[
+                    const SizedBox(height: 10),
+                    _PassiveTrackingBanner(status: issue.status),
+                  ],
+                  if (isAdmin && issue.status.needsAttention) ...[
                     const SizedBox(height: 10),
                     _AdminCompletionPanel(
                       issue: issue,
@@ -438,16 +444,74 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
             }),
           ),
         ),
-        _ReplyBar(
-          controller: _replyController,
-          sending: _sending,
-          enabled: !issue.status.isTerminal,
-          hintText: issue.status == IssueStatus.awaitingUser
-              ? 'Answer the question…'
-              : 'Add a reply…',
-          onSend: _sendReply,
-        ),
+        if (!issue.status.isTracking)
+          _ReplyBar(
+            controller: _replyController,
+            sending: _sending,
+            enabled: !issue.status.isTerminal,
+            hintText: issue.status == IssueStatus.awaitingUser
+                ? 'Answer the question…'
+                : 'Add a reply…',
+            onSend: _sendReply,
+          ),
       ],
+    );
+  }
+}
+
+/// Fixed, non-interactive explanation for an issue that is intentionally being
+/// tracked without starting an agent/admin workflow.
+class _PassiveTrackingBanner extends StatelessWidget {
+  final IssueStatus status;
+
+  const _PassiveTrackingBanner({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final recovering = status == IssueStatus.recovering;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            recovering ? Icons.sync : Icons.visibility_outlined,
+            size: 20,
+            color: AppTheme.textSecondary,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  status.label,
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'We’re tracking this quietly and will step in if it still '
+                  'needs help.',
+                  style: TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -692,7 +756,7 @@ class _IssueSummaryCard extends StatelessWidget {
               issue.resolutionLabel.trim().isNotEmpty) ...[
             const SizedBox(height: 8),
             const Text(
-              'Admin action needed',
+              'Needs a closer look',
               style: TextStyle(
                 color: AppTheme.requested,
                 fontSize: 12,
