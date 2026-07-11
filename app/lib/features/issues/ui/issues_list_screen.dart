@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,11 +9,12 @@ import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
+import 'issue_refresh_banner.dart';
 
 /// Admin list of reported / auto-detected problems. Tapping a row opens the
 /// issue thread. Mirrors `PendingRequestsScreen`: a [RefreshIndicator] over a
-/// [ListView.separated] of `_IssueTile`s, kept live by `issue_created`
-/// pings and seeding the drawer badge on load.
+/// [ListView.separated] of `_IssueTile`s, kept live by issue/action pings and
+/// seeding the drawer badge on load.
 class IssuesListScreen extends ConsumerStatefulWidget {
   const IssuesListScreen({super.key});
 
@@ -19,15 +22,43 @@ class IssuesListScreen extends ConsumerStatefulWidget {
   ConsumerState<IssuesListScreen> createState() => _IssuesListScreenState();
 }
 
-class _IssuesListScreenState extends ConsumerState<IssuesListScreen> {
+class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
+    with WidgetsBindingObserver {
   List<Issue>? _issues;
   bool _isLoading = true;
   String? _error;
+  _IssueFilter _filter = _IssueFilter.needsAttention;
+  int _loadEpoch = 0;
+  Timer? _realtimeDebounce;
+  Timer? _poll;
+
+  static const _pollInterval = Duration(seconds: 30);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    _poll = Timer.periodic(_pollInterval, (_) => _load());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The socket does not replay changes missed in the background.
+    if (state == AppLifecycleState.resumed) _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _realtimeDebounce?.cancel();
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  void _scheduleLoad() {
+    _realtimeDebounce?.cancel();
+    _realtimeDebounce = Timer(const Duration(milliseconds: 250), _load);
   }
 
   String _friendlyError(Object e) {
@@ -36,22 +67,25 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen> {
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
+    final epoch = ++_loadEpoch;
     setState(() {
       _isLoading = _issues == null;
-      _error = null;
+      if (_issues == null) _error = null;
     });
     try {
       final issues = await ref.read(issuesServiceProvider).listIssues();
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _issues = issues;
         _isLoading = false;
+        _error = null;
       });
       // Keep the drawer badge in sync with the list we just loaded.
-      final open = issues.where((i) => !i.status.isTerminal).length;
+      final open = issues.where((i) => i.status.needsAttention).length;
       ref.read(openIssuesProvider.notifier).setCount(open);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -61,72 +95,140 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Refresh the list whenever a new issue is created (best-effort over WS).
-    ref.listen(issuesChangedProvider, (_, __) => _load());
+    // Refresh whenever issue/action state changes (best-effort over WS).
+    ref.listen(issuesChangedProvider, (_, __) => _scheduleLoad());
 
     return Scaffold(
       appBar: AppBar(title: const Text('Issues')),
       body: CenteredContent(
-          child: _isLoading
-              ? const Center(
-                  child: CircularProgressIndicator(color: AppTheme.accent))
-              : _error != null && _issues == null
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(_friendlyError(_error!),
-                                style: const TextStyle(color: AppTheme.error),
-                                textAlign: TextAlign.center),
-                            const SizedBox(height: 12),
-                            ElevatedButton(
-                                onPressed: _load, child: const Text('Retry')),
-                          ],
-                        ),
-                      ),
-                    )
-                  : RefreshIndicator(
-                      color: AppTheme.accent,
-                      onRefresh: _load,
-                      child: (_issues?.isEmpty ?? true)
-                          ? ListView(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              children: const [
-                                SizedBox(height: 120),
-                                Center(
-                                  child: Text(
-                                    'No reported problems.',
-                                    style: TextStyle(
-                                        color: AppTheme.textSecondary),
-                                  ),
-                                ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+              child: SizedBox(
+                width: double.infinity,
+                child: SegmentedButton<_IssueFilter>(
+                  segments: const [
+                    ButtonSegment(
+                      value: _IssueFilter.needsAttention,
+                      label: Text('Needs attention'),
+                    ),
+                    ButtonSegment(
+                      value: _IssueFilter.tracking,
+                      label: Text('Tracking'),
+                    ),
+                    ButtonSegment(
+                      value: _IssueFilter.closed,
+                      label: Text('Closed'),
+                    ),
+                  ],
+                  selected: {_filter},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (selection) =>
+                      setState(() => _filter = selection.first),
+                ),
+              ),
+            ),
+            if (_error != null && _issues != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+                child: IssueRefreshBanner(
+                  message: "Couldn't refresh issues. Showing the last update.",
+                  onRetry: _load,
+                ),
+              ),
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppTheme.accent))
+                  : _error != null && _issues == null
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(_friendlyError(_error!),
+                                    style:
+                                        const TextStyle(color: AppTheme.error),
+                                    textAlign: TextAlign.center),
+                                const SizedBox(height: 12),
+                                ElevatedButton(
+                                    onPressed: _load,
+                                    child: const Text('Retry')),
                               ],
-                            )
-                          : ListView.separated(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              itemCount: _issues!.length,
-                              separatorBuilder: (_, __) => const Divider(
-                                  color: AppTheme.border, height: 1),
-                              itemBuilder: (context, index) {
-                                final issue = _issues![index];
-                                return _IssueTile(
-                                  issue: issue,
-                                  onTap: () async {
-                                    await context.push('/issues/${issue.id}');
-                                    // Returning from the thread may have changed
-                                    // state (a reply, a dismiss) — refresh.
-                                    if (mounted) _load();
-                                  },
-                                );
-                              },
                             ),
-                    )),
+                          ),
+                        )
+                      : RefreshIndicator(
+                          color: AppTheme.accent,
+                          onRefresh: _load,
+                          child: _visibleIssues.isEmpty
+                              ? ListView(
+                                  physics:
+                                      const AlwaysScrollableScrollPhysics(),
+                                  children: [
+                                    const SizedBox(height: 120),
+                                    Center(
+                                      child: Text(
+                                        switch (_filter) {
+                                          _IssueFilter.needsAttention =>
+                                            'No issues need attention.',
+                                          _IssueFilter.tracking =>
+                                            'Nothing is being tracked.',
+                                          _IssueFilter.closed =>
+                                            'No closed issues yet.',
+                                        },
+                                        style: const TextStyle(
+                                            color: AppTheme.textSecondary),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              : ListView.separated(
+                                  physics:
+                                      const AlwaysScrollableScrollPhysics(),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 8),
+                                  itemCount: _visibleIssues.length,
+                                  separatorBuilder: (_, __) => const Divider(
+                                      color: AppTheme.border, height: 1),
+                                  itemBuilder: (context, index) {
+                                    final issue = _visibleIssues[index];
+                                    return _IssueTile(
+                                      issue: issue,
+                                      onTap: () async {
+                                        await context
+                                            .push('/issues/${issue.id}');
+                                        // Returning from the thread may have changed
+                                        // state (a reply, a dismiss) — refresh.
+                                        if (mounted) _load();
+                                      },
+                                    );
+                                  },
+                                ),
+                        ),
+            ),
+          ],
+        ),
+      ),
     );
   }
+
+  List<Issue> get _visibleIssues {
+    final issues = _issues ?? const <Issue>[];
+    return switch (_filter) {
+      _IssueFilter.needsAttention =>
+        issues.where((issue) => issue.status.needsAttention).toList(),
+      _IssueFilter.tracking =>
+        issues.where((issue) => issue.status.isTracking).toList(),
+      _IssueFilter.closed =>
+        issues.where((issue) => issue.status.isTerminal).toList(),
+    };
+  }
 }
+
+enum _IssueFilter { needsAttention, tracking, closed }
 
 class _IssueTile extends StatelessWidget {
   final Issue issue;
@@ -137,6 +239,7 @@ class _IssueTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final category = issue.category;
+    final tracking = issue.status.isTracking;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       // Unread affordance: a small filled accent dot. The slot is reserved in
@@ -145,7 +248,7 @@ class _IssueTile extends StatelessWidget {
         width: 8,
         height: 8,
         decoration: BoxDecoration(
-          color: issue.read ? Colors.transparent : AppTheme.accent,
+          color: issue.read || tracking ? Colors.transparent : AppTheme.accent,
           shape: BoxShape.circle,
         ),
       ),
@@ -154,8 +257,9 @@ class _IssueTile extends StatelessWidget {
       title: Text(
         issue.title.isEmpty ? 'Issue #${issue.id}' : issue.title,
         style: TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: issue.read ? FontWeight.w600 : FontWeight.w800,
+          color: tracking ? AppTheme.textSecondary : AppTheme.textPrimary,
+          fontWeight:
+              issue.read || tracking ? FontWeight.w600 : FontWeight.w800,
         ),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -172,12 +276,27 @@ class _IssueTile extends StatelessWidget {
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
           const SizedBox(height: 6),
+          if (issue.status == IssueStatus.needsAdmin &&
+              issue.resolutionLabel.trim().isNotEmpty) ...[
+            Text(
+              issue.resolutionLabel.trim(),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
           Wrap(
             spacing: 6,
             runSpacing: 6,
             children: [
               if (category != null) _chip(category.label),
               _statusChip(issue.status),
+              if (issue.status.isTerminal) _chip(issue.resolutionKind.label),
             ],
           ),
         ],
@@ -237,10 +356,13 @@ class _IssueTile extends StatelessWidget {
         return AppTheme.unavailable;
       case IssueStatus.awaitingApproval:
       case IssueStatus.awaitingUser:
+      case IssueStatus.needsAdmin:
         return AppTheme.requested;
       case IssueStatus.open:
       case IssueStatus.investigating:
         return AppTheme.downloading;
+      case IssueStatus.observing:
+      case IssueStatus.recovering:
       case IssueStatus.unknown:
         return AppTheme.textSecondary;
     }

@@ -32,8 +32,7 @@ class EpisodeDetailSheet extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<EpisodeDetailSheet> createState() =>
-      _EpisodeDetailSheetState();
+  ConsumerState<EpisodeDetailSheet> createState() => _EpisodeDetailSheetState();
 }
 
 class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
@@ -88,7 +87,10 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
   ({String label, Color color}) get _shortStatus {
     final q = widget.queueItem;
     if (q != null) {
-      return (label: sonarrQueueStatusLabel(q), color: sonarrQueueStatusColor(q));
+      return (
+        label: sonarrQueueStatusLabel(q),
+        color: sonarrQueueStatusColor(q)
+      );
     }
     final e = widget.episode;
     if (!e.hasFile) {
@@ -111,7 +113,8 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
         (e.airDate != null ? DateTime.tryParse(e.airDate!) : null);
 
     return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: Container(
         constraints: BoxConstraints(
             maxHeight: MediaQuery.of(context).size.height * 0.85),
@@ -157,7 +160,9 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
                 const SizedBox(height: 14),
                 Text(e.overview!,
                     style: const TextStyle(
-                        color: AppTheme.textPrimary, fontSize: 14, height: 1.4)),
+                        color: AppTheme.textPrimary,
+                        fontSize: 14,
+                        height: 1.4)),
               ],
               if (widget.queueItem != null) ...[
                 const SizedBox(height: 16),
@@ -227,6 +232,7 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
                   width: double.infinity,
                   child: ReportProblemButton(
                     scope: ReportScope.episode(
+                      instanceId: widget.instanceId,
                       tmdbId: widget.series.tmdbId ?? 0,
                       tvdbId: widget.series.tvdbId,
                       seasonNumber: e.seasonNumber,
@@ -250,9 +256,9 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
   /// Show "Report a problem" only when the server allows it and we have a
   /// TMDB id to scope the report to.
   bool get _canReport {
-    final allow = ref.watch(authProvider).valueOrNull?.connection
-            ?.allowReporting ??
-        false;
+    final allow =
+        ref.watch(authProvider).valueOrNull?.connection?.allowReporting ??
+            false;
     return allow && (widget.series.tmdbId ?? 0) > 0;
   }
 
@@ -346,12 +352,11 @@ class _HistoryTile extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(_historyTime(record.date),
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 11)),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
           const SizedBox(height: 2),
           Text(_historyEventLabel(record),
-              style: const TextStyle(
-                  color: AppTheme.requested, fontSize: 12)),
+              style: const TextStyle(color: AppTheme.requested, fontSize: 12)),
         ],
       ),
     );

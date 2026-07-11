@@ -11,6 +11,8 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 )
 
+const maxRemediationRequestBytes = 64 << 10
+
 // Handler exposes the Wave-1 issue-reporting REST surface. It clones the shape
 // of request.Handler (claims gate, JSON helpers, decodeOptional).
 type Handler struct {
@@ -29,14 +31,18 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
+	if !h.service.Settings().AllowReporting {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "problem reporting is disabled"})
+		return
+	}
 
 	var req CreateIssueRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, false); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.MediaType == "" || req.Category == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "media_type and category required"})
+	if req.InstanceID == "" || req.MediaType == "" || req.Category == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance_id, media_type, and category required"})
 		return
 	}
 	if req.TmdbID == 0 && req.TvdbID == 0 {
@@ -119,7 +125,7 @@ func (h *Handler) Reply(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Body string `json:"body"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body, false); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -164,6 +170,37 @@ func (h *Handler) Dismiss(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// ResolveIssue handles POST /api/admin/issues/{id}/resolve. This is a human
+// completion with an explicit resolved/wont_fix disposition and required audit
+// note; it is deliberately distinct from dismissal.
+func (h *Handler) ResolveIssue(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid issue id"})
+		return
+	}
+	var body AdminIssueResolutionRequest
+	if err := decodeJSON(w, r, &body, false); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	issue, err := h.service.ResolveIssueByAdmin(r.Context(), claims.UserID, id, body.Disposition, body.Note)
+	if err != nil {
+		if errors.Is(err, ErrIssueCompletionConflict) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, issue)
+}
+
 // ListActions handles GET /api/admin/agent-actions?status=proposed
 // (PermissionRemediationManage). Default (no status) returns the approval queue
 // (proposed). Each row carries the issue title + kind + rationale + params.
@@ -180,6 +217,38 @@ func (h *Handler) ListActions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ListActionsResponse{Actions: actions})
 }
 
+// GetAction returns one durable action outcome. It lets clients reconcile an
+// approval request whose HTTP response was lost without risking a second
+// execution attempt.
+func (h *Handler) GetAction(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action id"})
+		return
+	}
+	action, err := h.service.GetAction(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, action)
+}
+
+// GetIssueActivity returns permanent action/run history for one issue.
+func (h *Handler) GetIssueActivity(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid issue id"})
+		return
+	}
+	activity, err := h.service.GetIssueActivity(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, activity)
+}
+
 // ApproveAction handles POST /api/admin/agent-actions/{id}/approve
 // (PermissionRemediationManage). Body {override?} optionally edits the params.
 func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +263,7 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body ActionDecision
-	if err := decodeOptional(r, &body); err != nil {
+	if err := decodeJSON(w, r, &body, true); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -221,12 +290,16 @@ func (h *Handler) DenyAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body ActionDenyRequest
-	if err := decodeOptional(r, &body); err != nil {
+	if err := decodeJSON(w, r, &body, true); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
 	action, err := h.service.DenyAction(claims.UserID, id, body.Note)
 	if err != nil {
+		if errors.Is(err, ErrActionDecisionConflict) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -258,7 +331,7 @@ func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 // Returns the normalized stored settings.
 func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var settings Settings
-	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+	if err := decodeJSON(w, r, &settings, false); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -278,10 +351,20 @@ func canAccessIssue(claims *auth.Claims, issue *Issue) bool {
 	return issue.ReporterID != nil && *issue.ReporterID == claims.UserID
 }
 
-// decodeOptional decodes a JSON body, tolerating an empty body.
-func decodeOptional(r *http.Request, v interface{}) error {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil && !errors.Is(err, io.EOF) {
+// decodeJSON bounds remediation request bodies, rejects unknown/trailing data,
+// and optionally tolerates an empty body for decision endpoints.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v interface{}, optional bool) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRemediationRequestBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		if optional && errors.Is(err, io.EOF) {
+			return nil
+		}
 		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("request body must contain exactly one JSON value")
 	}
 	return nil
 }

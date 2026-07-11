@@ -252,6 +252,35 @@ func TestNotifyAdminsSetsBadgeFromPendingCount(t *testing.T) {
 	}
 }
 
+func TestNotifyAdminsUsesAutomaticIssueCopy(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("issue_created", map[string]interface{}{
+		"issue_id":   42,
+		"source":     "auto",
+		"open_count": 1,
+	})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Problem needs attention" {
+		t.Errorf("title = %v, want automatic-incident copy", notif["title"])
+	}
+	if notif["body"] != "Cantinarr found a media problem that did not recover automatically" {
+		t.Errorf("body = %v, want automatic-recovery copy", notif["body"])
+	}
+	if _, ok := notif["badge"]; ok {
+		t.Errorf("issue notification unexpectedly overwrote the global app badge: %v", notif["badge"])
+	}
+}
+
 func TestNotifyAdminsHonorsOptOutAndRole(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {

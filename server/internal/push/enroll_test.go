@@ -3,8 +3,33 @@ package push
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
+
+func TestEnrollDoesNotFollowRedirects(t *testing.T) {
+	var redirectedRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedRequests.Add(1)
+		if got := r.Header.Get("X-Enroll-Token"); got != "" {
+			t.Errorf("redirect destination received X-Enroll-Token %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(destination.Close)
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/credential-sink", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	if _, err := Enroll(source.URL, "Cantinarr", "enroll-secret"); err == nil {
+		t.Fatal("Enroll accepted an upstream redirect")
+	}
+	if got := redirectedRequests.Load(); got != 0 {
+		t.Fatalf("redirect destination received %d requests, want 0", got)
+	}
+}
 
 func TestEnroll_Success(t *testing.T) {
 	var gotToken, gotPath, gotMethod string

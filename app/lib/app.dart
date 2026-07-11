@@ -54,6 +54,9 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       ref.read(pendingApprovalsProvider.notifier).refresh();
       // Same for the open-issues badge.
       ref.read(openIssuesProvider.notifier).refresh();
+      // Proposals may have executed, failed, or been superseded while the app
+      // was backgrounded. Reconcile the review badge on every foreground.
+      ref.read(pendingAgentActionsProvider.notifier).refresh();
       // And re-check for a newer server release (no-op for non-admins).
       ref.read(updateStatusProvider.notifier).refresh();
     }

@@ -383,16 +383,13 @@ class _AppShellState extends ConsumerState<AppShell>
     // the hamburger dot. Always 0 for non-admins. Watched here (not just in
     // the drawer) so the badge stays live app-wide.
     final openIssues = ref.watch(openIssuesProvider);
-    // Agent-proposed fixes awaiting approval — drives the drawer "Agent fixes"
-    // entry and the hamburger dot. Always 0 for non-admins.
-    final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
+    // Agent fixes are already represented by their parent open issue, so the
+    // hamburger total deliberately does not add the proposal count again. The
+    // drawer watches that count for its own dedicated badge.
     // Users waiting for a Plex invite — drives the drawer "Plex invites"
     // entry (only shown while someone waits) and the hamburger dot.
     final plexInvitesWaiting = ref.watch(plexInvitesWaitingProvider);
-    final menuBadgeCount = pendingApprovals +
-        openIssues +
-        pendingAgentActions +
-        plexInvitesWaiting;
+    final menuBadgeCount = pendingApprovals + openIssues + plexInvitesWaiting;
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
     final libraryStatus = searchState.isSearching && showSearchResults
@@ -922,19 +919,15 @@ class _AppShellState extends ConsumerState<AppShell>
                 context.push('/issues');
               },
             ),
-            // Only while fixes await review: the screen is a pending queue
-            // (empty at zero), agent-run history stays reachable via Issues, and
-            // a push for a new proposal deep-links straight here.
-            if (pendingAgentActions > 0)
-              _DrawerItem(
-                icon: Icons.build_circle_outlined,
-                title: 'Agent fixes',
-                badgeCount: pendingAgentActions,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/agent-actions');
-                },
-              ),
+            _DrawerItem(
+              icon: Icons.build_circle_outlined,
+              title: 'Agent fixes',
+              badgeCount: pendingAgentActions,
+              onTap: () {
+                if (isOverlay) Navigator.pop(context);
+                context.push('/agent-actions');
+              },
+            ),
             // Appears only while someone is waiting on a Plex invite (e.g.
             // the push was missed or an auto-invite failed); lands on the
             // Users screen where the invite is one tap.

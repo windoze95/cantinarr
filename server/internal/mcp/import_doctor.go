@@ -214,7 +214,7 @@ func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck | chaptarr.He
 	return sb.String()
 }
 
-func (s *ToolServer) getArrHealth(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getArrHealth(input json.RawMessage, instanceID string) (*ToolResult, error) {
 	var params struct {
 		MediaType string `json:"media_type"`
 	}
@@ -226,7 +226,7 @@ func (s *ToolServer) getArrHealth(input json.RawMessage) (*ToolResult, error) {
 	var sections []string
 
 	if mediaType == "movie" || mediaType == "all" {
-		client := s.GetRadarr()
+		client := s.GetRadarrFor(instanceID)
 		if client == nil {
 			if mediaType == "movie" {
 				return &ToolResult{Text: "Radarr is not configured."}, nil
@@ -242,7 +242,7 @@ func (s *ToolServer) getArrHealth(input json.RawMessage) (*ToolResult, error) {
 	}
 
 	if mediaType == "tv" || mediaType == "all" {
-		client := s.GetSonarr()
+		client := s.GetSonarrFor(instanceID)
 		if client == nil {
 			if mediaType == "tv" {
 				return &ToolResult{Text: "Sonarr is not configured."}, nil
@@ -258,7 +258,7 @@ func (s *ToolServer) getArrHealth(input json.RawMessage) (*ToolResult, error) {
 	}
 
 	if mediaType == "book" || mediaType == "all" {
-		client := s.GetChaptarr()
+		client := s.GetChaptarrFor(instanceID)
 		if client == nil {
 			if mediaType == "book" {
 				return &ToolResult{Text: "Chaptarr is not configured."}, nil
@@ -278,14 +278,24 @@ func (s *ToolServer) getArrHealth(input json.RawMessage) (*ToolResult, error) {
 
 // --- diagnose_queue ---
 
-func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*ToolResult, error) {
 	var params struct {
-		MediaType string `json:"media_type"`
+		MediaType     string `json:"media_type"`
+		QueueID       int    `json:"queue_id"`
+		DownloadID    string `json:"download_id"`
+		TmdbID        int    `json:"tmdb_id"`
+		TvdbID        int    `json:"tvdb_id"`
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	mediaType := normalizeMediaType(params.MediaType)
+	scope := mediaReadScope{
+		QueueID: params.QueueID, DownloadID: params.DownloadID, TmdbID: params.TmdbID, TvdbID: params.TvdbID,
+		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
+	}
 
 	var sb strings.Builder
 	var notes []string
@@ -293,7 +303,7 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 	healthy := 0
 
 	if mediaType == "movie" || mediaType == "all" {
-		radarrClient := s.GetRadarr()
+		radarrClient := s.GetRadarrFor(instanceID)
 		if radarrClient == nil {
 			if mediaType == "movie" {
 				return &ToolResult{Text: "Radarr is not configured."}, nil
@@ -301,6 +311,10 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 			notes = append(notes, "Radarr is not configured.")
 		} else {
 			items, err := radarrClient.GetQueueDetailed()
+			if err != nil {
+				return nil, err
+			}
+			items, err = filterRadarrQueue(radarrClient, items, scope)
 			if err != nil {
 				return nil, err
 			}
@@ -323,7 +337,7 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 	}
 
 	if mediaType == "tv" || mediaType == "all" {
-		sonarrClient := s.GetSonarr()
+		sonarrClient := s.GetSonarrFor(instanceID)
 		if sonarrClient == nil {
 			if mediaType == "tv" {
 				return &ToolResult{Text: "Sonarr is not configured."}, nil
@@ -331,6 +345,10 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 			notes = append(notes, "Sonarr is not configured.")
 		} else {
 			items, err := sonarrClient.GetQueueDetailed()
+			if err != nil {
+				return nil, err
+			}
+			items, err = filterSonarrQueue(sonarrClient, items, scope)
 			if err != nil {
 				return nil, err
 			}
@@ -350,7 +368,7 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 	}
 
 	if mediaType == "book" || mediaType == "all" {
-		chaptarrClient := s.GetChaptarr()
+		chaptarrClient := s.GetChaptarrFor(instanceID)
 		if chaptarrClient == nil {
 			if mediaType == "book" {
 				return &ToolResult{Text: "Chaptarr is not configured."}, nil
@@ -362,6 +380,12 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage) (*ToolResult, error) {
 				return nil, err
 			}
 			for _, item := range items {
+				if params.QueueID > 0 && item.ID != params.QueueID {
+					continue
+				}
+				if params.DownloadID != "" && item.DownloadID != params.DownloadID {
+					continue
+				}
 				d := arr.Diagnose(chaptarrSignal(item))
 				if d.Severity == arr.SeverityOK {
 					healthy++
@@ -457,24 +481,42 @@ func formatRejections(rejections []arr.ManualImportRejectionView) string {
 	return strings.Join(parts, "; ")
 }
 
-func (s *ToolServer) getManualImportCandidates(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID string) (*ToolResult, error) {
 	var params struct {
-		QueueID   int    `json:"queue_id"`
-		MediaType string `json:"media_type"`
+		QueueID       int    `json:"queue_id"`
+		MediaType     string `json:"media_type"`
+		DownloadID    string `json:"download_id"`
+		TmdbID        int    `json:"tmdb_id"`
+		TvdbID        int    `json:"tvdb_id"`
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
+	scope := mediaReadScope{
+		QueueID: params.QueueID, DownloadID: params.DownloadID, TmdbID: params.TmdbID, TvdbID: params.TvdbID,
+		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
+	}
 
 	switch params.MediaType {
 	case "movie":
-		client := s.GetRadarr()
+		client := s.GetRadarrFor(instanceID)
 		if client == nil {
 			return &ToolResult{Text: "Radarr is not configured."}, nil
 		}
 		item, err := findRadarrQueueItem(client, params.QueueID)
 		if err != nil {
 			return nil, err
+		}
+		if item != nil {
+			matched, err := filterRadarrQueue(client, []radarr.DetailedQueueItem{*item}, scope)
+			if err != nil {
+				return nil, err
+			}
+			if len(matched) == 0 {
+				item = nil
+			}
 		}
 		if item == nil {
 			return &ToolResult{Text: fmt.Sprintf("No movie queue item with id %d. Run get_queue or diagnose_queue for current ids.", params.QueueID)}, nil
@@ -506,13 +548,22 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage) (*ToolResu
 		return &ToolResult{Text: sb.String()}, nil
 
 	case "tv":
-		client := s.GetSonarr()
+		client := s.GetSonarrFor(instanceID)
 		if client == nil {
 			return &ToolResult{Text: "Sonarr is not configured."}, nil
 		}
 		item, err := findSonarrQueueItem(client, params.QueueID)
 		if err != nil {
 			return nil, err
+		}
+		if item != nil {
+			matched, err := filterSonarrQueue(client, []sonarr.DetailedQueueItem{*item}, scope)
+			if err != nil {
+				return nil, err
+			}
+			if len(matched) == 0 {
+				item = nil
+			}
 		}
 		if item == nil {
 			return &ToolResult{Text: fmt.Sprintf("No TV queue item with id %d. Run get_queue or diagnose_queue for current ids.", params.QueueID)}, nil
@@ -548,7 +599,7 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage) (*ToolResu
 		return &ToolResult{Text: sb.String()}, nil
 
 	case "book":
-		client := s.GetChaptarr()
+		client := s.GetChaptarrFor(instanceID)
 		if client == nil {
 			return &ToolResult{Text: "Chaptarr is not configured."}, nil
 		}
@@ -558,6 +609,9 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage) (*ToolResu
 		}
 		if item == nil {
 			return &ToolResult{Text: fmt.Sprintf("No book queue item with id %d. Run get_queue or diagnose_queue for current ids.", params.QueueID)}, nil
+		}
+		if params.DownloadID != "" && item.DownloadID != params.DownloadID {
+			return &ToolResult{Text: fmt.Sprintf("No book queue item with id %d in this issue's download scope.", params.QueueID)}, nil
 		}
 		if item.DownloadID == "" {
 			return &ToolResult{Text: fmt.Sprintf("Queue item %d has no download-client id yet, so its files cannot be inspected. Wait until it has been handed to the download client.", params.QueueID)}, nil
@@ -626,7 +680,7 @@ func (s *ToolServer) executeManualImport(input json.RawMessage) (*ToolResult, er
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := ExecuteManualImportHelper(s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.QueueID, params.Force)
+	text, err := ExecuteManualImportHelper(s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.QueueID, params.Force, nil)
 	if err != nil {
 		return nil, err
 	}

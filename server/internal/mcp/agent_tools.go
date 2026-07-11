@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 // Agent-only MCP tools. These are NEVER added to toolDefinitions /
@@ -89,9 +90,10 @@ var AgentToolPostIssueMessage = Tool{
 var AgentToolConcludeIssue = Tool{
 	Name:       ToolConcludeIssue,
 	Permission: auth.PermissionRemediationManage,
-	Description: "Finish the investigation by setting a terminal status. Use 'resolved' when nothing further is " +
-		"needed, or 'wont_fix' when the issue cannot be fixed read-only (always include a short plain-language " +
-		"resolution explaining why). Call this exactly once, after you have posted your diagnosis.",
+	Description: "Finish the investigation. The server accepts 'resolved' only for an auto-detected issue when a fresh, " +
+		"exact queue read proves its original target is gone; subjective user reports and 'wont_fix' judgments are " +
+		"escalated for an administrator. Proposing or dispatching a fix is not verification. Include a short plain-language " +
+		"explanation and call this exactly once after posting your diagnosis.",
 	InputSchema: map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -115,9 +117,10 @@ var AgentToolConcludeIssue = Tool{
 
 // AgentToolProposeAction lets the agent propose a consequential arr mutation for
 // an admin to approve. It is the agent's ONLY route to a change: it records a
-// proposal; the server replays the stored params verbatim ONLY after an admin
-// approves. The model never executes the mutation and never touches the params
-// again. The params shape depends on kind (validated server-side).
+// proposal; only after an admin approves does the server revalidate the stored
+// scope against fresh arr state and dispatch it. The model never executes the
+// mutation and never touches the params again. The params shape depends on kind
+// (validated and canonicalized server-side).
 var AgentToolProposeAction = Tool{
 	Name:       ToolProposeAction,
 	Permission: auth.PermissionRemediationManage,
@@ -131,7 +134,7 @@ var AgentToolProposeAction = Tool{
 		"\"remove\", \"blocklist_search\" (remove + blocklist + re-search), or \"change_category\".\n" +
 		"- manual_import: import a download's files. params: {media_type, queue_id, force} (force imports despite " +
 		"permanent rejections — only when a rejection is known-safe/temporary).\n" +
-		"- trigger_search: start an automatic search. params: {media_type, tmdb_id, season?}.\n" +
+		"- trigger_search: start an automatic search. params: {media_type, tmdb_id, season?, episode?}; for an episode-scoped TV issue include both authoritative values.\n" +
 		"- rescan: rescan the media on disk and run the import pass. params: {media_type, tmdb_id}.\n" +
 		"Always include a clear 'rationale' explaining why this fix is correct (the admin reads it).",
 	InputSchema: map[string]interface{}{
@@ -234,8 +237,10 @@ type AgentToolResult struct {
 	Text         string
 	Concluded    bool
 	Status       string // terminal issue status when Concluded
+	Resolution   string // requested closing note; the Runner owns the guarded DB transition
 	Parked       bool   // true after propose_action OR ask_reporter: the run pauses for a human
 	AwaitingUser bool   // true only after ask_reporter: park as awaiting_user (reporter reply), not awaiting_approval
+	Question     string // ask_reporter text committed atomically by the Runner when it parks
 }
 
 // ExecuteAgentTool dispatches an agent-only tool. The Runner passes the
@@ -244,7 +249,15 @@ type AgentToolResult struct {
 // hijacked model cannot post to, close, or propose against a different issue.
 // Every tool early-returns a benign result when remediation is disabled or no
 // IssueStore is wired.
-func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input json.RawMessage, issueID int64, toolUseID string) (*AgentToolResult, error) {
+func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input json.RawMessage, issueID int64, toolUseID string) (result *AgentToolResult, err error) {
+	defer func() {
+		if result != nil {
+			result.Text = secrets.RedactText(result.Text)
+			result.Resolution = secrets.RedactText(result.Resolution)
+			result.Question = secrets.RedactText(result.Question)
+		}
+		err = secrets.RedactError(err)
+	}()
 	if s.issueStore == nil || !s.issueStore.RemediationEnabled(ctx) {
 		return &AgentToolResult{Text: "Remediation is not enabled; this tool did nothing."}, nil
 	}
@@ -260,6 +273,7 @@ func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input js
 		if args.Body == "" {
 			return &AgentToolResult{Text: "No message body provided; nothing posted."}, nil
 		}
+		args.Body = secrets.RedactText(args.Body)
 		if err := s.issueStore.PostIssueMessage(ctx, issueID, args.Body); err != nil {
 			return nil, fmt.Errorf("post_issue_message: %w", err)
 		}
@@ -278,10 +292,15 @@ func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input js
 			// the agent is finishing either way, and a terminal state must result.
 			args.Status = ConcludeWontFix
 		}
-		if err := s.issueStore.ConcludeIssue(ctx, issueID, args.Status, args.Resolution); err != nil {
-			return nil, fmt.Errorf("conclude_issue: %w", err)
-		}
-		return &AgentToolResult{Text: "Investigation concluded (" + args.Status + ").", Concluded: true, Status: args.Status}, nil
+		args.Resolution = secrets.RedactText(args.Resolution)
+		// This is an intent, not a write. The Runner enforces that a fresh scoped
+		// state read succeeded before it lets this intent close the issue, then owns
+		// the aggregate transition. Keeping closure out of MCP prevents a model from
+		// bypassing that state-machine guard.
+		return &AgentToolResult{
+			Text:      "Requested conclusion (" + args.Status + "); the runner will verify the evidence gate.",
+			Concluded: true, Status: args.Status, Resolution: args.Resolution,
+		}, nil
 
 	case ToolProposeAction:
 		var args struct {
@@ -300,6 +319,7 @@ func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input js
 		if len(args.Params) == 0 || string(args.Params) == "null" {
 			return &AgentToolResult{Text: "params is required for propose_action and must be a JSON object for the chosen kind."}, nil
 		}
+		args.Rationale = secrets.RedactText(args.Rationale)
 		// Authoritative per-kind validation + fingerprint + conditional insert all
 		// happen in the IssueStore. The model-supplied issue_id is ignored; the
 		// Runner's claimed issueID is used.
@@ -331,9 +351,10 @@ func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input js
 		if args.Question == "" {
 			return &AgentToolResult{Text: "No question provided; nothing asked."}, nil
 		}
-		// Record the question + ask-token on the issue/run. hasReporter is false for
-		// an auto-detected (reporter-less) issue: in that case AskReporter does NOT
-		// post anything or park — the agent must decide or propose to the admin.
+		args.Question = secrets.RedactText(args.Question)
+		// Confirm a reporter exists. The Runner commits the question message and
+		// waiting_user gate atomically after it persists this turn's transcript, so
+		// an immediate reply cannot arrive before the gate exists.
 		hasReporter, err := s.issueStore.AskReporter(ctx, issueID, args.Question, toolUseID)
 		if err != nil {
 			// A storage error is data for the model, not an infrastructure crash:
@@ -351,10 +372,11 @@ func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input js
 			Text:         "Question posted to the reporter; the investigation will resume with their reply.",
 			Parked:       true,
 			AwaitingUser: true,
+			Question:     args.Question,
 		}, nil
 
 	default:
-		return nil, fmt.Errorf("unknown agent tool: %s", name)
+		return nil, fmt.Errorf("unknown agent tool")
 	}
 }
 

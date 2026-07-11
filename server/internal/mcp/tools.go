@@ -234,7 +234,38 @@ type MediaResultItem struct {
 type ToolResult struct {
 	Text           string
 	StructuredData any // nil for tools without UI; []MediaResultItem for search/browse tools
+	// ReleaseCandidates is internal, server-observed metadata used to bind a
+	// remediation proposal to the exact candidate the model just saw. Reference
+	// is a strict one-way SHA-256 selector; raw release capabilities never cross
+	// this boundary.
+	ReleaseCandidates []ReleaseCandidate
+	// Verification is server-authored, typed evidence for safety-sensitive
+	// callers. It is never inferred from the model-facing Text field.
+	Verification *ToolVerification
 }
+
+type ReleaseCandidate struct {
+	Reference  string
+	IndexerID  int
+	Title      string
+	Quality    string
+	Size       int64
+	Protocol   string
+	Indexer    string
+	Rejected   bool
+	Rejections []string
+}
+
+// ToolVerification describes one exact, scoped observation made by a read
+// tool. Remediation uses it to distinguish "the model read something" from
+// deterministic proof that the detector's original queue target disappeared.
+type ToolVerification struct {
+	Kind          string
+	ExactScope    bool
+	TargetPresent bool
+}
+
+const VerificationQueueTarget = "queue_target"
 
 // ToolsWithUI is the set of tool names that have MCP App UI attached.
 var ToolsWithUI = map[string]bool{

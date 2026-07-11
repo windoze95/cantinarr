@@ -1,8 +1,8 @@
 // Package webhooks receives Sonarr/Radarr "Connect → Webhook" callbacks so
 // library changes made outside Cantinarr (manual imports, deletes, adds) are
 // pushed instantly instead of caught on the next poll or user-driven refresh.
-// Each callback authenticates with the instance's webhook token — these
-// requests carry no user session — and translates into the same websocket
+// Each callback authenticates with the instance's server-only Basic credential.
+// These requests carry no user session and translate into the same websocket
 // events and push notifications the queue-poll witness already emits, so the
 // app needs no new event handling.
 package webhooks
@@ -10,6 +10,7 @@ package webhooks
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -66,9 +67,9 @@ type arrPayload struct {
 	} `json:"series"`
 }
 
-// HandleArr is POST /api/webhooks/arr/{instanceID}?token=... — the URL an
-// admin pastes into Sonarr/Radarr → Settings → Connect → Webhook. The token
-// may ride the query string or the webhook form's basic-auth password field.
+// HandleArr receives the server-managed Sonarr/Radarr Connect webhook. The
+// server-only credential is carried as the Basic Auth password, never in a URL
+// that an HTTP access logger could persist.
 func (h *Handler) HandleArr(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "instanceID")
 	inst, err := h.store.Get(instanceID)
@@ -76,14 +77,20 @@ func (h *Handler) HandleArr(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"unknown instance"}`, http.StatusNotFound)
 		return
 	}
-	token, err := h.store.WebhookToken(instanceID)
-	if err != nil || !tokenMatches(r, token) {
+	tokens, err := h.store.WebhookTokens(instanceID)
+	if err != nil || !tokenMatches(r, tokens) {
 		http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 		return
 	}
 
 	var payload arrPayload
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := decoder.Decode(&payload); err != nil {
+		http.Error(w, `{"error":"invalid payload"}`, http.StatusBadRequest)
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		http.Error(w, `{"error":"invalid payload"}`, http.StatusBadRequest)
 		return
 	}
@@ -140,21 +147,19 @@ func (h *Handler) HandleArr(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-// tokenMatches checks the per-instance token from the query string or the
-// basic-auth password (Sonarr's webhook form offers username/password fields
-// but no custom headers). Constant-time compare; an empty presented token
-// never matches.
-func tokenMatches(r *http.Request, want string) bool {
-	got := r.URL.Query().Get("token")
-	if got == "" {
-		if _, pw, ok := r.BasicAuth(); ok {
-			got = pw
-		}
-	}
-	if got == "" || want == "" {
+// tokenMatches checks the Basic Auth password against every credential valid
+// during a managed rotation. The query-string form is intentionally rejected:
+// standard HTTP request logs persist URLs.
+func tokenMatches(r *http.Request, accepted []string) bool {
+	_, got, ok := r.BasicAuth()
+	if !ok || got == "" || len(accepted) == 0 {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+	matched := 0
+	for _, want := range accepted {
+		matched |= subtle.ConstantTimeCompare([]byte(got), []byte(want))
+	}
+	return matched == 1
 }
 
 // movieImported reflects a completed movie import: re-reads the movie so the

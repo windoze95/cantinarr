@@ -10,11 +10,33 @@ import (
 // pattern (request/service.go GetGlobalSettings/SetGlobalSettings).
 const remediationSettingsKey = "remediation_settings"
 
-// Autonomy tiers controlling the mutation policy (enforced in later waves).
+// Remediation modes control whether the agent may only investigate or may also
+// record a proposal for an administrator to approve. There is deliberately no
+// auto-execution mode: every current action is consequential and always crosses
+// the human approval gate.
 const (
-	AutonomyInvestigateOnly = "investigate_only"
-	AutonomyPropose         = "propose"
-	AutonomyAutoSafe        = "auto_safe"
+	ModeInvestigateOnly = "investigate_only"
+	ModeSupervised      = "supervised"
+
+	legacyAutonomyPropose  = "propose"
+	legacyAutonomyAutoSafe = "auto_safe"
+)
+
+// Absolute ceilings keep a typo or hand-edited settings payload from turning a
+// guardrail into an effectively unbounded agent run. The app may offer tighter
+// UX ranges; these are the authoritative server limits.
+const (
+	maxConfiguredSteps          = 50
+	maxConfiguredTurnTokens     = 32768
+	maxConfiguredWallClockSecs  = 1800
+	maxConfiguredRunCostMicros  = 10_000_000
+	maxConfiguredDailyRuns      = 1000
+	maxConfiguredDailyCost      = 100_000_000
+	maxConfiguredBreakerGiveups = 100
+	maxConfiguredUserWaitHours  = 24 * 30
+	maxObservationMinMinutes    = 24 * 60
+	maxObservationQuietMinutes  = 6 * 60
+	maxObservationSettleMinutes = 60
 )
 
 // Settings is the global AI remediation configuration. It is stored as the
@@ -32,52 +54,96 @@ const (
 // AllowReporting (the user-visible "Report a problem" affordance, surfaced to
 // non-admin clients via /api/config).
 type Settings struct {
-	Enabled                bool   `json:"enabled"`                   // master switch — ships OFF
-	AutoDispatch           bool   `json:"auto_dispatch"`             // poller may open auto issues — ships OFF
-	AllowReporting         bool   `json:"allow_reporting"`           // user-visible "Report a problem" affordance
-	MarkResolvedAsRead     bool   `json:"mark_resolved_as_read"`     // mark an issue read when it resolves (default ON)
-	Autonomy               string `json:"autonomy"`                  // investigate_only | propose | auto_safe
-	Provider               string `json:"provider"`                  // "" = inherit the configured AI provider
-	Model                  string `json:"model"`                     // "" = inherit the configured AI model
-	MaxSteps               int    `json:"max_steps"`                 // total tool calls per investigation
-	MaxTurnTokens          int    `json:"max_turn_tokens"`           // per-turn output cap
-	MaxWallClockSecs       int    `json:"max_wall_clock_secs"`       // active wall-clock budget
-	MaxCostMicros          int    `json:"max_cost_micros"`           // per-run cost ceiling (millionths USD)
-	DailyRunCap            int    `json:"daily_run_cap"`             // max runs/day
-	DailyCostCeilingMicros int    `json:"daily_cost_ceiling_micros"` // global cost ceiling/day (millionths USD)
-	CircuitBreakerGiveups  int    `json:"circuit_breaker_giveups"`   // consecutive auto give-ups -> auto-dispatch off
-	MaxUserWaitHours       int    `json:"max_user_wait_hours"`       // W4: reply-TTL — close an awaiting_user issue with no reply within this window
+	Enabled                  bool   `json:"enabled"`                    // master switch — ships OFF
+	AutoDispatch             bool   `json:"auto_dispatch"`              // poller may open auto issues — ships OFF
+	AllowReporting           bool   `json:"allow_reporting"`            // user-visible "Report a problem" affordance
+	MarkResolvedAsRead       bool   `json:"mark_resolved_as_read"`      // mark an issue read when it resolves (default ON)
+	Mode                     string `json:"mode"`                       // investigate_only | supervised
+	Provider                 string `json:"provider"`                   // "" = inherit the configured AI provider
+	Model                    string `json:"model"`                      // "" = inherit the configured AI model
+	MaxSteps                 int    `json:"max_steps"`                  // total tool calls per investigation
+	MaxTurnTokens            int    `json:"max_turn_tokens"`            // per-turn output cap
+	MaxWallClockSecs         int    `json:"max_wall_clock_secs"`        // active wall-clock budget
+	MaxCostMicros            int    `json:"max_cost_micros"`            // per-run cost ceiling (millionths USD)
+	DailyRunCap              int    `json:"daily_run_cap"`              // max runs/day
+	DailyCostCeilingMicros   int    `json:"daily_cost_ceiling_micros"`  // global cost ceiling/day (millionths USD)
+	CircuitBreakerGiveups    int    `json:"circuit_breaker_giveups"`    // consecutive auto give-ups -> auto-dispatch off
+	MaxUserWaitHours         int    `json:"max_user_wait_hours"`        // W4: reply-TTL — close an awaiting_user issue with no reply within this window
+	ObservationMinMinutes    int    `json:"observation_min_minutes"`    // minimum persistent-problem age before promotion
+	ObservationQuietMinutes  int    `json:"observation_quiet_minutes"`  // unchanged time before promotion
+	ObservationSettleMinutes int    `json:"observation_settle_minutes"` // queue-absence settle window
+}
+
+// UnmarshalJSON accepts the pre-mode "autonomy" field so existing stored blobs
+// and older clients retain their safety policy across the rename. mode wins when
+// it is explicitly valid; otherwise a recognized legacy value is translated.
+// Settings deliberately has no autonomy field, so marshaling emits only mode.
+func (g *Settings) UnmarshalJSON(data []byte) error {
+	type plainSettings Settings
+	decoded := plainSettings(*g)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var compatibility struct {
+		Mode     *string `json:"mode"`
+		Autonomy *string `json:"autonomy"`
+	}
+	if err := json.Unmarshal(data, &compatibility); err != nil {
+		return err
+	}
+
+	*g = Settings(decoded)
+	if compatibility.Autonomy != nil && (compatibility.Mode == nil || !validMode(*compatibility.Mode)) {
+		if mode, ok := legacyAutonomyMode(*compatibility.Autonomy); ok {
+			g.Mode = mode
+		}
+	}
+	return nil
+}
+
+func legacyAutonomyMode(autonomy string) (string, bool) {
+	switch autonomy {
+	case ModeInvestigateOnly:
+		return ModeInvestigateOnly, true
+	case legacyAutonomyPropose, legacyAutonomyAutoSafe, ModeSupervised:
+		return ModeSupervised, true
+	default:
+		return "", false
+	}
 }
 
 // Defaults returns the built-in remediation settings. Provider and Model are
 // empty so the agent inherits the configured AI provider/model unless an admin
-// overrides them; every mutation is admin-approved (autonomy "propose"); the
+// overrides them; every mutation is admin-approved (mode "supervised"); the
 // feature ships OFF. The cost ceilings are best-effort guardrails.
 func Defaults() Settings {
 	return Settings{
-		Enabled:                false,
-		AutoDispatch:           false,
-		AllowReporting:         true,
-		MarkResolvedAsRead:     true,
-		Autonomy:               AutonomyPropose,
-		Provider:               "",
-		Model:                  "",
-		MaxSteps:               12,
-		MaxTurnTokens:          4096,
-		MaxWallClockSecs:       300,
-		MaxCostMicros:          500000, // ~$0.50/run
-		DailyRunCap:            50,
-		DailyCostCeilingMicros: 5000000, // ~$5/day, global
-		CircuitBreakerGiveups:  5,
-		MaxUserWaitHours:       72, // W4: 3 days for a reporter to answer before wont_fix(user_unresponsive)
+		Enabled:                  false,
+		AutoDispatch:             false,
+		AllowReporting:           true,
+		MarkResolvedAsRead:       true,
+		Mode:                     ModeSupervised,
+		Provider:                 "",
+		Model:                    "",
+		MaxSteps:                 12,
+		MaxTurnTokens:            4096,
+		MaxWallClockSecs:         300,
+		MaxCostMicros:            500000, // ~$0.50/run
+		DailyRunCap:              50,
+		DailyCostCeilingMicros:   5000000, // ~$5/day, global
+		CircuitBreakerGiveups:    5,
+		MaxUserWaitHours:         72, // W4: 3 days for a reporter to answer before wont_fix(user_unresponsive)
+		ObservationMinMinutes:    10,
+		ObservationQuietMinutes:  5,
+		ObservationSettleMinutes: 2,
 	}
 }
 
-// validAutonomy reports whether a stored/submitted autonomy value is one of the
-// known tiers.
-func validAutonomy(a string) bool {
-	switch a {
-	case AutonomyInvestigateOnly, AutonomyPropose, AutonomyAutoSafe:
+// validMode reports whether a stored/submitted mode is implemented.
+func validMode(mode string) bool {
+	switch mode {
+	case ModeInvestigateOnly, ModeSupervised:
 		return true
 	}
 	return false
@@ -88,34 +154,65 @@ func validAutonomy(a string) bool {
 // request settings' defensive validSeasonScope fallback.
 func (g *Settings) normalize() {
 	d := Defaults()
-	if !validAutonomy(g.Autonomy) {
-		g.Autonomy = d.Autonomy
+	if !validMode(g.Mode) {
+		g.Mode = d.Mode
 	}
 	// Provider/Model are intentionally not defaulted: empty means "inherit the
 	// configured AI provider/model", which is the shipped default.
 	if g.MaxSteps <= 0 {
 		g.MaxSteps = d.MaxSteps
+	} else if g.MaxSteps > maxConfiguredSteps {
+		g.MaxSteps = maxConfiguredSteps
 	}
 	if g.MaxTurnTokens <= 0 {
 		g.MaxTurnTokens = d.MaxTurnTokens
+	} else if g.MaxTurnTokens > maxConfiguredTurnTokens {
+		g.MaxTurnTokens = maxConfiguredTurnTokens
 	}
 	if g.MaxWallClockSecs <= 0 {
 		g.MaxWallClockSecs = d.MaxWallClockSecs
+	} else if g.MaxWallClockSecs > maxConfiguredWallClockSecs {
+		g.MaxWallClockSecs = maxConfiguredWallClockSecs
 	}
 	if g.MaxCostMicros <= 0 {
 		g.MaxCostMicros = d.MaxCostMicros
+	} else if g.MaxCostMicros > maxConfiguredRunCostMicros {
+		g.MaxCostMicros = maxConfiguredRunCostMicros
 	}
 	if g.DailyRunCap <= 0 {
 		g.DailyRunCap = d.DailyRunCap
+	} else if g.DailyRunCap > maxConfiguredDailyRuns {
+		g.DailyRunCap = maxConfiguredDailyRuns
 	}
 	if g.DailyCostCeilingMicros <= 0 {
 		g.DailyCostCeilingMicros = d.DailyCostCeilingMicros
+	} else if g.DailyCostCeilingMicros > maxConfiguredDailyCost {
+		g.DailyCostCeilingMicros = maxConfiguredDailyCost
 	}
 	if g.CircuitBreakerGiveups <= 0 {
 		g.CircuitBreakerGiveups = d.CircuitBreakerGiveups
+	} else if g.CircuitBreakerGiveups > maxConfiguredBreakerGiveups {
+		g.CircuitBreakerGiveups = maxConfiguredBreakerGiveups
 	}
 	if g.MaxUserWaitHours <= 0 {
 		g.MaxUserWaitHours = d.MaxUserWaitHours
+	} else if g.MaxUserWaitHours > maxConfiguredUserWaitHours {
+		g.MaxUserWaitHours = maxConfiguredUserWaitHours
+	}
+	if g.ObservationMinMinutes <= 0 {
+		g.ObservationMinMinutes = d.ObservationMinMinutes
+	} else if g.ObservationMinMinutes > maxObservationMinMinutes {
+		g.ObservationMinMinutes = maxObservationMinMinutes
+	}
+	if g.ObservationQuietMinutes <= 0 {
+		g.ObservationQuietMinutes = d.ObservationQuietMinutes
+	} else if g.ObservationQuietMinutes > maxObservationQuietMinutes {
+		g.ObservationQuietMinutes = maxObservationQuietMinutes
+	}
+	if g.ObservationSettleMinutes <= 0 {
+		g.ObservationSettleMinutes = d.ObservationSettleMinutes
+	} else if g.ObservationSettleMinutes > maxObservationSettleMinutes {
+		g.ObservationSettleMinutes = maxObservationSettleMinutes
 	}
 }
 

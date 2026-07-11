@@ -1,8 +1,50 @@
 package ai
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestCredentialHTTPClientDoesNotFollowRedirects(t *testing.T) {
+	var redirectedRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedRequests.Add(1)
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("redirect destination received Authorization %q", got)
+		}
+		if got := r.Header.Get("X-Goog-Api-Key"); got != "" {
+			t.Errorf("redirect destination received X-Goog-Api-Key %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(destination.Close)
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/credential-sink", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	req, err := http.NewRequest(http.MethodPost, source.URL+"/completion", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer provider-secret")
+	req.Header.Set("X-Goog-Api-Key", "gemini-secret")
+	resp, err := newCredentialHTTPClient(time.Second).Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307", resp.StatusCode)
+	}
+	if got := redirectedRequests.Load(); got != 0 {
+		t.Fatalf("redirect destination received %d requests, want 0", got)
+	}
+}
 
 func TestProviderNeutralTranscriptConvertersPreserveToolContext(t *testing.T) {
 	history := transcript{

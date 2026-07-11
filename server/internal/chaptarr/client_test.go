@@ -6,8 +6,51 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+func TestClientDoesNotFollowRedirects(t *testing.T) {
+	var redirectedRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedRequests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(destination.Close)
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/credential-sink", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	client := NewClient(source.URL, "chaptarr-secret")
+	if _, err := client.GetAllAuthors(); err == nil {
+		t.Fatal("GetAllAuthors accepted an upstream redirect")
+	}
+	if _, err := client.SearchReleases(42); err == nil {
+		t.Fatal("SearchReleases accepted an upstream redirect")
+	}
+	if got := redirectedRequests.Load(); got != 0 {
+		t.Fatalf("redirect destination received %d requests, want 0", got)
+	}
+}
+
+func TestClientErrorDoesNotEchoUpstreamBody(t *testing.T) {
+	const secret = "PROWLARR_DOWNLOAD_URL_API_KEY_SENTINEL"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"downloadUrl":"https://indexer.invalid/download?apikey=`+secret+`"}`, http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := NewClient(server.URL, "chaptarr-secret").GetAllAuthors()
+	if err == nil {
+		t.Fatal("GetAllAuthors returned nil error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("error echoed upstream response secret: %v", err)
+	}
+}
 
 // TestSetBookMonitored asserts SetBookMonitored PUTs the {bookIds, monitored}
 // body Chaptarr's book/monitor endpoint expects (a POST returns 405 on the

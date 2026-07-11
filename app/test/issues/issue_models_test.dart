@@ -25,6 +25,28 @@ void main() {
       expect(IssueStatus.resolved.isTerminal, isTrue);
       expect(IssueStatus.investigating.isActive, isTrue);
       expect(IssueStatus.investigating.isTerminal, isFalse);
+      expect(IssueStatus.observing.isTerminal, isFalse);
+      expect(IssueStatus.observing.label, 'Watching the download');
+      expect(IssueStatus.observing.isActive, isFalse);
+      expect(IssueStatus.observing.isTracking, isTrue);
+      expect(IssueStatus.observing.needsAttention, isFalse);
+      expect(IssueStatus.recovering.isTracking, isTrue);
+      expect(IssueStatus.recovering.label, 'Download recovery in progress');
+      expect(IssueStatus.recovering.needsAttention, isFalse);
+      expect(IssueStatus.awaitingApproval.needsAttention, isTrue);
+    });
+
+    test('shared status labels use requester vocabulary', () {
+      final forbidden = RegExp(
+        r'radarr|sonarr|agent|proposal|admin',
+        caseSensitive: false,
+      );
+      for (final status in IssueStatus.values) {
+        expect(status.label, isNot(matches(forbidden)));
+      }
+      for (final kind in IssueResolutionKind.values) {
+        expect(kind.label, isNot(matches(forbidden)));
+      }
     });
   });
 
@@ -37,6 +59,7 @@ void main() {
         'category': 'wrong_audio',
         'reporter_id': 3,
         'reporter_name': 'alice',
+        'instance_id': 'sonarr-main',
         'tmdb_id': 1399,
         'media_type': 'tv',
         'title': 'Show',
@@ -44,10 +67,24 @@ void main() {
         'episode_number': 4,
         'detail': 'wrong language',
         'occurrences': 1,
+        'resolution': '',
+        'resolution_kind': '',
       });
       expect(tv.id, 7);
       expect(tv.category, IssueCategory.wrongAudio);
+      expect(tv.instanceId, 'sonarr-main');
       expect(tv.scopeLabel, 'S2·E4');
+
+      final special = Issue.fromJson({
+        'id': 8,
+        'status': 'observing',
+        'media_type': 'tv',
+        'tmdb_id': 1399,
+        'title': 'Special',
+        'season_number': 0,
+        'episode_number': 1,
+      });
+      expect(special.scopeLabel, 'S0·E1');
       expect(tv.read, isTrue); // absent 'read' defaults true (older server)
 
       final unread = Issue.fromJson({
@@ -65,10 +102,26 @@ void main() {
         'status': 'resolved',
         'category': null,
         'tmdb_id': 27205,
+        'resolution': 'The queue cleared before a fix was approved.',
+        'resolution_kind': 'arr_state_cleared',
+        'closed_at': '2026-07-10T12:00:00Z',
       });
       expect(movie.category, isNull); // auto / no category
       expect(movie.scopeLabel, 'Movie');
       expect(movie.status, IssueStatus.resolved);
+      expect(movie.resolutionKind, IssueResolutionKind.arrStateCleared);
+      expect(movie.resolution, contains('before a fix'));
+      expect(movie.closedAt, isNotNull);
+
+      final adminCompleted = Issue.fromJson({
+        'id': 13,
+        'media_type': 'movie',
+        'status': 'resolved',
+        'resolution': 'Verified playback manually.',
+        'resolution_kind': 'admin_completed',
+      });
+      expect(adminCompleted.resolutionKind, IssueResolutionKind.adminCompleted);
+      expect(adminCompleted.resolutionKind.label, 'Completed after review');
     });
 
     test('never claims "Movie" for a non-movie media_type', () {
@@ -89,6 +142,18 @@ void main() {
       });
       expect(book.scopeLabel, 'Book');
     });
+
+    test('translates the reporter-timeout sentinel into requester copy', () {
+      final issue = Issue.fromJson({
+        'id': 12,
+        'media_type': 'tv',
+        'status': 'wont_fix',
+        'resolution': 'user_unresponsive',
+        'resolution_kind': 'reporter_timeout',
+      });
+      expect(issue.resolutionLabel, contains('No reply was received'));
+      expect(issue.resolutionLabel, isNot(contains('user_unresponsive')));
+    });
   });
 
   group('RemediationSettings', () {
@@ -98,7 +163,7 @@ void main() {
         autoDispatch: false,
         allowReporting: true,
         markResolvedAsRead: false,
-        autonomy: RemediationAutonomy.propose,
+        mode: RemediationMode.supervised,
         provider: 'openai',
         model: 'gpt-5',
         maxSteps: 12,
@@ -108,12 +173,20 @@ void main() {
         dailyRunCap: 50,
         dailyCostCeilingMicros: 5000000,
         circuitBreakerGiveups: 5,
+        maxUserWaitHours: 48,
+        observationMinMinutes: 12,
+        observationQuietMinutes: 7,
+        observationSettleMinutes: 3,
       );
       final back = RemediationSettings.fromJson(s.toJson());
       expect(back.provider, 'openai');
       expect(back.model, 'gpt-5');
-      expect(back.autonomy, RemediationAutonomy.propose);
+      expect(back.mode, RemediationMode.supervised);
       expect(back.maxCostMicros, 500000);
+      expect(back.maxUserWaitHours, 48);
+      expect(back.observationMinMinutes, 12);
+      expect(back.observationQuietMinutes, 7);
+      expect(back.observationSettleMinutes, 3);
       expect(back.markResolvedAsRead, isFalse); // explicit false round-trips
     });
 
@@ -121,7 +194,11 @@ void main() {
       final s = RemediationSettings.fromJson({});
       expect(s.provider, '');
       expect(s.model, '');
-      expect(s.autonomy, RemediationAutonomy.propose); // tolerant default
+      expect(s.mode, RemediationMode.supervised); // tolerant safe default
+      expect(s.maxUserWaitHours, 72);
+      expect(s.observationMinMinutes, 10);
+      expect(s.observationQuietMinutes, 5);
+      expect(s.observationSettleMinutes, 2);
       expect(s.markResolvedAsRead, isTrue); // defaults on when absent
     });
   });

@@ -2,6 +2,7 @@ package instance
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -207,11 +208,12 @@ func (s *Store) Update(inst *Instance) error {
 	return nil
 }
 
-// WebhookToken returns the instance's webhook bearer token, generating and
+// WebhookToken returns the instance's webhook callback credential, generating and
 // persisting one on first use (which also backfills instances that predate the
-// column). The token authorizes the arrs' Connect→Webhook callbacks — those
-// requests carry no user session, so the token IS the auth. Encrypted at rest
-// like the other instance secrets.
+// column). It is used as the server-managed webhook's Basic Auth password;
+// callbacks carry no user session, so this credential is the auth. It is
+// encrypted at rest like the other instance secrets and never returned by the
+// instance API.
 func (s *Store) WebhookToken(id string) (string, error) {
 	var stored string
 	err := s.db.QueryRow(
@@ -252,6 +254,117 @@ func (s *Store) WebhookToken(id string) (string, error) {
 	}
 	// Lost the race: return the winner's token.
 	return s.WebhookToken(id)
+}
+
+// WebhookTokens returns the currently accepted callback credentials without
+// generating one. During a managed rotation both current and pending are valid,
+// so a failed or ambiguous remote update cannot break the old webhook.
+func (s *Store) WebhookTokens(id string) ([]string, error) {
+	var current, pending string
+	if err := s.db.QueryRow(
+		"SELECT webhook_token, webhook_pending_token FROM service_instances WHERE id = ?", id,
+	).Scan(&current, &pending); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("instance not found: %s", id)
+		}
+		return nil, fmt.Errorf("get webhook credentials: %w", err)
+	}
+	out := make([]string, 0, 2)
+	for _, stored := range []string{current, pending} {
+		if stored == "" {
+			continue
+		}
+		token, err := s.cipher.Decrypt(stored)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt webhook credential for %s (wrong encryption key?): %w", id, err)
+		}
+		out = append(out, token)
+	}
+	return out, nil
+}
+
+// PrepareWebhookToken returns a stable pending rotation candidate. Concurrent
+// calls and retries reuse the same candidate until PromoteWebhookToken commits
+// it, avoiding racing credentials in the remote arr configuration.
+func (s *Store) PrepareWebhookToken(id string) (string, error) {
+	var stored string
+	if err := s.db.QueryRow(
+		"SELECT webhook_pending_token FROM service_instances WHERE id = ?", id,
+	).Scan(&stored); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("instance not found: %s", id)
+		}
+		return "", fmt.Errorf("get pending webhook credential: %w", err)
+	}
+	if stored != "" {
+		token, err := s.cipher.Decrypt(stored)
+		if err != nil {
+			return "", fmt.Errorf("decrypt pending webhook credential: %w", err)
+		}
+		return token, nil
+	}
+
+	token, err := newWebhookToken()
+	if err != nil {
+		return "", err
+	}
+	encrypted, err := s.cipher.Encrypt(token)
+	if err != nil {
+		return "", fmt.Errorf("encrypt webhook token: %w", err)
+	}
+	res, err := s.db.Exec(
+		"UPDATE service_instances SET webhook_pending_token = ? WHERE id = ? AND webhook_pending_token = ''",
+		encrypted, id,
+	)
+	if err != nil {
+		return "", fmt.Errorf("prepare webhook credential: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return token, nil
+	}
+	return s.PrepareWebhookToken(id)
+}
+
+// PromoteWebhookToken commits the exact pending candidate after the arr accepts
+// it. The operation is idempotent for a lost HTTP response.
+func (s *Store) PromoteWebhookToken(id, token string) error {
+	var currentStored, pendingStored string
+	if err := s.db.QueryRow(
+		"SELECT webhook_token, webhook_pending_token FROM service_instances WHERE id = ?", id,
+	).Scan(&currentStored, &pendingStored); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("instance not found: %s", id)
+		}
+		return fmt.Errorf("get webhook rotation state: %w", err)
+	}
+	if pendingStored == "" {
+		if currentStored != "" {
+			current, err := s.cipher.Decrypt(currentStored)
+			if err == nil && subtle.ConstantTimeCompare([]byte(current), []byte(token)) == 1 {
+				return nil
+			}
+		}
+		return fmt.Errorf("webhook rotation candidate is no longer pending")
+	}
+	pending, err := s.cipher.Decrypt(pendingStored)
+	if err != nil {
+		return fmt.Errorf("decrypt pending webhook credential: %w", err)
+	}
+	if subtle.ConstantTimeCompare([]byte(pending), []byte(token)) != 1 {
+		return fmt.Errorf("webhook rotation candidate changed")
+	}
+	res, err := s.db.Exec(
+		`UPDATE service_instances SET webhook_token = webhook_pending_token, webhook_pending_token = ''
+		 WHERE id = ? AND webhook_pending_token = ?`,
+		id, pendingStored,
+	)
+	if err != nil {
+		return fmt.Errorf("promote webhook credential: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("webhook rotation changed concurrently")
+	}
+	return nil
 }
 
 func newWebhookToken() (string, error) {

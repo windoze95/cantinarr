@@ -9,7 +9,7 @@ import '../logic/issues_provider.dart';
 
 /// Admin screen for the AI-remediation settings. Clones
 /// `RequestSettingsScreen`'s load → edit → Save shape: a master Enabled
-/// switch, sub-toggles, an autonomy dropdown, free-text provider/model
+/// switch, sub-toggles, a remediation-mode dropdown, free-text provider/model
 /// overrides, and numeric bound fields.
 class AiRemediationSettingsScreen extends ConsumerStatefulWidget {
   const AiRemediationSettingsScreen({super.key});
@@ -25,6 +25,7 @@ class _AiRemediationSettingsScreenState
   bool _isLoading = true;
   String? _error;
   bool _saving = false;
+  int _loadEpoch = 0;
 
   // Free-text controllers for provider/model so a blank means "server
   // default". The agent is provider-agnostic — no fixed dropdown here.
@@ -50,13 +51,14 @@ class _AiRemediationSettingsScreenState
   }
 
   Future<void> _load() async {
+    final epoch = ++_loadEpoch;
     setState(() {
       _isLoading = _edited == null;
       _error = null;
     });
     try {
       final settings = await ref.read(issuesServiceProvider).getSettings();
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _edited = settings;
         _providerController.text = settings.provider;
@@ -64,7 +66,7 @@ class _AiRemediationSettingsScreenState
         _isLoading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -172,7 +174,8 @@ class _AiRemediationSettingsScreenState
                 color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
           ),
           subtitle: const Text(
-            'Open and investigate issues automatically for stuck downloads.',
+            'Track detected problems quietly while Radarr or Sonarr retries, '
+            'then investigate only after the observation window.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
@@ -209,30 +212,71 @@ class _AiRemediationSettingsScreenState
         ),
         ListTile(
           title: const Text(
-            'Autonomy',
+            'Mode',
             style: TextStyle(
                 color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
           ),
           subtitle: const Text(
-            'How far the assistant may go on its own.',
+            'Whether the assistant may prepare a fix for an admin to review.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
-          trailing: DropdownButton<RemediationAutonomy>(
-            value: s.autonomy,
+          trailing: DropdownButton<RemediationMode>(
+            value: s.mode,
             dropdownColor: AppTheme.surface,
             underline: const SizedBox.shrink(),
             style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
             items: [
-              for (final a in RemediationAutonomy.values)
-                DropdownMenuItem<RemediationAutonomy>(
+              for (final a in RemediationMode.values)
+                DropdownMenuItem<RemediationMode>(
                   value: a,
                   child: Text(a.label),
                 ),
             ],
             onChanged: (v) {
               if (v == null) return;
-              setState(() => _edited = s.copyWith(autonomy: v));
+              setState(() => _edited = s.copyWith(mode: v));
             },
+          ),
+        ),
+        const _SectionLabel('Automatic recovery'),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Text(
+            'Detected download problems stay silent while the arr may still '
+            'recover on its own. These timers decide when recovery has had '
+            'enough time and the issue should become actionable.',
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 13,
+              height: 1.35,
+            ),
+          ),
+        ),
+        _NumberTile(
+          label: 'Minimum watch time (minutes)',
+          help: 'Wait at least this long before any agent work, proposal, or '
+              'admin alert can begin.',
+          value: s.observationMinMinutes,
+          onChanged: (v) => setState(
+            () => _edited = s.copyWith(observationMinMinutes: v),
+          ),
+        ),
+        _NumberTile(
+          label: 'Quiet time after arr activity (minutes)',
+          help: 'Keep waiting while Radarr or Sonarr is retrying. Escalation '
+              'starts only after no new recovery activity for this long.',
+          value: s.observationQuietMinutes,
+          onChanged: (v) => setState(
+            () => _edited = s.copyWith(observationQuietMinutes: v),
+          ),
+        ),
+        _NumberTile(
+          label: 'Recovery settle time (minutes)',
+          help: 'When the failed queue item clears, allow imports and library '
+              'state this long to settle before deciding the outcome.',
+          value: s.observationSettleMinutes,
+          onChanged: (v) => setState(
+            () => _edited = s.copyWith(observationSettleMinutes: v),
           ),
         ),
         const _SectionLabel('Model'),
@@ -253,6 +297,12 @@ class _AiRemediationSettingsScreenState
           label: 'Max steps per run',
           value: s.maxSteps,
           onChanged: (v) => setState(() => _edited = s.copyWith(maxSteps: v)),
+        ),
+        _NumberTile(
+          label: 'Max output tokens per turn',
+          value: s.maxTurnTokens,
+          onChanged: (v) =>
+              setState(() => _edited = s.copyWith(maxTurnTokens: v)),
         ),
         _NumberTile(
           label: 'Max wall-clock (seconds)',
@@ -277,6 +327,18 @@ class _AiRemediationSettingsScreenState
           value: s.dailyCostCeilingMicros,
           onChanged: (v) =>
               setState(() => _edited = s.copyWith(dailyCostCeilingMicros: v)),
+        ),
+        _NumberTile(
+          label: 'Wait for a user reply (hours)',
+          value: s.maxUserWaitHours,
+          onChanged: (v) =>
+              setState(() => _edited = s.copyWith(maxUserWaitHours: v)),
+        ),
+        _NumberTile(
+          label: 'Failed auto investigations before pausing',
+          value: s.circuitBreakerGiveups,
+          onChanged: (v) =>
+              setState(() => _edited = s.copyWith(circuitBreakerGiveups: v)),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
@@ -359,11 +421,13 @@ class _TextField extends StatelessWidget {
 /// A labelled integer field. Empty input is treated as 0.
 class _NumberTile extends StatefulWidget {
   final String label;
+  final String? help;
   final int value;
   final ValueChanged<int> onChanged;
 
   const _NumberTile({
     required this.label,
+    this.help,
     required this.value,
     required this.onChanged,
   });
@@ -382,6 +446,15 @@ class _NumberTileState extends State<_NumberTile> {
   }
 
   @override
+  void didUpdateWidget(covariant _NumberTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value &&
+        int.tryParse(_controller.text) != widget.value) {
+      _controller.text = widget.value.toString();
+    }
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
@@ -395,6 +468,16 @@ class _NumberTileState extends State<_NumberTile> {
         style: const TextStyle(
             color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
       ),
+      subtitle: widget.help == null
+          ? null
+          : Text(
+              widget.help!,
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+                height: 1.3,
+              ),
+            ),
       trailing: SizedBox(
         width: 120,
         child: TextField(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -6,6 +8,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/agent_action_models.dart';
 import '../logic/issues_provider.dart';
+import 'issue_refresh_banner.dart';
 
 /// Read-only audit timeline for one agent run (`GET /api/admin/agent-runs/{id}`).
 ///
@@ -22,15 +25,33 @@ class AgentRunScreen extends ConsumerStatefulWidget {
   ConsumerState<AgentRunScreen> createState() => _AgentRunScreenState();
 }
 
-class _AgentRunScreenState extends ConsumerState<AgentRunScreen> {
+class _AgentRunScreenState extends ConsumerState<AgentRunScreen>
+    with WidgetsBindingObserver {
   AgentRunDetail? _detail;
   bool _isLoading = true;
   String? _error;
+  int _loadEpoch = 0;
+  Timer? _poll;
+
+  static const _pollInterval = Duration(seconds: 10);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _poll?.cancel();
+    super.dispose();
   }
 
   String _friendlyError(Object e) {
@@ -39,23 +60,42 @@ class _AgentRunScreenState extends ConsumerState<AgentRunScreen> {
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
+    final epoch = ++_loadEpoch;
     setState(() {
       _isLoading = _detail == null;
-      _error = null;
+      if (_detail == null) _error = null;
     });
     try {
       final detail = await ref.read(issuesServiceProvider).getRun(widget.runId);
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _detail = detail;
         _isLoading = false;
+        _error = null;
       });
+      _syncPolling(detail.run.status);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _error = e.toString();
         _isLoading = false;
       });
+    }
+  }
+
+  void _syncPolling(String status) {
+    final live = const {
+      'running',
+      'waiting_user',
+      'waiting_approval',
+      'resume_pending',
+    }.contains(status);
+    if (live) {
+      _poll ??= Timer.periodic(_pollInterval, (_) => _load());
+    } else {
+      _poll?.cancel();
+      _poll = null;
     }
   }
 
@@ -92,6 +132,14 @@ class _AgentRunScreenState extends ConsumerState<AgentRunScreen> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: const EdgeInsets.all(16),
                         children: [
+                          if (_error != null) ...[
+                            IssueRefreshBanner(
+                              message:
+                                  "Couldn't refresh agent activity. Showing the last update.",
+                              onRetry: _load,
+                            ),
+                            const SizedBox(height: 12),
+                          ],
                           _RunSummary(run: detail.run),
                           const SizedBox(height: 16),
                           if (detail.steps.isEmpty)
@@ -124,8 +172,7 @@ class _RunSummary extends StatelessWidget {
       if (run.model.isNotEmpty) run.model,
       '${run.stepCount} step${run.stepCount == 1 ? '' : 's'}',
       run.costLabel,
-      if (run.stopReason != null && run.stopReason!.isNotEmpty)
-        'stopped: ${run.stopReason}',
+      if (run.stopReasonLabel != null) run.stopReasonLabel!,
     ];
     return Container(
       padding: const EdgeInsets.all(14),
@@ -138,7 +185,7 @@ class _RunSummary extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Run #${run.id} · ${run.status}',
+            'Run #${run.id} · ${run.statusLabel}',
             style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 14,
@@ -257,15 +304,29 @@ class _StepTile extends StatelessWidget {
               left: BorderSide(color: AppTheme.border, width: 2),
             ),
           ),
-          child: SelectableText(
-            value,
-            maxLines: 8,
-            style: const TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 12,
-              height: 1.35,
-              fontFamily: 'monospace',
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label[0].toUpperCase() + label.substring(1),
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              SelectableText(
+                value,
+                maxLines: 8,
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 12,
+                  height: 1.35,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
           ),
         ),
       );
@@ -290,7 +351,7 @@ class _StepTile extends StatelessWidget {
       case 'system':
         return (Icons.info_outline, AppTheme.textSecondary, 'System');
       default:
-        return (Icons.circle, AppTheme.textSecondary, s.kind);
+        return (Icons.circle, AppTheme.textSecondary, 'Activity');
     }
   }
 

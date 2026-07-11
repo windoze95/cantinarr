@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -34,6 +35,31 @@ func newMockGateway(t *testing.T, status int, respBody string, got *capturedRequ
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func TestClientDoesNotFollowRedirects(t *testing.T) {
+	var redirectedRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectedRequests.Add(1)
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("redirect destination received Authorization %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(destination.Close)
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/credential-sink", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	client := NewClient(source.URL, "gateway-secret")
+	if err := client.RegisterDevice(context.Background(), 42, "device-1", "ios", "token"); err == nil {
+		t.Fatal("RegisterDevice accepted an upstream redirect")
+	}
+	if got := redirectedRequests.Load(); got != 0 {
+		t.Fatalf("redirect destination received %d requests, want 0", got)
+	}
 }
 
 func TestClientRegisterDevice(t *testing.T) {

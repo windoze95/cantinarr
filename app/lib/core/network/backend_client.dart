@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/auth/logic/auth_provider.dart';
 import '../config/app_config.dart';
 import 'backend_auth_interceptor.dart';
+import 'safe_http_log_interceptor.dart';
 
 /// Provides an authenticated Dio instance configured for the backend.
 ///
@@ -50,11 +51,7 @@ final backendClientProvider = Provider<Dio>((ref) {
   ));
 
   if (kDebugMode) {
-    dio.interceptors.add(LogInterceptor(
-      requestBody: true,
-      responseBody: true,
-      logPrint: (obj) => debugPrint(obj.toString()),
-    ));
+    dio.interceptors.add(SafeHttpLogInterceptor(logPrint: debugPrint));
   }
 
   return dio;

@@ -26,7 +26,8 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:       30 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }
@@ -426,9 +427,9 @@ type ManualImportFile struct {
 	DownloadID   string          `json:"downloadId,omitempty"`
 }
 
-// do executes a request with an optional JSON body, fails on non-2xx status
-// (including a snippet of the response body), and decodes JSON into out when
-// out is non-nil.
+// do executes a request with an optional JSON body, fails on non-2xx status,
+// and decodes JSON into out when out is non-nil. Upstream error bodies are
+// deliberately excluded because they can contain credentials or signed URLs.
 func (c *Client) do(method, path string, body, out any) error {
 	return c.doWith(c.httpClient, method, path, body, out)
 }
@@ -456,9 +457,8 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("chaptarr %s %s returned status %d: %s",
-			method, strings.SplitN(path, "?", 2)[0], resp.StatusCode, strings.TrimSpace(string(snippet)))
+		requestPath, _, _ := strings.Cut(path, "?")
+		return fmt.Errorf("chaptarr %s %s returned status %d", method, requestPath, resp.StatusCode)
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -742,7 +742,10 @@ func (c *Client) GetWantedCutoff(page, pageSize int) (*WantedPage, error) {
 // releaseSearchClient allows the much longer round-trips of interactive
 // release searches, which query every configured indexer.
 func releaseSearchClient() *http.Client {
-	return &http.Client{Timeout: 120 * time.Second}
+	return &http.Client{
+		Timeout:       120 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 // SearchReleases runs an interactive release search for a book.

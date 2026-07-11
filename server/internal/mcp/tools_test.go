@@ -168,6 +168,52 @@ func TestExecuteToolDeniesRoleBeforeRunningTool(t *testing.T) {
 	}
 }
 
+func TestSanitizeToolResultScrubsTextErrorsAndStructuredData(t *testing.T) {
+	result := &ToolResult{
+		Text: `arr failed: {"downloadUrl":"https://indexer.invalid/get?apiKey=text-secret&id=4"}`,
+		StructuredData: map[string]any{
+			"nested": map[string]any{
+				"authorization": "Bearer structured-secret",
+				"detail":        "kept",
+			},
+		},
+	}
+	if dropped := sanitizeToolResult(result); dropped {
+		t.Fatal("JSON-compatible structured output was dropped")
+	}
+	encoded, err := json.Marshal(result.StructuredData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := result.Text + string(encoded)
+	for _, secret := range []string{"text-secret", "structured-secret"} {
+		if strings.Contains(combined, secret) {
+			t.Fatalf("tool boundary leaked %q: %s", secret, combined)
+		}
+	}
+	if !strings.Contains(combined, "id=4") || !strings.Contains(combined, "kept") {
+		t.Fatalf("tool boundary removed useful diagnosis: %s", combined)
+	}
+}
+
+func TestToolDebugMetadataContainsNoPayload(t *testing.T) {
+	secret := "must-never-appear-in-tool-debug"
+	result := &ToolResult{Text: "Authorization: Bearer " + secret, StructuredData: []any{"token=" + secret}}
+	sanitizeToolResult(result)
+	metadata := toolResultMetadata(result, false)
+	if strings.Contains(metadata, secret) || strings.Contains(metadata, "Authorization") || strings.Contains(metadata, "REDACTED") {
+		t.Fatalf("debug metadata contained payload data: %s", metadata)
+	}
+	for _, want := range []string{"text_bytes=", "structured_present=true"} {
+		if !strings.Contains(metadata, want) {
+			t.Errorf("debug metadata missing %q: %s", want, metadata)
+		}
+	}
+	if got := safeToolLogName("unknown?apiKey=" + secret); got != "<unknown>" {
+		t.Fatalf("unknown tool log name = %q", got)
+	}
+}
+
 func hasTool(tools []Tool, name string) bool {
 	for _, tool := range tools {
 		if tool.Name == name {

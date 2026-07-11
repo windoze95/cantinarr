@@ -18,17 +18,71 @@ AgentAction _proposed() => AgentAction.fromJson({
       'kind': 'grab_release',
       'params': {
         'media_type': 'tv',
-        'guid': 'Show.S02E04.1080p.WEB.H264-GROUP',
+        'guid': '[REDACTED release sha256:0123456789abcdef]',
         'indexer_id': 2,
         'queue_id_to_replace': 44,
+        'release_title': 'Show.S02E04.1080p.WEB.H264-GROUP',
+        'quality': 'WEBDL-1080p',
+        'size': 2147483648,
+        'protocol': 'usenet',
+        'indexer': 'Example Indexer',
+        'rejected': false,
       },
-      'rationale': 'The current release has Russian audio; this one is English.',
+      'rationale':
+          'The current release has Russian audio; this one is English.',
       'risk': 'mutating',
       'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
       'created_at': '2026-06-23T10:00:00Z',
       'issue_title': 'The Show',
       'issue_media_type': 'tv',
       'issue_category': 'wrong_audio',
+      'instance_id': 'sonarr-living-room',
+      'instance_name': 'Living Room TV',
+      'instance_service_type': 'sonarr',
+    });
+
+AgentAction _episodeSearch() => AgentAction.fromJson({
+      'id': 13,
+      'issue_id': 5,
+      'kind': 'trigger_search',
+      'params': {
+        'media_type': 'tv',
+        'tmdb_id': 42,
+        'season': 2,
+        'episode': 7,
+      },
+      'rationale': 'Search for a replacement of only the reported episode.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Show',
+      'issue_media_type': 'tv',
+      'instance_id': 'sonarr-living-room',
+      'instance_name': 'Living Room TV',
+      'instance_service_type': 'sonarr',
+    });
+
+AgentAction _specialSearch() => AgentAction.fromJson({
+      'id': 14,
+      'issue_id': 5,
+      'kind': 'trigger_search',
+      'params': {
+        'media_type': 'tv',
+        'tmdb_id': 42,
+        'season': 0,
+        'episode': 1,
+      },
+      'rationale': 'Search only for the reported special.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Show',
+      'issue_media_type': 'tv',
+      'instance_id': 'sonarr-living-room',
+      'instance_name': 'Living Room TV',
+      'instance_service_type': 'sonarr',
     });
 
 /// A fake service that returns canned decision results without any network I/O.
@@ -37,17 +91,30 @@ class _FakeIssuesService extends IssuesService {
 
   AgentAction Function(AgentAction)? onDeny;
   AgentAction Function(AgentAction)? onApprove;
+  AgentAction Function(AgentAction)? onGet;
+  Object? approveError;
+  Object? denyError;
 
   @override
   Future<AgentAction> denyAction(int id, {String? note}) async {
+    final error = denyError;
+    if (error != null) throw error;
     final base = _proposed();
     return (onDeny ?? _denied)(base);
   }
 
   @override
   Future<AgentAction> approveAction(int id, {Object? override}) async {
+    final error = approveError;
+    if (error != null) throw error;
     final base = _proposed();
     return (onApprove ?? _executed)(base);
+  }
+
+  @override
+  Future<AgentAction> getAction(int id) async {
+    final base = _proposed();
+    return (onGet ?? _executed)(base);
   }
 
   static AgentAction _denied(AgentAction _) => AgentAction.fromJson({
@@ -58,6 +125,9 @@ class _FakeIssuesService extends IssuesService {
         'status': 'denied',
         'deny_reason': 'Not the right release.',
         'decided_at': '2026-06-23T10:05:00Z',
+        'instance_id': 'sonarr-living-room',
+        'instance_name': 'Living Room TV',
+        'instance_service_type': 'sonarr',
       });
 
   static AgentAction _executed(AgentAction _) => AgentAction.fromJson({
@@ -69,6 +139,23 @@ class _FakeIssuesService extends IssuesService {
         'decided_at': '2026-06-23T10:05:00Z',
         'executed_at': '2026-06-23T10:05:02Z',
         'result_text': 'Grabbed the replacement release.',
+        'instance_id': 'sonarr-living-room',
+        'instance_name': 'Living Room TV',
+        'instance_service_type': 'sonarr',
+      });
+
+  static AgentAction _failed(AgentAction _) => AgentAction.fromJson({
+        'id': 12,
+        'issue_id': 5,
+        'kind': 'grab_release',
+        'params': const {},
+        'status': 'failed',
+        'decided_at': '2026-06-23T10:05:00Z',
+        'executed_at': '2026-06-23T10:05:02Z',
+        'result_text': 'The connected service rejected the change.',
+        'instance_id': 'sonarr-living-room',
+        'instance_name': 'Living Room TV',
+        'instance_service_type': 'sonarr',
       });
 }
 
@@ -114,6 +201,7 @@ Future<void> _pump(
   required AuthState auth,
   required IssuesService service,
   required AgentAction action,
+  bool decisionsEnabled = true,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -124,7 +212,10 @@ Future<void> _pump(
       child: MaterialApp(
         home: Scaffold(
           body: SingleChildScrollView(
-            child: ProposedActionCard(action: action),
+            child: ProposedActionCard(
+              action: action,
+              decisionsEnabled: decisionsEnabled,
+            ),
           ),
         ),
       ),
@@ -146,13 +237,53 @@ void main() {
     // Plain-language, kind-driven summary (server copy, not an agent string).
     expect(find.text('Grab a different release and remove the current one'),
         findsOneWidget);
-    // The release GUID is shown as quoted data.
+    // Server-observed candidate metadata is shown as quoted data; the raw
+    // release capability never reaches the app.
     expect(find.textContaining('Show.S02E04.1080p'), findsOneWidget);
+    expect(find.text('WEBDL-1080p'), findsOneWidget);
+    expect(find.text('2.0 GB'), findsOneWidget);
+    expect(find.text('Example Indexer (#2)'), findsOneWidget);
     // The agent's rationale is quoted verbatim.
     expect(find.textContaining('Russian audio'), findsOneWidget);
+    // The immutable target is prominent and separate from agent text.
+    expect(find.text('Target instance'), findsOneWidget);
+    expect(find.text('Sonarr · Living Room TV'), findsOneWidget);
+    expect(find.text('sonarr-living-room'), findsOneWidget);
     // Admin sees the two fixed controls.
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, 'Deny'), findsOneWidget);
+  });
+
+  testWidgets('renders episode scope for a trigger-search proposal',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _episodeSearch(),
+    );
+
+    expect(find.text('Season'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+    expect(find.text('Episode'), findsOneWidget);
+    expect(find.text('7'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
+  });
+
+  testWidgets('renders an exact S00 special as an approvable proposal',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _specialSearch(),
+    );
+
+    expect(find.text('Season'), findsOneWidget);
+    expect(find.text('0'), findsOneWidget);
+    expect(find.text('Episode'), findsOneWidget);
+    expect(find.text('1'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
   });
 
   testWidgets('a non-admin sees a read-only "waiting on an admin" footer',
@@ -204,6 +335,27 @@ void main() {
     );
 
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(find.text('Approve this change?'), findsOneWidget);
+    expect(
+      find.textContaining('download a different release'),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Sonarr · Living Room TV'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('sonarr-living-room'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
     await tester.pump(); // run the decision future
     await tester.pump(); // rebuild frozen
 
@@ -214,6 +366,130 @@ void main() {
     expect(find.widgetWithText(OutlinedButton, 'Deny'), findsNothing);
 
     await _drainSnackBar(tester);
+  });
+
+  testWidgets('lost approval response is reconciled before allowing a retry',
+      (tester) async {
+    final service = _FakeIssuesService()
+      ..approveError = DioException(
+        requestOptions: RequestOptions(path: '/approve'),
+        type: DioExceptionType.connectionError,
+      )
+      ..onGet = _FakeIssuesService._executed;
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: service,
+      action: _proposed(),
+    );
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.textContaining('· applied'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsNothing);
+    expect(find.text('Fix applied.'), findsOneWidget);
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('approval toast reports a failed execution', (tester) async {
+    final service = _FakeIssuesService()
+      ..onApprove = _FakeIssuesService._failed;
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: service,
+      action: _proposed(),
+    );
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('The fix was approved, but it failed.'), findsOneWidget);
+    expect(find.text('Approved, but the fix failed'), findsOneWidget);
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets(
+      'deny conflict reconciles an approval winner without claiming denied',
+      (tester) async {
+    final service = _FakeIssuesService()
+      ..denyError = DioException.badResponse(
+        statusCode: 409,
+        requestOptions: RequestOptions(path: '/deny'),
+        response: Response(
+          requestOptions: RequestOptions(path: '/deny'),
+          statusCode: 409,
+          data: {'error': 'action decision conflict: action is now executed'},
+        ),
+      )
+      ..onGet = _FakeIssuesService._executed;
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: service,
+      action: _proposed(),
+    );
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Deny'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Deny'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Fix applied.'), findsOneWidget);
+    expect(
+      find.text('Fix denied. The agent can investigate another option.'),
+      findsNothing,
+    );
+    expect(find.textContaining('· applied'), findsOneWidget);
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('unknown or malformed proposals explain why they are read-only',
+      (tester) async {
+    final malformed = AgentAction.fromJson({
+      'id': 14,
+      'issue_id': 5,
+      'kind': 'grab_release',
+      'params': '{bad-json',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+    });
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: malformed,
+    );
+
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsNothing);
+    expect(find.text('The proposed fix data is malformed.'), findsOneWidget);
+  });
+
+  testWidgets('a retained stale proposal is read-only until refreshed',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _proposed(),
+      decisionsEnabled: false,
+    );
+
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsNothing);
+    expect(find.widgetWithText(OutlinedButton, 'Deny'), findsNothing);
+    expect(
+      find.text('This fix could not be refreshed. Retry before deciding.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('an already-decided action renders frozen for an admin',

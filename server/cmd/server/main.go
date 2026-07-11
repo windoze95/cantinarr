@@ -105,7 +105,7 @@ func main() {
 	// Instance store and registry
 	instanceStore := instance.NewStore(database, cipher)
 	registry := instance.NewRegistry(instanceStore)
-	instanceHandler := instance.NewHandler(instanceStore, registry)
+	instanceHandler := instance.NewHandler(instanceStore, registry, cfg.PublicURL)
 
 	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission queue management)
 	downloadsHandler := downloads.NewHandler(instanceStore, registry)
@@ -217,7 +217,9 @@ func main() {
 	// (SetIssueOpener is not safe to call once Run is polling). Passing the opener
 	// only here keeps a server with the feature unwired from ever fetching the
 	// detailed queue.
-	wsHub.SetIssueOpener(remediation.NewAutoDispatcher(remediationService))
+	autoDispatcher := remediation.NewAutoDispatcher(remediationService)
+	autoDispatcher.StartObservationSweeper(ctx)
+	wsHub.SetIssueOpener(autoDispatcher)
 	go wsHub.Run(ctx)
 
 	// Discover handler (always created — checks credentials at request time)

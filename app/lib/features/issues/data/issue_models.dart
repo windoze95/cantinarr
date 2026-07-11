@@ -35,13 +35,16 @@ enum IssueCategory {
 /// resolved/wont_fix/failed/dismissed. The enum is tolerant of unknown
 /// server values (mapped to [unknown]) so a future status can't break parsing.
 enum IssueStatus {
-  open('open', 'Open'),
-  investigating('investigating', 'Investigating'),
+  open('open', 'Reported'),
+  observing('observing', 'Watching the download'),
+  recovering('recovering', 'Download recovery in progress'),
+  investigating('investigating', 'Checking the problem'),
   awaitingUser('awaiting_user', 'Needs your reply'),
-  awaitingApproval('awaiting_approval', 'Awaiting approval'),
+  awaitingApproval('awaiting_approval', 'Fix ready for review'),
+  needsAdmin('needs_admin', 'Needs a closer look'),
   resolved('resolved', 'Resolved'),
-  wontFix('wont_fix', "Won't fix"),
-  failed('failed', 'Failed'),
+  wontFix('wont_fix', 'Closed without a fix'),
+  failed('failed', 'Could not resolve'),
   dismissed('dismissed', 'Dismissed'),
   unknown('', 'Unknown');
 
@@ -57,6 +60,14 @@ enum IssueStatus {
       this == failed ||
       this == dismissed;
 
+  /// True while Cantinarr is passively tracking the arr's own recovery work.
+  /// These issues remain open for audit/history, but must not be presented as
+  /// agent or admin work that needs attention.
+  bool get isTracking => this == observing || this == recovering;
+
+  /// True when an open issue belongs in the admin's attention queue.
+  bool get needsAttention => !isTerminal && !isTracking;
+
   /// True while the issue is actively being worked (drives a typing/poll hint).
   bool get isActive => this == open || this == investigating;
 
@@ -64,6 +75,39 @@ enum IssueStatus {
         (s) => s.value == value,
         orElse: () => IssueStatus.unknown,
       );
+}
+
+/// Provenance for a terminal issue's resolution. The free-text `resolution`
+/// remains passive detail; this enum provides fixed, app-authored copy that
+/// makes it clear whether the agent acted or the arr state changed elsewhere.
+enum IssueResolutionKind {
+  agentConcluded('agent_concluded', 'Review completed'),
+  arrStateCleared('arr_state_cleared', 'Media became available'),
+  reporterTimeout('reporter_timeout', 'Closed after no reply'),
+  adminDismissed('admin_dismissed', 'Closed after review'),
+  adminCompleted('admin_completed', 'Completed after review'),
+  legacyUnknown('legacy_unknown', 'How it closed is unknown'),
+  unknown('', 'How it closed is unknown');
+
+  const IssueResolutionKind(this.value, this.label);
+
+  final String value;
+  final String label;
+
+  static IssueResolutionKind fromValue(String? value) => values.firstWhere(
+        (k) => k.value == value,
+        orElse: () => IssueResolutionKind.unknown,
+      );
+}
+
+/// Explicit human judgment for the admin completion endpoint. Dismissal is not
+/// a disposition here; it remains a separate action and audit provenance.
+enum AdminIssueDisposition {
+  resolved('resolved'),
+  wontFix('wont_fix');
+
+  const AdminIssueDisposition(this.value);
+  final String value;
 }
 
 /// One reported (or auto-detected) problem. Media-scoped like a media request
@@ -76,6 +120,7 @@ class Issue {
   final IssueCategory? category; // null for auto-detected
   final int? reporterId;
   final String reporterName;
+  final String instanceId; // exact owning Radarr/Sonarr instance
   final int tmdbId;
   final String mediaType; // 'movie' | 'tv'
   final String title;
@@ -87,8 +132,11 @@ class Issue {
   /// Whether an admin has seen the issue's current state. Any non-admin status
   /// change re-flags it unread; an admin opening the thread marks it read.
   final bool read;
+  final String resolution;
+  final IssueResolutionKind resolutionKind;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final DateTime? closedAt;
 
   const Issue({
     required this.id,
@@ -97,6 +145,7 @@ class Issue {
     required this.category,
     required this.reporterId,
     required this.reporterName,
+    required this.instanceId,
     required this.tmdbId,
     required this.mediaType,
     required this.title,
@@ -105,19 +154,34 @@ class Issue {
     required this.detail,
     required this.occurrences,
     required this.read,
+    required this.resolution,
+    required this.resolutionKind,
     required this.createdAt,
     required this.updatedAt,
+    required this.closedAt,
   });
 
   bool get isTv => mediaType == 'tv';
+
+  /// Human-facing resolution detail. Older/server-internal sentinel values are
+  /// translated so requesters never see implementation vocabulary.
+  String get resolutionLabel {
+    if (resolutionKind == IssueResolutionKind.reporterTimeout ||
+        resolution == 'user_unresponsive') {
+      return 'No reply was received before the waiting period ended.';
+    }
+    return resolution;
+  }
 
   /// A short scope label for list/thread subtitles:
   /// "S2·E4" / "Season 2" / "Movie".
   String get scopeLabel {
     if (isTv) {
+      // A positive episode disambiguates Sonarr Specials (season zero) from
+      // the season=0/episode=0 whole-series sentinel.
+      if (episodeNumber > 0) return 'S$seasonNumber·E$episodeNumber';
       if (seasonNumber <= 0) return 'Series';
-      if (episodeNumber <= 0) return 'Season $seasonNumber';
-      return 'S$seasonNumber·E$episodeNumber';
+      return 'Season $seasonNumber';
     }
     if (mediaType.isNotEmpty && mediaType != 'movie') {
       // 'book', or an off-contract value from an older server (auto issues
@@ -136,6 +200,7 @@ class Issue {
             : IssueCategory.fromValue(json['category'] as String?),
         reporterId: (json['reporter_id'] as num?)?.toInt(),
         reporterName: json['reporter_name'] as String? ?? '',
+        instanceId: json['instance_id'] as String? ?? '',
         tmdbId: json['tmdb_id'] as int? ?? 0,
         mediaType: json['media_type'] as String? ?? 'movie',
         title: json['title'] as String? ?? '',
@@ -146,10 +211,32 @@ class Issue {
         // Default true so an older server that omits the field doesn't paint the
         // whole list unread.
         read: json['read'] as bool? ?? true,
+        resolution: json['resolution'] as String? ?? '',
+        resolutionKind: IssueResolutionKind.fromValue(
+          json['resolution_kind'] as String?,
+        ),
         createdAt:
             DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
         updatedAt:
             DateTime.tryParse(json['updated_at'] as String? ?? '')?.toLocal(),
+        closedAt:
+            DateTime.tryParse(json['closed_at'] as String? ?? '')?.toLocal(),
+      );
+}
+
+/// Minimal acknowledgement returned when a reporter creates or adds to an
+/// issue. The initial server status lets the app explain that an arr recovery
+/// is already being watched instead of implying agent work has begun.
+class IssueReportResult {
+  final int issueId;
+  final IssueStatus status;
+
+  const IssueReportResult({required this.issueId, required this.status});
+
+  factory IssueReportResult.fromJson(Map<String, dynamic> json) =>
+      IssueReportResult(
+        issueId: (json['issue_id'] as num?)?.toInt() ?? 0,
+        status: IssueStatus.fromValue(json['status'] as String?),
       );
 }
 
@@ -192,8 +279,7 @@ class IssueMessage {
   /// True for messages that originate from the reporter/admin side of the
   /// conversation (rendered as a right-aligned bubble).
   bool get isFromHuman =>
-      authorKind == IssueAuthorKind.user ||
-      authorKind == IssueAuthorKind.admin;
+      authorKind == IssueAuthorKind.user || authorKind == IssueAuthorKind.admin;
 
   factory IssueMessage.fromJson(Map<String, dynamic> json) => IssueMessage(
         id: json['id'] as int? ?? 0,
@@ -221,19 +307,20 @@ class IssueThread {
       );
 }
 
-/// The agent's autonomy tier, shown as a dropdown in admin settings.
-enum RemediationAutonomy {
+/// Whether the remediation agent stops after investigation or may prepare
+/// changes for an administrator to review. There is intentionally no
+/// auto-execution mode.
+enum RemediationMode {
   investigateOnly('investigate_only', 'Investigate only'),
-  propose('propose', 'Propose fixes'),
-  autoSafe('auto_safe', 'Auto-fix low-risk');
+  supervised('supervised', 'Propose fixes for review');
 
-  const RemediationAutonomy(this.value, this.label);
+  const RemediationMode(this.value, this.label);
   final String value;
   final String label;
 
-  static RemediationAutonomy fromValue(String? value) => values.firstWhere(
+  static RemediationMode fromValue(String? value) => values.firstWhere(
         (a) => a.value == value,
-        orElse: () => RemediationAutonomy.propose,
+        orElse: () => RemediationMode.supervised,
       );
 }
 
@@ -248,7 +335,7 @@ class RemediationSettings {
   /// When on, an issue that transitions to resolved is marked read (overriding
   /// the flip-to-unread that any non-admin status change otherwise triggers).
   final bool markResolvedAsRead;
-  final RemediationAutonomy autonomy;
+  final RemediationMode mode;
 
   /// AI provider override (e.g. "anthropic", "openai"). Empty means "use the
   /// server's configured provider". The agent is provider-agnostic, so this is
@@ -264,13 +351,17 @@ class RemediationSettings {
   final int dailyRunCap;
   final int dailyCostCeilingMicros;
   final int circuitBreakerGiveups;
+  final int maxUserWaitHours;
+  final int observationMinMinutes;
+  final int observationQuietMinutes;
+  final int observationSettleMinutes;
 
   const RemediationSettings({
     required this.enabled,
     required this.autoDispatch,
     required this.allowReporting,
     required this.markResolvedAsRead,
-    required this.autonomy,
+    required this.mode,
     required this.provider,
     required this.model,
     required this.maxSteps,
@@ -280,6 +371,10 @@ class RemediationSettings {
     required this.dailyRunCap,
     required this.dailyCostCeilingMicros,
     required this.circuitBreakerGiveups,
+    required this.maxUserWaitHours,
+    required this.observationMinMinutes,
+    required this.observationQuietMinutes,
+    required this.observationSettleMinutes,
   });
 
   factory RemediationSettings.fromJson(Map<String, dynamic> json) =>
@@ -289,7 +384,7 @@ class RemediationSettings {
         allowReporting: json['allow_reporting'] as bool? ?? false,
         // Default true to match the server default when the field is absent.
         markResolvedAsRead: json['mark_resolved_as_read'] as bool? ?? true,
-        autonomy: RemediationAutonomy.fromValue(json['autonomy'] as String?),
+        mode: RemediationMode.fromValue(json['mode'] as String?),
         provider: json['provider'] as String? ?? '',
         model: json['model'] as String? ?? '',
         maxSteps: json['max_steps'] as int? ?? 0,
@@ -299,6 +394,13 @@ class RemediationSettings {
         dailyRunCap: json['daily_run_cap'] as int? ?? 0,
         dailyCostCeilingMicros: json['daily_cost_ceiling_micros'] as int? ?? 0,
         circuitBreakerGiveups: json['circuit_breaker_giveups'] as int? ?? 0,
+        // Match the server default for older/partial responses; serializing 0
+        // back would otherwise look like a deliberate timeout change.
+        maxUserWaitHours: json['max_user_wait_hours'] as int? ?? 72,
+        observationMinMinutes: json['observation_min_minutes'] as int? ?? 10,
+        observationQuietMinutes: json['observation_quiet_minutes'] as int? ?? 5,
+        observationSettleMinutes:
+            json['observation_settle_minutes'] as int? ?? 2,
       );
 
   Map<String, dynamic> toJson() => {
@@ -306,7 +408,7 @@ class RemediationSettings {
         'auto_dispatch': autoDispatch,
         'allow_reporting': allowReporting,
         'mark_resolved_as_read': markResolvedAsRead,
-        'autonomy': autonomy.value,
+        'mode': mode.value,
         'provider': provider,
         'model': model,
         'max_steps': maxSteps,
@@ -316,6 +418,10 @@ class RemediationSettings {
         'daily_run_cap': dailyRunCap,
         'daily_cost_ceiling_micros': dailyCostCeilingMicros,
         'circuit_breaker_giveups': circuitBreakerGiveups,
+        'max_user_wait_hours': maxUserWaitHours,
+        'observation_min_minutes': observationMinMinutes,
+        'observation_quiet_minutes': observationQuietMinutes,
+        'observation_settle_minutes': observationSettleMinutes,
       };
 
   RemediationSettings copyWith({
@@ -323,7 +429,7 @@ class RemediationSettings {
     bool? autoDispatch,
     bool? allowReporting,
     bool? markResolvedAsRead,
-    RemediationAutonomy? autonomy,
+    RemediationMode? mode,
     String? provider,
     String? model,
     int? maxSteps,
@@ -333,13 +439,17 @@ class RemediationSettings {
     int? dailyRunCap,
     int? dailyCostCeilingMicros,
     int? circuitBreakerGiveups,
+    int? maxUserWaitHours,
+    int? observationMinMinutes,
+    int? observationQuietMinutes,
+    int? observationSettleMinutes,
   }) =>
       RemediationSettings(
         enabled: enabled ?? this.enabled,
         autoDispatch: autoDispatch ?? this.autoDispatch,
         allowReporting: allowReporting ?? this.allowReporting,
         markResolvedAsRead: markResolvedAsRead ?? this.markResolvedAsRead,
-        autonomy: autonomy ?? this.autonomy,
+        mode: mode ?? this.mode,
         provider: provider ?? this.provider,
         model: model ?? this.model,
         maxSteps: maxSteps ?? this.maxSteps,
@@ -351,5 +461,12 @@ class RemediationSettings {
             dailyCostCeilingMicros ?? this.dailyCostCeilingMicros,
         circuitBreakerGiveups:
             circuitBreakerGiveups ?? this.circuitBreakerGiveups,
+        maxUserWaitHours: maxUserWaitHours ?? this.maxUserWaitHours,
+        observationMinMinutes:
+            observationMinMinutes ?? this.observationMinMinutes,
+        observationQuietMinutes:
+            observationQuietMinutes ?? this.observationQuietMinutes,
+        observationSettleMinutes:
+            observationSettleMinutes ?? this.observationSettleMinutes,
       );
 }

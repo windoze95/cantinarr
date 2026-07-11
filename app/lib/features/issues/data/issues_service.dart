@@ -15,9 +15,11 @@ class IssuesService {
 
   // ---- Reporter-facing -----------------------------------------------------
 
-  /// Submit a problem report. Returns the new issue id (the server also echoes
-  /// the initial status, which the caller doesn't currently need).
-  Future<int> reportProblem({
+  /// Submit a problem report. Returns the issue id and authoritative initial
+  /// status so the caller can distinguish passive arr recovery from agent
+  /// investigation.
+  Future<IssueReportResult> reportProblem({
+    required String instanceId,
     required String mediaType, // 'movie' | 'tv'
     required int tmdbId,
     int? tvdbId,
@@ -28,12 +30,17 @@ class IssuesService {
     String? title,
   }) async {
     final body = <String, dynamic>{
+      'instance_id': instanceId,
       'media_type': mediaType,
       'tmdb_id': tmdbId,
       'category': category.value,
     };
     if (tvdbId != null && tvdbId != 0) body['tvdb_id'] = tvdbId;
-    if (seasonNumber != null && seasonNumber > 0) {
+    // Season zero is a real Sonarr season (Specials). A positive episode makes
+    // the zero unambiguous, so preserve it instead of collapsing S00E## into a
+    // series-wide report.
+    if (seasonNumber != null &&
+        (seasonNumber > 0 || (episodeNumber != null && episodeNumber > 0))) {
       body['season_number'] = seasonNumber;
     }
     if (episodeNumber != null && episodeNumber > 0) {
@@ -46,8 +53,9 @@ class IssuesService {
     if (title != null && title.isNotEmpty) body['title'] = title;
 
     final resp = await _dio.post('/api/issues', data: body);
-    final data = resp.data as Map<String, dynamic>?;
-    return (data?['issue_id'] as num?)?.toInt() ?? 0;
+    return IssueReportResult.fromJson(
+      resp.data as Map<String, dynamic>? ?? const {},
+    );
   }
 
   /// Fetch one issue plus its full message thread (reporter or admin).
@@ -82,6 +90,24 @@ class IssuesService {
     await _dio.post('/api/admin/issues/$id/dismiss');
   }
 
+  /// Complete an issue after human review. The server atomically closes the
+  /// aggregate and records the required note/admin provenance. Dismissal is a
+  /// separate endpoint and is intentionally not representable here.
+  Future<Issue> resolveIssue(
+    int id, {
+    required AdminIssueDisposition disposition,
+    required String note,
+  }) async {
+    final resp = await _dio.post(
+      '/api/admin/issues/$id/resolve',
+      data: {
+        'disposition': disposition.value,
+        'note': note.trim(),
+      },
+    );
+    return Issue.fromJson(resp.data as Map<String, dynamic>);
+  }
+
   /// Read the admin-tunable remediation settings.
   Future<RemediationSettings> getSettings() async {
     final resp = await _dio.get('/api/admin/remediation-settings');
@@ -103,10 +129,9 @@ class IssuesService {
 
   /// List proposed agent actions awaiting an admin decision — the approval
   /// queue. Defaults to `proposed`; pass another [status] to inspect a
-  /// different bucket (e.g. `executed`). The server has no `issue_id` filter,
-  /// so a per-issue view fetches `proposed` and filters client-side
-  /// ([pendingActionsForIssue]).
-  Future<List<AgentAction>> listPendingActions({String status = 'proposed'}) async {
+  /// different bucket (e.g. `executed`) or `all` for permanent history.
+  Future<List<AgentAction>> listPendingActions(
+      {String status = 'proposed'}) async {
     final resp = await _dio.get(
       '/api/admin/agent-actions',
       queryParameters: {if (status.isNotEmpty) 'status': status},
@@ -117,12 +142,25 @@ class IssuesService {
         .toList();
   }
 
-  /// The proposed actions for one issue, filtered client-side from the queue
-  /// (there is no server-side `issue_id` filter). Used to surface the
-  /// ProposedActionCard inline in the issue thread.
-  Future<List<AgentAction>> pendingActionsForIssue(int issueId) async {
-    final all = await listPendingActions();
-    return all.where((a) => a.issueId == issueId).toList();
+  /// List the complete durable action history. `status=all` is explicit so a
+  /// future server default cannot silently turn this back into a pending-only
+  /// view.
+  Future<List<AgentAction>> listAllActions() =>
+      listPendingActions(status: 'all');
+
+  /// Fetch the authoritative current state of one action. Used after an
+  /// ambiguous approval response so the client never asks an admin to retry a
+  /// change that may already have executed.
+  Future<AgentAction> getAction(int id) async {
+    final resp = await _dio.get('/api/admin/agent-actions/$id');
+    return AgentAction.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Fetch every action and agent-run summary for one issue, including
+  /// terminal/superseded actions that have left the approval queue.
+  Future<IssueAgentActivity> getIssueActivity(int issueId) async {
+    final resp = await _dio.get('/api/admin/issues/$issueId/activity');
+    return IssueAgentActivity.fromJson(resp.data as Map<String, dynamic>);
   }
 
   /// Approve a proposed action, optionally replacing its params with an admin

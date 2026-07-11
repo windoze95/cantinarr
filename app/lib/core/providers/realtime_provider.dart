@@ -64,7 +64,8 @@ final libraryChangedEventsProvider = StreamProvider.autoDispose<WsEvent>((ref) {
 /// (`request_decision` events). The backend pushes these only to the
 /// requesting user, carrying `decision` ('approved'|'denied'), `title`,
 /// `media_type`, and an optional `reason`. Used to surface an in-app toast.
-final requestDecisionEventsProvider = StreamProvider.autoDispose<WsEvent>((ref) {
+final requestDecisionEventsProvider =
+    StreamProvider.autoDispose<WsEvent>((ref) {
   final events = ref.watch(realtimeEventsProvider);
   return events.where((e) => e.type == 'request_decision');
 });
@@ -76,9 +77,14 @@ final requestDecisionEventsProvider = StreamProvider.autoDispose<WsEvent>((ref) 
 final issueEventsProvider =
     StreamProvider.autoDispose.family<WsEvent, int>((ref, issueId) {
   final events = ref.watch(realtimeEventsProvider);
-  return events.where((e) =>
-      e.type == 'issue_updated' &&
-      (e.data['issue_id'] as num?)?.toInt() == issueId);
+  return events.where((e) {
+    final relevant = e.type == 'issue_updated' ||
+        e.type == 'agent_action_pending' ||
+        e.type == 'agent_action_decided' ||
+        e.type == 'agent_action_terminal' ||
+        e.type == 'agent_action_superseded';
+    return relevant && (e.data['issue_id'] as num?)?.toInt() == issueId;
+  });
 });
 
 /// New-issue / pending-approval pings (`issue_created`,
@@ -86,8 +92,12 @@ final issueEventsProvider =
 /// any of these.
 final issuesChangedProvider = StreamProvider.autoDispose<WsEvent>((ref) {
   final events = ref.watch(realtimeEventsProvider);
-  return events.where(
-      (e) => e.type == 'issue_created' || e.type == 'agent_action_pending');
+  return events.where((e) =>
+      e.type == 'issue_created' ||
+      e.type == 'issue_updated' ||
+      e.type == 'agent_action_pending' ||
+      e.type == 'agent_action_terminal' ||
+      e.type == 'agent_action_superseded');
 });
 
 /// Agent approval-queue pings (`agent_action_pending`,
@@ -96,7 +106,11 @@ final issuesChangedProvider = StreamProvider.autoDispose<WsEvent>((ref) {
 final agentActionsChangedProvider = StreamProvider.autoDispose<WsEvent>((ref) {
   final events = ref.watch(realtimeEventsProvider);
   return events.where((e) =>
-      e.type == 'agent_action_pending' || e.type == 'agent_action_decided');
+      e.type == 'agent_action_pending' ||
+      e.type == 'agent_action_decided' ||
+      e.type == 'agent_action_terminal' ||
+      e.type == 'agent_action_superseded' ||
+      e.type == 'issue_updated');
 });
 
 /// Admin notice that the remediation auto-dispatch circuit breaker tripped and

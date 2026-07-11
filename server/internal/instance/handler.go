@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,19 +31,16 @@ var allowedServiceTypes = map[string]bool{
 	"tautulli":     true,
 }
 
-// instanceResponse is the JSON shape returned to clients — API keys and
-// passwords are write-only. WebhookToken is readable (admin-only routes serve
-// this shape): the admin needs it verbatim to paste the webhook URL into the
-// arr's Connect settings.
+// instanceResponse is the JSON shape returned to clients. All credentials are
+// write-only, including the token used to authenticate arr webhook callbacks.
 type instanceResponse struct {
-	ID           string `json:"id"`
-	ServiceType  string `json:"service_type"`
-	Name         string `json:"name"`
-	URL          string `json:"url"`
-	Username     string `json:"username,omitempty"`
-	IsDefault    bool   `json:"is_default"`
-	SortOrder    int    `json:"sort_order"`
-	WebhookToken string `json:"webhook_token,omitempty"`
+	ID          string `json:"id"`
+	ServiceType string `json:"service_type"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Username    string `json:"username,omitempty"`
+	IsDefault   bool   `json:"is_default"`
+	SortOrder   int    `json:"sort_order"`
 }
 
 func toResponse(inst *Instance) instanceResponse {
@@ -58,13 +57,32 @@ func toResponse(inst *Instance) instanceResponse {
 
 // Handler provides REST endpoints for instance CRUD.
 type Handler struct {
-	store    *Store
-	registry *Registry
+	store        *Store
+	registry     *Registry
+	webhookMu    sync.Mutex
+	webhookLocks map[string]*sync.Mutex
+	publicURL    string
 }
 
 // NewHandler creates a new instance handler.
-func NewHandler(store *Store, registry *Registry) *Handler {
-	return &Handler{store: store, registry: registry}
+func NewHandler(store *Store, registry *Registry, publicURL ...string) *Handler {
+	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex)}
+	if len(publicURL) > 0 {
+		h.publicURL = strings.TrimRight(publicURL[0], "/")
+	}
+	return h
+}
+
+func (h *Handler) lockWebhookConfiguration(instanceID string) func() {
+	h.webhookMu.Lock()
+	lock := h.webhookLocks[instanceID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		h.webhookLocks[instanceID] = lock
+	}
+	h.webhookMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 // List returns all service instances.
@@ -76,22 +94,10 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := make([]instanceResponse, 0, len(instances))
 	for _, inst := range instances {
-		resp = append(resp, h.withWebhookToken(toResponse(&inst)))
+		resp = append(resp, toResponse(&inst))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
-}
-
-// withWebhookToken attaches the webhook token to arr instances (issuing one on
-// first read) so the settings UI can present a ready-to-paste webhook URL.
-func (h *Handler) withWebhookToken(resp instanceResponse) instanceResponse {
-	if resp.ServiceType != "radarr" && resp.ServiceType != "sonarr" {
-		return resp
-	}
-	if token, err := h.store.WebhookToken(resp.ID); err == nil {
-		resp.WebhookToken = token
-	}
-	return resp
 }
 
 // Create adds a new service instance.
@@ -127,7 +133,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(h.withWebhookToken(toResponse(&inst)))
+	json.NewEncoder(w).Encode(toResponse(&inst))
 }
 
 // Update modifies an existing service instance.
@@ -184,7 +190,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	h.registry.InvalidateClient(instanceID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(h.withWebhookToken(toResponse(&inst)))
+	json.NewEncoder(w).Encode(toResponse(&inst))
 }
 
 // Delete removes a service instance.
@@ -345,6 +351,13 @@ func validateRequiredFields(inst *Instance) error {
 	if inst.Name == "" || inst.URL == "" {
 		return fmt.Errorf("name and url are required")
 	}
+	parsed, err := url.Parse(inst.URL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("url must be an absolute http or https URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("url must not contain credentials, a query string, or a fragment")
+	}
 	switch inst.ServiceType {
 	case "qbittorrent", "nzbget":
 		if inst.Username == "" || inst.Password == "" {
@@ -395,7 +408,10 @@ func validateConnection(inst *Instance) error {
 // validateArrURL checks that a Servarr instance (Radarr/Sonarr on v3, Chaptarr
 // on v1) is reachable by hitting its system/status endpoint.
 func validateArrURL(baseURL, apiKey, apiVersion string) error {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	req, err := http.NewRequest("GET", baseURL+"/api/"+apiVersion+"/system/status", nil)
 	if err != nil {
 		return fmt.Errorf("invalid url: %w", err)

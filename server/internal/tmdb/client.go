@@ -22,7 +22,8 @@ func NewClient(accessToken string) *Client {
 	return &Client{
 		accessToken: accessToken,
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:       10 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }

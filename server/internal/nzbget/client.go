@@ -27,7 +27,8 @@ func NewClient(baseURL, username, password string) *Client {
 		username: username,
 		password: password,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:       30 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }

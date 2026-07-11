@@ -16,10 +16,15 @@ import 'package:go_router/go_router.dart';
 /// Fake Dio adapter: serves the instance list and per-type user pins, and
 /// records every request (method, path, decoded body) for assertions.
 class _FakeAdapter implements HttpClientAdapter {
-  _FakeAdapter({this.instances = const [], this.pins = const []});
+  _FakeAdapter({
+    this.instances = const [],
+    this.pins = const [],
+    this.webhookError,
+  });
 
   final List<Map<String, dynamic>> instances;
   final List<Map<String, dynamic>> pins;
+  final String? webhookError;
   final List<({String method, String path, dynamic body})> requests = [];
 
   @override
@@ -46,6 +51,20 @@ class _FakeAdapter implements HttpClientAdapter {
       response = {...map, 'id': '${map['service_type']}-new'};
     } else if (options.method == 'PUT' && path.endsWith('/users')) {
       response = pins;
+    } else if (options.method == 'POST' && path.endsWith('/webhook')) {
+      final error = webhookError;
+      if (error != null) {
+        // Mirrors Go's http.Error: the body is a JSON-shaped string but its
+        // content type is text/plain, so Dio deliberately does not decode it.
+        return ResponseBody.fromString(
+          '${jsonEncode({'error': error})}\n',
+          500,
+          headers: {
+            'content-type': ['text/plain; charset=utf-8'],
+          },
+        );
+      }
+      response = {'status': 'configured', 'action': 'created'};
     } else if (options.method == 'PUT') {
       // Instance update echo; the id encodes the service type (radarr-b).
       final id = path.split('/').last;
@@ -182,7 +201,8 @@ void main() {
     expect(find.widgetWithText(CheckboxListTile, 'alice'), findsOneWidget);
   });
 
-  testWidgets('taking over the default asks for confirmation naming both instances',
+  testWidgets(
+      'taking over the default asks for confirmation naming both instances',
       (tester) async {
     final adapter = _FakeAdapter(instances: [Map.of(_mainRadarr)]);
     await _pumpEdit(tester, adapter: adapter, users: [_user(1, 'alice')]);
@@ -232,8 +252,8 @@ void main() {
     await tester.tap(find.text('Chaptarr').last);
     await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(SwitchListTile, 'Default Instance'),
-        findsNothing);
+    expect(
+        find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
     expect(find.text('Assigned Users'), findsOneWidget);
 
     await _fillForm(tester, 'Books');
@@ -247,14 +267,15 @@ void main() {
     final post = adapter.requests.singleWhere((r) => r.method == 'POST');
     expect(post.body['service_type'], 'chaptarr');
     expect(post.body['is_default'], isFalse);
-    final putUsers = adapter.requests.singleWhere(
-        (r) => r.method == 'PUT' && r.path == '/api/instances/chaptarr-new/users');
+    final putUsers = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' && r.path == '/api/instances/chaptarr-new/users');
     expect(putUsers.body, {
       'user_ids': [1]
     });
   });
 
-  testWidgets('editing a non-default instance pins users and shows current pins',
+  testWidgets(
+      'editing a non-default instance pins users and shows current pins',
       (tester) async {
     final adapter = _FakeAdapter(
       instances: [Map.of(_mainRadarr), Map.of(_radarrB)],
@@ -305,8 +326,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      adapter.requests.any(
-          (r) => r.method == 'PUT' && r.path == '/api/instances/radarr-b'),
+      adapter.requests
+          .any((r) => r.method == 'PUT' && r.path == '/api/instances/radarr-b'),
       isTrue,
     );
     final putUsers = adapter.requests.singleWhere(
@@ -316,7 +337,8 @@ void main() {
     });
   });
 
-  testWidgets('assigning a user pinned to a sibling Chaptarr instance confirms the move',
+  testWidgets(
+      'assigning a user pinned to a sibling Chaptarr instance confirms the move',
       (tester) async {
     final adapter = _FakeAdapter(
       instances: [
@@ -361,8 +383,8 @@ void main() {
     expect(
       find.descendant(
           of: find.byType(AlertDialog),
-          matching: find.textContaining(
-              'Books access will come from "Books B" instead')),
+          matching: find
+              .textContaining('Books access will come from "Books B" instead')),
       findsOneWidget,
     );
     await tester.tap(find.text('Cancel'));
@@ -381,5 +403,66 @@ void main() {
     expect(putUsers.body, {
       'user_ids': [1]
     });
+  });
+
+  testWidgets('configures instant updates without displaying a webhook token',
+      (tester) async {
+    const syntheticToken = 'synthetic-webhook-token-that-must-not-render';
+    final instance = Map<String, dynamic>.of(_radarrB)
+      ..['webhook_token'] = syntheticToken;
+    final adapter = _FakeAdapter(instances: [instance]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    expect(find.textContaining(syntheticToken), findsNothing);
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, 'Configure instant updates'));
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.requests.any((r) =>
+          r.method == 'POST' &&
+          r.path == '/api/instances/radarr-b/webhook' &&
+          r.body == null),
+      isTrue,
+    );
+    expect(find.text('Instant updates are configured.'), findsOneWidget);
+    expect(find.textContaining(syntheticToken), findsNothing);
+  });
+
+  testWidgets('shows retry guidance from a text/plain webhook error',
+      (tester) async {
+    const guidance =
+        'webhook configured but credential promotion is pending; retry';
+    final adapter = _FakeAdapter(
+      instances: [Map.of(_radarrB)],
+      webhookError: guidance,
+    );
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, 'Configure instant updates'));
+    await tester.pumpAndSettle();
+
+    expect(find.text(guidance), findsOneWidget);
   });
 }

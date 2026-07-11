@@ -1,7 +1,10 @@
 package db
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -206,23 +209,25 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
 CREATE TABLE IF NOT EXISTS issues (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,                       -- 'auto' | 'user'
-    status TEXT NOT NULL DEFAULT 'open',        -- open|investigating|awaiting_user|awaiting_approval|resolved|wont_fix|failed|dismissed
+    status TEXT NOT NULL DEFAULT 'open',        -- observing|recovering|open|investigating|awaiting_user|awaiting_approval|needs_admin|resolved|wont_fix|failed|dismissed
     category TEXT,                              -- user pick: wrong_content|bad_copy|wrong_audio|other ; NULL for auto
     reporter_id INTEGER REFERENCES users(id),  -- NULL for auto-detected
     tmdb_id INTEGER NOT NULL,
     tvdb_id INTEGER,
     media_type TEXT NOT NULL,                   -- 'movie' | 'tv' | 'book'
     title TEXT NOT NULL DEFAULT '',
-    season_number INTEGER NOT NULL DEFAULT 0,   -- TV scope (0 = whole series / movie)
-    episode_number INTEGER NOT NULL DEFAULT 0,  -- TV scope (0 = whole season / movie)
-    instance_id TEXT,                          -- arr instance the fault came from (auto)
+    season_number INTEGER NOT NULL DEFAULT 0,   -- TV scope (0 = whole series unless episode_number > 0, which means Specials)
+    episode_number INTEGER NOT NULL DEFAULT 0,  -- TV scope (0 = whole season / movie; >0 = exact episode)
+    instance_id TEXT,                          -- exact owning arr instance (auto or user report)
     download_id TEXT,                          -- stable download-client hash (auto); keys dedupe + doctor tools
+    arr_queue_id INTEGER,                      -- arr queue row observed for this exact incident (auto)
     detail TEXT NOT NULL DEFAULT '',            -- user free-text reason OR doctor diagnosis summary (UNTRUSTED)
     dedupe_key TEXT,                           -- stable idempotency key (auto); NULL allowed (user reports)
     occurrences INTEGER NOT NULL DEFAULT 1,     -- bumped when a duplicate signal/report attaches
     read INTEGER NOT NULL DEFAULT 0,            -- admin read/unread flag; any non-admin status change re-flags unread, an admin viewing marks read
     active_run_id INTEGER,                      -- CAS claim: at most one running run per issue
     resolution TEXT,                           -- short closing note on a terminal state
+    resolution_kind TEXT NOT NULL DEFAULT '',  -- why work ended; exposed for audit provenance
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     closed_at DATETIME
@@ -233,6 +238,87 @@ CREATE TABLE IF NOT EXISTS issues (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_open_dedupe
     ON issues(dedupe_key) WHERE dedupe_key IS NOT NULL AND closed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+
+-- Durable retry-aware observation state. An issue can exist here while it is
+-- intentionally invisible to the admin attention queue: the arr still has a
+-- live download/retry for the exact media scope, so Cantinarr observes before
+-- asking either an agent or a human to intervene.
+CREATE TABLE IF NOT EXISTS issue_observations (
+    issue_id INTEGER PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+    service_type TEXT NOT NULL,                  -- radarr|sonarr
+    scope_key TEXT NOT NULL,                     -- sha256(instance + exact media scope)
+    state TEXT NOT NULL DEFAULT 'observing',     -- observing|recovering|settling
+    signature TEXT NOT NULL DEFAULT '',          -- last complete matching queue signature
+    first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    problem_since_at DATETIME,
+    last_seen_at DATETIME,
+    last_activity_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    settling_since DATETIME,
+    promoted_at DATETIME,
+    baseline_has_file INTEGER,
+    baseline_file_id INTEGER,
+    baseline_captured_at DATETIME,
+    import_history_id INTEGER,
+    import_download_id TEXT,
+    import_file_id INTEGER,
+    recovery_proven_at DATETIME,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_issue_observations_scope
+    ON issue_observations(scope_key, issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_observations_service
+    ON issue_observations(service_type, issue_id);
+
+CREATE TABLE IF NOT EXISTS issue_observation_downloads (
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    download_id TEXT NOT NULL,
+    first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(issue_id, download_id)
+);
+
+-- Most recent successful COMPLETE queue snapshot per instance. This small,
+-- bounded cache lets a user report join an already-observed arr retry without
+-- putting a network round trip on the report request path. Failed queue reads
+-- never update it, so absence in a stale/failed snapshot cannot close or hide
+-- work.
+CREATE TABLE IF NOT EXISTS remediation_queue_snapshots (
+    instance_id TEXT PRIMARY KEY,
+    service_type TEXT NOT NULL,
+    observed_at DATETIME NOT NULL,
+    items_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS remediation_observation_failures (
+    instance_id TEXT PRIMARY KEY,
+    service_type TEXT NOT NULL,
+    first_failed_at DATETIME NOT NULL,
+    last_failed_at DATETIME NOT NULL,
+    error_text TEXT NOT NULL DEFAULT ''
+);
+
+-- Monotonic per-instance processing watermark shared by websocket snapshots,
+-- synchronous execution preflights, and the restart sweeper. Older queued
+-- work can never overwrite or reconcile after a newer success/failure.
+CREATE TABLE IF NOT EXISTS remediation_observation_watermarks (
+    instance_id TEXT PRIMARY KEY,
+    service_type TEXT NOT NULL,
+    observed_at DATETIME NOT NULL
+);
+
+-- Transition-only audit trail. Repeated identical polls do not append rows;
+-- each entry explains why the observer changed phase or promoted the issue.
+CREATE TABLE IF NOT EXISTS issue_observation_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    state TEXT NOT NULL,
+    signature TEXT NOT NULL DEFAULT '',
+    download_id TEXT NOT NULL DEFAULT '',
+    arr_queue_id INTEGER,
+    note TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_issue_observation_attempts_issue
+    ON issue_observation_attempts(issue_id, id);
 
 -- The user <-> agent <-> admin thread. Append-only. author_kind tags provenance
 -- so agent code NEVER treats a 'user'/'system' message as an instruction. body
@@ -253,7 +339,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
     trigger TEXT NOT NULL,                       -- 'auto'|'user_report'|'user_reply'|'approval_granted'|'approval_denied'
-    status TEXT NOT NULL DEFAULT 'running',      -- running|waiting_user|waiting_approval|succeeded|gave_up|failed|aborted
+    status TEXT NOT NULL DEFAULT 'running',      -- running|waiting_user|waiting_approval|resume_pending|succeeded|gave_up|failed|aborted
     model TEXT NOT NULL DEFAULT '',
     proc_generation TEXT NOT NULL DEFAULT '',    -- process-start token; watchdog uses it to tell crashed-mid-run from parked
     step_count INTEGER NOT NULL DEFAULT 0,
@@ -299,10 +385,11 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     tool_use_id TEXT,                           -- the propose_action tool_use.id, so the resume tool_result pairs correctly
     kind TEXT NOT NULL,                          -- grab_release|remediate_queue|manual_import|trigger_search|rescan
     params TEXT NOT NULL DEFAULT '{}',           -- JSON: the exact typed args to replay on approval
+    approved_params TEXT,                        -- immutable admin override; NULL means original params
     rationale TEXT NOT NULL DEFAULT '',          -- agent's plain-language justification (UNTRUSTED — render as text)
-    risk TEXT NOT NULL DEFAULT 'mutating',       -- 'mutating' (always gated) | 'safe' (auto-exec only if opted in)
-    status TEXT NOT NULL DEFAULT 'proposed',     -- proposed|approved|executing|executed|denied|failed|superseded
-    fingerprint TEXT NOT NULL,                   -- sha256(issue_id|kind|canonical(params)) — UNIQUE
+    risk TEXT NOT NULL DEFAULT 'mutating',       -- retained for audit compatibility; every current action is gated
+    status TEXT NOT NULL DEFAULT 'proposed',     -- proposed|executing|executed|denied|failed|superseded|outcome_unknown
+    fingerprint TEXT NOT NULL,                   -- sha256(issue|run|tool gate|kind|params) — retry-idempotent, later re-proposals allowed
     decided_by INTEGER REFERENCES users(id),
     decided_at DATETIME,
     deny_reason TEXT,
@@ -388,6 +475,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// Connect→Webhook callbacks. Empty = not yet issued; generated lazily
 		// on first read (instance.Store.WebhookToken) and encrypted at rest.
 		{alter: "ALTER TABLE service_instances ADD COLUMN webhook_token TEXT NOT NULL DEFAULT ''"},
+		// Candidate credential accepted alongside the current one while Cantinarr
+		// updates the remote arr Connect record. A failed/ambiguous remote update
+		// therefore cannot break the previously working webhook.
+		{alter: "ALTER TABLE service_instances ADD COLUMN webhook_pending_token TEXT NOT NULL DEFAULT ''"},
 		// Plex access requests: the email a user shares so an admin can invite
 		// them to the Plex server. Empty = not yet shared.
 		{alter: "ALTER TABLE users ADD COLUMN plex_email TEXT NOT NULL DEFAULT ''"},
@@ -408,6 +499,9 @@ func Open(dbPath string) (*sql.DB, error) {
 				"UPDATE issues SET read = 1",
 			},
 		},
+		{alter: "ALTER TABLE issues ADD COLUMN arr_queue_id INTEGER"},
+		{alter: "ALTER TABLE issues ADD COLUMN resolution_kind TEXT NOT NULL DEFAULT ''"},
+		{alter: "ALTER TABLE agent_actions ADD COLUMN approved_params TEXT"},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {
@@ -451,6 +545,288 @@ func Open(dbPath string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("normalize issue media types: %w", err)
 	}
+	if err := repairAutoIssueDedupe(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	// Repair unsafe remediation states from older builds. Terminal issues cannot
+	// retain live approvals or parked runs, and an action found mid-execution has
+	// an unknowable external outcome, so it is never retried blindly.
+	repairs := []string{
+		`UPDATE issues SET resolution_kind = CASE
+		   WHEN source = 'auto' AND COALESCE(resolution,'') LIKE 'Auto-resolved:%' THEN 'arr_state_cleared'
+		   WHEN resolution = 'user_unresponsive' THEN 'reporter_timeout'
+		   WHEN status = 'dismissed' THEN 'admin_dismissed'
+		   ELSE 'legacy_unknown'
+		 END
+		 WHERE closed_at IS NOT NULL AND resolution_kind = ''`,
+		`UPDATE agent_actions
+		 SET status = 'superseded', decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
+		     result_text = COALESCE(result_text, 'Superseded because the issue was already closed; no fix was executed.')
+		 WHERE status = 'proposed'
+		   AND issue_id IN (SELECT id FROM issues WHERE closed_at IS NOT NULL)`,
+		`UPDATE agent_actions
+		 SET status = 'outcome_unknown',
+		     result_text = COALESCE(result_text, 'Cantinarr restarted while this action was executing; verify the arr state manually. It will not be retried.')
+		 WHERE status = 'executing'`,
+		`UPDATE issues
+		 SET status = 'needs_admin', read = 0, active_run_id = NULL,
+		     resolution = 'An approved action was interrupted while executing. Verify the arr state manually; Cantinarr will not retry it.',
+		     resolution_kind = '', updated_at = CURRENT_TIMESTAMP
+		 WHERE closed_at IS NULL AND id IN (
+		   SELECT issue_id FROM agent_actions WHERE status = 'outcome_unknown'
+		 )`,
+		`UPDATE agent_runs
+		 SET status = 'aborted', stop_reason = 'action_outcome_unknown', deadline_at = NULL,
+		     finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		 WHERE status IN ('running','waiting_user','waiting_approval','resume_pending')
+		   AND issue_id IN (SELECT issue_id FROM agent_actions WHERE status = 'outcome_unknown')`,
+		`UPDATE agent_runs
+		 SET status = 'aborted', stop_reason = 'issue_closed', deadline_at = NULL,
+		     finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		 WHERE status IN ('running','waiting_user','waiting_approval','resume_pending')
+		   AND issue_id IN (SELECT id FROM issues WHERE closed_at IS NOT NULL)`,
+		`UPDATE issues SET active_run_id = NULL
+		 WHERE closed_at IS NOT NULL AND active_run_id IS NOT NULL`,
+		`UPDATE agent_actions
+		 SET status = 'superseded', decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
+		     result_text = COALESCE(result_text, 'Superseded because its approval gate was not active after restart.')
+		 WHERE status = 'proposed' AND NOT EXISTS (
+		   SELECT 1 FROM issues i JOIN agent_runs r ON r.id = agent_actions.run_id
+		   WHERE i.id = agent_actions.issue_id AND i.closed_at IS NULL
+		     AND i.status = 'awaiting_approval' AND r.status = 'waiting_approval'
+		 )`,
+		`UPDATE agent_actions
+		 SET status = 'superseded', decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
+		     result_text = COALESCE(result_text, 'Superseded by a newer proposal for the same issue.')
+		 WHERE status = 'proposed' AND id NOT IN (
+		   SELECT MAX(id) FROM agent_actions WHERE status = 'proposed' GROUP BY issue_id
+		 )`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_actions_one_pending_per_issue
+		 ON agent_actions(issue_id) WHERE status = 'proposed'`,
+	}
+	for _, stmt := range repairs {
+		if _, err := db.Exec(stmt); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("repair remediation state: %w", err)
+		}
+	}
+	if err := repairReleaseActionReferences(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	return db, nil
+}
+
+// repairReleaseActionReferences removes legacy raw release capabilities from
+// action JSON. Approval resolves this one-way fingerprint against a fresh,
+// issue-scoped interactive search, so no signed URL/API credential needs to
+// remain in SQLite after an upgrade.
+func repairReleaseActionReferences(db *sql.DB) error {
+	type row struct {
+		id       int64
+		issueID  int64
+		status   string
+		params   string
+		approved sql.NullString
+	}
+	rows, err := db.Query(
+		"SELECT id, issue_id, status, params, approved_params FROM agent_actions WHERE kind = 'grab_release'",
+	)
+	if err != nil {
+		return fmt.Errorf("query release action references: %w", err)
+	}
+	var actions []row
+	for rows.Next() {
+		var action row
+		if err := rows.Scan(&action.id, &action.issueID, &action.status, &action.params, &action.approved); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan release action reference: %w", err)
+		}
+		actions = append(actions, action)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, action := range actions {
+		params, hasMetadata, err := safeReleaseActionJSON(action.params)
+		if err != nil {
+			params = `{"redacted":"[REDACTED invalid release params]"}`
+			hasMetadata = false
+		}
+		var approved any
+		if action.approved.Valid {
+			value, _, err := safeReleaseActionJSON(action.approved.String)
+			if err != nil {
+				value = `{"redacted":"[REDACTED invalid release params]"}`
+			}
+			approved = value
+		}
+		if _, err := tx.Exec(
+			"UPDATE agent_actions SET params = ?, approved_params = ? WHERE id = ?",
+			params, approved, action.id,
+		); err != nil {
+			return fmt.Errorf("store safe release action %d: %w", action.id, err)
+		}
+		if action.status == "proposed" && !hasMetadata {
+			if _, err := tx.Exec(
+				`UPDATE agent_actions SET status = 'superseded', decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
+				 result_text = COALESCE(result_text, 'Superseded during upgrade because the legacy proposal lacks verified release metadata; no fix was executed.')
+				 WHERE id = ? AND status = 'proposed'`, action.id,
+			); err != nil {
+				return fmt.Errorf("supersede legacy release action %d: %w", action.id, err)
+			}
+			if _, err := tx.Exec(
+				`UPDATE issues SET status = 'needs_admin', read = 0, active_run_id = NULL,
+				 resolution = 'A legacy release proposal lacked enough verified metadata to approve safely. Review the issue and run a fresh investigation.',
+				 resolution_kind = '', updated_at = CURRENT_TIMESTAMP
+				 WHERE id = ? AND closed_at IS NULL AND status = 'awaiting_approval'`, action.issueID,
+			); err != nil {
+				return fmt.Errorf("escalate legacy release issue %d: %w", action.issueID, err)
+			}
+			if _, err := tx.Exec(
+				`UPDATE agent_runs SET status = 'aborted', stop_reason = 'legacy_release_metadata',
+				 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+				 WHERE issue_id = ? AND status = 'waiting_approval'`, action.issueID,
+			); err != nil {
+				return fmt.Errorf("abort legacy release run for issue %d: %w", action.issueID, err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit release action reference repair: %w", err)
+	}
+	return nil
+}
+
+func safeReleaseActionJSON(raw string) (string, bool, error) {
+	var params map[string]any
+	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+		return "", false, err
+	}
+	guid, ok := params["guid"].(string)
+	if !ok || guid == "" {
+		return "", false, fmt.Errorf("missing guid")
+	}
+	if !isCanonicalReleaseFingerprint(guid) {
+		digest := sha256.Sum256([]byte(guid))
+		params["guid"] = fmt.Sprintf("[REDACTED release sha256:%x]", digest[:8])
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return "", false, err
+	}
+	title, titleOK := params["release_title"].(string)
+	protocol, protocolOK := params["protocol"].(string)
+	indexer, indexerOK := params["indexer"].(string)
+	size, sizeOK := params["size"].(float64)
+	hasMetadata := titleOK && title != "" && protocolOK && protocol != "" &&
+		indexerOK && indexer != "" && sizeOK && size >= 0
+	return string(encoded), hasMetadata, nil
+}
+
+func isCanonicalReleaseFingerprint(value string) bool {
+	const prefix = "[REDACTED release sha256:"
+	const digestHexLen = 16
+	if len(value) != len(prefix)+digestHexLen+1 || !strings.HasPrefix(value, prefix) || value[len(value)-1] != ']' {
+		return false
+	}
+	for _, char := range value[len(prefix) : len(value)-1] {
+		if char < '0' || char > '9' {
+			if char < 'a' || char > 'f' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// repairAutoIssueDedupe migrates the pre-scope key (which included a diagnosis
+// label) to one incident per instance/download. Any already-open duplicates are
+// terminalized before the canonical newest row is re-keyed; the normal repair
+// pass above then invalidates their proposals/runs.
+func repairAutoIssueDedupe(db *sql.DB) error {
+	rows, err := db.Query(
+		`SELECT i.id, i.instance_id, i.download_id,
+		        EXISTS (SELECT 1 FROM agent_actions a
+		                WHERE a.issue_id = i.id AND a.status IN ('executing','outcome_unknown')) AS hazardous
+		 FROM issues i
+		 WHERE source = 'auto' AND closed_at IS NULL
+		   AND COALESCE(instance_id,'') != '' AND COALESCE(download_id,'') != ''
+		 ORDER BY hazardous DESC, i.id DESC`,
+	)
+	if err != nil {
+		return fmt.Errorf("query auto-issue dedupe repair: %w", err)
+	}
+	type incident struct {
+		winner int64
+		rows   []struct {
+			id        int64
+			hazardous bool
+		}
+	}
+	groups := map[string]*incident{}
+	for rows.Next() {
+		var id int64
+		var instanceID, downloadID string
+		var hazardous bool
+		if err := rows.Scan(&id, &instanceID, &downloadID, &hazardous); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan auto-issue dedupe repair: %w", err)
+		}
+		key := instanceID + "\x00" + downloadID
+		group := groups[key]
+		if group == nil {
+			group = &incident{winner: id}
+			groups[key] = group
+		}
+		group.rows = append(group.rows, struct {
+			id        int64
+			hazardous bool
+		}{id: id, hazardous: hazardous})
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key, group := range groups {
+		for _, duplicate := range group.rows[1:] {
+			// Never hide a second action whose remote outcome may already have
+			// changed state. It remains a separate needs-admin record.
+			if duplicate.hazardous {
+				continue
+			}
+			if _, err := tx.Exec(
+				`UPDATE issues SET status = 'dismissed',
+				 resolution = 'Superseded by the canonical record for this same detected incident during upgrade.',
+				 resolution_kind = 'legacy_unknown', closed_at = CURRENT_TIMESTAMP,
+				 active_run_id = NULL, updated_at = CURRENT_TIMESTAMP
+				 WHERE id = ? AND closed_at IS NULL`, duplicate.id,
+			); err != nil {
+				return fmt.Errorf("close duplicate auto issue: %w", err)
+			}
+		}
+		parts := strings.SplitN(key, "\x00", 2)
+		sum := sha256.Sum256([]byte(parts[0] + "|" + parts[1]))
+		if _, err := tx.Exec("UPDATE issues SET dedupe_key = ? WHERE id = ?", hex.EncodeToString(sum[:]), group.winner); err != nil {
+			return fmt.Errorf("rekey auto issue: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit auto-issue dedupe repair: %w", err)
+	}
+	return nil
 }

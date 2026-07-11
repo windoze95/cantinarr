@@ -193,6 +193,7 @@ class _RadarrMovieDetailScreenState
               width: double.infinity,
               child: ReportProblemButton(
                 scope: ReportScope.movie(
+                  instanceId: widget.instanceId,
                   tmdbId: _movie.tmdbId ?? 0,
                   title: _movie.title,
                 ),

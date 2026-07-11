@@ -4,8 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
+
+const maxAdminResolutionNoteBytes = maxIssueReplyBytes
+
+// ErrIssueCompletionConflict means another close or an in-flight approved
+// mutation won the race with an admin completion attempt. The handler maps it
+// to HTTP 409 and clients reconcile the authoritative issue.
+var ErrIssueCompletionConflict = errors.New("issue completion conflict")
 
 // This file implements mcp.IssueStore on *Service so the agent-only MCP tools
 // (post_issue_message / conclude_issue) can write issue rows without internal/mcp
@@ -24,11 +36,30 @@ func (s *Service) PostIssueMessage(ctx context.Context, issueID int64, body stri
 	if body == "" {
 		return nil
 	}
-	if _, err := s.db.ExecContext(ctx,
-		"INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, ?, NULL, ?)",
-		issueID, AuthorAgent, body,
-	); err != nil {
+	if len(body) > maxIssueDetailBytes {
+		return fmt.Errorf("agent message is too long")
+	}
+	body = secrets.RedactText(body)
+	expectedRunID := mcp.AgentRunOwnership(ctx)
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+		 SELECT ?, ?, NULL, ? WHERE EXISTS (
+		   SELECT 1 FROM issues i WHERE i.id = ? AND i.closed_at IS NULL
+		     AND (? = 0 OR (i.status = ? AND i.active_run_id = ? AND EXISTS (
+		       SELECT 1 FROM agent_runs r WHERE r.id = ? AND r.issue_id = i.id AND r.status = ?
+		     )))
+		 )`,
+		issueID, AuthorAgent, body, issueID,
+		expectedRunID, IssueInvestigating, expectedRunID, expectedRunID, runStatusRunning,
+	)
+	if err != nil {
 		return fmt.Errorf("post agent message: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		if expectedRunID != 0 {
+			return fmt.Errorf("agent run no longer owns this issue")
+		}
+		return nil // external/admin closure won the race; do not append afterward.
 	}
 	s.db.ExecContext(ctx, "UPDATE issues SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", issueID)
 	s.pingIssueUpdated(issueID)
@@ -41,45 +72,347 @@ func (s *Service) PostIssueMessage(ctx context.Context, issueID int64, body stri
 // so a double-conclude is a no-op. An out-of-vocabulary status is coerced to
 // wont_fix so a terminal state always results.
 func (s *Service) ConcludeIssue(ctx context.Context, issueID int64, status, resolution string) error {
+	if len(resolution) > maxIssueDetailBytes {
+		return fmt.Errorf("issue resolution is too long")
+	}
 	if status != IssueResolved && status != IssueWontFix {
 		status = IssueWontFix
 	}
-	// A conclude is always a non-admin (agent/system) status change, so it flips
-	// the issue back to unread — UNLESS it resolved and the admin opted to
-	// "mark resolved issues as read", which overrides the flip so a clean
-	// resolution doesn't nag the admin.
-	read := 0
-	if status == IssueResolved && s.Settings().MarkResolvedAsRead {
-		read = 1
+	resolution = secrets.RedactText(resolution)
+	kind := ResolutionAgentConcluded
+	if resolution == ResolutionUserUnresponsive {
+		kind = ResolutionReporterTimeout
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE issues SET status = ?, resolution = ?, read = ?, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		 WHERE id = ? AND closed_at IS NULL`,
-		status, resolution, read, issueID,
+	return s.concludeIssue(ctx, issueID, status, resolution, kind)
+}
+
+// concludeIssue is the transactional terminal transition for the entire issue
+// aggregate. Closing the issue, superseding live proposals, and aborting parked
+// work commit together, so no closed issue can retain an executable approval.
+func (s *Service) concludeIssue(ctx context.Context, issueID int64, status, resolution, resolutionKind string) error {
+	_, err := s.concludeIssueCAS(ctx, issueID, status, resolution, resolutionKind, "", "")
+	return err
+}
+
+// concludeIssueCAS is concludeIssue with an optional expected status and SQLite
+// age modifier. The reply-timeout sweeper uses both so a reply racing its stale
+// snapshot wins cleanly instead of closing an answered issue.
+func (s *Service) concludeIssueCAS(ctx context.Context, issueID int64, status, resolution, resolutionKind, expectedStatus, ageModifier string) (bool, error) {
+	return s.concludeIssueAggregate(ctx, issueID, status, resolution, resolutionKind, issueClosureOptions{
+		expectedStatus: expectedStatus,
+		ageModifier:    ageModifier,
+	})
+}
+
+type issueClosureOptions struct {
+	expectedStatus      string
+	expectedRunID       int64
+	ageModifier         string
+	conflictIfClosed    bool
+	adminID             int64
+	silentNotifications bool
+}
+
+// ResolveIssueByAdmin records a human-reviewed terminal disposition. It is
+// intentionally separate from DismissIssue: the required note and admin actor
+// are committed with aggregate closure under ResolutionAdminCompleted.
+func (s *Service) ResolveIssueByAdmin(ctx context.Context, adminID, issueID int64, disposition AdminIssueDisposition, note string) (*Issue, error) {
+	note = strings.TrimSpace(note)
+	if disposition != AdminDispositionResolved && disposition != AdminDispositionWontFix {
+		return nil, fmt.Errorf("disposition must be resolved or wont_fix")
+	}
+	if note == "" {
+		return nil, fmt.Errorf("resolution note is required")
+	}
+	if len(note) > maxAdminResolutionNoteBytes {
+		return nil, fmt.Errorf("resolution note is too long")
+	}
+	if adminID <= 0 {
+		return nil, fmt.Errorf("admin identity is required")
+	}
+	note = secrets.RedactText(note)
+	transitioned, err := s.concludeIssueAggregate(
+		ctx, issueID, string(disposition), note, ResolutionAdminCompleted,
+		issueClosureOptions{conflictIfClosed: true, adminID: adminID},
 	)
 	if err != nil {
-		return fmt.Errorf("conclude issue: %w", err)
+		return nil, err
+	}
+	if !transitioned {
+		return nil, fmt.Errorf("%w: issue is already closed or changed", ErrIssueCompletionConflict)
+	}
+	return s.GetIssue(issueID)
+}
+
+func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, status, resolution, resolutionKind string, opts issueClosureOptions) (bool, error) {
+	resolution = secrets.RedactText(resolution)
+	if status != IssueResolved && status != IssueWontFix && status != IssueDismissed {
+		status = IssueWontFix
+	}
+	// Agent/system conclusions flip the issue back to unread unless the resolved
+	// preference overrides it. Explicit admin completion and dismissal are human
+	// decisions already seen by an admin, so they close read.
+	read := 0
+	if status == IssueDismissed || resolutionKind == ResolutionAdminCompleted || (status == IssueResolved && s.Settings().MarkResolvedAsRead) {
+		read = 1
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin conclude issue: %w", err)
+	}
+	defer tx.Rollback()
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted {
+		var executing int
+		if err := tx.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
+			issueID, ActionExecuting,
+		).Scan(&executing); err != nil {
+			return false, fmt.Errorf("check executing issue action: %w", err)
+		}
+		if executing > 0 {
+			if resolutionKind == ResolutionAdminCompleted {
+				return false, fmt.Errorf("%w: an approved fix is still executing", ErrIssueCompletionConflict)
+			}
+			return false, fmt.Errorf("an approved fix is still executing; wait for its outcome before closing the issue")
+		}
+	}
+	if resolutionKind == ResolutionArrStateCleared {
+		var unknown int
+		if err := tx.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
+			issueID, ActionOutcomeUnknown,
+		).Scan(&unknown); err != nil {
+			return false, fmt.Errorf("check unknown issue action: %w", err)
+		}
+		if unknown > 0 {
+			// The original queue row disappearing is expected after some partial
+			// fixes (for example remove succeeded, replacement grab failed). Preserve
+			// the human-verification boundary and record the new observation once.
+			const body = "The original queue signal has cleared, but an approved fix has an unknown or partial outcome. The issue remains open for an administrator to verify the current arr state."
+			msgRes, err := tx.ExecContext(ctx,
+				`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+				 SELECT ?, ?, NULL, ?
+				 WHERE NOT EXISTS (
+				   SELECT 1 FROM issue_messages WHERE issue_id = ? AND author_kind = ? AND body = ?
+				 )`,
+				issueID, AuthorSystem, body, issueID, AuthorSystem, body,
+			)
+			if err != nil {
+				return false, fmt.Errorf("record cleared signal awaiting verification: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return false, fmt.Errorf("commit cleared signal evidence: %w", err)
+			}
+			if inserted, _ := msgRes.RowsAffected(); inserted > 0 {
+				s.pingIssueUpdated(issueID)
+			}
+			return false, nil
+		}
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE issues SET status = ?, resolution = ?, resolution_kind = ?, read = ?,
+		 active_run_id = NULL, closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND closed_at IS NULL
+		   AND (? = '' OR status = ?)
+		   AND (? = 0 OR (status = ? AND active_run_id = ? AND EXISTS (
+		     SELECT 1 FROM agent_runs r WHERE r.id = ? AND r.issue_id = issues.id AND r.status = 'running'
+		   )))
+		   AND (? = '' OR updated_at <= datetime('now', ?))`,
+		status, resolution, resolutionKind, read, issueID,
+		opts.expectedStatus, opts.expectedStatus,
+		opts.expectedRunID, IssueInvestigating, opts.expectedRunID, opts.expectedRunID,
+		opts.ageModifier, opts.ageModifier,
+	)
+	if err != nil {
+		return false, fmt.Errorf("conclude issue: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		// Already closed (or no such issue): treat as idempotent success when the
 		// row exists, so a resumed/duplicated conclude does not error. No circuit-
 		// breaker update here: the row did not transition, so this is not a fresh
 		// terminal outcome (a double-conclude must never double-count a give-up).
-		var exists int
-		if qerr := s.db.QueryRowContext(ctx, "SELECT 1 FROM issues WHERE id = ?", issueID).Scan(&exists); qerr == sql.ErrNoRows {
-			return fmt.Errorf("issue not found")
+		if opts.conflictIfClosed {
+			var exists int
+			if qerr := tx.QueryRowContext(ctx, "SELECT 1 FROM issues WHERE id = ?", issueID).Scan(&exists); qerr == sql.ErrNoRows {
+				return false, fmt.Errorf("issue not found")
+			} else if qerr != nil {
+				return false, fmt.Errorf("reload issue after completion race: %w", qerr)
+			}
+			return false, nil
 		}
-		return nil
+		if opts.expectedStatus != "" || opts.expectedRunID != 0 || opts.ageModifier != "" {
+			return false, nil
+		}
+		var exists int
+		if qerr := tx.QueryRowContext(ctx, "SELECT 1 FROM issues WHERE id = ?", issueID).Scan(&exists); qerr == sql.ErrNoRows {
+			return false, fmt.Errorf("issue not found")
+		}
+		return false, nil
 	}
 
-	// Release any run claim now that the issue is terminal.
-	s.db.ExecContext(ctx, "UPDATE issues SET active_run_id = NULL WHERE id = ?", issueID)
+	actionRes, err := tx.ExecContext(ctx,
+		`UPDATE agent_actions
+		 SET status = ?, decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
+		     result_text = COALESCE(result_text, 'Superseded because the issue closed before approval; no fix was executed.')
+		 WHERE issue_id = ? AND status = ?`,
+		ActionSuperseded, issueID, ActionProposed,
+	)
+	if err != nil {
+		return false, fmt.Errorf("supersede issue actions: %w", err)
+	}
+	superseded, _ := actionRes.RowsAffected()
+
+	// An external observation/admin close can race a running or parked agent.
+	// Terminalize those runs here; an agent-concluded run is finalized by the
+	// Runner immediately after this transaction and must not be mislabeled.
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionReporterTimeout || resolutionKind == ResolutionAdminCompleted {
+		stopReason := "external_resolution"
+		if resolutionKind == ResolutionAdminDismissed {
+			stopReason = "admin_dismissed"
+		} else if resolutionKind == ResolutionAdminCompleted {
+			stopReason = "admin_completed"
+		} else if resolutionKind == ResolutionReporterTimeout {
+			stopReason = stopUserUnresponsive
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = ?, deadline_at = NULL,
+				 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+				 WHERE issue_id = ? AND status IN ('running','waiting_user','waiting_approval','resume_pending')
+				   AND (? = 0 OR id != ?)`,
+			stopReason, issueID, opts.expectedRunID, opts.expectedRunID,
+		); err != nil {
+			return false, fmt.Errorf("abort issue runs: %w", err)
+		}
+	}
+	if resolutionKind == ResolutionAdminCompleted {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+			 VALUES (?, ?, ?, ?)`,
+			issueID, AuthorAdmin, opts.adminID, resolution,
+		); err != nil {
+			return false, fmt.Errorf("record admin resolution note: %w", err)
+		}
+	}
+	if resolutionKind == ResolutionReporterTimeout {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+			 VALUES (?, ?, NULL, ?)`,
+			issueID, AuthorAgent,
+			"I didn't hear back, so I'm closing this for now. If it's still a problem, please report it again and I'll take another look.",
+		); err != nil {
+			return false, fmt.Errorf("record reporter-timeout message: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit conclude issue: %w", err)
+	}
+
 	// Feed the auto-dispatch circuit breaker exactly once per real terminal
 	// transition: resolved resets the give-up streak, a non-resolved close bumps
-	// it (and may disarm auto-dispatch). A no-op for user-reported issues.
-	s.noteAutoTerminal(issueID, status)
-	s.notifyIssueResolved(issueID, status)
-	return nil
+	// it (and may disarm auto-dispatch). Manual admin closure is excluded because
+	// it is neither an autonomous success nor an agent give-up.
+	if resolutionKind != ResolutionAdminDismissed && resolutionKind != ResolutionAdminCompleted {
+		s.noteAutoTerminal(issueID, status)
+	}
+	if !opts.silentNotifications {
+		s.notifyIssueResolved(issueID, status)
+		if superseded > 0 {
+			s.notifyActionsChanged(issueID, "superseded")
+		}
+	}
+	return true, nil
+}
+
+// EscalateIssue releases the agent claim but deliberately keeps the issue open
+// for an administrator. Agent exhaustion or missing AI configuration is not a
+// truthful "won't fix" outcome and must not disappear from the attention queue.
+func (s *Service) EscalateIssue(ctx context.Context, issueID int64, reason string) error {
+	_, err := s.GiveUpIssue(ctx, issueID, 0, "", "", reason)
+	return err
+}
+
+// GiveUpIssue atomically terminalizes the active run and moves its issue to
+// needs_admin with the human-readable message. A process loss can therefore
+// never leave an investigating issue pointing at a gave_up run.
+func (s *Service) GiveUpIssue(ctx context.Context, issueID, runID int64, stopReason, message, reason string) (bool, error) {
+	message = secrets.RedactText(message)
+	reason = secrets.RedactText(reason)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin give-up transition: %w", err)
+	}
+	defer tx.Rollback()
+	if runID != 0 {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL,
+			 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			 WHERE id = ? AND issue_id = ? AND status IN (?, ?)`,
+			runStatusGaveUp, stopReason, runID, issueID, runStatusRunning, runStatusResumePending,
+		)
+		if err != nil {
+			return false, fmt.Errorf("finalize give-up run: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return false, nil
+		}
+	}
+	var res sql.Result
+	if runID == 0 {
+		// This path is used only when provider setup failed before a run could be
+		// claimed. Do not let a stale queued job overwrite a reporter/admin gate
+		// that another worker established in the meantime.
+		res, err = tx.ExecContext(ctx,
+			`UPDATE issues SET status = ?, resolution = ?, resolution_kind = '', read = 0,
+			 active_run_id = NULL, updated_at = CURRENT_TIMESTAMP
+			 WHERE id = ? AND closed_at IS NULL AND active_run_id IS NULL
+			   AND status IN (?, ?)`,
+			IssueNeedsAdmin, reason, issueID, IssueOpen, IssueInvestigating,
+		)
+	} else {
+		res, err = tx.ExecContext(ctx,
+			`UPDATE issues SET status = ?, resolution = ?, resolution_kind = '', read = 0,
+			 active_run_id = NULL, updated_at = CURRENT_TIMESTAMP
+			 WHERE id = ? AND closed_at IS NULL AND active_run_id = ?`,
+			IssueNeedsAdmin, reason, issueID, runID,
+		)
+	}
+	if err != nil {
+		return false, fmt.Errorf("escalate give-up issue: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	actionRes, err := tx.ExecContext(ctx,
+		`UPDATE agent_actions SET status = ?, decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
+		 result_text = COALESCE(result_text, 'Superseded because the agent could not durably finish its approval gate; no fix was executed.')
+		 WHERE issue_id = ? AND status = ?`,
+		ActionSuperseded, issueID, ActionProposed,
+	)
+	if err != nil {
+		return false, fmt.Errorf("supersede give-up proposals: %w", err)
+	}
+	superseded, _ := actionRes.RowsAffected()
+	if message != "" {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+			 VALUES (?, ?, NULL, ?)`, issueID, AuthorAgent, message,
+		); err != nil {
+			return false, fmt.Errorf("record give-up message: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit give-up transition: %w", err)
+	}
+	// An unattended auto investigation that needs a human still feeds the
+	// circuit breaker even though the incident remains open.
+	s.noteAutoTerminal(issueID, IssueWontFix)
+	if superseded > 0 {
+		s.notifyActionsChanged(issueID, ActionSuperseded)
+	} else {
+		s.pingIssueUpdated(issueID)
+	}
+	return true, nil
 }
 
 // RemediationEnabled reports the master switch. Every agent-only tool and the
@@ -88,11 +421,9 @@ func (s *Service) RemediationEnabled(ctx context.Context) bool {
 	return s.Settings().Enabled
 }
 
-// AskReporter posts a clarifying question to the issue's reporter (an agent-
-// authored thread message) and signals the Runner to PARK the run as
-// awaiting_user until the reporter replies. It is intent/preference ONLY: it can
-// only record a string and never mutates anything (the rule is "the user answers
-// a question; the admin authorizes an action").
+// AskReporter validates that the issue has a reporter who can answer. The
+// Runner later commits the question message, waiting_user run state, and
+// awaiting_user issue state in one transaction after persisting the transcript.
 //
 // When the issue has NO reporter (an auto-detected issue), it returns
 // hasReporter=false WITHOUT posting or notifying, so the caller does not park —
@@ -104,12 +435,20 @@ func (s *Service) RemediationEnabled(ctx context.Context) bool {
 // and PostReply replaces that placeholder with the reply on resume — so the
 // transcript stays well-formed (exactly one tool_result per tool_use).
 func (s *Service) AskReporter(ctx context.Context, issueID int64, question, toolUseID string) (hasReporter bool, err error) {
+	if len(question) > maxIssueReplyBytes {
+		return false, fmt.Errorf("reporter question is too long")
+	}
+	question = secrets.RedactText(question)
 	var reporterID sql.NullInt64
-	if qerr := s.db.QueryRowContext(ctx, "SELECT reporter_id FROM issues WHERE id = ?", issueID).Scan(&reporterID); qerr != nil {
+	var closedAt sql.NullTime
+	if qerr := s.db.QueryRowContext(ctx, "SELECT reporter_id, closed_at FROM issues WHERE id = ?", issueID).Scan(&reporterID, &closedAt); qerr != nil {
 		if qerr == sql.ErrNoRows {
 			return false, fmt.Errorf("issue not found")
 		}
 		return false, fmt.Errorf("load issue: %w", qerr)
+	}
+	if closedAt.Valid {
+		return false, fmt.Errorf("issue is already closed")
 	}
 	if !reporterID.Valid {
 		// Auto-detected / reporter-less issue: do NOT park. The caller returns a
@@ -117,20 +456,6 @@ func (s *Service) AskReporter(ctx context.Context, issueID int64, question, tool
 		return false, nil
 	}
 
-	// Post the question to the thread as an agent message (so the reporter sees it
-	// and can reply), then notify just the reporter. The body is stored verbatim
-	// but is never put on the notification (only the issue id travels).
-	if _, err := s.db.ExecContext(ctx,
-		"INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, ?, NULL, ?)",
-		issueID, AuthorAgent, question,
-	); err != nil {
-		return false, fmt.Errorf("post reporter question: %w", err)
-	}
-	s.db.ExecContext(ctx, "UPDATE issues SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", issueID)
-
-	if s.notifier != nil {
-		s.notifier.NotifyUser(reporterID.Int64, "issue_updated", map[string]interface{}{"issue_id": issueID})
-	}
 	return true, nil
 }
 
@@ -143,26 +468,68 @@ func (s *Service) AskReporter(ctx context.Context, issueID int64, question, tool
 // replay verbatim on approval. On a genuinely new proposal it notifies admins
 // with a fixed-template event (ids + kind only; no model text on the wire).
 func (s *Service) ProposeAction(ctx context.Context, issueID int64, kindStr string, rawParams json.RawMessage, rationale, toolUseID string) (proposalID int64, alreadyExisted bool, err error) {
+	if len(rationale) > maxIssueDetailBytes {
+		return 0, false, fmt.Errorf("proposal rationale is too long")
+	}
+	rationale = secrets.RedactText(rationale)
 	kind := ActionKind(kindStr)
 	canonical, verr := validateActionParams(kind, rawParams)
 	if verr != nil {
 		return 0, false, verr
 	}
-	fp := fingerprint(issueID, kind, canonical)
+	if toolUseID == "" {
+		return 0, false, fmt.Errorf("proposal requires its model tool gate id")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, fmt.Errorf("begin proposal: %w", err)
+	}
+	defer tx.Rollback()
+	if err := validateActionScopeWith(tx, issueID, kind, canonical); err != nil {
+		return 0, false, err
+	}
 
-	// Resolve the originating run (the issue's current claim) so the audit links
-	// the proposal to the run that made it. Best-effort: a NULL run_id is fine.
-	var runID sql.NullInt64
-	s.db.QueryRowContext(ctx, "SELECT active_run_id FROM issues WHERE id = ?", issueID).Scan(&runID)
+	// Bind the proposal to the exact live run that owns this issue. The scope
+	// validation and insert share this transaction, so a concurrent close/park
+	// cannot leave a new proposal attached to a closed or unowned issue.
+	var runID int64
+	expectedRunID := mcp.AgentRunOwnership(ctx)
+	if err := tx.QueryRowContext(ctx,
+		`SELECT i.active_run_id FROM issues i JOIN agent_runs r ON r.id = i.active_run_id
+		 WHERE i.id = ? AND i.status = ? AND i.closed_at IS NULL
+		   AND i.active_run_id IS NOT NULL AND r.status = ?
+		   AND (? = 0 OR i.active_run_id = ?)`,
+		issueID, IssueInvestigating, runStatusRunning, expectedRunID, expectedRunID,
+	).Scan(&runID); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, false, fmt.Errorf("issue has no active investigation gate")
+		}
+		return 0, false, fmt.Errorf("load proposal run: %w", err)
+	}
+	fp := fingerprint(issueID, runID, toolUseID, kind, canonical)
 
-	// Conditional insert: only create the row if no action with this fingerprint
-	// exists yet. The UNIQUE(fingerprint) index is the backstop; the NOT EXISTS
-	// keeps the common path a clean no-op instead of a constraint error.
-	res, err := s.db.ExecContext(ctx,
+	var pendingID int64
+	var existingFP string
+	if qerr := tx.QueryRowContext(ctx,
+		"SELECT id, fingerprint FROM agent_actions WHERE issue_id = ? AND status = ? LIMIT 1",
+		issueID, ActionProposed,
+	).Scan(&pendingID, &existingFP); qerr == nil {
+		if existingFP == fp {
+			if err := tx.Commit(); err != nil {
+				return 0, false, err
+			}
+			return pendingID, true, nil
+		}
+		return 0, false, fmt.Errorf("another proposal is already awaiting a decision for this issue")
+	} else if qerr != sql.ErrNoRows {
+		return 0, false, fmt.Errorf("check pending proposal: %w", qerr)
+	}
+
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO agent_actions (issue_id, run_id, tool_use_id, kind, params, rationale, risk, status, fingerprint)
 		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 WHERE NOT EXISTS (SELECT 1 FROM agent_actions WHERE fingerprint = ?)`,
-		issueID, runID, sqlNullStr(toolUseID), kindStr, string(canonical), rationale, "mutating", ActionProposed, fp,
+		issueID, runID, toolUseID, kindStr, string(canonical), rationale, "mutating", ActionProposed, fp,
 		fp,
 	)
 	if err != nil {
@@ -171,8 +538,11 @@ func (s *Service) ProposeAction(ctx context.Context, issueID int64, kindStr stri
 	if n, _ := res.RowsAffected(); n == 0 {
 		// Already proposed/decided: return the existing row id, no new notification.
 		var existingID int64
-		if qerr := s.db.QueryRowContext(ctx, "SELECT id FROM agent_actions WHERE fingerprint = ?", fp).Scan(&existingID); qerr != nil {
+		if qerr := tx.QueryRowContext(ctx, "SELECT id FROM agent_actions WHERE fingerprint = ?", fp).Scan(&existingID); qerr != nil {
 			return 0, true, nil
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, false, err
 		}
 		return existingID, true, nil
 	}
@@ -181,8 +551,20 @@ func (s *Service) ProposeAction(ctx context.Context, issueID int64, kindStr stri
 		return 0, false, fmt.Errorf("proposal id: %w", err)
 	}
 
-	s.notifyActionPending(issueID, kindStr)
+	if err := tx.Commit(); err != nil {
+		return 0, false, fmt.Errorf("commit proposal: %w", err)
+	}
 	return newID, false, nil
+}
+
+func (s *Service) notifyPendingActionForIssue(issueID int64) {
+	var kind string
+	if err := s.db.QueryRow(
+		"SELECT kind FROM agent_actions WHERE issue_id = ? AND status = ? ORDER BY id DESC LIMIT 1",
+		issueID, ActionProposed,
+	).Scan(&kind); err == nil {
+		s.notifyActionPending(issueID, kind)
+	}
 }
 
 // notifyActionPending fires the agent_action_pending admin event when the agent

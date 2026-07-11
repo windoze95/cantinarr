@@ -22,17 +22,22 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:       30 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 }
 
 type Movie struct {
-	ID             int    `json:"id"`
-	Title          string `json:"title"`
-	TmdbID         int    `json:"tmdbId"`
-	Year           int    `json:"year"`
-	HasFile        bool   `json:"hasFile"`
+	ID          int    `json:"id"`
+	Title       string `json:"title"`
+	TmdbID      int    `json:"tmdbId"`
+	Year        int    `json:"year"`
+	HasFile     bool   `json:"hasFile"`
+	MovieFileID int    `json:"movieFileId"`
+	MovieFile   struct {
+		ID int `json:"id"`
+	} `json:"movieFile"`
 	Monitored      bool   `json:"monitored"`
 	IsAvailable    bool   `json:"isAvailable"`
 	RootFolderPath string `json:"rootFolderPath,omitempty"`
@@ -78,9 +83,9 @@ type QueueItem struct {
 	Size     float64 `json:"size"`
 }
 
-// do executes a request with an optional JSON body, fails on non-2xx status
-// (including a snippet of the response body), and decodes JSON into out when
-// out is non-nil.
+// do executes a request with an optional JSON body, fails on non-2xx status,
+// and decodes JSON into out when out is non-nil. Upstream error bodies are
+// deliberately excluded because they can contain credentials or signed URLs.
 func (c *Client) do(method, path string, body, out any) error {
 	return c.doWith(c.httpClient, method, path, body, out)
 }
@@ -108,9 +113,8 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("radarr %s %s returned status %d: %s",
-			method, strings.SplitN(path, "?", 2)[0], resp.StatusCode, strings.TrimSpace(string(snippet)))
+		requestPath, _, _ := strings.Cut(path, "?")
+		return fmt.Errorf("radarr %s %s returned status %d", method, requestPath, resp.StatusCode)
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -276,35 +280,40 @@ type DetailedQueueItem struct {
 	Movie *MovieContext `json:"movie,omitempty"`
 }
 
-// queuePageSize is the per-request page size for queue pagination, and
-// queueMaxRecords is a safety cap on the total records accumulated.
-const (
-	queuePageSize   = 100
-	queueMaxRecords = 1000
-)
+// queueMaxRecords is both the requested single-page size and a safety cap.
+// A multi-page offset snapshot can silently mix two queue generations when
+// rows churn without changing totalRecords, so observation never treats one as
+// authoritative.
+const queueMaxRecords = 1000
 
-// GetQueueDetailed returns the full download queue with movie context,
-// paginating until all records are fetched (capped at queueMaxRecords).
+// GetQueueDetailed returns one bounded, internally consistent queue page with
+// movie context. A server that clamps/truncates the requested page fails closed.
 func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
-	var all []DetailedQueueItem
-	for page := 1; ; page++ {
-		var resp struct {
-			TotalRecords int                 `json:"totalRecords"`
-			Records      []DetailedQueueItem `json:"records"`
-		}
-		path := fmt.Sprintf("/api/v3/queue?page=%d&pageSize=%d&includeMovie=true", page, queuePageSize)
-		if err := c.do("GET", path, nil, &resp); err != nil {
-			return nil, fmt.Errorf("radarr queue: %w", err)
-		}
-		all = append(all, resp.Records...)
-		if len(resp.Records) == 0 || len(all) >= resp.TotalRecords || len(all) >= queueMaxRecords {
-			break
-		}
+	var resp struct {
+		TotalRecords int                 `json:"totalRecords"`
+		Records      []DetailedQueueItem `json:"records"`
 	}
-	if len(all) > queueMaxRecords {
-		all = all[:queueMaxRecords]
+	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeMovie=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return nil, fmt.Errorf("radarr queue: %w", err)
 	}
-	return all, nil
+	if resp.TotalRecords < 0 || resp.TotalRecords > queueMaxRecords {
+		return nil, fmt.Errorf("radarr queue snapshot incomplete: invalid or oversized total %d (safety cap %d)", resp.TotalRecords, queueMaxRecords)
+	}
+	if len(resp.Records) != resp.TotalRecords {
+		return nil, fmt.Errorf("radarr queue snapshot incomplete: received %d of %d records in bounded page", len(resp.Records), resp.TotalRecords)
+	}
+	seenIDs := make(map[int]struct{})
+	for _, item := range resp.Records {
+		if item.ID <= 0 {
+			return nil, fmt.Errorf("radarr queue snapshot incomplete: record has invalid id")
+		}
+		if _, duplicate := seenIDs[item.ID]; duplicate {
+			return nil, fmt.Errorf("radarr queue snapshot incomplete: duplicate record id %d", item.ID)
+		}
+		seenIDs[item.ID] = struct{}{}
+	}
+	return resp.Records, nil
 }
 
 // RemoveQueueItem removes an item from the download queue. removeFromClient
@@ -322,9 +331,13 @@ func (c *Client) RemoveQueueItem(id int, removeFromClient, blocklist, skipRedown
 }
 
 type HistoryRecord struct {
-	EventType   string    `json:"eventType"`
-	SourceTitle string    `json:"sourceTitle"`
-	Date        time.Time `json:"date"`
+	ID          int64             `json:"id"`
+	MovieID     int               `json:"movieId"`
+	EventType   string            `json:"eventType"`
+	SourceTitle string            `json:"sourceTitle"`
+	Date        time.Time         `json:"date"`
+	DownloadID  string            `json:"downloadId"`
+	Data        map[string]string `json:"data"`
 	Quality     struct {
 		Quality struct {
 			Name string `json:"name"`
@@ -341,6 +354,25 @@ func (c *Client) GetHistory(pageSize int) ([]HistoryRecord, error) {
 	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&includeMovie=true", pageSize)
 	if err := c.do("GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("radarr history: %w", err)
+	}
+	return resp.Records, nil
+}
+
+// GetImportHistory returns a bounded server-filtered import witness for one
+// internal movie and observed download identity. Callers still revalidate every
+// returned field; filters reduce both noise and truncation risk.
+func (c *Client) GetImportHistory(movieID int, downloadID string, pageSize int) ([]HistoryRecord, error) {
+	var resp struct {
+		TotalRecords int             `json:"totalRecords"`
+		Records      []HistoryRecord `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&includeMovie=true&eventType=3&movieIds=%d&downloadId=%s",
+		pageSize, movieID, url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return nil, fmt.Errorf("radarr import history: %w", err)
+	}
+	if resp.TotalRecords > pageSize {
+		return nil, fmt.Errorf("radarr import history incomplete: %d records exceeds bound %d", resp.TotalRecords, pageSize)
 	}
 	return resp.Records, nil
 }
@@ -394,7 +426,10 @@ type Release struct {
 // SearchReleases runs an interactive release search for a movie. Indexer
 // queries can take well over the normal timeout, so a longer one is used.
 func (c *Client) SearchReleases(movieID int) ([]Release, error) {
-	searchClient := &http.Client{Timeout: 120 * time.Second}
+	searchClient := &http.Client{
+		Timeout:       120 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	var releases []Release
 	path := fmt.Sprintf("/api/v3/release?movieId=%d", movieID)
 	if err := c.doWith(searchClient, "GET", path, nil, &releases); err != nil {
