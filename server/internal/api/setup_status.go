@@ -108,7 +108,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "ai",
 			Title:       "AI assistant",
-			Description: "Conversational discovery, requests, and server management. Bring an API key or select Codex; each user then links ChatGPT in Settings.",
+			Description: "Conversational discovery, requests, and server management. Configure a shared provider; users may override it with their own credentials.",
 			Configured:  f.AI,
 			Optional:    true,
 		},

@@ -1,6 +1,6 @@
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
-import 'package:cantinarr/features/ai_assistant/data/codex_oauth_service.dart';
+import 'package:cantinarr/features/ai_assistant/data/ai_settings_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/settings/ui/settings_screen.dart';
 import 'package:flutter/material.dart';
@@ -21,61 +21,48 @@ void main() {
     );
   });
 
-  testWidgets('shows ChatGPT account tile whenever Codex is selected',
-      (tester) async {
-    await _pumpSettings(
-      tester,
-      const CodexConnectionStatus(
-        selected: true,
-        available: false,
-        connected: false,
-      ),
-    );
+  testWidgets('shows the effective included provider', (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
 
-    expect(find.text('ChatGPT'), findsOneWidget);
-    expect(find.text('Sign-in is unavailable on this server'), findsOneWidget);
+    expect(find.text('AI Access'), findsOneWidget);
+    expect(find.text('Included · OpenAI'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('AI Assistant'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Available'), findsOneWidget);
   });
 
-  testWidgets('hides ChatGPT account tile for a different unlinked provider',
+  testWidgets('marks a broken personal override instead of showing included',
       (tester) async {
     await _pumpSettings(
       tester,
-      const CodexConnectionStatus(
-        selected: false,
-        available: false,
-        connected: false,
-      ),
+      _settings(source: AiAccessSource.personal, available: false),
     );
 
-    expect(find.text('ChatGPT'), findsNothing);
+    expect(find.text('Personal AI needs attention'), findsOneWidget);
+    expect(find.text('Included · OpenAI'), findsNothing);
   });
 
-  testWidgets('keeps ChatGPT account tile after the provider changes',
+  testWidgets('AI Access remains visible when no source is configured',
       (tester) async {
-    await _pumpSettings(
-      tester,
-      const CodexConnectionStatus(
-        selected: false,
-        available: false,
-        connected: true,
-        accountEmail: 'viewer@example.com',
-      ),
-    );
+    await _pumpSettings(tester, _settings(source: AiAccessSource.none));
 
-    expect(find.text('ChatGPT'), findsOneWidget);
-    expect(find.text('Connected as viewer@example.com'), findsOneWidget);
+    expect(find.text('AI Access'), findsOneWidget);
+    expect(find.text('Add a personal provider'), findsOneWidget);
   });
 }
 
 Future<void> _pumpSettings(
   WidgetTester tester,
-  CodexConnectionStatus codexStatus,
+  AiSettings settings,
 ) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         authProvider.overrideWith(_FakeAuthNotifier.new),
-        codexConnectionStatusProvider.overrideWith((_) async => codexStatus),
+        aiSettingsProvider.overrideWith((_) async => settings),
       ],
       child: const MaterialApp(home: SettingsScreen()),
     ),
@@ -91,9 +78,44 @@ class _FakeAuthNotifier extends AuthNotifier {
           accessToken: 'access',
           refreshToken: 'refresh',
         ),
-        user: UserProfile(id: 1, username: 'viewer', role: 'user'),
+        user: UserProfile(
+          id: 1,
+          username: 'viewer',
+          role: 'user',
+          permissions: ['ai:chat'],
+        ),
       );
 
   @override
   Future<void> refreshUser() async {}
 }
+
+AiSettings _settings({
+  required AiAccessSource source,
+  bool available = true,
+}) =>
+    AiSettings(
+      providers: const [],
+      personal: PersonalAiSettings(
+        selected: source == AiAccessSource.personal,
+        config: source == AiAccessSource.personal
+            ? const AiProviderConfig(provider: 'openai', model: 'gpt-5.4-mini')
+            : null,
+        credentials: const {},
+      ),
+      shared: SharedAiSettings(
+        granted: source == AiAccessSource.shared,
+        configured: source == AiAccessSource.shared,
+        config: const AiProviderConfig(
+          provider: 'openai',
+          model: 'gpt-5.4-mini',
+        ),
+      ),
+      effective: EffectiveAiSettings(
+        available: source == AiAccessSource.none ? false : available,
+        source: source,
+        provider: source == AiAccessSource.none ? '' : 'openai',
+        model: source == AiAccessSource.none ? '' : 'gpt-5.4-mini',
+        reason: available ? '' : 'personal_credential_missing',
+      ),
+    );

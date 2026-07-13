@@ -10,7 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('Codex provider is described as per-user sign-in',
+  testWidgets('Codex provider is described as shared included access',
       (tester) async {
     final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
       ..httpClientAdapter = _CredentialsAdapter();
@@ -27,13 +27,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('ChatGPT (Codex)'), findsOneWidget);
-    expect(find.text('Per-user sign-in'), findsOneWidget);
+    expect(find.text('Shared account'), findsOneWidget);
     expect(
       find.text(
-        'Each person connects their own ChatGPT account from Settings.',
+        'Connect one server ChatGPT account for users with included access.',
       ),
       findsOneWidget,
     );
+    expect(find.textContaining('one ChatGPT account and one Codex meter'),
+        findsOneWidget);
     expect(find.text('Key missing'), findsNothing);
   });
 }

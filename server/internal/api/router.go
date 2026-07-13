@@ -153,6 +153,7 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users", authHandler.HandleListUsers)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}", authHandler.HandleUpdateUserRole)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}/auth-methods", authHandler.HandleUpdateUserAuthMethods)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/ai-access", authHandler.HandleUpdateUserAIAccess)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}", authHandler.HandleDeleteUser)
 			// Send a test push to a specific user's devices (delivery diagnostics).
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/test-push", pushHandler.TestPushToUser)
@@ -190,6 +191,11 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/credentials", credHandler.Get)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/credentials", credHandler.Update)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/credentials/{key}", credHandler.Delete)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/codex/status", aiHandler.SharedCodexStatus)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), codexLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginSharedCodexDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/codex/device/{flowID}", aiHandler.CheckSharedCodexDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/codex/device/{flowID}", aiHandler.CancelSharedCodexDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/codex", aiHandler.UnlinkSharedCodex)
 
 			// AI tool toggles
 			aiToolsHandler := mcp.NewToolSettingsHandler(toolServer)
@@ -317,11 +323,16 @@ func NewRouter(
 			r.Get("/ai/codex/status", aiHandler.CodexStatus)
 			r.Delete("/ai/codex", aiHandler.UnlinkCodex)
 			r.Delete("/ai/codex/device/{flowID}", aiHandler.CancelCodexDeviceLogin)
+			r.Get("/ai/settings", aiHandler.AISettings)
+			r.Delete("/ai/settings", aiHandler.DeleteAISettings)
+			r.Delete("/ai/credentials/{provider}", aiHandler.DeletePersonalAICredential)
 
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermissionAIChat))
 				r.Post("/ai/chat", aiHandler.Chat)
 				r.Get("/ai/available", aiHandler.Available)
+				r.Put("/ai/settings", aiHandler.UpdateAISettings)
+				r.Put("/ai/credentials/{provider}", aiHandler.UpdatePersonalAICredential)
 				r.With(codexLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginCodexDeviceLogin)
 				r.Get("/ai/codex/device/{flowID}", aiHandler.CheckCodexDeviceLogin)
 			})
@@ -443,6 +454,7 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 
 func configHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		// Build instances list
 		type instanceInfo struct {
 			ID          string `json:"id"`

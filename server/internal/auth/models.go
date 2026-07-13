@@ -35,6 +35,7 @@ type UserSummary struct {
 	HasPassword      bool         `json:"has_password"`
 	PasswordEnabled  bool         `json:"password_enabled"`
 	PasskeyEnabled   bool         `json:"passkey_enabled"`
+	AISharedEnabled  bool         `json:"ai_shared_enabled"`
 	HasPendingInvite bool         `json:"has_pending_invite"`
 	PlexEmail        string       `json:"plex_email"`
 	PlexInvitedAt    *time.Time   `json:"plex_invited_at,omitempty"`
@@ -50,6 +51,13 @@ type UpdateUserRoleRequest struct {
 type UpdateUserAuthMethodsRequest struct {
 	PasswordEnabled *bool `json:"password_enabled"`
 	PasskeyEnabled  *bool `json:"passkey_enabled"`
+}
+
+// UpdateUserAIAccessRequest controls whether this account may use the
+// administrator-funded shared AI provider. Personal credentials are separate
+// and remain usable when this grant is disabled.
+type UpdateUserAIAccessRequest struct {
+	SharedEnabled *bool `json:"shared_ai_enabled"`
 }
 
 type Device struct {

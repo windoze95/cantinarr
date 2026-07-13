@@ -48,7 +48,7 @@ void main() {
       expect(status.ai.providers, isEmpty);
     });
 
-    test('parses a per-user OAuth provider without a credential key', () {
+    test('parses an OAuth provider without a credential key', () {
       final status = CredentialsStatus.fromJson({
         'credentials': const <String, bool>{},
         'ai': {

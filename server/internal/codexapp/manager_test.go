@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/credentials"
 	projectdb "github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -129,6 +130,13 @@ func TestCodexAppHelperProcess(t *testing.T) {
 		case "":
 			if fmt.Sprint(id) == "preturn-tool" {
 				send(map[string]any{"id": pendingTurnStartID, "result": map[string]any{"turn": map[string]any{"id": "turn-1", "status": "inProgress", "items": []any{}}}})
+				if slices.Contains(os.Args, "--fake-prefill-notifications") {
+					for i := 0; i < maxQueuedNotifications+32; i++ {
+						send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{
+							"threadId": "thread-1", "turnId": "turn-1", "itemId": "prefill-message", "delta": "queued text",
+						}})
+					}
+				}
 				// Deliberately request an admin-only tool from a user turn. The
 				// adapter must reject it even though the process invented the call.
 				send(map[string]any{"id": "server-tool-1", "method": "item/tool/call", "params": map[string]any{
@@ -137,6 +145,41 @@ func TestCodexAppHelperProcess(t *testing.T) {
 				continue
 			}
 			if fmt.Sprint(id) == "server-tool-1" {
+				if slices.Contains(os.Args, "--fake-allowed-tool") {
+					send(map[string]any{"id": "server-tool-2", "method": "item/tool/call", "params": map[string]any{
+						"callId": "call-2", "threadId": "thread-1", "turnId": "turn-1", "tool": "search_movies", "arguments": map[string]any{"query": "Dune"},
+					}})
+					continue
+				}
+				if slices.Contains(os.Args, "--fake-token-limit") {
+					send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
+						"threadId": "thread-1", "turnId": "turn-1",
+						"tokenUsage": map[string]any{
+							"last":  map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": 12, "reasoningOutputTokens": 3, "totalTokens": 33},
+							"total": map[string]any{"inputTokens": 21, "cachedInputTokens": 5, "outputTokens": 12, "reasoningOutputTokens": 3, "totalTokens": 33},
+						},
+					}})
+					continue
+				}
+				if slices.Contains(os.Args, "--fake-token-after-interrupt") {
+					continue
+				}
+				if slices.Contains(os.Args, "--fake-token-usage") {
+					send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
+						"threadId": "thread-1", "turnId": "turn-1",
+						"tokenUsage": map[string]any{
+							"last": map[string]any{"inputTokens": 18, "cachedInputTokens": 4, "outputTokens": 7, "reasoningOutputTokens": 2, "totalTokens": 25},
+						},
+					}})
+				}
+				send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{
+					"threadId": "thread-1", "turnId": "turn-1", "itemId": "message-1", "delta": "safe response",
+				}})
+				send(map[string]any{"method": "turn/completed", "params": map[string]any{
+					"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "completed", "items": []any{}},
+				}})
+			}
+			if fmt.Sprint(id) == "server-tool-2" {
 				send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{
 					"threadId": "thread-1", "turnId": "turn-1", "itemId": "message-1", "delta": "safe response",
 				}})
@@ -146,6 +189,25 @@ func TestCodexAppHelperProcess(t *testing.T) {
 			}
 		case "turn/interrupt":
 			send(map[string]any{"id": id, "result": map[string]any{}})
+			if slices.Contains(os.Args, "--fake-token-after-interrupt") {
+				send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{
+					"threadId": "thread-1", "turnId": "turn-1",
+					"tokenUsage": map[string]any{
+						"last": map[string]any{"inputTokens": 18, "cachedInputTokens": 4, "outputTokens": 7, "reasoningOutputTokens": 2, "totalTokens": 25},
+					},
+				}})
+				send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{
+					"threadId": "thread-1", "turnId": "turn-1", "itemId": "late-message", "delta": "late partial response",
+				}})
+			}
+			if slices.Contains(os.Args, "--fake-token-limit") {
+				send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{
+					"threadId": "thread-1", "turnId": "turn-1", "itemId": "limited-message", "delta": "partial capped response",
+				}})
+			}
+			send(map[string]any{"method": "turn/completed", "params": map[string]any{
+				"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "interrupted", "items": []any{}},
+			}})
 		default:
 			send(map[string]any{"id": id, "error": map[string]any{"code": -32601, "message": "unsupported fake method"}})
 		}
@@ -238,6 +300,154 @@ func TestManagerProtocol0144DeviceAccountAndRestrictedRun(t *testing.T) {
 	}
 	if manager.HasAccount(1) {
 		t.Fatal("unlink retained account row")
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestSharedAccountIsIndependentAndToolsUseRequestingActor(t *testing.T) {
+	manager, _, _, runtimeDir, _ := fakeManager(t)
+	personalAuth := []byte(`{"tokens":{"access_token":"personal-secret"}}`)
+	sharedAuth := []byte(`{"tokens":{"access_token":"shared-secret"}}`)
+	if err := manager.saveAccount(PersonalAccount(1), personalAuth, AccountStatus{Connected: true, Email: "personal@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.saveAccount(SharedAccount(), sharedAuth, AccountStatus{Connected: true, Email: "shared@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := manager.AccountExists(SharedAccount()); err != nil || !found {
+		t.Fatalf("shared exists=%t err=%v", found, err)
+	}
+	manager.args = append(manager.args, "--fake-allowed-tool")
+	var observed mcp.CallContext
+	manager.toolCallObserver = func(call mcp.CallContext) { observed = call }
+	if err := manager.RunWithAccount(context.Background(), SharedAccount(), 2, auth.RoleUser, "", "base", "context", "prompt", Callbacks{}); err != nil {
+		t.Fatal(err)
+	}
+	if observed.UserID != 2 || observed.Role != auth.RoleUser {
+		t.Fatalf("shared tool actor = %#v, want requester user 2", observed)
+	}
+	if err := manager.UnlinkAccount(SharedAccount()); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := manager.AccountExists(SharedAccount()); err != nil || found {
+		t.Fatalf("shared after unlink exists=%t err=%v", found, err)
+	}
+	if found, err := manager.AccountExists(PersonalAccount(1)); err != nil || !found {
+		t.Fatalf("personal was affected by shared unlink: exists=%t err=%v", found, err)
+	}
+	if err := manager.Unlink(1); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestAutonomousTurnReturnsExplicitToolCallWithoutExecutingIt(t *testing.T) {
+	manager, _, _, runtimeDir, _ := fakeManager(t)
+	if err := manager.saveAccount(
+		SharedAccount(),
+		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+		AccountStatus{Connected: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	executed := false
+	manager.toolCallObserver = func(mcp.CallContext) { executed = true }
+	manager.args = append(manager.args, "--fake-token-after-interrupt", "--fake-prefill-notifications")
+
+	result, err := manager.RunSharedAutonomousTurn(
+		context.Background(),
+		"",
+		"server-owned remediation prompt",
+		"guarded runner context",
+		"inspect the issue",
+		[]mcp.Tool{{
+			Name:        "get_queue",
+			Description: "Read the queue",
+			InputSchema: map[string]any{"type": "object"},
+		}},
+		4096,
+	)
+	if err != nil {
+		t.Fatalf("autonomous turn: %v", err)
+	}
+	if executed {
+		t.Fatal("autonomous app-server turn executed a tool inside codexapp")
+	}
+	if result.Text != "" {
+		t.Fatalf("post-placeholder assistant text was retained: %q", result.Text)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].ID != "call-1" || result.ToolCalls[0].Name != "get_queue" || string(result.ToolCalls[0].Input) != "{}" {
+		t.Fatalf("captured tool calls = %#v", result.ToolCalls)
+	}
+	if result.Usage.InputTokens != 18 || result.Usage.CachedInputTokens != 4 || result.Usage.OutputTokens != 7 || result.Usage.ReasoningOutputTokens != 2 {
+		t.Fatalf("captured tool usage = %#v", result.Usage)
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestAutonomousTurnWithNoToolsReturnsText(t *testing.T) {
+	manager, _, _, runtimeDir, _ := fakeManager(t)
+	if err := manager.saveAccount(
+		SharedAccount(),
+		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+		AccountStatus{Connected: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.RunSharedAutonomousTurn(
+		context.Background(), "", "base", "context", "prompt", nil, 4096,
+	)
+	if err != nil {
+		t.Fatalf("autonomous text turn: %v", err)
+	}
+	if result.Text != "safe response" || len(result.ToolCalls) != 0 {
+		t.Fatalf("autonomous text result = %#v", result)
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestSharedAutonomousTurnInterruptsAtReportedOutputLimit(t *testing.T) {
+	manager, _, _, runtimeDir, _ := fakeManager(t)
+	if err := manager.saveAccount(
+		SharedAccount(),
+		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+		AccountStatus{Connected: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	manager.args = append(manager.args, "--fake-token-limit")
+
+	result, err := manager.RunSharedAutonomousTurn(
+		context.Background(), "", "base", "context", "prompt", nil, 10,
+	)
+	if err != nil {
+		t.Fatalf("autonomous limited turn: %v", err)
+	}
+	if !result.OutputLimitReached || result.Usage.InputTokens != 21 || result.Usage.CachedInputTokens != 5 ||
+		result.Usage.OutputTokens != 12 || result.Usage.ReasoningOutputTokens != 3 {
+		t.Fatalf("limited result = %#v", result)
+	}
+	if result.Text != "partial capped response" {
+		t.Fatalf("limited partial text = %q", result.Text)
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestSharedDeviceFlowIsBoundToInitiatingAdminAndScope(t *testing.T) {
+	manager, _, _, runtimeDir, _ := fakeManager(t)
+	login, err := manager.BeginDeviceLoginForAccount(context.Background(), SharedAccount(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.CheckDeviceLoginForAccount(context.Background(), SharedAccount(), 2, login.FlowID); !errors.Is(err, ErrFlowNotFound) {
+		t.Fatalf("different actor poll = %v, want ErrFlowNotFound", err)
+	}
+	if _, err := manager.CheckDeviceLogin(context.Background(), 1, login.FlowID); !errors.Is(err, ErrFlowNotFound) {
+		t.Fatalf("personal-scope poll of shared flow = %v, want ErrFlowNotFound", err)
+	}
+	if err := manager.CancelDeviceLoginForAccount(SharedAccount(), 1, login.FlowID); err != nil {
+		t.Fatal(err)
 	}
 	assertRuntimeEmpty(t, runtimeDir)
 }
@@ -359,7 +569,7 @@ func TestBeginCannotPublishAcrossUnlinkRevocation(t *testing.T) {
 	go func() { unlinkResult <- manager.Unlink(1) }()
 	for deadline := time.Now().Add(time.Second); ; {
 		manager.operationsMu.Lock()
-		revoking := manager.revocations[1] != 0
+		revoking := manager.revocations[PersonalAccount(1)] != 0
 		manager.operationsMu.Unlock()
 		if revoking {
 			break
@@ -384,7 +594,7 @@ func TestBeginCannotPublishAcrossUnlinkRevocation(t *testing.T) {
 
 func TestCancelWinsConcurrentLoginFinalization(t *testing.T) {
 	manager, _, _, runtimeDir, logPath := fakeManager(t)
-	manager.args = append(manager.args, "--fake-account-read-delay=200ms")
+	manager.args = append(manager.args, "--fake-account-read-delay=1s")
 	login, err := manager.BeginDeviceLogin(context.Background(), 1)
 	if err != nil {
 		t.Fatal(err)
@@ -483,7 +693,7 @@ func TestUnlinkCancelsStatusAndPreventsResurrection(t *testing.T) {
 		VALUES (1, ?, datetime('now', '-2 minutes'))`, encrypted); err != nil {
 		t.Fatal(err)
 	}
-	manager.args = append(manager.args, "--fake-rate-limits-delay=300ms")
+	manager.args = append(manager.args, "--fake-rate-limits-delay=1s")
 	statusResult := make(chan error, 1)
 	go func() {
 		_, statusErr := manager.Status(context.Background(), 1, true)
@@ -581,7 +791,7 @@ func TestAuthOnlyPersistenceDoesNotExtendStatusFreshness(t *testing.T) {
 	if err := database.QueryRow(`SELECT CAST(strftime('%s', updated_at) AS INTEGER) FROM user_codex_accounts WHERE user_id = 1`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.saveRefreshedAuth(1, []byte(`{"tokens":{"access_token":"rotated-secret"}}`)); err != nil {
+	if err := manager.saveRefreshedAuth(PersonalAccount(1), []byte(`{"tokens":{"access_token":"rotated-secret"}}`)); err != nil {
 		t.Fatal(err)
 	}
 	var after int64
@@ -886,6 +1096,41 @@ func TestTurnCompletedCompactsOversizedDynamicToolContent(t *testing.T) {
 	}
 }
 
+func TestTokenUsageNotificationIsValidatedAndCompacted(t *testing.T) {
+	params, err := json.Marshal(map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"tokenUsage": map[string]any{
+			"last": map[string]any{
+				"inputTokens": 21, "cachedInputTokens": 5,
+				"outputTokens": 12, "reasoningOutputTokens": 3,
+			},
+			"ignored": strings.Repeat("x", maxNotificationBytes),
+		},
+	})
+	if err != nil || len(params) <= maxNotificationBytes {
+		t.Fatalf("oversized token fixture = %d bytes, %v", len(params), err)
+	}
+	compact, ok := compactNotification("thread/tokenUsage/updated", params)
+	if !ok || len(compact) >= maxNotificationBytes {
+		t.Fatalf("compacted token notification = %d bytes, ok=%t", len(compact), ok)
+	}
+	update, ok := decodeTokenUsageUpdate(compact)
+	if !ok || update.TokenUsage.Last.OutputTokens != 12 || update.TokenUsage.Last.CachedInputTokens != 5 {
+		t.Fatalf("decoded compact usage = %#v, ok=%t", update, ok)
+	}
+
+	for _, invalid := range []json.RawMessage{
+		json.RawMessage(`{"threadId":"","turnId":"turn-1","tokenUsage":{"last":{"outputTokens":1}}}`),
+		json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"last":{"outputTokens":-1}}}`),
+		json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{}}`),
+	} {
+		if _, ok := compactNotification("thread/tokenUsage/updated", invalid); ok {
+			t.Fatalf("invalid token notification was accepted: %s", invalid)
+		}
+	}
+}
+
 func TestDuplicateRPCReplyFailsSessionWithoutBlocking(t *testing.T) {
 	readPipe, writePipe, err := os.Pipe()
 	if err != nil {
@@ -1106,7 +1351,7 @@ func TestManagerRejectsDiskRuntimeWithoutExplicitTestEscape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(database, cipher, mcp.NewToolServer(nil, nil, nil, nil), Options{
+	manager := NewManager(database, cipher, mcp.NewToolServer(credentials.NewRegistry(database, cipher), nil, nil, nil), Options{
 		Binary:     os.Args[0],
 		RuntimeDir: t.TempDir(),
 	})
@@ -1334,7 +1579,7 @@ func fakeManager(t *testing.T) (*Manager, *sql.DB, *secrets.Cipher, string, stri
 	runtimeDir := filepath.Join(base, "runtime")
 	logPath := filepath.Join(base, "protocol.jsonl")
 	t.Setenv("CANTINARR_FAKE_PARENT_SECRET", "must-not-reach-child")
-	manager := NewManager(database, cipher, mcp.NewToolServer(nil, nil, nil, nil), Options{
+	manager := NewManager(database, cipher, mcp.NewToolServer(credentials.NewRegistry(database, cipher), nil, nil, nil), Options{
 		Binary:                   os.Args[0],
 		RuntimeDir:               runtimeDir,
 		Args:                     []string{"-test.run=TestCodexAppHelperProcess", "--", "--fake-log=" + logPath},

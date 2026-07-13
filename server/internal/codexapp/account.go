@@ -12,7 +12,8 @@ import (
 
 type deviceFlow struct {
 	id              string
-	userID          int64
+	actorID         int64
+	account         AccountRef
 	loginID         string
 	verificationURI string
 	userCode        string
@@ -51,10 +52,15 @@ type accountResponse struct {
 // refresh the user's account and rate-limit state. Account-backed refreshes are
 // serialized with chat and login for that user.
 func (m *Manager) Status(ctx context.Context, userID int64, refresh bool) (status AccountStatus, err error) {
-	if m == nil || m.db == nil || m.cipher == nil || userID <= 0 {
+	return m.StatusForAccount(ctx, PersonalAccount(userID), refresh)
+}
+
+// StatusForAccount returns safe status for a personal or shared authorization.
+func (m *Manager) StatusForAccount(ctx context.Context, account AccountRef, refresh bool) (status AccountStatus, err error) {
+	if m == nil || m.db == nil || m.cipher == nil || !account.valid() {
 		return AccountStatus{}, ErrInvalidInput
 	}
-	status, found, err := m.accountMetadata(userID)
+	status, found, err := m.accountMetadata(account)
 	if err != nil {
 		return AccountStatus{}, err
 	}
@@ -71,16 +77,16 @@ func (m *Manager) Status(ctx context.Context, userID int64, refresh bool) (statu
 	defer cancel()
 	ctx = opCtx
 
-	if err := m.acquireUser(ctx, userID); err != nil {
+	if err := m.acquireAccount(ctx, account); err != nil {
 		return AccountStatus{}, err
 	}
-	defer m.releaseUser(userID)
-	ctx, operation, err := m.registerUserOperation(ctx, userID)
+	defer m.releaseAccount(account)
+	ctx, operation, err := m.registerAccountOperation(ctx, account)
 	if err != nil {
 		return AccountStatus{}, err
 	}
-	defer m.unregisterUserOperation(userID, operation)
-	record, found, err := m.loadAccount(userID)
+	defer m.unregisterAccountOperation(account, operation)
+	record, found, err := m.loadAccount(account)
 	if err != nil {
 		return AccountStatus{}, err
 	}
@@ -98,12 +104,12 @@ func (m *Manager) Status(ctx context.Context, userID int64, refresh bool) (statu
 		if purgeAccount {
 			session.stop()
 			session.cleanup()
-			if deleteErr := m.deleteAccount(userID); err == nil && deleteErr != nil {
+			if deleteErr := m.deleteAccount(account); err == nil && deleteErr != nil {
 				err = deleteErr
 			}
 			return
 		}
-		persistErr := m.finishAccountSession(userID, session, persistFull, operation)
+		persistErr := m.finishAccountSession(account, session, persistFull, operation)
 		if err == nil && persistErr != nil {
 			err = persistErr
 		}
@@ -112,15 +118,15 @@ func (m *Manager) Status(ctx context.Context, userID int64, refresh bool) (statu
 		return AccountStatus{}, wrapContextOrSafe(ctx, ErrProvider)
 	}
 
-	var account accountResponse
-	if err = session.request(ctx, "account/read", map[string]bool{"refreshToken": true}, &account); err != nil {
+	var response accountResponse
+	if err = session.request(ctx, "account/read", map[string]bool{"refreshToken": true}, &response); err != nil {
 		if errors.Is(err, ErrNotConnected) {
 			purgeAccount = true
 			return AccountStatus{Connected: false}, nil
 		}
 		return AccountStatus{}, wrapContextOrSafe(ctx, ErrProvider)
 	}
-	if account.Account == nil || account.Account.Type != "chatgpt" {
+	if response.Account == nil || response.Account.Type != "chatgpt" {
 		// app-server made an authoritative auth decision. Remove the stale row
 		// so the disconnected user can immediately start a new device login.
 		purgeAccount = true
@@ -128,11 +134,11 @@ func (m *Manager) Status(ctx context.Context, userID int64, refresh bool) (statu
 	}
 	cachedUpdatedAt := status.UpdatedAt
 	status = AccountStatus{
-		Connected: true, PlanType: account.Account.PlanType,
+		Connected: true, PlanType: response.Account.PlanType,
 		RateLimits: cloneRaw(record.rateLimits), UpdatedAt: cachedUpdatedAt, Stale: true,
 	}
-	if account.Account.Email != nil {
-		status.Email = *account.Account.Email
+	if response.Account.Email != nil {
+		status.Email = *response.Account.Email
 	}
 	var rateLimits json.RawMessage
 	if rateErr := session.request(ctx, "account/rateLimits/read", nil, &rateLimits); rateErr == nil && json.Valid(rateLimits) {
@@ -150,10 +156,16 @@ func (m *Manager) Status(ctx context.Context, userID int64, refresh bool) (statu
 // upstream login ID, and plaintext auth state remain server-side in that
 // operation's dedicated app-server session.
 func (m *Manager) BeginDeviceLogin(ctx context.Context, userID int64) (DeviceLogin, error) {
+	return m.BeginDeviceLoginForAccount(ctx, PersonalAccount(userID), userID)
+}
+
+// BeginDeviceLoginForAccount starts a device flow for account and binds the
+// capability to actorID. Shared account identity never becomes tool identity.
+func (m *Manager) BeginDeviceLoginForAccount(ctx context.Context, account AccountRef, actorID int64) (DeviceLogin, error) {
 	if err := validateManager(m); err != nil {
 		return DeviceLogin{}, err
 	}
-	if userID <= 0 {
+	if !account.valid() || actorID <= 0 {
 		return DeviceLogin{}, ErrInvalidInput
 	}
 	opCtx, cancel := m.accountContext(ctx)
@@ -162,30 +174,30 @@ func (m *Manager) BeginDeviceLogin(ctx context.Context, userID int64) (DeviceLog
 	if ctx.Err() != nil {
 		return DeviceLogin{}, ctx.Err()
 	}
-	if !m.reserveLoginStart(userID) {
+	if !m.reserveLoginStart(account) {
 		return DeviceLogin{}, ErrLoginInProgress
 	}
 	reservationHeld := true
 	defer func() {
 		if reservationHeld {
-			m.releaseLoginStart(userID)
+			m.releaseLoginStart(account)
 		}
 	}()
-	if err := m.tryAcquireUser(userID); err != nil {
+	if err := m.tryAcquireAccount(account); err != nil {
 		return DeviceLogin{}, err
 	}
 	gateHeld := true
 	defer func() {
 		if gateHeld {
-			m.releaseUser(userID)
+			m.releaseAccount(account)
 		}
 	}()
-	ctx, operation, err := m.registerUserOperation(ctx, userID)
+	ctx, operation, err := m.registerAccountOperation(ctx, account)
 	if err != nil {
 		return DeviceLogin{}, err
 	}
-	defer m.unregisterUserOperation(userID, operation)
-	_, found, err := m.loadAccount(userID)
+	defer m.unregisterAccountOperation(account, operation)
+	_, found, err := m.loadAccount(account)
 	if err != nil {
 		return DeviceLogin{}, err
 	}
@@ -231,7 +243,8 @@ func (m *Manager) BeginDeviceLogin(ctx context.Context, userID int64) (DeviceLog
 	}
 	flow := &deviceFlow{
 		id:              flowID,
-		userID:          userID,
+		actorID:         actorID,
+		account:         account,
 		loginID:         response.LoginID,
 		verificationURI: response.VerificationURL,
 		userCode:        response.UserCode,
@@ -263,14 +276,18 @@ func (m *Manager) BeginDeviceLogin(ctx context.Context, userID int64) (DeviceLog
 // CheckDeviceLogin returns the state of a caller-owned flow and persists a
 // completed account before releasing that user's serialization gate.
 func (m *Manager) CheckDeviceLogin(ctx context.Context, userID int64, flowID string) (DeviceLoginCheck, error) {
+	return m.CheckDeviceLoginForAccount(ctx, PersonalAccount(userID), userID, flowID)
+}
+
+func (m *Manager) CheckDeviceLoginForAccount(ctx context.Context, account AccountRef, actorID int64, flowID string) (DeviceLoginCheck, error) {
 	if err := validateManager(m); err != nil {
 		return DeviceLoginCheck{}, err
 	}
 	opCtx, cancel := m.accountContext(ctx)
 	defer cancel()
 	ctx = opCtx
-	flow := m.ownedFlow(userID, flowID)
-	if flow == nil {
+	flow := m.ownedFlow(actorID, flowID)
+	if flow == nil || flow.account != account {
 		return DeviceLoginCheck{}, ErrFlowNotFound
 	}
 	flow.mu.Lock()
@@ -300,17 +317,17 @@ func (m *Manager) CheckDeviceLogin(ctx context.Context, userID int64, flowID str
 		return DeviceLoginCheck{Status: LoginFailed, Error: "ChatGPT sign-in failed"}, nil
 	}
 
-	var account accountResponse
-	if err := flow.session.request(ctx, "account/read", map[string]bool{"refreshToken": false}, &account); err != nil || account.Account == nil || account.Account.Type != "chatgpt" {
+	var response accountResponse
+	if err := flow.session.request(ctx, "account/read", map[string]bool{"refreshToken": false}, &response); err != nil || response.Account == nil || response.Account.Type != "chatgpt" {
 		m.finishFlow(flow)
 		if ctx.Err() != nil {
 			return DeviceLoginCheck{}, ctx.Err()
 		}
 		return DeviceLoginCheck{Status: LoginFailed, Error: "ChatGPT sign-in could not be completed"}, nil
 	}
-	status := AccountStatus{Connected: true, PlanType: account.Account.PlanType, Stale: true}
-	if account.Account.Email != nil {
-		status.Email = *account.Account.Email
+	status := AccountStatus{Connected: true, PlanType: response.Account.PlanType, Stale: true}
+	if response.Account.Email != nil {
+		status.Email = *response.Account.Email
 	}
 	var rateLimits json.RawMessage
 	if err := flow.session.request(ctx, "account/rateLimits/read", nil, &rateLimits); err == nil && json.Valid(rateLimits) {
@@ -323,7 +340,7 @@ func (m *Manager) CheckDeviceLogin(ctx context.Context, userID int64, flowID str
 	flow.mu.Lock()
 	canceled := flow.canceled
 	if err == nil && !canceled {
-		err = m.saveAccount(userID, authJSON, status)
+		err = m.saveAccount(flow.account, authJSON, status)
 	}
 	flow.mu.Unlock()
 	m.finishFlow(flow)
@@ -336,13 +353,17 @@ func (m *Manager) CheckDeviceLogin(ctx context.Context, userID int64, flowID str
 	return DeviceLoginCheck{Status: LoginConnected, Account: status}, nil
 }
 
-// CancelDeviceLogin cancels and removes only a flow owned by userID.
-func (m *Manager) CancelDeviceLogin(userID int64, flowID string) error {
+// CancelDeviceLogin cancels and removes only a flow owned by actorID.
+func (m *Manager) CancelDeviceLogin(actorID int64, flowID string) error {
+	return m.CancelDeviceLoginForAccount(PersonalAccount(actorID), actorID, flowID)
+}
+
+func (m *Manager) CancelDeviceLoginForAccount(account AccountRef, actorID int64, flowID string) error {
 	if err := validateManager(m); err != nil {
 		return err
 	}
-	flow := m.ownedFlow(userID, flowID)
-	if flow == nil {
+	flow := m.ownedFlow(actorID, flowID)
+	if flow == nil || flow.account != account {
 		return ErrFlowNotFound
 	}
 	if m.afterCancelLookup != nil {
@@ -350,7 +371,7 @@ func (m *Manager) CancelDeviceLogin(userID int64, flowID string) error {
 	}
 	flow.mu.Lock()
 	m.flowsMu.Lock()
-	if m.flows[flow.id] != flow || m.userFlows[userID] != flow.id {
+	if m.flows[flow.id] != flow || m.accountFlows[flow.account] != flow.id {
 		m.flowsMu.Unlock()
 		flow.mu.Unlock()
 		return ErrFlowNotFound
@@ -360,7 +381,7 @@ func (m *Manager) CancelDeviceLogin(userID int64, flowID string) error {
 	// The flow still owns the per-user gate here, so no newer login can race
 	// this authoritative local delete. Do it before the best-effort upstream
 	// cancel, which may consume its entire timeout.
-	deleteErr := m.deleteAccount(userID)
+	deleteErr := m.deleteAccount(flow.account)
 	flow.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -373,12 +394,18 @@ func (m *Manager) CancelDeviceLogin(userID int64, flowID string) error {
 // Unlink cancels any active login, asks app-server to log out when possible,
 // and always removes the local encrypted account row.
 func (m *Manager) Unlink(userID int64) error {
-	if m == nil || m.db == nil || userID <= 0 {
+	return m.UnlinkAccount(PersonalAccount(userID))
+}
+
+// UnlinkAccount revokes one personal or shared authorization and cancels any
+// operation using that account without touching the other scope.
+func (m *Manager) UnlinkAccount(account AccountRef) error {
+	if m == nil || m.db == nil || !account.valid() {
 		return ErrInvalidInput
 	}
-	m.beginAccountRevocation(userID)
-	defer m.endAccountRevocation(userID)
-	if flow := m.flowForUser(userID); flow != nil {
+	m.beginAccountRevocation(account)
+	defer m.endAccountRevocation(account)
+	if flow := m.flowForAccount(account); flow != nil {
 		flow.mu.Lock()
 		flow.canceled = true
 		flow.mu.Unlock()
@@ -391,8 +418,8 @@ func (m *Manager) Unlink(userID int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if m.Available() {
-		if err := m.acquireUser(ctx, userID); err == nil {
-			record, found, _ := m.loadAccount(userID)
+		if err := m.acquireAccount(ctx, account); err == nil {
+			record, found, _ := m.loadAccount(account)
 			if found {
 				if session, err := m.startSession(record.authJSON); err == nil {
 					if session.initialize(ctx) == nil {
@@ -403,13 +430,13 @@ func (m *Manager) Unlink(userID int64) error {
 					session.cleanup()
 				}
 			}
-			m.releaseUser(userID)
+			m.releaseAccount(account)
 		}
 	}
-	return m.deleteAccount(userID)
+	return m.deleteAccount(account)
 }
 
-func (m *Manager) finishAccountSession(userID int64, session *appSession, status *AccountStatus, operation *userOperation) error {
+func (m *Manager) finishAccountSession(account AccountRef, session *appSession, status *AccountStatus, operation *userOperation) error {
 	session.stop()
 	authJSON, err := session.readAuthJSON()
 	defer session.cleanup()
@@ -421,32 +448,36 @@ func (m *Manager) finishAccountSession(userID int64, session *appSession, status
 	// row afterward; if revocation wins, this session cannot write anything.
 	m.operationsMu.Lock()
 	defer m.operationsMu.Unlock()
-	if operation != nil && (m.revocations[userID] != 0 || m.accountGenerations[userID] != operation.generation) {
-		return nil
+	if operation != nil && (m.revocations[account] != 0 || m.accountGenerations[account] != operation.generation) {
+		return context.Canceled
 	}
 	if status != nil && status.Connected {
-		return m.saveAccount(userID, authJSON, *status)
+		return m.saveAccount(account, authJSON, *status)
 	}
-	return m.saveRefreshedAuth(userID, authJSON)
+	return m.saveRefreshedAuth(account, authJSON)
 }
 
-func (m *Manager) ownedFlow(userID int64, flowID string) *deviceFlow {
+func (m *Manager) ownedFlow(actorID int64, flowID string) *deviceFlow {
 	if flowID == "" {
 		return nil
 	}
 	m.flowsMu.Lock()
 	defer m.flowsMu.Unlock()
 	flow := m.flows[flowID]
-	if flow == nil || flow.userID != userID {
+	if flow == nil || flow.actorID != actorID {
 		return nil
 	}
 	return flow
 }
 
-func (m *Manager) flowForUser(userID int64) *deviceFlow {
+func (m *Manager) flowForAccount(account AccountRef) *deviceFlow {
 	m.flowsMu.Lock()
 	defer m.flowsMu.Unlock()
-	return m.flows[m.userFlows[userID]]
+	return m.flows[m.accountFlows[account]]
+}
+
+func (m *Manager) flowForUser(userID int64) *deviceFlow {
+	return m.flowForAccount(PersonalAccount(userID))
 }
 
 func (m *Manager) finishFlow(flow *deviceFlow) {
@@ -459,11 +490,11 @@ func (m *Manager) finishFlow(flow *deviceFlow) {
 		flow.session.cleanup()
 		m.flowsMu.Lock()
 		delete(m.flows, flow.id)
-		if m.userFlows[flow.userID] == flow.id {
-			delete(m.userFlows, flow.userID)
+		if m.accountFlows[flow.account] == flow.id {
+			delete(m.accountFlows, flow.account)
 		}
 		m.flowsMu.Unlock()
-		m.releaseUser(flow.userID)
+		m.releaseAccount(flow.account)
 		select {
 		case <-m.loginSlots:
 		default:

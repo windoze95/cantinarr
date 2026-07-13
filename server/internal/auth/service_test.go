@@ -106,6 +106,39 @@ func TestListUsers_ReportsDeviceAndInviteState(t *testing.T) {
 	}
 }
 
+func TestSharedAIAccessDefaultsAndAdminToggle(t *testing.T) {
+	svc := setupTestService(t)
+	if _, err := svc.CreateConnectToken(1, "guest-ai", "http://example.com"); err != nil {
+		t.Fatal(err)
+	}
+	users, err := svc.ListUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var admin, guest *UserSummary
+	for i := range users {
+		switch users[i].Username {
+		case "admin":
+			admin = &users[i]
+		case "guest-ai":
+			guest = &users[i]
+		}
+	}
+	if admin == nil || !admin.AISharedEnabled {
+		t.Fatalf("initial admin shared access = %#v, want enabled", admin)
+	}
+	if guest == nil || guest.AISharedEnabled {
+		t.Fatalf("new invited user shared access = %#v, want disabled", guest)
+	}
+	updated, err := svc.SetUserAISharedAccess(guest.ID, true)
+	if err != nil || !updated.AISharedEnabled {
+		t.Fatalf("enable shared AI = %#v, %v", updated, err)
+	}
+	if _, err := svc.SetUserAISharedAccess(99999, true); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("missing user error = %v, want ErrUserNotFound", err)
+	}
+}
+
 // inviteGuest creates a connect-link "guest" user (password/passkey disabled by
 // default) and returns its ID.
 func inviteGuest(t *testing.T, svc *Service) int64 {

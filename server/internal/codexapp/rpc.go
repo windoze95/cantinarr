@@ -41,7 +41,24 @@ type rpcNotification struct {
 	params json.RawMessage
 }
 
+type tokenUsageUpdateParams struct {
+	ThreadID   string `json:"threadId"`
+	TurnID     string `json:"turnId"`
+	TokenUsage struct {
+		Last *AutonomousTurnUsage `json:"last"`
+	} `json:"tokenUsage"`
+}
+
 type serverRequestHandler func(context.Context, string, json.RawMessage) (any, error)
+
+// serverRequestResult lets a handler run a local notification only after its
+// JSON-RPC response has been written. Autonomous turns use this to interrupt a
+// Codex turn after returning the dynamic-tool acknowledgement, so the model's
+// tool intent can be handed to Cantinarr's guarded Runner without executing it.
+type serverRequestResult struct {
+	value      any
+	afterWrite func()
+}
 
 type appSession struct {
 	cmd      *exec.Cmd
@@ -303,6 +320,9 @@ func (s *appSession) request(ctx context.Context, method string, params any, out
 	}
 	select {
 	case reply := <-response:
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if reply.err != nil {
 			return classifyRPCError(reply.err)
 		}
@@ -310,6 +330,9 @@ func (s *appSession) request(ctx context.Context, method string, params any, out
 			if len(reply.result) == 0 || json.Unmarshal(reply.result, out) != nil {
 				return ErrProvider
 			}
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		return nil
 	case <-s.processDone:
@@ -464,7 +487,7 @@ func (s *appSession) dispatch(message rpcEnvelope) {
 	}
 	if message.Method != "" {
 		switch message.Method {
-		case "account/login/completed", "item/agentMessage/delta", "turn/completed":
+		case "account/login/completed", "item/agentMessage/delta", "thread/tokenUsage/updated", "turn/completed":
 		default:
 			return
 		}
@@ -500,6 +523,14 @@ func (s *appSession) dispatch(message rpcEnvelope) {
 }
 
 func compactNotification(method string, params json.RawMessage) (json.RawMessage, bool) {
+	if method == "thread/tokenUsage/updated" {
+		update, ok := decodeTokenUsageUpdate(params)
+		if !ok {
+			return nil, false
+		}
+		encoded, err := json.Marshal(update)
+		return json.RawMessage(encoded), err == nil && len(encoded) <= maxNotificationBytes
+	}
 	if method != "turn/completed" {
 		if len(params) > maxNotificationBytes {
 			return nil, false
@@ -538,6 +569,19 @@ func compactNotification(method string, params json.RawMessage) (json.RawMessage
 		}
 	}
 	return best, len(best) != 0
+}
+
+func decodeTokenUsageUpdate(raw json.RawMessage) (tokenUsageUpdateParams, bool) {
+	var update tokenUsageUpdateParams
+	if json.Unmarshal(raw, &update) != nil || update.ThreadID == "" || len(update.ThreadID) > 256 ||
+		update.TurnID == "" || len(update.TurnID) > 256 || update.TokenUsage.Last == nil {
+		return tokenUsageUpdateParams{}, false
+	}
+	u := update.TokenUsage.Last
+	if u.InputTokens < 0 || u.CachedInputTokens < 0 || u.OutputTokens < 0 || u.ReasoningOutputTokens < 0 {
+		return tokenUsageUpdateParams{}, false
+	}
+	return update, true
 }
 
 func marshalCompactTurn(complete turnCompleteParams, textBudget int) (json.RawMessage, error) {
@@ -591,8 +635,15 @@ func (s *appSession) handleServerRequest(message rpcEnvelope) {
 		s.writeRPCError(message.ID, -32601, "request is disabled")
 		return
 	}
+	var afterWrite func()
+	if wrapped, ok := result.(serverRequestResult); ok {
+		result = wrapped.value
+		afterWrite = wrapped.afterWrite
+	}
 	response := map[string]any{"id": json.RawMessage(message.ID), "result": result}
-	_ = s.write(response)
+	if err := s.write(response); err == nil && afterWrite != nil {
+		afterWrite()
+	}
 }
 
 func (s *appSession) writeRPCError(id json.RawMessage, code int, message string) {

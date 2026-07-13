@@ -77,21 +77,25 @@ type Manager struct {
 
 	flowsMu            sync.Mutex
 	flows              map[string]*deviceFlow
-	userFlows          map[int64]string
-	loginStarts        map[int64]struct{}
+	accountFlows       map[AccountRef]string
+	loginStarts        map[AccountRef]struct{}
 	gatesMu            sync.Mutex
-	userGates          map[int64]chan struct{}
+	accountGates       map[AccountRef]chan struct{}
 	processSlots       chan struct{}
 	loginSlots         chan struct{}
 	serverRequestSlots chan struct{}
+	sharedWaitSlots    chan struct{}
+	actorRunsMu        sync.Mutex
+	actorRuns          map[string]struct{}
 
 	accountOperationTimeout time.Duration
 	operationsMu            sync.Mutex
-	userOperations          map[int64]*userOperation
-	accountGenerations      map[int64]uint64
-	revocations             map[int64]int
+	accountOperations       map[AccountRef]*userOperation
+	accountGenerations      map[AccountRef]uint64
+	revocations             map[AccountRef]int
 	beforeLoginPublish      func()
 	afterCancelLookup       func()
+	toolCallObserver        func(mcp.CallContext)
 }
 
 type userOperation struct {
@@ -107,16 +111,18 @@ func NewManager(db *sql.DB, cipher *secrets.Cipher, tools *mcp.ToolServer, opts 
 		cipher:                  cipher,
 		toolServer:              tools,
 		flows:                   make(map[string]*deviceFlow),
-		userFlows:               make(map[int64]string),
-		loginStarts:             make(map[int64]struct{}),
-		userGates:               make(map[int64]chan struct{}),
+		accountFlows:            make(map[AccountRef]string),
+		loginStarts:             make(map[AccountRef]struct{}),
+		accountGates:            make(map[AccountRef]chan struct{}),
 		processSlots:            make(chan struct{}, maxConcurrentApps),
 		loginSlots:              make(chan struct{}, maxConcurrentLogins),
 		serverRequestSlots:      make(chan struct{}, maxGlobalRequests),
+		sharedWaitSlots:         make(chan struct{}, maxSharedWaiters),
+		actorRuns:               make(map[string]struct{}),
 		accountOperationTimeout: maxAccountOperation,
-		userOperations:          make(map[int64]*userOperation),
-		accountGenerations:      make(map[int64]uint64),
-		revocations:             make(map[int64]int),
+		accountOperations:       make(map[AccountRef]*userOperation),
+		accountGenerations:      make(map[AccountRef]uint64),
+		revocations:             make(map[AccountRef]int),
 	}
 	if db == nil || cipher == nil || tools == nil {
 		return m
@@ -137,6 +143,25 @@ func NewManager(db *sql.DB, cipher *secrets.Cipher, tools *mcp.ToolServer, opts 
 	m.available = true
 	m.allowDiskRuntimeForTests = opts.AllowDiskRuntimeForTests
 	return m
+}
+
+func (m *Manager) tryAcquireActorRun(actorKey string) bool {
+	m.actorRunsMu.Lock()
+	defer m.actorRunsMu.Unlock()
+	if actorKey == "" {
+		return false
+	}
+	if _, running := m.actorRuns[actorKey]; running {
+		return false
+	}
+	m.actorRuns[actorKey] = struct{}{}
+	return true
+}
+
+func (m *Manager) releaseActorRun(actorKey string) {
+	m.actorRunsMu.Lock()
+	delete(m.actorRuns, actorKey)
+	m.actorRunsMu.Unlock()
 }
 
 // Available reports whether both an app-server command and a writable
@@ -165,12 +190,8 @@ func (m *Manager) AvailabilityError() error {
 
 // HasAccount reports whether encrypted account material exists for userID.
 func (m *Manager) HasAccount(userID int64) bool {
-	if m == nil || m.db == nil || userID <= 0 {
-		return false
-	}
-	var one int
-	err := m.db.QueryRow(`SELECT 1 FROM user_codex_accounts WHERE user_id = ?`, userID).Scan(&one)
-	return err == nil && one == 1
+	found, _ := m.AccountExists(PersonalAccount(userID))
+	return found
 }
 
 func discoverBinary(override string) (string, []string, error) {
@@ -292,77 +313,77 @@ func scrubStaleSessions(runtimeDir string) error {
 	return nil
 }
 
-func (m *Manager) gate(userID int64) chan struct{} {
+func (m *Manager) gate(account AccountRef) chan struct{} {
 	m.gatesMu.Lock()
 	defer m.gatesMu.Unlock()
-	gate := m.userGates[userID]
+	gate := m.accountGates[account]
 	if gate == nil {
 		gate = make(chan struct{}, 1)
-		m.userGates[userID] = gate
+		m.accountGates[account] = gate
 	}
 	return gate
 }
 
-func (m *Manager) acquireUser(ctx context.Context, userID int64) error {
-	if userID <= 0 {
+func (m *Manager) acquireAccount(ctx context.Context, account AccountRef) error {
+	if !account.valid() {
 		return ErrInvalidInput
 	}
 	select {
-	case m.gate(userID) <- struct{}{}:
+	case m.gate(account) <- struct{}{}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (m *Manager) tryAcquireUser(userID int64) error {
-	if userID <= 0 {
+func (m *Manager) tryAcquireAccount(account AccountRef) error {
+	if !account.valid() {
 		return ErrInvalidInput
 	}
 	select {
-	case m.gate(userID) <- struct{}{}:
+	case m.gate(account) <- struct{}{}:
 		return nil
 	default:
 		return ErrLoginInProgress
 	}
 }
 
-func (m *Manager) releaseUser(userID int64) {
+func (m *Manager) releaseAccount(account AccountRef) {
 	select {
-	case <-m.gate(userID):
+	case <-m.gate(account):
 	default:
 	}
 }
 
-func (m *Manager) reserveLoginStart(userID int64) bool {
+func (m *Manager) reserveLoginStart(account AccountRef) bool {
 	m.flowsMu.Lock()
 	defer m.flowsMu.Unlock()
-	if _, active := m.userFlows[userID]; active {
+	if _, active := m.accountFlows[account]; active {
 		return false
 	}
-	if _, starting := m.loginStarts[userID]; starting {
+	if _, starting := m.loginStarts[account]; starting {
 		return false
 	}
-	m.loginStarts[userID] = struct{}{}
+	m.loginStarts[account] = struct{}{}
 	return true
 }
 
-func (m *Manager) releaseLoginStart(userID int64) {
+func (m *Manager) releaseLoginStart(account AccountRef) {
 	m.flowsMu.Lock()
-	delete(m.loginStarts, userID)
+	delete(m.loginStarts, account)
 	m.flowsMu.Unlock()
 }
 
 func (m *Manager) publishLoginFlow(flow *deviceFlow, operation *userOperation) bool {
 	m.operationsMu.Lock()
 	defer m.operationsMu.Unlock()
-	if operation == nil || m.revocations[flow.userID] != 0 || m.accountGenerations[flow.userID] != operation.generation {
+	if operation == nil || m.revocations[flow.account] != 0 || m.accountGenerations[flow.account] != operation.generation {
 		return false
 	}
 	m.flowsMu.Lock()
-	delete(m.loginStarts, flow.userID)
+	delete(m.loginStarts, flow.account)
 	m.flows[flow.id] = flow
-	m.userFlows[flow.userID] = flow.id
+	m.accountFlows[flow.account] = flow.id
 	m.flowsMu.Unlock()
 	return true
 }
@@ -375,47 +396,47 @@ func (m *Manager) accountContext(parent context.Context) (context.Context, conte
 	return context.WithTimeout(parent, timeout)
 }
 
-func (m *Manager) registerUserOperation(parent context.Context, userID int64) (context.Context, *userOperation, error) {
+func (m *Manager) registerAccountOperation(parent context.Context, account AccountRef) (context.Context, *userOperation, error) {
 	m.operationsMu.Lock()
 	defer m.operationsMu.Unlock()
-	if m.revocations[userID] != 0 {
+	if m.revocations[account] != 0 {
 		return nil, nil, ErrNotConnected
 	}
 	ctx, cancel := context.WithCancel(parent)
-	operation := &userOperation{cancel: cancel, generation: m.accountGenerations[userID]}
-	m.userOperations[userID] = operation
+	operation := &userOperation{cancel: cancel, generation: m.accountGenerations[account]}
+	m.accountOperations[account] = operation
 	return ctx, operation, nil
 }
 
-func (m *Manager) unregisterUserOperation(userID int64, operation *userOperation) {
+func (m *Manager) unregisterAccountOperation(account AccountRef, operation *userOperation) {
 	if operation == nil {
 		return
 	}
 	operation.cancel()
 	m.operationsMu.Lock()
-	if m.userOperations[userID] == operation {
-		delete(m.userOperations, userID)
+	if m.accountOperations[account] == operation {
+		delete(m.accountOperations, account)
 	}
 	m.operationsMu.Unlock()
 }
 
-func (m *Manager) beginAccountRevocation(userID int64) {
+func (m *Manager) beginAccountRevocation(account AccountRef) {
 	m.operationsMu.Lock()
-	m.revocations[userID]++
-	m.accountGenerations[userID]++
-	operation := m.userOperations[userID]
+	m.revocations[account]++
+	m.accountGenerations[account]++
+	operation := m.accountOperations[account]
 	m.operationsMu.Unlock()
 	if operation != nil {
 		operation.cancel()
 	}
 }
 
-func (m *Manager) endAccountRevocation(userID int64) {
+func (m *Manager) endAccountRevocation(account AccountRef) {
 	m.operationsMu.Lock()
-	if m.revocations[userID] <= 1 {
-		delete(m.revocations, userID)
+	if m.revocations[account] <= 1 {
+		delete(m.revocations, account)
 	} else {
-		m.revocations[userID]--
+		m.revocations[account]--
 	}
 	m.operationsMu.Unlock()
 }

@@ -317,15 +317,22 @@ func (r *Registry) SetAIConfig(provider, model string) error {
 	if model == "" {
 		model = DefaultAIModel(provider)
 	}
-	if err := r.SetSetting(KeyAIProvider, provider); err != nil {
+	tx, err := r.db.Begin()
+	if err != nil {
 		return err
 	}
-	return r.SetSetting(KeyAIModel, model)
+	defer tx.Rollback()
+	if _, err := tx.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", KeyAIProvider, provider); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", KeyAIModel, model); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-// IsAIConfigured reports whether the globally selected provider has a server
-// API key. User-OAuth providers are resolved per caller and therefore never
-// make the global AI service available on their own.
+// IsAIConfigured reports whether the selected shared provider has a server API
+// key. OAuth-backed Codex readiness is checked by the AI adapter instead.
 func (r *Registry) IsAIConfigured() bool {
 	cfg := r.GetAIConfig()
 	key := AIKeyCredentialKey(cfg.Provider)

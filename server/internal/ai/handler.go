@@ -15,6 +15,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 // Handler provides HTTP handlers for AI chat endpoints.
@@ -23,6 +24,13 @@ type Handler struct {
 	toolServer    *mcp.ToolServer
 	codex         *codexapp.Manager
 	conversations *conversationStore
+	admissionOnce sync.Once
+	admission     *chatAdmission
+}
+
+func (h *Handler) chatAdmission() *chatAdmission {
+	h.admissionOnce.Do(func() { h.admission = newChatAdmission() })
+	return h.admission
 }
 
 // NewHandler creates a new AI handler.
@@ -46,27 +54,19 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	aiConfig := h.creds.GetAIConfig()
-	var apiKey string
-	if aiConfig.Provider == credentials.AIProviderCodex {
-		if h.codex == nil || !h.codex.Available() {
-			http.Error(w, `{"error":"ChatGPT (Codex) is unavailable on this server"}`, http.StatusServiceUnavailable)
-			return
+	resolved := h.resolveAI(r.Context(), claims.UserID)
+	if !resolved.Available {
+		message := "AI access is not available. Add a personal provider in Settings or ask an admin to include shared access."
+		if resolved.Source == aiSourcePersonal {
+			message = "Your personal AI provider needs attention in Settings. Cantinarr will not silently use the shared provider instead."
+		} else if resolved.Source == aiSourceShared {
+			message = "Included AI is temporarily unavailable. Ask an admin to check the shared provider."
 		}
-		if !h.codex.HasAccount(claims.UserID) {
-			http.Error(w, `{"error":"Link your ChatGPT account in Settings before using the assistant"}`, http.StatusServiceUnavailable)
-			return
-		}
-	} else {
-		credentialKey := credentials.AIKeyCredentialKey(aiConfig.Provider)
-		if credentialKey != "" {
-			apiKey = h.creds.GetCredential(credentialKey)
-		}
-		if apiKey == "" {
-			http.Error(w, `{"error":"AI is not configured"}`, http.StatusServiceUnavailable)
-			return
-		}
+		http.Error(w, `{"error":"`+message+`"}`, http.StatusServiceUnavailable)
+		return
 	}
+	aiConfig := credentials.AIConfig{Provider: resolved.Provider, Model: resolved.Model}
+	apiKey := resolved.APIKey
 
 	var req chatRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
@@ -84,6 +84,17 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"streaming not supported"}`, http.StatusInternalServerError)
 		return
 	}
+	releaseChat, admissionResult := h.chatAdmission().tryAcquire(claims.UserID, resolved.Source)
+	if admissionResult != chatAdmitted {
+		w.Header().Set("Retry-After", "2")
+		status := http.StatusServiceUnavailable
+		if admissionResult == chatActorBusy {
+			status = http.StatusTooManyRequests
+		}
+		http.Error(w, `{"error":"AI is busy; try again shortly"}`, status)
+		return
+	}
+	defer releaseChat()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Connection", "keep-alive")
@@ -156,8 +167,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		Services: h.configuredServices(),
 	}
 	if h.toolServer.IsAIDebugEnabled() {
-		log.Printf("ai debug: chat start provider=%s model=%s user_id=%d role=%s requested_conversation_id=%s messages=%d latest_user=%q",
-			aiConfig.Provider, aiConfig.Model, claims.UserID, claims.Role, req.ConversationID, len(req.Messages), truncateLog(latestUserText(req.Messages), 1000))
+		log.Printf("ai debug: chat start source=%s provider=%s model=%s user_id=%d role=%s requested_conversation_id=%s messages=%d latest_user=%q",
+			resolved.Source, aiConfig.Provider, aiConfig.Model, claims.UserID, claims.Role, req.ConversationID, len(req.Messages), truncateLog(latestUserText(req.Messages), 1000))
 	}
 
 	// Resolve history: prefer the server-stored transcript (which keeps tool
@@ -204,8 +215,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		if model == "default" {
 			model = ""
 		}
-		err = h.codex.Run(
+		err = h.codex.RunWithAccount(
 			r.Context(),
+			resolved.Account,
 			claims.UserID,
 			claims.Role,
 			model,
@@ -271,10 +283,13 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		// Drop stored state rather than persist a possibly poisoned transcript;
 		// the client's retry falls back to its own plain-text transcript.
 		h.conversations.Delete(convID)
-		log.Printf("ai chat error: %v", err)
-		clientError := err.Error()
+		log.Printf("ai chat error: %v", secrets.RedactError(err))
+		clientError := "Your personal AI provider could not complete the request. Check its credentials and try again."
+		if resolved.Source == aiSourceShared {
+			clientError = "Included AI could not complete the request. Try again or ask an admin to check the shared provider."
+		}
 		if aiConfig.Provider == credentials.AIProviderCodex {
-			clientError = codexClientError(err)
+			clientError = codexClientError(err, resolved.Source)
 		}
 		emit(map[string]string{"error": clientError})
 	} else {
@@ -282,7 +297,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err == nil && h.toolServer.IsAIDebugEnabled() {
-		log.Printf("ai debug: chat complete provider=%s model=%s user_id=%d conversation_id=%s", aiConfig.Provider, aiConfig.Model, claims.UserID, convID)
+		log.Printf("ai debug: chat complete source=%s provider=%s model=%s user_id=%d conversation_id=%s", resolved.Source, aiConfig.Provider, aiConfig.Model, claims.UserID, convID)
 	}
 
 	writeMu.Lock()
@@ -319,15 +334,29 @@ func renderCodexPrompt(history transcript) string {
 	return sb.String()
 }
 
-func codexClientError(err error) string {
+func codexClientError(err error, source string) string {
 	switch {
 	case errors.Is(err, codexapp.ErrNotConnected):
+		if source == aiSourceShared {
+			return "The included ChatGPT connection expired. Ask an admin to reconnect it."
+		}
 		return "Your ChatGPT connection expired. Reconnect it in Settings and try again."
 	case errors.Is(err, codexapp.ErrUsageLimit):
+		if source == aiSourceShared {
+			return "The included ChatGPT Codex usage limit has been reached. Ask an admin when it resets."
+		}
 		return "Your ChatGPT Codex usage limit has been reached. Check Settings for the reset time."
+	case errors.Is(err, codexapp.ErrBusy):
+		if source == aiSourceShared {
+			return "Included ChatGPT is busy with another request. Try again shortly."
+		}
+		return "Your ChatGPT connection is busy with another request. Try again shortly."
 	case errors.Is(err, context.Canceled):
 		return "The ChatGPT request was canceled."
 	default:
+		if source == aiSourceShared {
+			return "Included ChatGPT is temporarily unavailable. Try again or ask an admin to check the shared connection."
+		}
 		return "ChatGPT (Codex) is temporarily unavailable. Try again shortly."
 	}
 }
@@ -360,41 +389,32 @@ func (h *Handler) configuredServices() []string {
 
 // Available handles GET /api/ai/available.
 func (h *Handler) Available(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	cfg := h.creds.GetAIConfig()
 	claims := auth.GetClaims(r.Context())
-	available := false
+	resolved := resolvedAI{Source: aiSourceNone, Reason: "unauthorized"}
 	if claims != nil {
-		available = h.AvailableForUser(claims.UserID)
+		resolved = h.resolveAI(r.Context(), claims.UserID)
 	}
 	json.NewEncoder(w).Encode(map[string]any{
-		"available": available,
-		"provider":  cfg.Provider,
-		"model":     cfg.Model,
+		"available": resolved.Available,
+		"provider":  resolved.Provider,
+		"model":     resolved.Model,
+		"source":    resolved.Source,
+		"reason":    resolved.Reason,
 	})
 }
 
-// AvailableForUser reports whether the selected provider is usable by one
-// caller now. API-key providers are global; Codex requires this user's link.
+// AvailableForUser reports whether the caller's effective personal-or-included
+// provider is usable now.
 func (h *Handler) AvailableForUser(userID int64) bool {
-	if !h.ProviderConfigured() {
-		return false
-	}
-	cfg := h.creds.GetAIConfig()
-	if cfg.Provider == credentials.AIProviderCodex {
-		return h.codex.HasAccount(userID)
-	}
-	return true
+	return h.resolveAIForUser(userID).Available
 }
 
-// ProviderConfigured reports whether the server-wide provider selection is
-// ready. A Codex selection is globally configured once its runtime is
-// available; each user's separate ChatGPT link is intentionally not part of
-// the admin setup-checklist fact.
+// ProviderConfigured reports whether the admin-owned included provider is
+// ready, including the shared ChatGPT account when Codex is selected.
 func (h *Handler) ProviderConfigured() bool {
-	cfg := h.creds.GetAIConfig()
-	if cfg.Provider == credentials.AIProviderCodex {
-		return h.codex != nil && h.codex.Available()
-	}
-	return h.creds.IsAIConfigured()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return h.sharedProviderConfigured(ctx)
 }

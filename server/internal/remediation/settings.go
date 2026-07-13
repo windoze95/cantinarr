@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// remediationSettingsKey is the settings-table key holding the global AI
+// remediationSettingsKey is the settings-table key holding the autonomous AI
 // remediation configuration (JSON blob), mirroring the request_settings storage
 // pattern (request/service.go GetGlobalSettings/SetGlobalSettings).
 const remediationSettingsKey = "remediation_settings"
@@ -37,30 +37,25 @@ const (
 	maxObservationSettleMinutes = 60
 )
 
-// Settings is the global AI remediation configuration. It is stored as the
+// Settings is the autonomous AI remediation configuration. It is stored as the
 // remediation_settings JSON blob and unmarshalled over Defaults(), so adding a
 // field later is migration-free (older blobs simply keep the default for it).
 //
-// The remediation agent (later waves) is provider-agnostic: it reuses
-// Cantinarr's existing multi-provider AI layer. Provider/Model are plain
-// configurable overrides — empty means "inherit the server's globally-configured
-// AI provider/model" (the same one the AI assistant uses), so no provider is
-// ever hardcoded here.
-//
-// Wave 1 only stores and serves these values; no agent run consumes the bound
-// fields yet. The two switches that matter in Wave 1 are Enabled (master) and
-// AllowReporting (the user-visible "Report a problem" affordance, surfaced to
-// non-admin clients via /api/config).
+// The remediation agent is provider-agnostic and reuses Cantinarr's existing
+// multi-provider AI layer. Provider and Model are deprecated wire-compatibility
+// fields and are always normalized empty; autonomous work follows both values
+// from the current included profile. Neither field selects personal credentials
+// or a different stored shared key.
 type Settings struct {
 	Enabled                  bool   `json:"enabled"`                    // master switch — ships OFF
 	AutoDispatch             bool   `json:"auto_dispatch"`              // poller may open auto issues — ships OFF
 	AllowReporting           bool   `json:"allow_reporting"`            // user-visible "Report a problem" affordance
 	MarkResolvedAsRead       bool   `json:"mark_resolved_as_read"`      // mark an issue read when it resolves (default ON)
 	Mode                     string `json:"mode"`                       // investigate_only | supervised
-	Provider                 string `json:"provider"`                   // "" = inherit the configured AI provider
-	Model                    string `json:"model"`                      // "" = inherit the configured AI model
+	Provider                 string `json:"provider"`                   // deprecated compatibility field; always normalized to ""
+	Model                    string `json:"model"`                      // deprecated compatibility field; always normalized to ""
 	MaxSteps                 int    `json:"max_steps"`                  // total tool calls per investigation
-	MaxTurnTokens            int    `json:"max_turn_tokens"`            // per-turn output cap
+	MaxTurnTokens            int    `json:"max_turn_tokens"`            // per-turn output cap; Codex is interrupted at its next usage update
 	MaxWallClockSecs         int    `json:"max_wall_clock_secs"`        // active wall-clock budget
 	DailyRunCap              int    `json:"daily_run_cap"`              // max runs/day
 	CircuitBreakerGiveups    int    `json:"circuit_breaker_giveups"`    // consecutive auto give-ups -> auto-dispatch off
@@ -109,10 +104,10 @@ func legacyAutonomyMode(autonomy string) (string, bool) {
 	}
 }
 
-// Defaults returns the built-in remediation settings. Provider and Model are
-// empty so the agent inherits the configured AI provider/model unless an admin
-// overrides them; every mutation is admin-approved (mode "supervised"); the
-// feature ships OFF.
+// Defaults returns the built-in remediation settings. The compatibility fields
+// Provider and Model are empty because the agent follows the configured included
+// profile; every mutation is admin-approved (mode "supervised"); the feature
+// ships OFF.
 func Defaults() Settings {
 	return Settings{
 		Enabled:                  false,
@@ -148,11 +143,16 @@ func validMode(mode string) bool {
 // request settings' defensive validSeasonScope fallback.
 func (g *Settings) normalize() {
 	d := Defaults()
+	// Provider and Model used to select a separate remediation profile. Server-
+	// owned work now always follows both values from the live included profile,
+	// including shared Codex OAuth, so discard stored legacy values and writes
+	// from older clients. This also prevents a stale provider-specific model from
+	// being sent after the admin changes the shared provider.
+	g.Provider = ""
+	g.Model = ""
 	if !validMode(g.Mode) {
 		g.Mode = d.Mode
 	}
-	// Provider/Model are intentionally not defaulted: empty means "inherit the
-	// configured AI provider/model", which is the shipped default.
 	if g.MaxSteps <= 0 {
 		g.MaxSteps = d.MaxSteps
 	} else if g.MaxSteps > maxConfiguredSteps {

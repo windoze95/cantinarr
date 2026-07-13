@@ -37,7 +37,7 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
     final disconnect = find.text('Disconnect ChatGPT');
-    await tester.drag(find.byType(ListView), const Offset(0, -400));
+    await tester.ensureVisible(disconnect);
     await tester.pumpAndSettle();
     await tester.tap(disconnect);
     await tester.pumpAndSettle();
@@ -128,7 +128,7 @@ void main() {
     final disconnect = find.text('Disconnect ChatGPT');
     expect(disconnect, findsOneWidget);
 
-    await tester.drag(find.byType(ListView), const Offset(0, -400));
+    await tester.ensureVisible(disconnect);
     await tester.pumpAndSettle();
     await tester.tap(disconnect);
     await tester.pumpAndSettle();
@@ -149,7 +149,7 @@ void main() {
 
     expect(find.text('Connected'), findsOneWidget);
     expect(find.text('viewer@example.com'), findsOneWidget);
-    expect(find.textContaining('different AI provider'), findsOneWidget);
+    expect(find.textContaining('different AI source'), findsOneWidget);
     expect(find.text('Disconnect ChatGPT'), findsOneWidget);
   });
 
@@ -167,6 +167,8 @@ Future<void> _pumpScreen(
   _FakeAuthNotifier auth,
   List<Uri> opened,
 ) async {
+  await tester.binding.setSurfaceSize(const Size(900, 900));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     ProviderScope(
       overrides: [

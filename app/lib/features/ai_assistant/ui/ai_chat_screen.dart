@@ -7,7 +7,7 @@ import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/ai_models.dart';
-import '../data/codex_oauth_service.dart';
+import '../data/ai_settings_service.dart';
 import '../logic/ai_chat_provider.dart';
 import 'chat_bubble.dart';
 
@@ -92,8 +92,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
               ),
             )) ==
         true;
-    final codexStatus = ref.watch(codexConnectionStatusProvider);
-    return codexStatus.when(
+    final aiSettings = ref.watch(aiSettingsProvider);
+    return aiSettings.when(
       loading: () {
         _setNotifier(null);
         return _buildUnavailable(loading: true);
@@ -103,20 +103,10 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         _setNotifier(null);
         return _buildUnavailable();
       },
-      data: (status) {
-        if (status.selected) {
-          if (status.available && status.connected) {
-            return _buildAvailableChat(context);
-          }
-          _setNotifier(null);
-          return _buildUnavailable(
-            codexAvailable: status.available,
-            codexSelected: true,
-          );
-        }
-        if (cachedAiAvailable) return _buildAvailableChat(context);
+      data: (settings) {
+        if (settings.effective.available) return _buildAvailableChat(context);
         _setNotifier(null);
-        return _buildUnavailable();
+        return _buildUnavailable(settings: settings);
       },
     );
   }
@@ -128,8 +118,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   }
 
   Widget _buildUnavailable({
-    bool codexAvailable = false,
-    bool codexSelected = false,
+    AiSettings? settings,
     bool loading = false,
   }) {
     return Scaffold(
@@ -174,28 +163,22 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   )
                 else ...[
                   Text(
-                    codexAvailable
-                        ? 'Connect your ChatGPT account to use the AI assistant on this server.'
-                        : codexSelected
-                            ? 'ChatGPT is selected for this server, but it is currently unavailable. Ask your server admin to check the Codex integration.'
-                            : 'The AI assistant is not configured on this server. Ask your server admin to set up an AI provider.',
+                    _unavailableCopy(settings),
                     style: const TextStyle(
                       color: AppTheme.textSecondary,
                       fontSize: 15,
                     ),
                     textAlign: TextAlign.center,
                   ),
-                  if (codexAvailable) ...[
-                    const SizedBox(height: 20),
-                    ElevatedButton.icon(
-                      onPressed: () async {
-                        await context.push('/settings/chatgpt');
-                        ref.invalidate(codexConnectionStatusProvider);
-                      },
-                      icon: const Icon(Icons.open_in_browser, size: 18),
-                      label: const Text('Connect ChatGPT'),
-                    ),
-                  ],
+                  const SizedBox(height: 20),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      await context.push('/settings/ai');
+                      ref.invalidate(aiSettingsProvider);
+                    },
+                    icon: const Icon(Icons.tune_rounded, size: 18),
+                    label: const Text('Set up AI access'),
+                  ),
                 ],
               ],
             ),
@@ -203,6 +186,28 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         ),
       ),
     );
+  }
+
+  String _unavailableCopy(AiSettings? settings) {
+    if (settings == null) {
+      return 'AI access is not ready. Choose a personal provider or ask your '
+          'server admin about included access.';
+    }
+    final effective = settings.effective;
+    if (effective.source == AiAccessSource.personal) {
+      return 'Your selected personal provider needs attention. Cantinarr did '
+          'not fall back to included access.';
+    }
+    if (settings.shared.granted && !settings.shared.configured) {
+      return 'Your account has included AI access, but the server provider '
+          'still needs admin setup. You can use a personal provider now.';
+    }
+    if (!settings.shared.granted) {
+      return 'Add your own AI provider, or ask your server admin to include '
+          'AI access for this account.';
+    }
+    return 'Included AI is temporarily unavailable. You can use a personal '
+        'provider or ask your server admin to check the provider.';
   }
 
   Widget _buildChat(BuildContext context, AiChatNotifier notifier) {

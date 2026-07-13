@@ -203,6 +203,7 @@ func main() {
 		log.Printf("ChatGPT (Codex) provider unavailable: %v", codexManager.AvailabilityError())
 	}
 	aiHandler := ai.NewHandler(creds, toolServer, codexManager)
+	credHandler.SetSharedAIConfigured(aiHandler.ProviderConfigured)
 
 	// Remediation read-only agent (Wave 2). The agent investigates one issue
 	// read-only and posts a diagnosis; it has NO path to mutate the *arr (the
@@ -212,7 +213,7 @@ func main() {
 	// small bounded worker pool that drains enqueued investigation jobs.
 	toolServer.SetIssueStore(remediationService)
 	remediationProcToken := newProcToken()
-	remediationRunner := remediation.NewRunner(database, remediationService, toolServer, creds, remediationProcToken)
+	remediationRunner := remediation.NewRunner(database, remediationService, toolServer, aiHandler, remediationProcToken)
 	remediationService.StartWorkers(ctx, remediationRunner, 2)
 	// Reply-TTL sweep (Wave 4): periodically close awaiting_user issues whose
 	// reporter never answered the agent's clarifying question within the window.

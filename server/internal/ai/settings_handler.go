@@ -1,0 +1,214 @@
+package ai
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/codexapp"
+	"github.com/windoze95/cantinarr-server/internal/credentials"
+)
+
+const (
+	maxAISettingsBody = 64 << 10
+	maxAIModelLength  = 256
+	maxAIAPIKeyLength = 32 << 10
+)
+
+type updatePersonalAISettingsRequest struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+type updatePersonalAICredentialRequest struct {
+	APIKey string `json:"api_key"`
+}
+
+// AISettings returns only caller-owned credential presence plus the safe
+// shared provider configuration. Shared account identity, usage, and key
+// presence by provider are deliberately absent.
+func (h *Handler) AISettings(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeAISettingsError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	h.writeAISettings(w, r, claims.UserID)
+}
+
+func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeAISettingsError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var req updatePersonalAISettingsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAISettingsBody)).Decode(&req); err != nil {
+		writeAISettingsError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Provider = strings.TrimSpace(req.Provider)
+	req.Model = strings.TrimSpace(req.Model)
+	if !credentials.IsValidAIProvider(req.Provider) || len(req.Model) > maxAIModelLength {
+		writeAISettingsError(w, http.StatusBadRequest, "invalid AI provider or model")
+		return
+	}
+	if err := h.creds.SetUserAIConfig(claims.UserID, req.Provider, req.Model); err != nil {
+		writeAISettingsError(w, http.StatusInternalServerError, "failed to save personal AI settings")
+		return
+	}
+	h.writeAISettings(w, r, claims.UserID)
+}
+
+func (h *Handler) DeleteAISettings(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeAISettingsError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	setAINoStore(w)
+	if err := h.creds.DeleteUserAIConfig(claims.UserID); err != nil {
+		writeAISettingsError(w, http.StatusInternalServerError, "failed to disable personal AI settings")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) UpdatePersonalAICredential(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeAISettingsError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
+	if credentials.AIKeyCredentialKey(provider) == "" {
+		writeAISettingsError(w, http.StatusBadRequest, "provider does not accept an API key")
+		return
+	}
+	var req updatePersonalAICredentialRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAISettingsBody)).Decode(&req); err != nil {
+		writeAISettingsError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	if req.APIKey == "" || len(req.APIKey) > maxAIAPIKeyLength {
+		writeAISettingsError(w, http.StatusBadRequest, "api_key is required")
+		return
+	}
+	setAINoStore(w)
+	if err := h.creds.SetUserAICredential(claims.UserID, provider, req.APIKey); err != nil {
+		writeAISettingsError(w, http.StatusInternalServerError, "failed to save personal AI credential")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) DeletePersonalAICredential(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeAISettingsError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
+	if credentials.AIKeyCredentialKey(provider) == "" {
+		writeAISettingsError(w, http.StatusBadRequest, "provider does not accept an API key")
+		return
+	}
+	setAINoStore(w)
+	if err := h.creds.DeleteUserAICredential(claims.UserID, provider); err != nil {
+		writeAISettingsError(w, http.StatusInternalServerError, "failed to delete personal AI credential")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID int64) {
+	setAINoStore(w)
+	personalConfig, selected, err := h.creds.GetUserAIConfig(userID)
+	if err != nil {
+		writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
+		return
+	}
+	personalCredentials := map[string]bool{}
+	for _, provider := range []string{
+		credentials.AIProviderAnthropic,
+		credentials.AIProviderOpenAI,
+		credentials.AIProviderGemini,
+	} {
+		configured, err := h.creds.UserAICredentialConfigured(userID, provider)
+		if err != nil {
+			writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
+			return
+		}
+		personalCredentials[provider] = configured
+	}
+	codexConnected := false
+	if h.codex != nil {
+		codexConnected, err = h.codex.AccountExists(codexapp.PersonalAccount(userID))
+		if err != nil {
+			writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
+			return
+		}
+	}
+	personalCredentials[credentials.AIProviderCodex] = codexConnected
+
+	sharedProfile, granted, err := h.creds.LoadSharedAIProfileForUser(r.Context(), userID)
+	sharedStorageOK := err == nil
+	sharedConfigured := sharedStorageOK && sharedProfile.CredentialPresent
+	if sharedProfile.Config.Provider == credentials.AIProviderCodex {
+		sharedConfigured = false
+		if h.codex != nil && h.codex.Available() {
+			sharedConfigured, err = h.codex.AccountExists(codexapp.SharedAccount())
+			if err != nil {
+				writeAISettingsError(w, http.StatusInternalServerError, "failed to load shared AI settings")
+				return
+			}
+		}
+	}
+	resolved := h.resolveAI(r.Context(), userID)
+	var personalConfigJSON any
+	if selected {
+		personalConfigJSON = personalConfig
+	}
+	response := map[string]any{
+		"providers": credentials.AIProviders,
+		"personal": map[string]any{
+			"selected":    selected,
+			"config":      personalConfigJSON,
+			"credentials": personalCredentials,
+		},
+		"shared": map[string]any{
+			"granted":    granted,
+			"configured": sharedConfigured,
+			"config":     sharedProfile.Config,
+			"reason": func() string {
+				if !sharedStorageOK {
+					return "storage_error"
+				}
+				return ""
+			}(),
+		},
+		"effective": map[string]any{
+			"available": resolved.Available,
+			"source":    resolved.Source,
+			"provider":  resolved.Provider,
+			"model":     resolved.Model,
+			"reason":    resolved.Reason,
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func setAINoStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+}
+
+func writeAISettingsError(w http.ResponseWriter, status int, message string) {
+	setAINoStore(w)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}

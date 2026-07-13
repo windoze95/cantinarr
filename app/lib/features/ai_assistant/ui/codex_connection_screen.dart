@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/codex_oauth_service.dart';
+import '../data/ai_settings_service.dart';
 
 typedef CodexExternalUrlLauncher = Future<bool> Function(Uri uri);
 
@@ -21,7 +22,12 @@ final codexExternalUrlLauncherProvider = Provider<CodexExternalUrlLauncher>(
 
 /// Self-service ChatGPT connection for the current Cantinarr user.
 class CodexConnectionScreen extends ConsumerStatefulWidget {
-  const CodexConnectionScreen({super.key});
+  final CodexOAuthScope scope;
+
+  const CodexConnectionScreen({
+    super.key,
+    this.scope = CodexOAuthScope.personal,
+  });
 
   @override
   ConsumerState<CodexConnectionScreen> createState() =>
@@ -40,10 +46,14 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
   bool _unlinking = false;
   String? _flowError;
 
+  bool get _isShared => widget.scope == CodexOAuthScope.adminShared;
+
   @override
   void initState() {
     super.initState();
-    _service = ref.read(codexOAuthServiceProvider);
+    _service = ref.read(
+      _isShared ? adminCodexOAuthServiceProvider : codexOAuthServiceProvider,
+    );
   }
 
   @override
@@ -151,11 +161,41 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
             _flowExpiresAt = null;
             _flowError = null;
           });
-          ref.invalidate(codexConnectionStatusProvider);
+          if (_isShared) {
+            ref.invalidate(adminCodexConnectionStatusProvider);
+            ref.invalidate(aiSettingsProvider);
+          } else {
+            ref.invalidate(codexConnectionStatusProvider);
+            ref.invalidate(aiSettingsProvider);
+            // Connecting a personal provider is an explicit choice: make it
+            // the active override rather than silently leaving included AI in
+            // charge after the browser flow succeeds.
+            try {
+              await ref.read(aiSettingsServiceProvider).usePersonal(
+                    provider: 'codex',
+                    model: 'default',
+                  );
+            } catch (_) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'ChatGPT connected, but could not make it active. '
+                      'Choose it from AI Access.',
+                    ),
+                  ),
+                );
+              }
+            }
+          }
           await _refreshAppAvailability();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('ChatGPT account connected')),
+              SnackBar(
+                content: Text(_isShared
+                    ? 'Shared ChatGPT account connected'
+                    : 'Personal ChatGPT account connected'),
+              ),
             );
           }
           return;
@@ -235,10 +275,16 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Disconnect ChatGPT?'),
-        content: const Text(
-          'Cantinarr will forget this account connection. Your ChatGPT '
-          'account and existing Cantinarr conversations are not deleted.',
+        title: Text(_isShared
+            ? 'Disconnect shared ChatGPT?'
+            : 'Disconnect personal ChatGPT?'),
+        content: Text(
+          _isShared
+              ? 'Included AI will stop working for every user who relies on '
+                  'this shared account. Cantinarr conversations are not deleted.'
+              : 'Cantinarr will forget this personal account connection. If it '
+                  'is your selected provider, AI stays unavailable until you '
+                  'choose another source. Cantinarr conversations are not deleted.',
         ),
         actions: [
           TextButton(
@@ -257,11 +303,21 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     setState(() => _unlinking = true);
     try {
       await _service.unlink();
-      ref.invalidate(codexConnectionStatusProvider);
+      if (_isShared) {
+        ref.invalidate(adminCodexConnectionStatusProvider);
+        ref.invalidate(aiSettingsProvider);
+      } else {
+        ref.invalidate(codexConnectionStatusProvider);
+        ref.invalidate(aiSettingsProvider);
+      }
       await _refreshAppAvailability();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('ChatGPT account disconnected')),
+          SnackBar(
+            content: Text(_isShared
+                ? 'Shared ChatGPT account disconnected'
+                : 'Personal ChatGPT account disconnected'),
+          ),
         );
       }
     } catch (_) {
@@ -296,13 +352,21 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final status = ref.watch(codexConnectionStatusProvider);
+    final status = ref.watch(
+      _isShared
+          ? adminCodexConnectionStatusProvider
+          : codexConnectionStatusProvider,
+    );
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ChatGPT'),
+        title: Text(_isShared ? 'Shared ChatGPT' : 'Personal ChatGPT'),
         actions: [
           IconButton(
-            onPressed: () => ref.invalidate(codexConnectionStatusProvider),
+            onPressed: () => ref.invalidate(
+              _isShared
+                  ? adminCodexConnectionStatusProvider
+                  : codexConnectionStatusProvider,
+            ),
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh connection',
           ),
@@ -314,7 +378,11 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
             child: CircularProgressIndicator(color: AppTheme.accent),
           ),
           error: (_, __) => _StatusError(
-            onRetry: () => ref.invalidate(codexConnectionStatusProvider),
+            onRetry: () => ref.invalidate(
+              _isShared
+                  ? adminCodexConnectionStatusProvider
+                  : codexConnectionStatusProvider,
+            ),
           ),
           data: _buildStatus,
         ),
@@ -326,12 +394,16 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
-        _ConnectionIntro(connected: status.connected),
+        _ConnectionIntro(connected: status.connected, shared: _isShared),
+        if (_isShared) ...[
+          const SizedBox(height: 14),
+          const _SharedAccountWarning(),
+        ],
         const SizedBox(height: 20),
         if (status.connected)
           _buildConnected(status)
-        else if (!status.available)
-          _UnavailablePanel(selected: status.selected)
+        else if (status.selected && !status.available)
+          _UnavailablePanel(selected: true, shared: _isShared)
         else if (_flow != null)
           _buildPending(_flow!)
         else
@@ -348,19 +420,24 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           _InlineMessage(message: _flowError!, isError: true),
           const SizedBox(height: 16),
         ],
-        const Text(
-          'Connect your own account',
-          style: TextStyle(
+        Text(
+          _isShared ? 'Connect the server account' : 'Connect your own account',
+          style: const TextStyle(
             color: AppTheme.textPrimary,
             fontSize: 18,
             fontWeight: FontWeight.w600,
           ),
         ),
         const SizedBox(height: 6),
-        const Text(
-          'ChatGPT opens in your browser and gives Cantinarr a private, '
-          'revocable connection. Your password never passes through Cantinarr.',
-          style: TextStyle(color: AppTheme.textSecondary, height: 1.45),
+        Text(
+          _isShared
+              ? 'ChatGPT opens in your browser. The resulting authorization '
+                  'stays encrypted on this server and can power included AI '
+                  'for users you explicitly enable.'
+              : 'ChatGPT opens in your browser and gives your Cantinarr '
+                  'account a private, revocable connection. Your password '
+                  'never passes through Cantinarr.',
+          style: const TextStyle(color: AppTheme.textSecondary, height: 1.45),
         ),
         const SizedBox(height: 18),
         ElevatedButton.icon(
@@ -372,7 +449,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Icon(Icons.open_in_browser, size: 19),
-          label: const Text('Connect ChatGPT'),
+          label: Text(_isShared ? 'Connect shared ChatGPT' : 'Connect ChatGPT'),
         ),
       ],
     );
@@ -556,6 +633,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           _UnavailablePanel(
             selected: status.selected,
             connected: true,
+            shared: _isShared,
           ),
         ],
         if (limits != null && !limits.isEmpty) ...[
@@ -598,7 +676,11 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
         OutlinedButton.icon(
           onPressed: _unlinking ? null : _unlink,
           icon: const Icon(Icons.link_off, size: 18),
-          label: Text(_unlinking ? 'Disconnecting…' : 'Disconnect ChatGPT'),
+          label: Text(_unlinking
+              ? 'Disconnecting…'
+              : _isShared
+                  ? 'Disconnect shared ChatGPT'
+                  : 'Disconnect ChatGPT'),
           style: OutlinedButton.styleFrom(foregroundColor: AppTheme.error),
         ),
       ],
@@ -608,8 +690,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
 
 class _ConnectionIntro extends StatelessWidget {
   final bool connected;
+  final bool shared;
 
-  const _ConnectionIntro({required this.connected});
+  const _ConnectionIntro({required this.connected, required this.shared});
 
   @override
   Widget build(BuildContext context) {
@@ -624,20 +707,23 @@ class _ConnectionIntro extends StatelessWidget {
             size: 28,
           ),
           const SizedBox(height: 12),
-          const Text(
-            'Use your ChatGPT plan',
-            style: TextStyle(
+          Text(
+            shared ? 'Included AI, one allowance' : 'Use your ChatGPT plan',
+            style: const TextStyle(
               color: AppTheme.textPrimary,
               fontSize: 22,
               fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 7),
-          const Text(
-            'Cantinarr can run its assistant against your own Codex allowance. '
-            'The connection belongs only to your Cantinarr account, and its '
-            'authorization is stored encrypted at rest on the server.',
-            style: TextStyle(color: AppTheme.textSecondary, height: 1.45),
+          Text(
+            shared
+                ? 'This server account can power the assistant for every user '
+                    'you grant included access. They share its Codex meter.'
+                : 'Cantinarr can run its assistant against your own Codex '
+                    'allowance. This personal connection takes priority over '
+                    'included AI when selected.',
+            style: const TextStyle(color: AppTheme.textSecondary, height: 1.45),
           ),
         ],
       ),
@@ -648,26 +734,72 @@ class _ConnectionIntro extends StatelessWidget {
 class _UnavailablePanel extends StatelessWidget {
   final bool selected;
   final bool connected;
+  final bool shared;
 
-  const _UnavailablePanel({required this.selected, this.connected = false});
+  const _UnavailablePanel({
+    required this.selected,
+    this.connected = false,
+    this.shared = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     return _InlineMessage(
-      message: connected
-          ? selected
-              ? 'Your ChatGPT account remains connected, but Codex is '
-                  'currently unavailable on this server. You can disconnect '
-                  'below or ask your server admin to check the integration.'
-              : 'Your ChatGPT account remains connected, but this server now '
-                  'uses a different AI provider. You can disconnect it below.'
-          : selected
-              ? 'ChatGPT is selected for this server, but sign-in is currently '
-                  'unavailable. Ask your server admin to check the Codex '
-                  'integration.'
-              : 'This server is not using ChatGPT for its AI assistant. Ask '
-                  'your server admin to select ChatGPT (Codex) as the AI '
-                  'provider.',
+      message: shared
+          ? connected
+              ? selected
+                  ? 'The shared account remains connected, but Codex is '
+                      'currently unavailable on this server.'
+                  : 'The shared account remains connected. Select ChatGPT '
+                      '(Codex) as the included provider to use it.'
+              : selected
+                  ? 'ChatGPT is selected for included AI, but the Codex '
+                      'runtime is currently unavailable.'
+                  : 'Select ChatGPT (Codex) as the included provider before '
+                      'connecting the shared account.'
+          : connected
+              ? selected
+                  ? 'Your personal ChatGPT account remains connected, but Codex '
+                      'is currently unavailable on this server.'
+                  : 'Your personal ChatGPT connection is saved while you use a '
+                      'different AI source.'
+              : selected
+                  ? 'Personal ChatGPT is selected, but Codex is currently '
+                      'unavailable on this server.'
+                  : 'This personal connection is saved even while you use a '
+                      'different AI source.',
+    );
+  }
+}
+
+class _SharedAccountWarning extends StatelessWidget {
+  const _SharedAccountWarning();
+
+  @override
+  Widget build(BuildContext context) {
+    return const AppPanel(
+      accentColor: AppTheme.warning,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.warning_amber_rounded, color: AppTheme.warning),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Sharing this connection means enabled users send prompts and '
+              'tool context through the same ChatGPT account and consume one '
+              'Codex allowance. Activity is attributable to that account, and '
+              'any subscription or usage costs remain with it. ChatGPT '
+              'accounts are intended for one person; only enable this for '
+              'people or devices you control.',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                height: 1.45,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

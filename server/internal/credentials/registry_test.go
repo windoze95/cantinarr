@@ -108,14 +108,14 @@ func TestIsAIConfiguredExcludesUserOAuth(t *testing.T) {
 		t.Fatalf("select Codex: %v", err)
 	}
 	if registry.IsAIConfigured() {
-		t.Fatal("global AI reported configured for a per-user OAuth provider")
+		t.Fatal("shared AI reported API-key configured for an OAuth-backed provider")
 	}
 
 	if err := registry.SetAIConfig(AIProviderOpenAI, ""); err != nil {
 		t.Fatalf("select OpenAI: %v", err)
 	}
 	if !registry.IsAIConfigured() {
-		t.Fatal("global AI did not report configured for selected API-key provider")
+		t.Fatal("shared AI did not report configured for selected API-key provider")
 	}
 }
 

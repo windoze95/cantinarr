@@ -9,8 +9,7 @@ import '../logic/issues_provider.dart';
 
 /// Admin screen for the AI-remediation settings. Clones
 /// `RequestSettingsScreen`'s load → edit → Save shape: a master Enabled
-/// switch, sub-toggles, a remediation-mode dropdown, free-text provider/model
-/// overrides, and numeric bound fields.
+/// switch, sub-toggles, a remediation-mode dropdown, and numeric bound fields.
 class AiRemediationSettingsScreen extends ConsumerStatefulWidget {
   const AiRemediationSettingsScreen({super.key});
 
@@ -27,23 +26,10 @@ class _AiRemediationSettingsScreenState
   bool _saving = false;
   int _loadEpoch = 0;
 
-  // Free-text provider/model overrides. A blank provider can inherit only a
-  // server-wide API-key provider; per-user Codex auth cannot run background
-  // remediation because no requester is present to supply an account.
-  final _providerController = TextEditingController();
-  final _modelController = TextEditingController();
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
-  }
-
-  @override
-  void dispose() {
-    _providerController.dispose();
-    _modelController.dispose();
-    super.dispose();
   }
 
   String _friendlyError(Object e) {
@@ -62,8 +48,6 @@ class _AiRemediationSettingsScreenState
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _edited = settings;
-        _providerController.text = settings.provider;
-        _modelController.text = settings.model;
         _isLoading = false;
       });
     } catch (e) {
@@ -81,16 +65,16 @@ class _AiRemediationSettingsScreenState
     setState(() => _saving = true);
     try {
       final toSave = edited.copyWith(
-        provider: _providerController.text.trim(),
-        model: _modelController.text.trim(),
+        // Clear both legacy overrides so remediation always follows the current
+        // admin-shared provider and model.
+        provider: '',
+        model: '',
       );
       final saved =
           await ref.read(issuesServiceProvider).updateSettings(toSave);
       if (!mounted) return;
       setState(() {
         _edited = saved;
-        _providerController.text = saved.provider;
-        _modelController.text = saved.model;
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -145,7 +129,10 @@ class _AiRemediationSettingsScreenState
           child: Text(
             'Let the assistant investigate reported problems and propose fixes '
             'for your approval. Read-only investigation never changes anything; '
-            'every mutation waits for an admin.',
+            'every mutation waits for an admin. This server-owned agent always '
+            'uses the admin shared provider, so runs count against its API quota '
+            'or shared ChatGPT usage meter. Personal providers and per-user AI '
+            'access switches are never used.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
@@ -280,21 +267,19 @@ class _AiRemediationSettingsScreenState
             () => _edited = s.copyWith(observationSettleMinutes: v),
           ),
         ),
-        const _SectionLabel('Model'),
-        _TextField(
-          controller: _providerController,
-          label: 'AI provider',
-          help: 'Leave blank only when the server-wide provider uses an API '
-              'key. Per-user ChatGPT (Codex) sign-in cannot run autonomous '
-              'remediation. If Codex is selected globally, enter anthropic, '
-              'openai, or gemini here and store its matching API key.',
-          hint: 'anthropic, openai, or gemini',
-        ),
-        _TextField(
-          controller: _modelController,
-          label: 'Model',
-          help: "Leave blank to use the server's configured model.",
-          hint: 'e.g. a model name',
+        const _SectionLabel('Shared AI'),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Text(
+            'Always uses the provider and model currently selected in Admin > '
+            'Providers & Credentials, including the admin-shared ChatGPT '
+            '(Codex) connection. Change the shared AI profile there.',
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 13,
+              height: 1.35,
+            ),
+          ),
         ),
         const _SectionLabel('Limits'),
         _NumberTile(
@@ -304,6 +289,11 @@ class _AiRemediationSettingsScreenState
         ),
         _NumberTile(
           label: 'Max output tokens per turn',
+          help: 'API-key providers receive this as a request cap. For shared '
+              'ChatGPT, Cantinarr watches Codex usage reports and interrupts '
+              'the turn when reported output reaches the limit. Reports are '
+              'best-effort rather than a request-side hard cap and can arrive '
+              'after the model has already exceeded the boundary.',
           value: s.maxTurnTokens,
           onChanged: (v) =>
               setState(() => _edited = s.copyWith(maxTurnTokens: v)),
@@ -357,55 +347,6 @@ class _AiRemediationSettingsScreenState
           ),
         ),
       ],
-    );
-  }
-}
-
-/// A labelled free-text field with helper text (used for provider/model).
-class _TextField extends StatelessWidget {
-  final TextEditingController controller;
-  final String label;
-  final String help;
-  final String hint;
-
-  const _TextField({
-    required this.controller,
-    required this.label,
-    required this.help,
-    required this.hint,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 6),
-          TextField(
-            controller: controller,
-            style: const TextStyle(color: AppTheme.textPrimary),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: hint,
-              hintStyle: const TextStyle(color: AppTheme.textSecondary),
-              helperText: help,
-              helperStyle:
-                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-              helperMaxLines: 2,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

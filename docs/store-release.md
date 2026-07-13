@@ -142,8 +142,8 @@ steps below must be done in the UI.
    and a demo server URL + connect link are provided before each submission.
 2. App Privacy (App Store Connect → the app → App Privacy): **reassess this form before the next
    submission** against Apple's current [App privacy details](https://developer.apple.com/app-store/app-privacy-details/)
-   definitions. The developer still operates no backend and receives nothing, but optional Codex
-   use sends prompts/context to OpenAI under a linked account and the user's self-hosted server
+   definitions. The developer still operates no backend and receives nothing, but optional AI
+   use sends prompts/context to a personal or admin-included provider and the user's self-hosted server
    keeps short-lived conversation context in memory. This likely requires an optional
    **Other User Content / App Functionality** disclosure; the account owner must confirm the exact
    linked-to-user and optional-disclosure answers in App Store Connect. Do not reuse the previous
@@ -165,7 +165,7 @@ Prepared answers, in console order:
 - **Data safety**: **reassess before the next submission** against Google's current
   [Data safety definitions](https://support.google.com/googleplay/android-developer/answer/10787469).
   Google defines collection around off-device transmission, not only data received by the app
-  developer. Optional Codex use sends prompts/context to OpenAI and retains short-lived context on
+  developer. Optional AI use sends prompts/context to a personal or admin-included provider and retains short-lived context on
   the user's self-hosted server, so the previous categorical "No data collected" answer must not be
   reused without review. The likely disclosure is optional user-generated/other user content for
   app functionality; the account owner must confirm whether Google's user-initiated-transfer

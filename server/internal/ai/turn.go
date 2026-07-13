@@ -9,7 +9,6 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"google.golang.org/genai"
 
-	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
@@ -91,8 +90,10 @@ type TurnParams struct {
 	// ForceNoTools omits tools / sets tool_choice:none so the model must answer
 	// in text (used to coerce a final diagnosis when bounds are nearly spent).
 	ForceNoTools bool
-	// MaxTokens is the per-turn output cap. 0 falls back to a small default so a
-	// single turn cannot produce an unbounded response.
+	// MaxTokens is the per-turn output cap. Codex app-server has no request-time
+	// hard-cap field, so that adapter monitors its usage notifications and
+	// interrupts once the reported output reaches this ceiling. 0 falls back to
+	// a small default.
 	MaxTokens int
 }
 
@@ -108,8 +109,8 @@ type TurnResult struct {
 }
 
 // TurnRunner runs one model turn without executing any tool. It is satisfied by
-// each provider service so remediation gets whatever provider/model is
-// configured.
+// each provider service so remediation can follow the admin-owned shared
+// provider/model without changing its guarded tool-dispatch loop.
 type TurnRunner interface {
 	NextTurn(ctx context.Context, p TurnParams) (TurnResult, error)
 }
@@ -121,22 +122,6 @@ func turnMaxTokens(p TurnParams) int {
 		return p.MaxTokens
 	}
 	return defaultTurnMaxTokens
-}
-
-// NewTurnRunner builds a single-turn runner for the given provider/model, mirroring
-// handler.go's provider switch. apiKey + model come from the caller (remediation
-// resolves them from credentials/settings), so no provider is hardcoded here.
-func NewTurnRunner(provider, apiKey, model string, ts *mcp.ToolServer) (TurnRunner, error) {
-	switch provider {
-	case credentials.AIProviderAnthropic, "":
-		return NewService(apiKey, model, ts), nil
-	case credentials.AIProviderOpenAI:
-		return NewOpenAIService(apiKey, model, ts), nil
-	case credentials.AIProviderGemini:
-		return NewGeminiService(apiKey, model, ts), nil
-	default:
-		return nil, fmt.Errorf("unsupported AI provider: %s", provider)
-	}
 }
 
 // --- exported <-> private transcript conversion ---

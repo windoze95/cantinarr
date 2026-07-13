@@ -153,7 +153,7 @@ func (s *Service) EnsureAdmin(adminPassword string) error {
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
-	_, err = s.db.Exec("INSERT INTO users (username, password_hash, role, password_enabled, passkey_enabled) VALUES (?, ?, ?, 1, 1)", "admin", string(hash), "admin")
+	_, err = s.db.Exec("INSERT INTO users (username, password_hash, role, password_enabled, passkey_enabled, ai_shared_enabled) VALUES (?, ?, ?, 1, 1, 1)", "admin", string(hash), "admin")
 	if err != nil {
 		return fmt.Errorf("create admin: %w", err)
 	}
@@ -201,7 +201,7 @@ func (s *Service) Setup(username, password, deviceName, hardwareID string) (*Tok
 	}
 
 	result, err := tx.Exec(
-		"INSERT INTO users (username, password_hash, role, password_enabled, passkey_enabled) VALUES (?, ?, ?, 1, 1)",
+		"INSERT INTO users (username, password_hash, role, password_enabled, passkey_enabled, ai_shared_enabled) VALUES (?, ?, ?, 1, 1, 1)",
 		username, string(hash), "admin",
 	)
 	if err != nil {
@@ -696,6 +696,7 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 			u.password_hash != '' AS has_password,
 			u.password_enabled,
 			u.passkey_enabled,
+			u.ai_shared_enabled,
 			u.plex_email,
 			u.plex_invited_at,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
@@ -717,7 +718,7 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 		var invitedAt sql.NullTime
 		if err := rows.Scan(
 			&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.PlexEmail, &invitedAt,
+			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail, &invitedAt,
 			&u.DeviceCount, &u.HasPendingInvite,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
@@ -732,6 +733,24 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 		users = []UserSummary{}
 	}
 	return users, nil
+}
+
+// SetUserAISharedAccess grants or revokes use of the administrator-funded AI
+// profile. It deliberately does not delete or modify the user's personal AI
+// settings and credentials.
+func (s *Service) SetUserAISharedAccess(userID int64, enabled bool) (*UserSummary, error) {
+	result, err := s.db.Exec("UPDATE users SET ai_shared_enabled = ? WHERE id = ?", enabled, userID)
+	if err != nil {
+		return nil, fmt.Errorf("update shared AI access: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("count shared AI access update: %w", err)
+	}
+	if affected != 1 {
+		return nil, ErrUserNotFound
+	}
+	return s.userSummaryByID(userID)
 }
 
 // UpdateUserRole changes a user's role. It rejects unknown roles and refuses to
@@ -891,6 +910,7 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 			u.password_hash != '' AS has_password,
 			u.password_enabled,
 			u.passkey_enabled,
+			u.ai_shared_enabled,
 			u.plex_email,
 			u.plex_invited_at,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
@@ -902,7 +922,7 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 		WHERE u.id = ?
 	`, time.Now(), userID).Scan(
 		&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.PlexEmail, &invitedAt,
+		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail, &invitedAt,
 		&u.DeviceCount, &u.HasPendingInvite,
 	)
 	if err != nil {

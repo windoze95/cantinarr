@@ -1,5 +1,10 @@
 import 'package:dio/dio.dart';
 
+import '../../ai_assistant/data/ai_provider_models.dart';
+
+export '../../ai_assistant/data/ai_provider_models.dart'
+    show AiModelOption, AiProviderOption;
+
 class CredentialsStatus {
   final Map<String, bool> credentials;
   final AiCredentialConfig ai;
@@ -64,53 +69,6 @@ class AiCredentialConfig {
       providers: providers,
     );
   }
-}
-
-class AiProviderOption {
-  final String id;
-  final String label;
-  final String credentialKey;
-  final String authType;
-  final List<AiModelOption> models;
-
-  const AiProviderOption({
-    required this.id,
-    required this.label,
-    required this.credentialKey,
-    this.authType = 'api_key',
-    required this.models,
-  });
-
-  bool get usesUserOAuth => authType == 'user_oauth';
-
-  factory AiProviderOption.fromJson(Map<String, dynamic> json) =>
-      AiProviderOption(
-        id: json['id'] as String,
-        label: json['label'] as String? ?? json['id'] as String,
-        credentialKey: json['credential_key'] as String? ?? '',
-        authType: json['auth_type'] as String? ?? 'api_key',
-        models: ((json['models'] as List?) ?? const [])
-            .map((e) => AiModelOption.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
-}
-
-class AiModelOption {
-  final String id;
-  final String label;
-  final String description;
-
-  const AiModelOption({
-    required this.id,
-    required this.label,
-    required this.description,
-  });
-
-  factory AiModelOption.fromJson(Map<String, dynamic> json) => AiModelOption(
-        id: json['id'] as String,
-        label: json['label'] as String? ?? json['id'] as String,
-        description: json['description'] as String? ?? '',
-      );
 }
 
 /// API service for admin credential management (write-only).

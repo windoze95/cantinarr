@@ -1100,11 +1100,8 @@ func newProposeCycleRunner(t *testing.T) (*Runner, *Service, *fakeExecutor, int6
 		db:         database,
 		svc:        svc,
 		toolServer: &serviceBackedHost{svc: svc},
-		creds:      newFakeCreds(t, database),
+		turns:      scriptedTurnResolver(script),
 		procToken:  "test",
-		newTurn: func(provider, apiKey, model string) (ai.TurnRunner, error) {
-			return script, nil
-		},
 	}
 	return r, svc, fx, issueID
 }

@@ -10,7 +10,14 @@ import (
 
 // Handler provides admin-only REST endpoints for credential management.
 type Handler struct {
-	registry *Registry
+	registry           *Registry
+	sharedAIConfigured func() bool
+}
+
+// SetSharedAIConfigured supplies the runtime-aware shared readiness check after
+// the AI/Codex adapter has been constructed. It is wired once at startup.
+func (h *Handler) SetSharedAIConfigured(check func() bool) {
+	h.sharedAIConfigured = check
 }
 
 // NewHandler creates a new credentials handler.
@@ -20,6 +27,7 @@ func NewHandler(registry *Registry) *Handler {
 
 // Get returns which credentials are configured (booleans, never values).
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	status := make(map[string]any, len(AllKeys)+1)
 	credentials := make(map[string]bool, len(AllKeys))
 	for _, key := range AllKeys {
@@ -28,9 +36,18 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		credentials[key] = configured
 	}
 	status["credentials"] = credentials
+	configured := h.registry.IsAIConfigured()
+	if h.sharedAIConfigured != nil {
+		configured = h.sharedAIConfigured()
+	}
+	config := h.registry.GetAIConfig()
 	status["ai"] = map[string]any{
-		"config":    h.registry.GetAIConfig(),
+		"config":    config,
 		"providers": AIProviders,
+		"shared": map[string]any{
+			"config":     config,
+			"configured": configured,
+		},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
@@ -39,6 +56,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 // Update sets one or more credentials and non-secret AI settings. Only
 // non-empty fields are written.
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var body map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -103,6 +121,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
 // Delete removes a single credential.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	key := chi.URLParam(r, "key")
 
 	valid := false

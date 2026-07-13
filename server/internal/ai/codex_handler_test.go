@@ -1,11 +1,15 @@
 package ai
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/credentials"
 )
 
 func TestCodexAccountHandlersDisableCaching(t *testing.T) {
@@ -25,6 +29,40 @@ func TestCodexAccountHandlersDisableCaching(t *testing.T) {
 				t.Fatalf("Cache-Control = %q, want no-store", got)
 			}
 		})
+	}
+}
+
+func TestSharedCodexAdminHandlerRejectsRegularUser(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/ai/codex/status", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{UserID: 1, Role: auth.RoleUser}))
+	(&Handler{}).SharedCodexStatus(recorder, req)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", recorder.Code)
+	}
+	if recorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q", recorder.Header().Get("Cache-Control"))
+	}
+}
+
+func TestLegacyCodexStatusExposesPersonalConnectWhenSharedIsUnusable(t *testing.T) {
+	h, registry, _, userID := newResolverTestHandler(t)
+	if err := registry.SetAIConfig(credentials.AIProviderCodex, "default"); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/ai/codex/status", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{UserID: userID, Role: auth.RoleUser}))
+	rec := httptest.NewRecorder()
+	h.CodexStatus(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["selected"] != true || body["personal_selected"] != false || body["connected"] != false {
+		t.Fatalf("legacy status = %#v", body)
 	}
 }
 
@@ -106,5 +144,16 @@ func TestPublicRateLimitsRejectsMalformedOrEmptySnapshots(t *testing.T) {
 		if got := publicRateLimits(raw); got != nil {
 			t.Errorf("publicRateLimits(%q) = %#v, want nil", raw, got)
 		}
+	}
+}
+
+func TestCompletedLegacyPersonalCodexFlowSelectsPersonalOverride(t *testing.T) {
+	h, registry, _, userID := newResolverTestHandler(t)
+	if err := h.selectPersonalCodex(userID); err != nil {
+		t.Fatal(err)
+	}
+	config, found, err := registry.GetUserAIConfig(userID)
+	if err != nil || !found || config.Provider != "codex" || config.Model != "default" {
+		t.Fatalf("personal config = %#v found=%t err=%v", config, found, err)
 	}
 }

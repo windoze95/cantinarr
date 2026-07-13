@@ -1,9 +1,7 @@
 package remediation
 
 import (
-	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -12,10 +10,8 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/arr"
-	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
-	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 // mutatingTools is the exact set of arr-mutating tool names that MUST be
@@ -134,9 +130,21 @@ func toolUse(id, name string) ai.TranscriptBlock {
 	return ai.TranscriptBlock{Type: ai.BlockToolUse, ID: id, Name: name, Input: json.RawMessage(`{}`)}
 }
 
+type autonomousTurnResolverFunc func(context.Context) (ai.AutonomousTurn, error)
+
+func (f autonomousTurnResolverFunc) ResolveSharedAutonomousTurn(ctx context.Context) (ai.AutonomousTurn, error) {
+	return f(ctx)
+}
+
+func scriptedTurnResolver(turn ai.TurnRunner) autonomousTurnResolver {
+	return autonomousTurnResolverFunc(func(context.Context) (ai.AutonomousTurn, error) {
+		return ai.AutonomousTurn{Runner: turn, Provider: "test", Model: "test-model"}, nil
+	})
+}
+
 // newTestRunner builds a Runner over an in-memory DB with the feature ENABLED, a
-// configured (fake) AI key, and the given fake tool host + scripted turns. It
-// returns the Runner, the Service, the fake host, and a seeded issue id.
+// fake shared-turn resolver and the given fake tool host + scripted turns. It
+// returns the Runner, the Service, and a seeded issue id.
 func newTestRunner(t *testing.T, host toolHost, script *scriptedTurn) (*Runner, *Service, int64) {
 	t.Helper()
 	database, err := db.Open(":memory:")
@@ -152,8 +160,6 @@ func newTestRunner(t *testing.T, host toolHost, script *scriptedTurn) (*Runner, 
 		t.Fatalf("set settings: %v", err)
 	}
 
-	creds := newFakeCreds(t, database)
-
 	// Seed a user issue to investigate.
 	res, err := database.Exec(
 		"INSERT INTO issues (source, status, media_type, tmdb_id, title, detail) VALUES ('user','open','movie',42,'Test Movie','wrong content')",
@@ -167,11 +173,8 @@ func newTestRunner(t *testing.T, host toolHost, script *scriptedTurn) (*Runner, 
 		db:         database,
 		svc:        svc,
 		toolServer: host,
-		creds:      creds,
+		turns:      scriptedTurnResolver(script),
 		procToken:  "test",
-		newTurn: func(provider, apiKey, model string) (ai.TurnRunner, error) {
-			return script, nil
-		},
 	}
 	return r, svc, issueID
 }
@@ -761,23 +764,6 @@ func TestBindReleaseCandidateMetadataUsesServerObservation(t *testing.T) {
 	if _, err := bindReleaseCandidateMetadata(input, nil); err == nil || !strings.Contains(err.Error(), "fresh issue-scoped") {
 		t.Fatalf("missing-candidate error = %v", err)
 	}
-}
-
-// --- test helpers ---
-
-// newFakeCreds builds a credentials registry over the given DB with a fake
-// Anthropic key set, so the Runner's resolveTurn succeeds without real secrets.
-func newFakeCreds(t *testing.T, database *sql.DB) *credentials.Registry {
-	t.Helper()
-	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x42}, 32))
-	if err != nil {
-		t.Fatalf("cipher: %v", err)
-	}
-	creds := credentials.NewRegistry(database, cipher)
-	if err := creds.SetCredential(credentials.AIKeyCredentialKey(credentials.AIProviderAnthropic), "fake-key"); err != nil {
-		t.Fatalf("set credential: %v", err)
-	}
-	return creds
 }
 
 func isMutating(name string) bool {

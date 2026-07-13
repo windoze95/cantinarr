@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/backend_client.dart';
 
+enum CodexOAuthScope { personal, adminShared }
+
 /// One Codex usage window reported by the linked ChatGPT account.
 class CodexRateLimitWindow {
   final double usedPercent;
@@ -45,15 +47,16 @@ class CodexRateLimits {
 CodexRateLimitWindow? _rateLimitWindow(Object? value) =>
     value is Map<String, dynamic> ? CodexRateLimitWindow.fromJson(value) : null;
 
-/// Current user's ChatGPT/Codex connection status.
+/// Personal or admin-shared ChatGPT/Codex connection status.
 ///
-/// [selected] means the server admin chose the per-user Codex provider, while
-/// [available] means this server can currently start and serve Codex sessions.
-/// Tokens remain server-side; the app only receives safe account metadata.
+/// [selected] applies to the requested scope. Personal metadata belongs only
+/// to the authenticated user; shared metadata is available only on admin
+/// routes. Tokens remain server-side.
 class CodexConnectionStatus {
   final bool selected;
   final bool available;
   final bool connected;
+  final bool effective;
   final String accountEmail;
   final String planType;
   final CodexRateLimits? rateLimits;
@@ -64,6 +67,7 @@ class CodexConnectionStatus {
     required this.selected,
     required this.available,
     required this.connected,
+    this.effective = false,
     this.accountEmail = '',
     this.planType = '',
     this.rateLimits,
@@ -78,6 +82,7 @@ class CodexConnectionStatus {
       selected: json['selected'] as bool? ?? available,
       available: available,
       connected: json['connected'] as bool? ?? false,
+      effective: json['effective'] as bool? ?? false,
       accountEmail: json['account_email'] as String? ?? '',
       planType: json['plan_type'] as String? ?? '',
       updatedAt: DateTime.tryParse(json['updated_at'] as String? ?? ''),
@@ -178,18 +183,26 @@ String _accountEmail(Object? account) {
 
 class CodexOAuthService {
   final Dio _dio;
+  final CodexOAuthScope scope;
 
-  CodexOAuthService({required Dio backendDio}) : _dio = backendDio;
+  CodexOAuthService({
+    required Dio backendDio,
+    this.scope = CodexOAuthScope.personal,
+  }) : _dio = backendDio;
+
+  String get _basePath => scope == CodexOAuthScope.adminShared
+      ? '/api/admin/ai/codex'
+      : '/api/ai/codex';
 
   Future<CodexConnectionStatus> getStatus() async {
-    final response = await _dio.get('/api/ai/codex/status');
+    final response = await _dio.get('$_basePath/status');
     return CodexConnectionStatus.fromJson(
       response.data as Map<String, dynamic>,
     );
   }
 
   Future<CodexDeviceAuthorization> beginDeviceAuthorization() async {
-    final response = await _dio.post('/api/ai/codex/device/begin');
+    final response = await _dio.post('$_basePath/device/begin');
     return CodexDeviceAuthorization.fromJson(
       response.data as Map<String, dynamic>,
     );
@@ -198,7 +211,7 @@ class CodexOAuthService {
   Future<CodexDeviceFlowResult> checkDeviceAuthorization(String flowId) async {
     final safeFlowId = Uri.encodeComponent(flowId);
     try {
-      final response = await _dio.get('/api/ai/codex/device/$safeFlowId');
+      final response = await _dio.get('$_basePath/device/$safeFlowId');
       return CodexDeviceFlowResult.fromJson(
         response.data as Map<String, dynamic>,
       );
@@ -216,11 +229,11 @@ class CodexOAuthService {
 
   Future<void> cancelDeviceAuthorization(String flowId) async {
     final safeFlowId = Uri.encodeComponent(flowId);
-    await _dio.delete('/api/ai/codex/device/$safeFlowId');
+    await _dio.delete('$_basePath/device/$safeFlowId');
   }
 
   Future<void> unlink() async {
-    await _dio.delete('/api/ai/codex');
+    await _dio.delete(_basePath);
   }
 }
 
@@ -235,8 +248,20 @@ final codexOAuthServiceProvider = Provider<CodexOAuthService>(
   (ref) => CodexOAuthService(backendDio: ref.watch(backendClientProvider)),
 );
 
+final adminCodexOAuthServiceProvider = Provider<CodexOAuthService>(
+  (ref) => CodexOAuthService(
+    backendDio: ref.watch(backendClientProvider),
+    scope: CodexOAuthScope.adminShared,
+  ),
+);
+
 /// Safe, per-user status used by Settings and the assistant's auth gate.
 final codexConnectionStatusProvider =
     FutureProvider.autoDispose<CodexConnectionStatus>(
   (ref) => ref.watch(codexOAuthServiceProvider).getStatus(),
+);
+
+final adminCodexConnectionStatusProvider =
+    FutureProvider.autoDispose<CodexConnectionStatus>(
+  (ref) => ref.watch(adminCodexOAuthServiceProvider).getStatus(),
 );
