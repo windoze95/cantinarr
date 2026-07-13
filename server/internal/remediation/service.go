@@ -329,8 +329,8 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 			continue
 		}
 		if _, err := tx.Exec(
-			"INSERT OR IGNORE INTO issue_observation_downloads(issue_id,download_id,first_seen_at) VALUES (?,?,?)",
-			id, item.DownloadID, now,
+			observationDownloadUpsertSQL,
+			id, item.DownloadID, now, sqlTimeOrNil(item.AddedAt), sqlInt64PointerOrNil(item.FileIDAtSnapshot),
 		); err != nil {
 			return nil, fmt.Errorf("record issue download identity: %w", err)
 		}
@@ -956,4 +956,34 @@ func sqlNullStr(v string) interface{} {
 		return nil
 	}
 	return v
+}
+
+func sqlTimeOrNil(v *time.Time) interface{} {
+	if v == nil || v.IsZero() {
+		return nil
+	}
+	return v.UTC()
+}
+
+func sqlInt64PointerOrNil(v *int64) interface{} {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func cloneTime(v *time.Time) *time.Time {
+	if v == nil {
+		return nil
+	}
+	copy := *v
+	return &copy
+}
+
+func cloneInt64(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	copy := *v
+	return &copy
 }

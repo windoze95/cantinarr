@@ -817,7 +817,6 @@ class _RunSummaryTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final detail = <String>[
       '${run.stepCount} ${run.stepCount == 1 ? 'step' : 'steps'}',
-      run.costLabel,
       if (run.startedAt != null)
         DateFormat('MMM d, h:mm a').format(run.startedAt!),
     ];

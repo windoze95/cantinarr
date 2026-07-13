@@ -95,3 +95,23 @@ func TestGetQueueDetailedRejectsClampedSinglePage(t *testing.T) {
 		t.Fatalf("queue requests=%d, want one atomic bounded page", requests)
 	}
 }
+
+func TestDetailedQueueFileStateRequiresExactMovieIdentity(t *testing.T) {
+	noFile := 0
+	item := DetailedQueueItem{
+		MovieID: 7,
+		Movie:   &MovieContext{ID: 7, TmdbID: 42, MovieFileID: &noFile},
+	}
+	if got := item.FileIDAtSnapshot(); got == nil || *got != 0 {
+		t.Fatalf("exact movie file ID = %v, want known absent", got)
+	}
+	item.Movie.ID = 8
+	if got := item.FileIDAtSnapshot(); got != nil {
+		t.Fatalf("mismatched movie identity produced file ID %v", *got)
+	}
+	item.Movie.ID = 7
+	item.Movie.MovieFileID = nil
+	if got := item.FileIDAtSnapshot(); got != nil {
+		t.Fatalf("omitted movieFileId produced file ID %v", *got)
+	}
+}

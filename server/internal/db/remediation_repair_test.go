@@ -61,6 +61,18 @@ func TestOpenRepairsUnsafeRemediationStates(t *testing.T) {
 		t.Fatalf("insert legacy release run: %v", err)
 	}
 	legacyRunID, _ := legacyRun.LastInsertId()
+	if _, err := database.Exec("ALTER TABLE agent_runs ADD COLUMN cost_micros INTEGER NOT NULL DEFAULT 0"); err != nil {
+		t.Fatalf("add legacy cost column: %v", err)
+	}
+	if _, err := database.Exec("UPDATE agent_runs SET cost_micros = 80000 WHERE id = ?", legacyRunID); err != nil {
+		t.Fatalf("seed legacy cost estimate: %v", err)
+	}
+	if _, err := database.Exec("ALTER TABLE issue_observation_downloads DROP COLUMN arr_added_at"); err != nil {
+		t.Fatalf("restore legacy observation-download schema: %v", err)
+	}
+	if _, err := database.Exec("ALTER TABLE issue_observation_downloads DROP COLUMN queue_file_id"); err != nil {
+		t.Fatalf("restore legacy queue file-state schema: %v", err)
+	}
 	if _, err := database.Exec("UPDATE issues SET active_run_id = ? WHERE id = ?", legacyRunID, legacyIssueID); err != nil {
 		t.Fatalf("bind legacy release run: %v", err)
 	}
@@ -173,6 +185,18 @@ func TestOpenRepairsUnsafeRemediationStates(t *testing.T) {
 	if legacyActionStatus != "superseded" || legacyIssueStatus != "needs_admin" || legacyRunStatus != "aborted" {
 		t.Fatalf("legacy release gate repair = action %q issue %q run %q", legacyActionStatus, legacyIssueStatus, legacyRunStatus)
 	}
+	var legacyCost int64
+	if err := database.QueryRow("SELECT cost_micros FROM agent_runs WHERE id = ?", legacyRunID).Scan(&legacyCost); err != nil {
+		t.Fatalf("load cleared legacy run cost: %v", err)
+	}
+	if legacyCost != 0 {
+		t.Fatalf("legacy agent run cost = %d, want erased", legacyCost)
+	}
+	rows, err := database.Query("SELECT arr_added_at,queue_file_id FROM issue_observation_downloads LIMIT 1")
+	if err != nil {
+		t.Fatalf("arr attempt-boundary migration missing: %v", err)
+	}
+	rows.Close()
 }
 
 func TestSafeReleaseActionJSONFingerprintsFakeRedactionMarkers(t *testing.T) {

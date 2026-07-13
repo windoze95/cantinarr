@@ -390,33 +390,57 @@ type SeriesContext struct {
 // EpisodeContext is the lean episode object embedded in queue/history records.
 type EpisodeContext struct {
 	ID            int    `json:"id"`
+	SeriesID      int    `json:"seriesId"`
 	SeasonNumber  int    `json:"seasonNumber"`
 	EpisodeNumber int    `json:"episodeNumber"`
+	EpisodeFileID *int   `json:"episodeFileId"`
+	HasFile       *bool  `json:"hasFile"`
 	Title         string `json:"title"`
 }
 
 type DetailedQueueItem struct {
-	ID                    int     `json:"id"`
-	SeriesID              int     `json:"seriesId"`
-	EpisodeID             int     `json:"episodeId"`
-	Title                 string  `json:"title"`
-	Status                string  `json:"status"`
-	TrackedDownloadStatus string  `json:"trackedDownloadStatus"`
-	TrackedDownloadState  string  `json:"trackedDownloadState"`
-	Timeleft              string  `json:"timeleft"`
-	Size                  float64 `json:"size"`
-	Sizeleft              float64 `json:"sizeleft"`
-	DownloadClient        string  `json:"downloadClient"`
-	DownloadID            string  `json:"downloadId"`
-	Indexer               string  `json:"indexer"`
-	Protocol              string  `json:"protocol"`
-	ErrorMessage          string  `json:"errorMessage"`
+	ID                    int        `json:"id"`
+	SeriesID              int        `json:"seriesId"`
+	EpisodeID             int        `json:"episodeId"`
+	Title                 string     `json:"title"`
+	Status                string     `json:"status"`
+	TrackedDownloadStatus string     `json:"trackedDownloadStatus"`
+	TrackedDownloadState  string     `json:"trackedDownloadState"`
+	Timeleft              string     `json:"timeleft"`
+	Size                  float64    `json:"size"`
+	Sizeleft              float64    `json:"sizeleft"`
+	DownloadClient        string     `json:"downloadClient"`
+	DownloadID            string     `json:"downloadId"`
+	Indexer               string     `json:"indexer"`
+	Protocol              string     `json:"protocol"`
+	Added                 *time.Time `json:"added"`
+	EpisodeHasFile        *bool      `json:"episodeHasFile"`
+	ErrorMessage          string     `json:"errorMessage"`
 	StatusMessages        []struct {
 		Title    string   `json:"title"`
 		Messages []string `json:"messages"`
 	} `json:"statusMessages"`
 	Series  *SeriesContext  `json:"series,omitempty"`
 	Episode *EpisodeContext `json:"episode,omitempty"`
+}
+
+// FileIDAtSnapshot returns the exact embedded episode's file ID only when
+// Sonarr supplied consistent queue, series, episode, and file-state identity.
+// Zero means known absent. Top-level episodeHasFile alone is ambiguous.
+func (item DetailedQueueItem) FileIDAtSnapshot() *int64 {
+	if item.Series == nil || item.Episode == nil || item.SeriesID <= 0 || item.EpisodeID <= 0 ||
+		item.Series.ID != item.SeriesID || item.Series.TvdbID <= 0 ||
+		item.Episode.ID != item.EpisodeID || item.Episode.SeriesID != item.SeriesID ||
+		item.Episode.EpisodeNumber <= 0 || item.Episode.EpisodeFileID == nil || *item.Episode.EpisodeFileID < 0 {
+		return nil
+	}
+	fileID := int64(*item.Episode.EpisodeFileID)
+	hasFile := fileID > 0
+	if (item.Episode.HasFile != nil && *item.Episode.HasFile != hasFile) ||
+		(item.EpisodeHasFile != nil && *item.EpisodeHasFile != hasFile) {
+		return nil
+	}
+	return &fileID
 }
 
 // queueMaxRecords is both the requested single-page size and a safety cap.

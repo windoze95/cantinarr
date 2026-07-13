@@ -339,7 +339,7 @@ void main() {
       }
     });
 
-    test('parses a run + ordered steps with a cost label', () {
+    test('parses a run + ordered steps without exposing provider cost', () {
       final d = AgentRunDetail.fromJson({
         'run': {
           'id': 9,
@@ -385,7 +385,6 @@ void main() {
       expect(d.run.id, 9);
       expect(d.run.model, 'claude-haiku-4-5');
       expect(d.run.cacheReadTokens, 800);
-      expect(d.run.costLabel, '\$0.0042');
       expect(d.run.statusLabel, 'Investigation completed');
       expect(d.run.stopReasonLabel, 'Resolution verified');
       expect(d.steps, hasLength(3));

@@ -3,7 +3,10 @@
 // queue problems regardless of which service surfaced them.
 package arr
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // StatusMessage mirrors a Radarr/Sonarr queue item's statusMessages entry: a
 // title plus one or more human-readable lines.
@@ -51,10 +54,12 @@ type QueueMediaContext struct {
 // including healthy items, so the observer can distinguish an arr that is
 // actively progressing or retrying from one that needs intervention.
 type QueueObservation struct {
-	DownloadID string
-	Media      QueueMediaContext
-	Signal     QueueSignal
-	Diagnosis  Diagnosis
+	DownloadID       string
+	AddedAt          *time.Time // arr-clock attempt boundary; nil when the service omits it
+	FileIDAtSnapshot *int64     // exact media file ID: nil unknown, 0 absent, positive present
+	Media            QueueMediaContext
+	Signal           QueueSignal
+	Diagnosis        Diagnosis
 }
 
 // Diagnosis is the classifier's verdict for one queue item.

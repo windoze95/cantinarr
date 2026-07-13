@@ -817,7 +817,7 @@ func (s *Service) GetIssueActivity(issueID int64) (*IssueActivity, error) {
 	runRows, err := s.db.Query(
 		`SELECT id, issue_id, trigger, status, model, step_count,
 		 input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-		 cost_micros, stop_reason, started_at, finished_at
+		 stop_reason, started_at, finished_at
 		 FROM agent_runs WHERE issue_id = ? ORDER BY id DESC`, issueID,
 	)
 	if err != nil {
@@ -830,7 +830,7 @@ func (s *Service) GetIssueActivity(issueID int64) (*IssueActivity, error) {
 		var finished sql.NullTime
 		if err := runRows.Scan(&run.ID, &run.IssueID, &run.Trigger, &run.Status, &run.Model, &run.StepCount,
 			&run.InputTokens, &run.OutputTokens, &run.CacheCreationTokens, &run.CacheReadTokens,
-			&run.CostMicros, &stop, &run.StartedAt, &finished); err != nil {
+			&stop, &run.StartedAt, &finished); err != nil {
 			runRows.Close()
 			return nil, fmt.Errorf("scan issue run: %w", err)
 		}
@@ -981,13 +981,13 @@ func (s *Service) GetRunDetail(runID int64) (*AgentRunDetail, error) {
 	err := s.db.QueryRow(
 		`SELECT id, issue_id, trigger, status, model, step_count,
 		        input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-		        cost_micros, stop_reason, started_at, finished_at
+		        stop_reason, started_at, finished_at
 		 FROM agent_runs WHERE id = ?`,
 		runID,
 	).Scan(
 		&run.ID, &run.IssueID, &run.Trigger, &run.Status, &run.Model, &run.StepCount,
 		&run.InputTokens, &run.OutputTokens, &run.CacheCreationTokens, &run.CacheReadTokens,
-		&run.CostMicros, &stopReason, &run.StartedAt, &finishedAt,
+		&stopReason, &run.StartedAt, &finishedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("run not found")

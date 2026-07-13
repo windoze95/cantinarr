@@ -400,9 +400,6 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if d.Provider != "" || d.Model != "" {
 		t.Fatalf("default provider/model = %q/%q, want empty (inherit)", d.Provider, d.Model)
 	}
-	if d.MaxCostMicros != 500000 || d.DailyCostCeilingMicros != 5000000 {
-		t.Fatalf("default cost ceilings = %d/%d, want 500000/5000000", d.MaxCostMicros, d.DailyCostCeilingMicros)
-	}
 	if d.MaxUserWaitHours != 72 {
 		t.Fatalf("default max_user_wait_hours = %d, want 72", d.MaxUserWaitHours)
 	}
@@ -419,9 +416,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 		MaxSteps:                 20,
 		MaxTurnTokens:            8000,
 		MaxWallClockSecs:         600,
-		MaxCostMicros:            123456,
 		DailyRunCap:              10,
-		DailyCostCeilingMicros:   999999,
 		CircuitBreakerGiveups:    3,
 		MaxUserWaitHours:         48,
 		ObservationMinMinutes:    20,
@@ -442,7 +437,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 
 	// Out-of-range bounds normalize back to defaults; an unknown mode too;
 	// empty provider/model are left empty (inherit), not defaulted.
-	norm, err := svc.SetSettings(Settings{Mode: "bogus", MaxSteps: 0, MaxCostMicros: -5})
+	norm, err := svc.SetSettings(Settings{Mode: "bogus", MaxSteps: 0})
 	if err != nil {
 		t.Fatalf("SetSettings normalize: %v", err)
 	}
@@ -450,8 +445,8 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if norm.Mode != def.Mode {
 		t.Fatalf("normalized mode = %q, want %q", norm.Mode, def.Mode)
 	}
-	if norm.MaxSteps != def.MaxSteps || norm.MaxCostMicros != def.MaxCostMicros {
-		t.Fatalf("normalized bounds = steps %d cost %d, want %d/%d", norm.MaxSteps, norm.MaxCostMicros, def.MaxSteps, def.MaxCostMicros)
+	if norm.MaxSteps != def.MaxSteps {
+		t.Fatalf("normalized max steps = %d, want %d", norm.MaxSteps, def.MaxSteps)
 	}
 	if norm.Provider != "" || norm.Model != "" {
 		t.Fatalf("normalized provider/model = %q/%q, want empty (inherit)", norm.Provider, norm.Model)
@@ -459,8 +454,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 
 	high, err := svc.SetSettings(Settings{
 		Mode: ModeSupervised, MaxSteps: 1 << 30, MaxTurnTokens: 1 << 30,
-		MaxWallClockSecs: 1 << 30, MaxCostMicros: 1 << 30,
-		DailyRunCap: 1 << 30, DailyCostCeilingMicros: 1 << 30,
+		MaxWallClockSecs: 1 << 30, DailyRunCap: 1 << 30,
 		CircuitBreakerGiveups: 1 << 30, MaxUserWaitHours: 1 << 30,
 		ObservationMinMinutes: 1 << 30, ObservationQuietMinutes: 1 << 30,
 		ObservationSettleMinutes: 1 << 30,
@@ -469,12 +463,43 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("SetSettings high values: %v", err)
 	}
 	if high.MaxSteps != maxConfiguredSteps || high.MaxTurnTokens != maxConfiguredTurnTokens ||
-		high.MaxWallClockSecs != maxConfiguredWallClockSecs || high.MaxCostMicros != maxConfiguredRunCostMicros ||
-		high.DailyRunCap != maxConfiguredDailyRuns || high.DailyCostCeilingMicros != maxConfiguredDailyCost ||
+		high.MaxWallClockSecs != maxConfiguredWallClockSecs || high.DailyRunCap != maxConfiguredDailyRuns ||
 		high.CircuitBreakerGiveups != maxConfiguredBreakerGiveups || high.MaxUserWaitHours != maxConfiguredUserWaitHours ||
 		high.ObservationMinMinutes != maxObservationMinMinutes || high.ObservationQuietMinutes != maxObservationQuietMinutes ||
 		high.ObservationSettleMinutes != maxObservationSettleMinutes {
 		t.Fatalf("high settings were not safely capped: %+v", high)
+	}
+}
+
+func TestLegacyPriceSettingsAreNotExposedOrRepersisted(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	legacy := `{"enabled":true,"max_cost_micros":500000,"daily_cost_ceiling_micros":5000000}`
+	if _, err := svc.db.Exec(
+		"INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+		remediationSettingsKey, legacy,
+	); err != nil {
+		t.Fatalf("seed legacy remediation settings: %v", err)
+	}
+
+	settings := svc.Settings()
+	wire, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatalf("marshal settings: %v", err)
+	}
+	if strings.Contains(string(wire), "cost") {
+		t.Fatalf("settings JSON still exposes legacy price fields: %s", wire)
+	}
+	if _, err := svc.SetSettings(settings); err != nil {
+		t.Fatalf("repersist settings: %v", err)
+	}
+	var stored string
+	if err := svc.db.QueryRow(
+		"SELECT value FROM settings WHERE key = ?", remediationSettingsKey,
+	).Scan(&stored); err != nil {
+		t.Fatalf("load repersisted settings: %v", err)
+	}
+	if strings.Contains(stored, "cost") {
+		t.Fatalf("legacy price fields survived repersist: %s", stored)
 	}
 }
 

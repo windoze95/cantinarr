@@ -372,7 +372,6 @@ type AgentRun struct {
 	OutputTokens        int64      `json:"output_tokens"`
 	CacheCreationTokens int64      `json:"cache_creation_tokens"`
 	CacheReadTokens     int64      `json:"cache_read_tokens"`
-	CostMicros          int64      `json:"cost_micros"`
 	StopReason          *string    `json:"stop_reason"`
 	StartedAt           time.Time  `json:"started_at"`
 	FinishedAt          *time.Time `json:"finished_at"`

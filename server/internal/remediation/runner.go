@@ -70,7 +70,6 @@ const (
 	stopResolved         = "resolved"
 	stopMaxSteps         = "max_steps"
 	stopTimeout          = "timeout"
-	stopMaxCost          = "max_cost"
 	stopModelError       = "model_error"
 	stopInfrastructure   = "infrastructure_error"
 	stopNoDiagnosis      = "no_diagnosis"
@@ -153,12 +152,6 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 		log.Printf("remediation: daily run cap (%d) reached; skipping issue %d", settings.DailyRunCap, issueID)
 		return nil
 	}
-	// Global daily-cost ceiling.
-	if over, err := r.dailyCostCeilingExceeded(int64(settings.DailyCostCeilingMicros)); err == nil && over {
-		log.Printf("remediation: daily cost ceiling reached; skipping issue %d", issueID)
-		return nil
-	}
-
 	issue, err := r.svc.GetIssue(issueID)
 	if err != nil {
 		return fmt.Errorf("load issue %d: %w", issueID, err)
@@ -218,8 +211,7 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	defer cancel()
 
 	st := &loopState{
-		runID:     runID,
-		costKnown: true,
+		runID: runID,
 		history: ai.Transcript{ai.TranscriptMessage{
 			Role:    ai.RoleUser,
 			Content: []ai.TranscriptBlock{{Type: ai.BlockText, Text: initialUserTurn(issue)}},
@@ -282,7 +274,7 @@ func (r *Runner) resolveTurn(settings Settings) (ai.TurnRunner, string, error) {
 // Resume re-enters the SAME parked run after an admin decision (approve/deny) has
 // appended the decision tool_result to the run's transcript. It re-claims the
 // issue, rehydrates the untruncated transcript and the bounds spent so far
-// (step_count/cost_micros are NOT reset), and re-enters the loop with the
+// (step_count and active wall-clock are NOT reset), and re-enters the loop with the
 // remaining budget. Approval → the agent verifies (read-only) and concludes or
 // proposes again; denial → it tries another tack, still bounded. Safe to call
 // from a worker goroutine; the CAS re-claim guards against a double-resume.
@@ -359,8 +351,6 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 		history:      history,
 		seq:          r.nextSeq(runID),
 		stepCount:    resume.stepCount,
-		costAccum:    resume.costMicros,
-		costKnown:    true,
 		postedAnyMsg: r.hasAgentMessage(issueID),
 	}
 	if err := r.loop(runCtx, turn, issue, st, model, settings); err != nil {
@@ -432,18 +422,16 @@ func rehydrateTranscript(transcriptJSON string) (ai.Transcript, error) {
 }
 
 // loopState is the mutable per-run state the turn loop carries. A fresh Run seeds
-// it; Resume rehydrates it from the persisted run so the SAME bounds (step count,
-// cost) continue across a human-gated pause — they are never reset.
+// it; Resume rehydrates it from the persisted run so the SAME bounds (step count
+// and active wall-clock) continue across a human-gated pause — they are never reset.
 type loopState struct {
 	runID         int64
 	history       ai.Transcript
-	seq           int   // next audit-step sequence number
-	stepCount     int   // total TOOL calls so far (the MaxSteps bound)
-	costAccum     int64 // accumulated cost in micros
-	costKnown     bool  // false once an unknown-model turn disables the cost check
-	postedAnyMsg  bool  // whether any agent message has been posted to the thread
-	verifiedRead  bool  // successful scoped state read in this active segment
-	targetCleared bool  // typed proof that this auto issue's exact queue target is absent
+	seq           int  // next audit-step sequence number
+	stepCount     int  // total TOOL calls so far (the MaxSteps bound)
+	postedAnyMsg  bool // whether any agent message has been posted to the thread
+	verifiedRead  bool // successful scoped state read in this active segment
+	targetCleared bool // typed proof that this auto issue's exact queue target is absent
 	// Replaced by each successful issue-scoped interactive search. It is
 	// intentionally not rehydrated across a human pause: approval candidates
 	// must be refreshed after resume.
@@ -489,11 +477,6 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			return r.giveUp(ctx, issue.ID, st.runID, model, stopMaxSteps,
 				giveUpMessage(issue, st.postedAnyMsg))
 		}
-		// Bound: cost ceiling (soft, bounded by one turn of <= MaxTurnTokens).
-		if st.costKnown && st.costAccum >= int64(settings.MaxCostMicros) {
-			return r.giveUp(ctx, issue.ID, st.runID, model, stopMaxCost,
-				giveUpMessage(issue, st.postedAnyMsg))
-		}
 		// Context deadline (wall clock) — surface as a give-up, not a crash.
 		if ctx.Err() != nil {
 			return r.giveUp(context.Background(), issue.ID, st.runID, model, stopTimeout,
@@ -521,15 +504,9 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			return nil
 		}
 
-		// Accumulate usage/cost onto the run (best-effort). An unknown model means
-		// the cost bound can't be enforced — skip the check, never crash.
-		turnCost, ok := costMicros(model, res.Usage)
-		if ok {
-			st.costAccum += turnCost
-		} else {
-			st.costKnown = false
-		}
-		r.bumpRunUsage(st.runID, res.Usage, turnCost, st.stepCount)
+		// Keep provider-reported token usage for diagnostics without converting it
+		// into a monetary estimate.
+		r.bumpRunUsage(st.runID, res.Usage, st.stepCount)
 
 		// Append the assistant turn to the transcript and persist it as an audit
 		// step. Text-only turns and tool-calling turns both land here.
@@ -1332,7 +1309,6 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 type resumeState struct {
 	runID          int64
 	stepCount      int
-	costMicros     int64
 	activeSeconds  int
 	transcriptJSON string
 }
@@ -1347,10 +1323,10 @@ func (r *Runner) claimResume(issueID int64) (resumeState, bool, error) {
 	defer tx.Rollback()
 	var state resumeState
 	if err := tx.QueryRow(
-		`SELECT id, step_count, cost_micros, active_seconds, transcript_json
+		`SELECT id, step_count, active_seconds, transcript_json
 		 FROM agent_runs WHERE issue_id = ? AND status = ? ORDER BY id DESC LIMIT 1`,
 		issueID, runStatusResumePending,
-	).Scan(&state.runID, &state.stepCount, &state.costMicros, &state.activeSeconds, &state.transcriptJSON); err != nil {
+	).Scan(&state.runID, &state.stepCount, &state.activeSeconds, &state.transcriptJSON); err != nil {
 		if err == sql.ErrNoRows {
 			return resumeState{}, false, nil
 		}
@@ -1454,18 +1430,18 @@ func (r *Runner) finishActiveWindow(runID int64, started time.Time) {
 	r.db.Exec("UPDATE agent_runs SET active_seconds = active_seconds + ?, deadline_at = NULL WHERE id = ?", elapsed, runID)
 }
 
-// bumpRunUsage accumulates token usage + cost + step count onto the run row.
-func (r *Runner) bumpRunUsage(runID int64, u ai.Usage, costMic int64, stepCount int) {
+// bumpRunUsage accumulates provider-reported token usage and the step count onto
+// the run row. Tokens remain useful diagnostics; they are never priced.
+func (r *Runner) bumpRunUsage(runID int64, u ai.Usage, stepCount int) {
 	r.db.Exec(
 		`UPDATE agent_runs SET
 			input_tokens = input_tokens + ?,
 			output_tokens = output_tokens + ?,
 			cache_creation_tokens = cache_creation_tokens + ?,
 			cache_read_tokens = cache_read_tokens + ?,
-			cost_micros = cost_micros + ?,
 			step_count = ?
 		 WHERE id = ?`,
-		u.InputTokens, u.OutputTokens, u.CacheCreationTokens, u.CacheReadTokens, costMic, stepCount, runID,
+		u.InputTokens, u.OutputTokens, u.CacheCreationTokens, u.CacheReadTokens, stepCount, runID,
 	)
 }
 
@@ -1547,20 +1523,6 @@ func (r *Runner) dailyRunCapExceeded(cap int) (bool, error) {
 		return false, err
 	}
 	return n >= cap, nil
-}
-
-func (r *Runner) dailyCostCeilingExceeded(ceilingMicros int64) (bool, error) {
-	if ceilingMicros <= 0 {
-		return false, nil
-	}
-	var spent sql.NullInt64
-	err := r.db.QueryRow(
-		"SELECT COALESCE(SUM(cost_micros),0) FROM agent_runs WHERE started_at >= datetime('now','start of day')",
-	).Scan(&spent)
-	if err != nil {
-		return false, err
-	}
-	return spent.Valid && spent.Int64 >= ceilingMicros, nil
 }
 
 // --- small pure helpers ---

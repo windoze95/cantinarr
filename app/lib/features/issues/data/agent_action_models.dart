@@ -571,7 +571,6 @@ class AgentRun {
   final int outputTokens;
   final int cacheCreationTokens;
   final int cacheReadTokens;
-  final int costMicros;
   final String? stopReason;
   final DateTime? startedAt;
   final DateTime? finishedAt;
@@ -587,17 +586,10 @@ class AgentRun {
     required this.outputTokens,
     required this.cacheCreationTokens,
     required this.cacheReadTokens,
-    required this.costMicros,
     required this.stopReason,
     required this.startedAt,
     required this.finishedAt,
   });
-
-  /// The accumulated run cost as a short "$0.0123" string (micros → USD).
-  String get costLabel {
-    final usd = costMicros / 1000000.0;
-    return '\$${usd.toStringAsFixed(usd < 0.01 ? 4 : 2)}';
-  }
 
   String get statusLabel => switch (status) {
         'running' => 'Investigation in progress',
@@ -616,7 +608,7 @@ class AgentRun {
         'resolved' => 'Resolution verified',
         'max_steps' => 'Reached the investigation step limit',
         'timeout' => 'Reached the investigation time limit',
-        'max_cost' => 'Reached the investigation cost limit',
+        'max_cost' => 'Reached the investigation limit',
         'model_error' => 'The AI provider returned an error',
         'infrastructure_error' => 'The investigation service returned an error',
         'no_diagnosis' => 'No reliable diagnosis was found',
@@ -656,7 +648,6 @@ class AgentRun {
         cacheCreationTokens:
             (json['cache_creation_tokens'] as num?)?.toInt() ?? 0,
         cacheReadTokens: (json['cache_read_tokens'] as num?)?.toInt() ?? 0,
-        costMicros: (json['cost_micros'] as num?)?.toInt() ?? 0,
         stopReason: json['stop_reason'] as String?,
         startedAt:
             DateTime.tryParse(json['started_at'] as String? ?? '')?.toLocal(),
