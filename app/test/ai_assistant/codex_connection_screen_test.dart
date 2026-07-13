@@ -14,9 +14,9 @@ void main() {
     final opened = <Uri>[];
     await _pumpScreen(tester, service, auth, opened);
 
-    expect(find.text('Connect ChatGPT'), findsOneWidget);
+    expect(find.text('Connect OpenAI OAuth'), findsOneWidget);
 
-    await tester.tap(find.text('Connect ChatGPT'));
+    await tester.tap(find.text('Connect OpenAI OAuth'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 10));
 
@@ -36,7 +36,7 @@ void main() {
 
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
-    final disconnect = find.text('Disconnect ChatGPT');
+    final disconnect = find.text('Disconnect OpenAI OAuth');
     await tester.ensureVisible(disconnect);
     await tester.pumpAndSettle();
     await tester.tap(disconnect);
@@ -47,7 +47,7 @@ void main() {
 
     expect(service.unlinkCalls, 1);
     expect(auth.refreshCount, 2);
-    expect(find.text('Connect ChatGPT'), findsOneWidget);
+    expect(find.text('Connect OpenAI OAuth'), findsOneWidget);
   });
 
   testWidgets('a pending device flow can be reopened and cancelled',
@@ -57,11 +57,11 @@ void main() {
     final opened = <Uri>[];
     await _pumpScreen(tester, service, auth, opened);
 
-    await tester.tap(find.text('Connect ChatGPT'));
+    await tester.tap(find.text('Connect OpenAI OAuth'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 10));
 
-    await tester.tap(find.text('Reopen ChatGPT'));
+    await tester.tap(find.text('Reopen ChatGPT sign-in'));
     await tester.pump();
     expect(opened, hasLength(2));
 
@@ -69,7 +69,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.cancelledFlowIds, ['flow-1']);
-    expect(find.text('Connect ChatGPT'), findsOneWidget);
+    expect(find.text('Connect OpenAI OAuth'), findsOneWidget);
   });
 
   testWidgets('leaving a pending device flow cancels it on the server',
@@ -77,7 +77,7 @@ void main() {
     final service = _FakeCodexOAuthService(pollConnects: false);
     await _pumpScreen(tester, service, _FakeAuthNotifier(), []);
 
-    await tester.tap(find.text('Connect ChatGPT'));
+    await tester.tap(find.text('Connect OpenAI OAuth'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 10));
 
@@ -95,13 +95,13 @@ void main() {
     );
     await _pumpScreen(tester, service, _FakeAuthNotifier(), []);
 
-    await tester.tap(find.text('Connect ChatGPT'));
+    await tester.tap(find.text('Connect OpenAI OAuth'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 20));
 
     expect(service.cancelledFlowIds, ['flow-1']);
     expect(find.textContaining('one-time code expired'), findsOneWidget);
-    expect(find.text('Connect ChatGPT'), findsOneWidget);
+    expect(find.text('Connect OpenAI OAuth'), findsOneWidget);
   });
 
   testWidgets('selected but unavailable Codex explains the runtime problem',
@@ -109,8 +109,8 @@ void main() {
     final service = _FakeCodexOAuthService(available: false);
     await _pumpScreen(tester, service, _FakeAuthNotifier(), []);
 
-    expect(find.textContaining('ChatGPT is selected'), findsOneWidget);
-    expect(find.text('Connect ChatGPT'), findsNothing);
+    expect(find.textContaining('OpenAI OAuth is selected'), findsOneWidget);
+    expect(find.text('Connect OpenAI OAuth'), findsNothing);
   });
 
   testWidgets('a linked account can disconnect when runtime is unavailable',
@@ -125,7 +125,7 @@ void main() {
     expect(find.text('viewer@example.com'), findsOneWidget);
     expect(
         find.textContaining('Codex is currently unavailable'), findsOneWidget);
-    final disconnect = find.text('Disconnect ChatGPT');
+    final disconnect = find.text('Disconnect OpenAI OAuth');
     expect(disconnect, findsOneWidget);
 
     await tester.ensureVisible(disconnect);
@@ -150,7 +150,7 @@ void main() {
     expect(find.text('Connected'), findsOneWidget);
     expect(find.text('viewer@example.com'), findsOneWidget);
     expect(find.textContaining('different AI source'), findsOneWidget);
-    expect(find.text('Disconnect ChatGPT'), findsOneWidget);
+    expect(find.text('Disconnect OpenAI OAuth'), findsOneWidget);
   });
 
   testWidgets('labels a cached usage snapshot as stale', (tester) async {
@@ -158,6 +158,23 @@ void main() {
     await _pumpScreen(tester, service, _FakeAuthNotifier(), []);
 
     expect(find.textContaining('snapshot may be out of date'), findsOneWidget);
+  });
+
+  testWidgets('keeps a connected account manageable when its model test fails',
+      (tester) async {
+    final service = _FakeCodexOAuthService(validationFails: true);
+    await _pumpScreen(tester, service, _FakeAuthNotifier(), []);
+
+    await tester.tap(find.text('Connect OpenAI OAuth'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+    await tester.tap(find.text('Check now'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Connected'), findsOneWidget);
+    expect(find.textContaining('selected model could not complete'),
+        findsOneWidget);
+    expect(find.text('Disconnect OpenAI OAuth'), findsOneWidget);
   });
 }
 
@@ -195,6 +212,7 @@ class _FakeCodexOAuthService extends CodexOAuthService {
     this.available = true,
     this.connected = false,
     this.stale = false,
+    this.validationFails = false,
     this.flowExpiresIn = const Duration(minutes: 15),
   }) : super(backendDio: Dio());
 
@@ -203,6 +221,7 @@ class _FakeCodexOAuthService extends CodexOAuthService {
   final bool available;
   final Duration flowExpiresIn;
   final bool stale;
+  final bool validationFails;
   bool connected;
   int unlinkCalls = 0;
   final cancelledFlowIds = <String>[];
@@ -241,6 +260,13 @@ class _FakeCodexOAuthService extends CodexOAuthService {
       );
     }
     connected = true;
+    if (validationFails) {
+      return const CodexDeviceFlowResult(
+        status: CodexDeviceFlowStatus.failed,
+        error:
+            'OpenAI OAuth connected, but the selected model could not complete a test message',
+      );
+    }
     return const CodexDeviceFlowResult(
       status: CodexDeviceFlowStatus.connected,
       accountEmail: 'viewer@example.com',

@@ -200,10 +200,13 @@ func main() {
 		RuntimeDir: cfg.CodexRuntimeDir,
 	})
 	if !codexManager.Available() {
-		log.Printf("ChatGPT (Codex) provider unavailable: %v", codexManager.AvailabilityError())
+		log.Printf("OpenAI OAuth provider unavailable: %v", codexManager.AvailabilityError())
 	}
 	aiHandler := ai.NewHandler(creds, toolServer, codexManager)
 	credHandler.SetSharedAIConfigured(aiHandler.ProviderConfigured)
+	aiHandler.SetSharedAIHealthIssueSink(remediationService)
+	credHandler.SetSharedAIValidator(aiHandler.ValidateSharedAISettings, aiHandler.SharedAISettingsValidated)
+	aiHandler.StartSharedAIHealthMonitor(ctx)
 
 	// Remediation read-only agent (Wave 2). The agent investigates one issue
 	// read-only and posts a diagnosis; it has NO path to mutate the *arr (the

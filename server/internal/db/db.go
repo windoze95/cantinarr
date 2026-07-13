@@ -258,13 +258,13 @@ CREATE TABLE IF NOT EXISTS shared_codex_account (
 -- interpreted.
 CREATE TABLE IF NOT EXISTS issues (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source TEXT NOT NULL,                       -- 'auto' | 'user'
+    source TEXT NOT NULL,                       -- 'auto' | 'user' | 'system'
     status TEXT NOT NULL DEFAULT 'open',        -- observing|recovering|open|investigating|awaiting_user|awaiting_approval|needs_admin|resolved|wont_fix|failed|dismissed
     category TEXT,                              -- user pick: wrong_content|bad_copy|wrong_audio|other ; NULL for auto
     reporter_id INTEGER REFERENCES users(id),  -- NULL for auto-detected
     tmdb_id INTEGER NOT NULL,
     tvdb_id INTEGER,
-    media_type TEXT NOT NULL,                   -- 'movie' | 'tv' | 'book'
+    media_type TEXT NOT NULL,                   -- 'movie' | 'tv' | 'book' | 'system'
     title TEXT NOT NULL DEFAULT '',
     season_number INTEGER NOT NULL DEFAULT 0,   -- TV scope (0 = whole series unless episode_number > 0, which means Specials)
     episode_number INTEGER NOT NULL DEFAULT 0,  -- TV scope (0 = whole season / movie; >0 = exact episode)

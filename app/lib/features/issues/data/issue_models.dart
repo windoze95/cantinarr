@@ -86,6 +86,7 @@ enum IssueResolutionKind {
   reporterTimeout('reporter_timeout', 'Closed after no reply'),
   adminDismissed('admin_dismissed', 'Closed after review'),
   adminCompleted('admin_completed', 'Completed after review'),
+  aiHealthRestored('ai_health_restored', 'Shared AI recovered'),
   legacyUnknown('legacy_unknown', 'How it closed is unknown'),
   unknown('', 'How it closed is unknown');
 
@@ -115,14 +116,14 @@ enum AdminIssueDisposition {
 /// "whole series" / not applicable).
 class Issue {
   final int id;
-  final String source; // 'auto' | 'user'
+  final String source; // 'auto' | 'user' | 'system'
   final IssueStatus status;
   final IssueCategory? category; // null for auto-detected
   final int? reporterId;
   final String reporterName;
   final String instanceId; // exact owning Radarr/Sonarr instance
   final int tmdbId;
-  final String mediaType; // 'movie' | 'tv'
+  final String mediaType; // 'movie' | 'tv' | 'system'
   final String title;
   final int seasonNumber; // 0 = whole series / movie
   final int episodeNumber; // 0 = whole season / movie

@@ -20,12 +20,15 @@ import (
 
 // Handler provides HTTP handlers for AI chat endpoints.
 type Handler struct {
-	creds         *credentials.Registry
-	toolServer    *mcp.ToolServer
-	codex         *codexapp.Manager
-	conversations *conversationStore
-	admissionOnce sync.Once
-	admission     *chatAdmission
+	creds           *credentials.Registry
+	toolServer      *mcp.ToolServer
+	codex           *codexapp.Manager
+	conversations   *conversationStore
+	validationProbe func(context.Context, credentials.AIProfile, codexapp.AccountRef) error
+	healthIssueSink SharedAIHealthIssueSink
+	settingsMu      sync.Mutex
+	admissionOnce   sync.Once
+	admission       *chatAdmission
 }
 
 func (h *Handler) chatAdmission() *chatAdmission {
@@ -338,9 +341,9 @@ func codexClientError(err error, source string) string {
 	switch {
 	case errors.Is(err, codexapp.ErrNotConnected):
 		if source == aiSourceShared {
-			return "The included ChatGPT connection expired. Ask an admin to reconnect it."
+			return "The included OpenAI OAuth connection expired. Ask an admin to reconnect it."
 		}
-		return "Your ChatGPT connection expired. Reconnect it in Settings and try again."
+		return "Your OpenAI OAuth connection expired. Reconnect it in Settings and try again."
 	case errors.Is(err, codexapp.ErrUsageLimit):
 		if source == aiSourceShared {
 			return "The included ChatGPT Codex usage limit has been reached. Ask an admin when it resets."
@@ -348,16 +351,16 @@ func codexClientError(err error, source string) string {
 		return "Your ChatGPT Codex usage limit has been reached. Check Settings for the reset time."
 	case errors.Is(err, codexapp.ErrBusy):
 		if source == aiSourceShared {
-			return "Included ChatGPT is busy with another request. Try again shortly."
+			return "Included OpenAI OAuth is busy with another request. Try again shortly."
 		}
-		return "Your ChatGPT connection is busy with another request. Try again shortly."
+		return "Your OpenAI OAuth connection is busy with another request. Try again shortly."
 	case errors.Is(err, context.Canceled):
-		return "The ChatGPT request was canceled."
+		return "The OpenAI OAuth request was canceled."
 	default:
 		if source == aiSourceShared {
-			return "Included ChatGPT is temporarily unavailable. Try again or ask an admin to check the shared connection."
+			return "Included OpenAI OAuth is temporarily unavailable. Try again or ask an admin to check the shared connection."
 		}
-		return "ChatGPT (Codex) is temporarily unavailable. Try again shortly."
+		return "OpenAI OAuth is temporarily unavailable. Try again shortly."
 	}
 }
 
@@ -412,7 +415,7 @@ func (h *Handler) AvailableForUser(userID int64) bool {
 }
 
 // ProviderConfigured reports whether the admin-owned included provider is
-// ready, including the shared ChatGPT account when Codex is selected.
+// ready, including the shared OpenAI OAuth account when Codex is selected.
 func (h *Handler) ProviderConfigured() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

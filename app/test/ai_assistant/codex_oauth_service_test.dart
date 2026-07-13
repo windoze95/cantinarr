@@ -142,12 +142,30 @@ void main() {
     expect(result.status, CodexDeviceFlowStatus.expired);
     expect(result.error, 'ChatGPT sign-in expired; start again');
   });
+
+  test('preserves a connected account model-validation failure', () async {
+    final adapter = _CodexAdapter(validationFailed: true);
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+
+    final result = await CodexOAuthService(
+      backendDio: dio,
+    ).checkDeviceAuthorization('flow-1');
+
+    expect(result.status, CodexDeviceFlowStatus.failed);
+    expect(result.error, contains('selected model'));
+    expect(
+      adapter.requests.single.receiveTimeout,
+      const Duration(seconds: 75),
+    );
+  });
 }
 
 class _CodexAdapter implements HttpClientAdapter {
-  _CodexAdapter({this.checkExpired = false});
+  _CodexAdapter({this.checkExpired = false, this.validationFailed = false});
 
   final bool checkExpired;
+  final bool validationFailed;
   final requests = <RequestOptions>[];
 
   @override
@@ -163,6 +181,20 @@ class _CodexAdapter implements HttpClientAdapter {
       return ResponseBody.fromString(
         jsonEncode({'error': 'ChatGPT sign-in expired; start again'}),
         410,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType],
+        },
+      );
+    }
+    if (validationFailed &&
+        options.method == 'GET' &&
+        options.path == '/api/ai/codex/device/flow-1') {
+      return ResponseBody.fromString(
+        jsonEncode({
+          'error':
+              'OpenAI OAuth connected, but the selected model could not complete a test message',
+        }),
+        422,
         headers: {
           Headers.contentTypeHeader: [Headers.jsonContentType],
         },

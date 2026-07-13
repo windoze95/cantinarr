@@ -358,7 +358,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           title: Text('Include AI access for ${user.username}?'),
           content: Text(
             codex
-                ? 'Prompts and tool context will use the shared ChatGPT '
+                ? 'Prompts and tool context will use the shared OpenAI OAuth '
                     'account. All enabled users consume the same Codex '
                     'allowance, and activity is attributable to that account. '
                     'Any subscription or usage costs remain with it. ChatGPT '
@@ -366,7 +366,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                     'people or devices you control.'
                 : providerUnknown
                     ? 'Cantinarr could not confirm which shared provider is '
-                        'selected. If it is ChatGPT, prompts and tool context '
+                        'selected. If it is OpenAI OAuth, prompts and tool context '
                         'will use one shared account and Codex allowance, '
                         'activity is attributable to that account, and any '
                         'subscription or usage costs remain with it. ChatGPT '
@@ -682,7 +682,7 @@ class _UserTile extends StatelessWidget {
             title: const Text('Included AI access'),
             subtitle: Text(
               sharedAiProvider == 'codex'
-                  ? 'Shared ChatGPT allowance'
+                  ? 'Shared OpenAI OAuth allowance'
                   : sharedAiProvider.isEmpty
                       ? 'Provider status unavailable'
                       : 'Server provider quota',

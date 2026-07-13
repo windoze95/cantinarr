@@ -2,6 +2,7 @@ package ai
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 const (
@@ -20,10 +22,12 @@ const (
 type updatePersonalAISettingsRequest struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	APIKey   string `json:"api_key,omitempty"`
 }
 
 type updatePersonalAICredentialRequest struct {
 	APIKey string `json:"api_key"`
+	Model  string `json:"model,omitempty"`
 }
 
 // AISettings returns only caller-owned credential presence plus the safe
@@ -51,11 +55,40 @@ func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Provider = strings.TrimSpace(req.Provider)
 	req.Model = strings.TrimSpace(req.Model)
-	if !credentials.IsValidAIProvider(req.Provider) || len(req.Model) > maxAIModelLength {
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	if !credentials.IsValidAIProvider(req.Provider) || len(req.Model) > maxAIModelLength || len(req.APIKey) > maxAIAPIKeyLength {
 		writeAISettingsError(w, http.StatusBadRequest, "invalid AI provider or model")
 		return
 	}
-	if err := h.creds.SetUserAIConfig(claims.UserID, req.Provider, req.Model); err != nil {
+	if req.Model == "" {
+		req.Model = credentials.DefaultAIModel(req.Provider)
+	}
+	h.settingsMu.Lock()
+	defer h.settingsMu.Unlock()
+	profile := credentials.AIProfile{Config: credentials.AIConfig{Provider: req.Provider, Model: req.Model}}
+	if req.Provider == credentials.AIProviderCodex {
+		if req.APIKey != "" {
+			writeAISettingsError(w, http.StatusBadRequest, "OAuth providers do not accept API keys")
+			return
+		}
+		profile.CredentialPresent = true
+	} else if req.APIKey != "" {
+		profile.APIKey = req.APIKey
+		profile.CredentialPresent = true
+	} else {
+		key, found, err := h.creds.UserAICredential(claims.UserID, req.Provider)
+		if err != nil {
+			writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI credential")
+			return
+		}
+		profile.APIKey, profile.CredentialPresent = key, found
+	}
+	if err := h.ValidatePersonalAISettings(r.Context(), claims.UserID, profile); err != nil {
+		log.Printf("personal AI validation failed user_id=%d provider=%q model=%q: %v", claims.UserID, req.Provider, req.Model, secrets.RedactError(err))
+		writeAISettingsError(w, http.StatusUnprocessableEntity, "The selected AI provider and model could not complete a test message. Nothing was saved.")
+		return
+	}
+	if err := h.creds.SetUserAIProfile(claims.UserID, req.Provider, req.Model, req.APIKey); err != nil {
 		writeAISettingsError(w, http.StatusInternalServerError, "failed to save personal AI settings")
 		return
 	}
@@ -68,6 +101,8 @@ func (h *Handler) DeleteAISettings(w http.ResponseWriter, r *http.Request) {
 		writeAISettingsError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	h.settingsMu.Lock()
+	defer h.settingsMu.Unlock()
 	setAINoStore(w)
 	if err := h.creds.DeleteUserAIConfig(claims.UserID); err != nil {
 		writeAISettingsError(w, http.StatusInternalServerError, "failed to disable personal AI settings")
@@ -93,8 +128,31 @@ func (h *Handler) UpdatePersonalAICredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	req.APIKey = strings.TrimSpace(req.APIKey)
-	if req.APIKey == "" || len(req.APIKey) > maxAIAPIKeyLength {
+	req.Model = strings.TrimSpace(req.Model)
+	if req.APIKey == "" || len(req.APIKey) > maxAIAPIKeyLength || len(req.Model) > maxAIModelLength {
 		writeAISettingsError(w, http.StatusBadRequest, "api_key is required")
+		return
+	}
+	h.settingsMu.Lock()
+	defer h.settingsMu.Unlock()
+	if selected, found, err := h.creds.GetUserAIConfig(claims.UserID); err != nil {
+		writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
+		return
+	} else if found && selected.Provider == provider {
+		// A key rotation changes the active profile even though its model row is
+		// untouched. Test the pair that will actually serve the next request.
+		req.Model = selected.Model
+	} else if req.Model == "" {
+		req.Model = credentials.DefaultAIModel(provider)
+	}
+	profile := credentials.AIProfile{
+		Config:            credentials.AIConfig{Provider: provider, Model: req.Model},
+		APIKey:            req.APIKey,
+		CredentialPresent: true,
+	}
+	if err := h.ValidatePersonalAISettings(r.Context(), claims.UserID, profile); err != nil {
+		log.Printf("personal AI credential validation failed user_id=%d provider=%q model=%q: %v", claims.UserID, provider, req.Model, secrets.RedactError(err))
+		writeAISettingsError(w, http.StatusUnprocessableEntity, "The AI key and model could not complete a test message. Nothing was saved.")
 		return
 	}
 	setAINoStore(w)
@@ -116,6 +174,8 @@ func (h *Handler) DeletePersonalAICredential(w http.ResponseWriter, r *http.Requ
 		writeAISettingsError(w, http.StatusBadRequest, "provider does not accept an API key")
 		return
 	}
+	h.settingsMu.Lock()
+	defer h.settingsMu.Unlock()
 	setAINoStore(w)
 	if err := h.creds.DeleteUserAICredential(claims.UserID, provider); err != nil {
 		writeAISettingsError(w, http.StatusInternalServerError, "failed to delete personal AI credential")

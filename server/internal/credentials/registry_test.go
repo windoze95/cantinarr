@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -26,7 +27,7 @@ func TestAIProviderMetadataIncludesAuthType(t *testing.T) {
 	}
 
 	codex := aiProviderForTest(t, AIProviderCodex)
-	if codex.Label != "ChatGPT (Codex)" {
+	if codex.Label != "OpenAI (OAuth)" {
 		t.Fatalf("Codex label = %q", codex.Label)
 	}
 	if codex.AuthType != AIAuthTypeUserOAuth {
@@ -35,8 +36,17 @@ func TestAIProviderMetadataIncludesAuthType(t *testing.T) {
 	if codex.CredentialKey != "" {
 		t.Fatalf("Codex credential_key = %q, want empty", codex.CredentialKey)
 	}
-	if len(codex.Models) != 1 || codex.Models[0].ID != "default" || codex.Models[0].Label != "Codex default" {
+	wantCodexModels := []string{"default", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+	if len(codex.Models) != len(wantCodexModels) {
 		t.Fatalf("Codex models = %+v", codex.Models)
+	}
+	for i, want := range wantCodexModels {
+		if codex.Models[i].ID != want {
+			t.Fatalf("Codex model[%d] = %q, want %q", i, codex.Models[i].ID, want)
+		}
+	}
+	if codex.Models[0].Label != "OpenAI recommended" {
+		t.Fatalf("Codex default label = %q", codex.Models[0].Label)
 	}
 	encoded, err := json.Marshal(codex)
 	if err != nil {
@@ -116,6 +126,66 @@ func TestIsAIConfiguredExcludesUserOAuth(t *testing.T) {
 	}
 	if !registry.IsAIConfigured() {
 		t.Fatal("shared AI did not report configured for selected API-key provider")
+	}
+}
+
+func TestAIHealthCheckScheduleDefaultsOnAndSurvivesRestart(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x45}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(database, cipher)
+	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	if !registry.AIHealthCheckEnabled() || !registry.AIHealthCheckDue(now) {
+		t.Fatal("a never-checked install should default to a due daily health check")
+	}
+	if err := registry.RecordAIHealthCheck(now); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewRegistry(database, cipher)
+	if restarted.AIHealthLastCheck() != now {
+		t.Fatalf("last check = %s, want %s", restarted.AIHealthLastCheck(), now)
+	}
+	if restarted.AIHealthCheckDue(now.Add(23 * time.Hour)) {
+		t.Fatal("health check became due before 24 hours")
+	}
+	if !restarted.AIHealthCheckDue(now.Add(24 * time.Hour)) {
+		t.Fatal("health check did not become due at 24 hours")
+	}
+	if err := restarted.SetSetting(KeyAIHealthCheckEnabled, "false"); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.AIHealthCheckEnabled() || restarted.AIHealthCheckDue(now.Add(48*time.Hour)) {
+		t.Fatal("disabled health checks must never be due")
+	}
+}
+
+func TestAISelectionConfiguredSkipsUntouchedInstall(t *testing.T) {
+	t.Setenv("CANTINARR_AI_PROVIDER", "")
+	t.Setenv("CANTINARR_AI_MODEL", "")
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x46}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(database, cipher)
+	if registry.AISelectionConfigured() {
+		t.Fatal("untouched default selection reported configured")
+	}
+	if err := registry.SetAIConfig(AIProviderCodex, "gpt-5.6-luna"); err != nil {
+		t.Fatal(err)
+	}
+	if !registry.AISelectionConfigured() {
+		t.Fatal("explicit OAuth selection did not report configured")
 	}
 }
 

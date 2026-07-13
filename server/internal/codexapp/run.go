@@ -131,6 +131,33 @@ func (m *Manager) RunWithAccount(
 	})
 }
 
+// ProbeAccount completes one tiny tool-free response using the exact account
+// and model selected at an AI settings boundary. It is intentionally separate
+// from interactive chat attribution and from the remediation-only shared turn.
+func (m *Manager) ProbeAccount(ctx context.Context, account AccountRef, model string) error {
+	var result AutonomousTurnResult
+	actorKey := "system:ai-probe:shared"
+	if !account.shared {
+		actorKey = "system:ai-probe:user:" + strconv.FormatInt(account.userID, 10)
+	}
+	err := m.runWithAccount(ctx, account, model,
+		"You are checking whether an AI provider is ready. Do not use tools. Return one short plain-text response.",
+		"This is a Cantinarr provider readiness check.",
+		"Reply with exactly: OK",
+		runBehavior{
+			actorKey:  actorKey,
+			captured:  &result,
+			maxOutput: 256,
+		})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(result.Text) == "" {
+		return ErrProvider
+	}
+	return nil
+}
+
 // RunSharedAutonomousTurn runs one server-owned Codex turn against only the
 // admin-owned shared account, with an exact dynamic-tool surface. Tool requests
 // are validated and returned as data; they are never executed inside app-server.

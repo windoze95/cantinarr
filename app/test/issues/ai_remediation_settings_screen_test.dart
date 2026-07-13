@@ -29,7 +29,7 @@ void main() {
 
     expect(
         find.textContaining('This server-owned agent always'), findsOneWidget);
-    expect(find.textContaining('shared ChatGPT usage meter'), findsOneWidget);
+    expect(find.textContaining('shared OpenAI OAuth usage meter'), findsOneWidget);
     expect(
       find.textContaining(
         'Personal providers and per-user AI access switches are never used',

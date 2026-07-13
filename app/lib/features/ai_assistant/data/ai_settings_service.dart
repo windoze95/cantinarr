@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import 'ai_provider_models.dart';
 
+const _aiValidationReceiveTimeout = Duration(seconds: 75);
+
 enum AiAccessSource { personal, shared, none }
 
 AiAccessSource _accessSource(String? value) => switch (value) {
@@ -154,7 +156,7 @@ String _fallbackLabel(String provider) => switch (provider) {
       'anthropic' => 'Anthropic',
       'openai' => 'OpenAI',
       'gemini' => 'Google Gemini',
-      'codex' => 'ChatGPT (Codex)',
+      'codex' => 'OpenAI (OAuth)',
       _ => provider,
     };
 
@@ -171,10 +173,16 @@ class AiSettingsService {
   Future<AiSettings> usePersonal({
     required String provider,
     required String model,
+    String? apiKey,
   }) async {
+    final data = <String, String>{'provider': provider, 'model': model};
+    if (apiKey != null && apiKey.trim().isNotEmpty) {
+      data['api_key'] = apiKey.trim();
+    }
     final response = await _dio.put(
       '/api/ai/settings',
-      data: {'provider': provider, 'model': model},
+      data: data,
+      options: Options(receiveTimeout: _aiValidationReceiveTimeout),
     );
     return AiSettings.fromJson(response.data as Map<String, dynamic>);
   }
@@ -185,10 +193,15 @@ class AiSettingsService {
     await _dio.delete('/api/ai/settings');
   }
 
-  Future<void> setApiKey(String provider, String apiKey) async {
+  Future<void> setApiKey(
+    String provider,
+    String apiKey, {
+    required String model,
+  }) async {
     await _dio.put(
       '/api/ai/credentials/${Uri.encodeComponent(provider)}',
-      data: {'api_key': apiKey},
+      data: {'api_key': apiKey, 'model': model},
+      options: Options(receiveTimeout: _aiValidationReceiveTimeout),
     );
   }
 

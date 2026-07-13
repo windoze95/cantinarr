@@ -17,7 +17,7 @@ void main() {
 
     expect(find.textContaining('Personal · OpenAI'), findsOneWidget);
     expect(find.textContaining('did not fall back'), findsOneWidget);
-    expect(find.text('Included · ChatGPT (Codex)'), findsNothing);
+    expect(find.text('Included · OpenAI (OAuth)'), findsNothing);
 
     final useIncluded = find.text('Use included access');
     await tester.ensureVisible(useIncluded);
@@ -25,7 +25,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(service.includedCalls, 1);
-    expect(find.textContaining('Included · ChatGPT (Codex)'), findsOneWidget);
+    expect(find.textContaining('Included · OpenAI (OAuth)'), findsOneWidget);
     expect(service.current.personal.isConfigured('openai'), isFalse);
   });
 
@@ -37,7 +37,7 @@ void main() {
     expect(find.text('Anthropic'), findsOneWidget);
     expect(find.text('OpenAI'), findsOneWidget);
     expect(find.text('Google Gemini'), findsOneWidget);
-    expect(find.text('ChatGPT (Codex)'), findsWidgets);
+    expect(find.text('OpenAI (OAuth)'), findsWidgets);
 
     await tester.enterText(
       find.widgetWithText(TextField, 'OpenAI API key'),
@@ -56,9 +56,9 @@ void main() {
     final service = _FakeAiSettingsService(_included());
     await _pump(tester, service, withChatGptRoute: true);
 
-    await tester.tap(find.widgetWithText(ChoiceChip, 'ChatGPT (Codex)'));
+    await tester.tap(find.widgetWithText(ChoiceChip, 'OpenAI (OAuth)'));
     await tester.pumpAndSettle();
-    final connect = find.text('Connect personal ChatGPT');
+    final connect = find.text('Connect personal OpenAI OAuth');
     await tester.ensureVisible(connect);
     await tester.tap(connect);
     await tester.pumpAndSettle();
@@ -136,16 +136,12 @@ class _FakeAiSettingsService extends AiSettingsService {
   Future<AiSettings> getSettings() async => current;
 
   @override
-  Future<void> setApiKey(String provider, String apiKey) async {
-    savedKeys.add((provider, apiKey));
-    current = _personal(provider: provider, configured: true);
-  }
-
-  @override
   Future<AiSettings> usePersonal({
     required String provider,
     required String model,
+    String? apiKey,
   }) async {
+    if (apiKey != null) savedKeys.add((provider, apiKey));
     personalSelections.add((provider, model));
     current = _personal(provider: provider, configured: true, model: model);
     return current;
@@ -197,13 +193,13 @@ const _providers = [
   ),
   AiProviderOption(
     id: 'codex',
-    label: 'ChatGPT (Codex)',
+    label: 'OpenAI (OAuth)',
     credentialKey: '',
     authType: 'user_oauth',
     models: [
       AiModelOption(
         id: 'default',
-        label: 'Codex default',
+        label: 'OpenAI recommended',
         description: '',
       ),
     ],

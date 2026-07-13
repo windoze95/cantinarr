@@ -407,6 +407,45 @@ func TestAutonomousTurnWithNoToolsReturnsText(t *testing.T) {
 	assertRuntimeEmpty(t, runtimeDir)
 }
 
+func TestProbeAccountUsesExactModelWithoutExecutingTools(t *testing.T) {
+	manager, _, _, runtimeDir, logPath := fakeManager(t)
+	if err := manager.saveAccount(
+		SharedAccount(),
+		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+		AccountStatus{Connected: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	executed := false
+	manager.toolCallObserver = func(mcp.CallContext) { executed = true }
+	if err := manager.ProbeAccount(context.Background(), SharedAccount(), "gpt-5.6-luna"); err != nil {
+		t.Fatalf("probe account: %v", err)
+	}
+	if executed {
+		t.Fatal("provider probe executed a Cantinarr tool")
+	}
+	var received []map[string]any
+	for _, entry := range readFakeLog(t, logPath) {
+		if entry.Kind != "received" {
+			continue
+		}
+		var message map[string]any
+		if json.Unmarshal(entry.Value, &message) == nil {
+			received = append(received, message)
+		}
+	}
+	thread := requestByMethod(t, received, "thread/start")
+	params, _ := thread["params"].(map[string]any)
+	if params["model"] != "gpt-5.6-luna" {
+		t.Fatalf("probe model=%v", params["model"])
+	}
+	tools, ok := params["dynamicTools"].([]any)
+	if !ok || len(tools) != 0 {
+		t.Fatalf("probe dynamic tools=%#v, want empty", params["dynamicTools"])
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
 func TestSharedAutonomousTurnInterruptsAtReportedOutputLimit(t *testing.T) {
 	manager, _, _, runtimeDir, _ := fakeManager(t)
 	if err := manager.saveAccount(

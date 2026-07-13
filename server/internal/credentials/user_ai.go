@@ -223,6 +223,59 @@ func (r *Registry) SetUserAIConfig(userID int64, provider, model string) error {
 	return err
 }
 
+// SetUserAIProfile atomically stores an optional replacement API key and the
+// personal provider/model that was already proven by a save-time test turn.
+func (r *Registry) SetUserAIProfile(userID int64, provider, model, apiKey string) error {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	apiKey = strings.TrimSpace(apiKey)
+	if userID <= 0 || !IsValidAIProvider(provider) {
+		return fmt.Errorf("invalid personal AI settings")
+	}
+	if model == "" {
+		model = DefaultAIModel(provider)
+	}
+	if provider == AIProviderCodex && apiKey != "" {
+		return fmt.Errorf("OAuth provider does not accept an API key")
+	}
+	var encrypted string
+	var err error
+	if apiKey != "" {
+		if AIKeyCredentialKey(provider) == "" {
+			return fmt.Errorf("provider does not accept an API key")
+		}
+		encrypted, err = r.cipher.Encrypt(apiKey)
+		if err != nil || !secrets.IsEncrypted(encrypted) {
+			return ErrAIStorage
+		}
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if encrypted != "" {
+		if _, err := tx.Exec(`
+			INSERT INTO user_ai_credentials (user_id, provider, credential_blob, updated_at)
+			VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(user_id, provider) DO UPDATE SET
+				credential_blob = excluded.credential_blob,
+				updated_at = CURRENT_TIMESTAMP`, userID, provider, encrypted); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO user_ai_settings (user_id, provider, model, updated_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(user_id) DO UPDATE SET
+			provider = excluded.provider,
+			model = excluded.model,
+			updated_at = CURRENT_TIMESTAMP`, userID, provider, model); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // DeleteUserAIConfig disables the personal override without deleting retained
 // personal credentials. The user can explicitly erase each credential.
 func (r *Registry) DeleteUserAIConfig(userID int64) error {

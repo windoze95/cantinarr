@@ -4,7 +4,10 @@ import (
 	"database/sql"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
@@ -21,6 +24,10 @@ const (
 
 	KeyAIProvider = "ai_provider"
 	KeyAIModel    = "ai_model"
+	// KeyAIHealthCheckEnabled controls only the scheduled shared-model probe.
+	// Provider/model saves always perform their own validation turn.
+	KeyAIHealthCheckEnabled = "ai_health_check_enabled"
+	KeyAIHealthLastCheckAt  = "ai_health_last_check_at"
 )
 
 // AllKeys lists every credential key the system manages. Values for these
@@ -37,6 +44,10 @@ const (
 	AIAuthTypeUserOAuth = "user_oauth"
 
 	DefaultAIProvider = AIProviderAnthropic
+
+	// AIHealthCheckInterval deliberately keeps the default background cost to
+	// one tiny shared-provider turn per day.
+	AIHealthCheckInterval = 24 * time.Hour
 )
 
 // AIModelOption describes one selectable chat model for the admin UI.
@@ -104,10 +115,13 @@ var AIProviders = []AIProviderOption{
 	},
 	{
 		ID:       AIProviderCodex,
-		Label:    "ChatGPT (Codex)",
+		Label:    "OpenAI (OAuth)",
 		AuthType: AIAuthTypeUserOAuth,
 		Models: []AIModelOption{
-			{ID: "default", Label: "Codex default", Description: "Uses the model selected by Codex"},
+			{ID: "default", Label: "OpenAI recommended", Description: "Uses the current model recommended by Codex"},
+			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Highest-quality GPT-5.6 model for complex work"},
+			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Pragmatic GPT-5.6 model for everyday work"},
+			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Fast GPT-5.6 model for clear, repeatable work"},
 		},
 	},
 }
@@ -265,6 +279,55 @@ func (r *Registry) SetSetting(key, value string) error {
 		key, value,
 	)
 	return err
+}
+
+// AIHealthCheckEnabled defaults on for existing installs. The switch affects
+// only periodic probes; explicit shared-provider saves are always validated.
+func (r *Registry) AIHealthCheckEnabled() bool {
+	raw := strings.TrimSpace(r.GetSetting(KeyAIHealthCheckEnabled))
+	if raw == "" {
+		return true
+	}
+	enabled, err := strconv.ParseBool(raw)
+	return err == nil && enabled
+}
+
+// AIHealthLastCheck returns the last completed scheduled or save-time probe.
+// A missing or malformed value is treated as never checked.
+func (r *Registry) AIHealthLastCheck() time.Time {
+	checked, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(r.GetSetting(KeyAIHealthLastCheckAt)))
+	if err != nil {
+		return time.Time{}
+	}
+	return checked.UTC()
+}
+
+// RecordAIHealthCheck prevents restarts from multiplying background usage.
+func (r *Registry) RecordAIHealthCheck(checked time.Time) error {
+	return r.SetSetting(KeyAIHealthLastCheckAt, checked.UTC().Format(time.RFC3339Nano))
+}
+
+// AIHealthCheckDue reports whether the optional daily shared-model turn is due.
+func (r *Registry) AIHealthCheckDue(now time.Time) bool {
+	if !r.AIHealthCheckEnabled() {
+		return false
+	}
+	last := r.AIHealthLastCheck()
+	return last.IsZero() || !now.UTC().Before(last.Add(AIHealthCheckInterval))
+}
+
+// AISelectionConfigured distinguishes an intentionally configured shared
+// provider from the untouched Anthropic fallback used by legacy installs.
+func (r *Registry) AISelectionConfigured() bool {
+	if strings.TrimSpace(r.GetSetting(KeyAIProvider)) != "" || strings.TrimSpace(r.GetSetting(KeyAIModel)) != "" {
+		return true
+	}
+	if strings.TrimSpace(os.Getenv("CANTINARR_AI_PROVIDER")) != "" || strings.TrimSpace(os.Getenv("CANTINARR_AI_MODEL")) != "" {
+		return true
+	}
+	config := r.GetAIConfig()
+	key := AIKeyCredentialKey(config.Provider)
+	return key != "" && r.IsConfigured(key)
 }
 
 // SetCredential writes a credential to the DB (upsert). Secret keys are

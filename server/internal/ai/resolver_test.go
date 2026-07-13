@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -28,7 +29,9 @@ func newResolverTestHandler(t *testing.T) (*Handler, *credentials.Registry, *sql
 	}
 	userID, _ := result.LastInsertId()
 	registry := credentials.NewRegistry(database, cipher)
-	return &Handler{creds: registry}, registry, database, userID
+	handler := &Handler{creds: registry}
+	handler.validationProbe = func(context.Context, credentials.AIProfile, codexapp.AccountRef) error { return nil }
+	return handler, registry, database, userID
 }
 
 func TestResolveAIPersonalOverridesShared(t *testing.T) {

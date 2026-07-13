@@ -131,7 +131,7 @@ class _AiRemediationSettingsScreenState
             'for your approval. Read-only investigation never changes anything; '
             'every mutation waits for an admin. This server-owned agent always '
             'uses the admin shared provider, so runs count against its API quota '
-            'or shared ChatGPT usage meter. Personal providers and per-user AI '
+            'or shared OpenAI OAuth usage meter. Personal providers and per-user AI '
             'access switches are never used.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
@@ -272,8 +272,8 @@ class _AiRemediationSettingsScreenState
           padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: Text(
             'Always uses the provider and model currently selected in Admin > '
-            'Providers & Credentials, including the admin-shared ChatGPT '
-            '(Codex) connection. Change the shared AI profile there.',
+            'Providers & Credentials, including the admin-shared OpenAI '
+            '(OAuth) connection. Change the shared AI profile there.',
             style: TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 13,
@@ -290,7 +290,7 @@ class _AiRemediationSettingsScreenState
         _NumberTile(
           label: 'Max output tokens per turn',
           help: 'API-key providers receive this as a request cap. For shared '
-              'ChatGPT, Cantinarr watches Codex usage reports and interrupts '
+              'OpenAI OAuth, Cantinarr watches Codex usage reports and interrupts '
               'the turn when reported output reaches the limit. Reports are '
               'best-effort rather than a request-side hard cap and can arrive '
               'after the model has already exceeded the boundary.',

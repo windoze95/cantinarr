@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -99,13 +100,16 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
     setState(() => _saving = true);
     try {
       final service = ref.read(aiSettingsServiceProvider);
-      if (saveKey) {
-        await service.setApiKey(provider, _apiKeyController.text.trim());
-      }
-      await service.usePersonal(provider: provider, model: model);
+      await service.usePersonal(
+        provider: provider,
+        model: model,
+        apiKey: saveKey ? _apiKeyController.text.trim() : null,
+      );
       _apiKeyController.clear();
       await _refresh();
-      _message('Personal ${settings.providerLabel(provider)} is now active.');
+      _message(
+        'Personal ${settings.providerLabel(provider)} passed its test and is now active.',
+      );
     } catch (error) {
       _message(_friendlyError(error, 'Could not update personal AI access.'));
     } finally {
@@ -162,7 +166,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
     }
   }
 
-  Future<void> _openChatGPT() async {
+  Future<void> _openOpenAIOAuth() async {
     await context.push('/settings/chatgpt');
     if (!mounted) return;
     ref.invalidate(codexConnectionStatusProvider);
@@ -234,7 +238,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
           onSaveKeyAndUse: () => _saveAndUse(settings, saveKey: true),
           onUseConfigured: () => _saveAndUse(settings),
           onDeleteKey: (provider) => _deleteKey(settings, provider),
-          onOpenChatGPT: _openChatGPT,
+          onOpenChatGPT: _openOpenAIOAuth,
         ),
         const SizedBox(height: 16),
         _IncludedSourcePanel(
@@ -411,7 +415,7 @@ class _PersonalSourcePanel extends StatelessWidget {
           const SizedBox(height: 7),
           const Text(
             'A personal provider takes priority over included AI. Keys and '
-            'ChatGPT authorization stay encrypted on your Cantinarr server.',
+            'OpenAI OAuth authorization stay encrypted on your Cantinarr server.',
             style: TextStyle(color: AppTheme.textSecondary, height: 1.42),
           ),
           const SizedBox(height: 16),
@@ -524,6 +528,16 @@ class _PersonalSourcePanel extends StatelessWidget {
                 ),
               ],
             ],
+            const SizedBox(height: 10),
+            const Text(
+              'Provider and model saves require one small response test. '
+              'A failed save keeps your previous active settings.',
+              style: TextStyle(
+                color: AppTheme.textMuted,
+                fontSize: 12,
+                height: 1.35,
+              ),
+            ),
           ],
         ],
       ),
@@ -552,7 +566,7 @@ class _ChatGPTActions extends StatelessWidget {
       return ElevatedButton.icon(
         onPressed: onManage,
         icon: const Icon(Icons.open_in_browser_rounded, size: 18),
-        label: const Text('Connect personal ChatGPT'),
+        label: const Text('Connect personal OpenAI OAuth'),
       );
     }
     return Column(
@@ -561,13 +575,13 @@ class _ChatGPTActions extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: onManage,
           icon: const Icon(Icons.manage_accounts_outlined, size: 18),
-          label: const Text('Manage personal ChatGPT'),
+          label: const Text('Manage personal OpenAI OAuth'),
         ),
         if (!active) ...[
           const SizedBox(height: 8),
           ElevatedButton(
             onPressed: saving ? null : onUse,
-            child: const Text('Use personal ChatGPT'),
+            child: const Text('Use personal OpenAI OAuth'),
           ),
         ],
       ],
@@ -773,11 +787,11 @@ String _reasonCopy(String reason) => switch (reason) {
       'personal_credential_missing' =>
         'The selected personal API key is missing.',
       'personal_codex_disconnected' =>
-        'The selected personal ChatGPT account needs to be connected.',
+        'The selected personal OpenAI OAuth account needs to be connected.',
       'shared_codex_disconnected' =>
-        'Included ChatGPT needs the server admin to connect its shared account.',
+        'Included OpenAI OAuth needs the server admin to connect its shared account.',
       'codex_unavailable' =>
-        'ChatGPT is configured, but Codex is unavailable on this server.',
+        'OpenAI OAuth is configured, but its Codex runtime is unavailable on this server.',
       'storage_error' =>
         'Cantinarr could not read the saved AI credentials. Ask the admin to '
             'check the server logs and encryption key.',
@@ -785,6 +799,12 @@ String _reasonCopy(String reason) => switch (reason) {
     };
 
 String _friendlyError(Object error, String fallback) {
+  if (error is DioException) {
+    final data = error.response?.data;
+    if (data is Map && data['error'] is String) {
+      return data['error'] as String;
+    }
+  }
   final match = RegExp(r'"error":"([^"]+)"').firstMatch(error.toString());
   return match?.group(1) ?? fallback;
 }
