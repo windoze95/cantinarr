@@ -646,12 +646,13 @@ class _AIHealthCheckSection extends StatelessWidget {
     final lastTest = lastCheckedAt == null
         ? ''
         : '\nLast tested ${_shortDate(lastCheckedAt!)}.';
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceVariant.withValues(alpha: 0.45),
+    return Material(
+      color: AppTheme.surfaceVariant.withValues(alpha: 0.45),
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
-        border: Border.all(color: AppTheme.border),
+        side: const BorderSide(color: AppTheme.border),
       ),
+      clipBehavior: Clip.antiAlias,
       child: SwitchListTile.adaptive(
         key: const ValueKey('ai-health-check-toggle'),
         value: enabled,
