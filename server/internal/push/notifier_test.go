@@ -281,6 +281,30 @@ func TestNotifyAdminsUsesAutomaticIssueCopy(t *testing.T) {
 	}
 }
 
+func TestNotifyAdminsUsesSharedAIHealthIssueCopy(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, capture := newNotifierTestGateway(t, database)
+	notifier := NewNotifier(database, mgr, nil)
+	notifier.NotifyAdmins("issue_created", map[string]interface{}{
+		"issue_id": 51,
+		"source":   "system",
+	})
+
+	body := capture.waitForNotification(t)
+	notification, _ := body["notification"].(map[string]any)
+	if notification["title"] != "Shared AI needs attention" {
+		t.Fatalf("title=%v", notification["title"])
+	}
+	if notification["body"] != "Cantinarr's shared AI model failed its daily response test" {
+		t.Fatalf("body=%v", notification["body"])
+	}
+}
+
 func TestNotifyAdminsHonorsOptOutAndRole(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {

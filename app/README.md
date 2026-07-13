@@ -88,7 +88,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Live badges** -- Approvals / actionable Issues / Agent fixes counts in the drawer, kept current over WebSocket; quietly observed or actively retrying arr issues are tracked without adding alert pressure. A **Plex invites** entry appears (with count) only while someone is waiting on a Plex invite -- the persistent surface behind the miss-able push -- and lands on the Users screen, where waiting users carry a "Needs Plex invite" tag. A **Setup checklist** entry (with unconfigured-feature count) appears for admins until everything is configured or they mute it from the checklist.
 
 ### AI assistant
-- **Multi-provider chat** with SSE streaming, visible tool activity, and a poster carousel for results. Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link ChatGPT (Codex) with a browser device code. Admins can configure the same choices as an included server profile and grant it per user. Personal overrides fail closed instead of silently spending shared quota.
+- **Multi-provider chat** with SSE streaming, visible tool activity, and a poster carousel for results. Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link OpenAI (OAuth) with a ChatGPT browser device code. Admins can configure the same choices as an included server profile and grant it per user. Personal overrides fail closed instead of silently spending shared quota.
 - **Server-side tools** -- the assistant searches, checks availability, and requests on your behalf; admins can triage queues conversationally.
 - **Persistent session** -- the focused `/assistant` workspace keeps one conversation alive across navigation (30-minute idle expiry).
 
@@ -103,11 +103,11 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Plex Invites** (admin) -- link a Plex account via the PIN flow, pick the server and libraries invites share, and toggle **auto-invite** (a user sharing their Plex email gets invited with zero admin taps).
 - **Request policy** (admin) -- global require-approval, season choice + default scope, quality choice + default profiles.
 - **Devices** (admin) -- every connected device with hardware model, last-seen, "This device" badge, and revoke.
-- **Credentials** (admin, write-only) -- TMDB and Trakt, plus the included server AI profile: Anthropic/OpenAI/Gemini API keys or a shared ChatGPT (Codex) connection and provider/model selection.
-- **AI Access** (self-service) -- choose included access when the admin grants it, or configure a personal Anthropic/OpenAI/Gemini key or ChatGPT (Codex) link at any time, with or without a grant. A personal provider need not match the server provider. Personal and included sources are labeled separately, keys are write-only, and a broken personal override is never replaced by surprise shared usage.
-- **ChatGPT** -- personal and admin-shared device-code flows open in the browser, poll until approval, show the owning account's current Codex usage windows, and support disconnecting it. Passwords and OAuth tokens never pass through the app; authorization is encrypted on the server. Only admins can see shared-account identity and usage metadata.
+- **Credentials** (admin, write-only) -- TMDB and Trakt, plus the included server AI profile: Anthropic/OpenAI/Gemini API keys or a shared OpenAI (OAuth) connection and provider/model selection. AI saves show a testing state and succeed only after one small response turn. A default-on daily shared-model test can be disabled to eliminate background usage; failures open one admin issue.
+- **AI Access** (self-service) -- choose included access when the admin grants it, or configure a personal Anthropic/OpenAI/Gemini key or OpenAI (OAuth) link at any time, with or without a grant. A personal provider need not match the server provider. Personal and included sources are labeled separately, keys are write-only, and a broken personal override is never replaced by surprise shared usage. Key and model are tested and saved together so a failure keeps the prior profile intact.
+- **OpenAI OAuth** -- personal and admin-shared device-code flows open ChatGPT sign-in in the browser, poll until approval, perform a small response test, show the owning account's current Codex usage windows, and support disconnecting it. The model picker includes OpenAI recommended and GPT-5.6 Sol, Terra, and Luna. Passwords and OAuth tokens never pass through the app; authorization is encrypted on the server. Only admins can see shared-account identity and usage metadata.
 - **AI tools** (admin) -- per-tool toggles for chat + MCP, and a one-hour debug-logging switch.
-- **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, mark-resolved-issues-as-read, `supervised`/`investigate_only` mode, step/turn/time and daily-run budgets, reporter-reply timeout, and minimum-watch / arr-quiet / recovery-settle timers that delay investigation and alerts while Radarr or Sonarr can still recover on its own. This server-owned agent always follows the currently selected admin shared provider and model, including the shared ChatGPT (Codex) connection; it never uses personal credentials or per-user included-access grants.
+- **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, mark-resolved-issues-as-read, `supervised`/`investigate_only` mode, step/turn/time and daily-run budgets, reporter-reply timeout, and minimum-watch / arr-quiet / recovery-settle timers that delay investigation and alerts while Radarr or Sonarr can still recover on its own. This server-owned agent always follows the currently selected admin shared provider and model, including the shared OpenAI OAuth connection; it never uses personal credentials or per-user included-access grants.
 - **Update Portal** (admin) -- optional link to your own container-management portal (e.g. an Unraid or Portainer page). When the server sees a newer published release, an admin-only banner appears app-wide and links here (or to the update guide when unset); it's dismissible per release. The About sheet also shows the running server version.
 - **Notifications, Passkeys, Password** -- self-service (passkey/password screens appear when admin-enabled).
 - **Watch on Plex guide** -- requester-focused walkthrough (install the Plex app, sign in, accept the invite, start watching) with a **Request your invite** step: the user shares their Plex email, admins get a push pointing at the Users screen, and once the invite goes out (one-tap or auto) the card flips to "check your inbox" and the user gets a push. Hideable from the guide itself or via a Settings toggle that also removes it from the menu.
@@ -152,8 +152,8 @@ Feature-first structure with data / logic / ui layers per feature. State is Rive
 | Arr management | Backend `/api/instances/{id}/api/v3` (credential-scrubbed proxy) | API keys never reach devices; reads allowed for users, writes admin-only |
 | Books | Backend proxy to Chaptarr (Readarr API v1) | Per-user grant enforced server-side |
 | AI chat | Backend `/api/ai/chat` (SSE) | Tool execution stays server-side; chat uses the resolved personal provider or a granted included provider |
-| AI settings | Backend `/api/ai/settings` + write-only personal credential routes | The app sees provider/model, source, and configured booleans, never secret values |
-| ChatGPT link | Personal `/api/ai/codex/*` or admin-shared `/api/admin/ai/codex/*` + explicit browser sign-in | Device code and scope-appropriate safe status reach the app; OAuth tokens remain encrypted on the server |
+| AI settings | Backend `/api/ai/settings` + write-only personal credential routes | The app sees provider/model, source, validation errors, and configured booleans, never secret values |
+| OpenAI OAuth | Personal `/api/ai/codex/*` or admin-shared `/api/admin/ai/codex/*` + explicit ChatGPT browser sign-in | Device code and scope-appropriate safe status reach the app; OAuth tokens remain encrypted on the server |
 | Realtime | Backend `/api/ws` | Queue snapshots, status pings, badges |
 | Push | Native APNs token → backend → push gateway | No Firebase |
 
@@ -175,7 +175,7 @@ app/lib/
 │   └── widgets/                  # Ambient canvas, panels, heroes, media primitives, sheets...
 ├── features/
 │   ├── auth/                     # Auth screen (setup/login/connect), passkeys, session
-│   ├── ai_assistant/             # SSE chat, source-aware AI settings, media carousel, ChatGPT links
+│   ├── ai_assistant/             # SSE chat, source-aware AI settings, media carousel, OpenAI OAuth
 │   ├── chaptarr/                 # Books module: library/queue/history/wanted + doctor
 │   ├── dashboard/                # Movies/TV/Releases/Books home tabs
 │   ├── discover/                 # Discovery rows + multi-search (backend-proxied)

@@ -5,6 +5,8 @@ import '../../ai_assistant/data/ai_provider_models.dart';
 export '../../ai_assistant/data/ai_provider_models.dart'
     show AiModelOption, AiProviderOption;
 
+const _aiValidationReceiveTimeout = Duration(seconds: 75);
+
 class CredentialsStatus {
   final Map<String, bool> credentials;
   final AiCredentialConfig ai;
@@ -36,15 +38,22 @@ class AiCredentialConfig {
   final String provider;
   final String model;
   final List<AiProviderOption> providers;
+  final bool healthCheckEnabled;
+  final int healthCheckIntervalHours;
+  final DateTime? healthLastCheckedAt;
 
   const AiCredentialConfig({
     required this.provider,
     required this.model,
     required this.providers,
+    required this.healthCheckEnabled,
+    required this.healthCheckIntervalHours,
+    required this.healthLastCheckedAt,
   });
 
   factory AiCredentialConfig.fromJson(Map<String, dynamic> json) {
     final config = json['config'] as Map<String, dynamic>? ?? const {};
+    final health = json['health_check'] as Map<String, dynamic>? ?? const {};
     final providersJson = json['providers'] as List? ?? const [];
     final providers = providersJson
         .map((e) => AiProviderOption.fromJson(e as Map<String, dynamic>))
@@ -67,6 +76,12 @@ class AiCredentialConfig {
               ? selected!.models.first.id
               : 'claude-opus-4-8'),
       providers: providers,
+      healthCheckEnabled: health['enabled'] as bool? ?? true,
+      healthCheckIntervalHours:
+          (health['interval_hours'] as num?)?.toInt() ?? 24,
+      healthLastCheckedAt: DateTime.tryParse(
+        health['last_checked_at'] as String? ?? '',
+      )?.toLocal(),
     );
   }
 }
@@ -85,7 +100,11 @@ class CredentialsService {
 
   /// Updates one or more credentials. Only non-empty values are written.
   Future<void> update(Map<String, String> credentials) async {
-    await _dio.put('/api/admin/credentials', data: credentials);
+    await _dio.put(
+      '/api/admin/credentials',
+      data: credentials,
+      options: Options(receiveTimeout: _aiValidationReceiveTimeout),
+    );
   }
 
   /// Removes a single credential.

@@ -155,6 +155,9 @@ func (n *Notifier) notifyIssueCreated(client *Client, data map[string]interface{
 	if str(data["source"]) == "auto" {
 		title = "Problem needs attention"
 		body = "Cantinarr found a media problem that did not recover automatically"
+	} else if str(data["source"]) == "system" {
+		title = "Shared AI needs attention"
+		body = "Cantinarr's shared AI model failed its daily response test"
 	}
 	n.sendWithOptions(client, recipients, title, body, out, SendOptions{})
 }

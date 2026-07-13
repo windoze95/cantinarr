@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -34,7 +35,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   final _customModelController = TextEditingController();
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
+  bool _healthCheckEnabled = true;
   bool _isSaving = false;
+  bool _isTestingAI = false;
 
   @override
   void initState() {
@@ -69,17 +72,21 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
   Future<void> _save() async {
     final creds = <String, String>{};
+    var aiChanged = false;
     if (_tmdbController.text.isNotEmpty) {
       creds['tmdb_access_token'] = _tmdbController.text.trim();
     }
     if (_anthropicController.text.isNotEmpty) {
       creds['anthropic_key'] = _anthropicController.text.trim();
+      aiChanged = true;
     }
     if (_openAIController.text.isNotEmpty) {
       creds['openai_key'] = _openAIController.text.trim();
+      aiChanged = true;
     }
     if (_geminiController.text.isNotEmpty) {
       creds['gemini_key'] = _geminiController.text.trim();
+      aiChanged = true;
     }
     if (_traktIdController.text.isNotEmpty) {
       creds['trakt_client_id'] = _traktIdController.text.trim();
@@ -99,6 +106,12 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
         selectedModel != _status!.ai.model) {
       creds['ai_provider'] = _selectedProvider;
       creds['ai_model'] = selectedModel;
+      aiChanged = true;
+    }
+    if (_status == null ||
+        _healthCheckEnabled != _status!.ai.healthCheckEnabled) {
+      creds['ai_health_check_enabled'] = _healthCheckEnabled.toString();
+      if (_healthCheckEnabled) aiChanged = true;
     }
 
     if (creds.isEmpty) {
@@ -108,7 +121,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       return;
     }
 
-    setState(() => _isSaving = true);
+    setState(() {
+      _isSaving = true;
+      _isTestingAI = aiChanged;
+    });
     try {
       await _service.update(creds);
       _tmdbController.clear();
@@ -126,17 +142,26 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       ref.read(authProvider.notifier).refreshConfig();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Settings saved')),
+          SnackBar(
+            content: Text(
+              aiChanged ? 'AI test passed. Settings saved.' : 'Settings saved',
+            ),
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save: $e')),
+          SnackBar(content: Text(_friendlySaveError(e))),
         );
       }
     } finally {
-      if (mounted) setState(() => _isSaving = false);
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+          _isTestingAI = false;
+        });
+      }
     }
   }
 
@@ -193,6 +218,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
   void _syncAISelection(CredentialsStatus status) {
     _selectedProvider = status.ai.provider;
+    _healthCheckEnabled = status.ai.healthCheckEnabled;
     final provider = _providerFor(_selectedProvider, status.ai.providers);
     final hasModel =
         provider?.models.any((model) => model.id == status.ai.model) ?? false;
@@ -203,6 +229,18 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _selectedModel = _customModelValue;
       _customModelController.text = status.ai.model;
     }
+  }
+
+  String _friendlySaveError(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map && data['error'] is String) {
+        return data['error'] as String;
+      }
+    }
+    final match =
+        RegExp(r'"error"\s*:\s*"([^"]+)"').firstMatch(error.toString());
+    return match?.group(1) ?? 'Failed to save settings.';
   }
 
   AiProviderOption? _providerFor(
@@ -282,6 +320,18 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           onProviderChanged: _selectProvider,
                           onModelChanged: (value) =>
                               setState(() => _selectedModel = value),
+                        ),
+                        const SizedBox(height: 14),
+                        _AIHealthCheckSection(
+                          enabled: _healthCheckEnabled,
+                          intervalHours:
+                              _status?.ai.healthCheckIntervalHours ?? 24,
+                          lastCheckedAt: _status?.ai.healthLastCheckedAt,
+                          onChanged: _isSaving
+                              ? null
+                              : (value) => setState(
+                                    () => _healthCheckEnabled = value,
+                                  ),
                         ),
                         const SizedBox(height: 14),
                         if (_selectedProvider == 'codex')
@@ -380,14 +430,24 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           width: double.infinity,
                           child: ElevatedButton(
                             onPressed: _isSaving ? null : _save,
-                            child: _isSaving
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_isSaving) ...[
+                                  const SizedBox(
+                                    width: 18,
+                                    height: 18,
                                     child: CircularProgressIndicator(
-                                        strokeWidth: 2),
-                                  )
-                                : const Text('Save'),
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 9),
+                                ],
+                                Text(
+                                  _isTestingAI ? 'Testing & saving…' : 'Save',
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ],
@@ -497,7 +557,7 @@ class _AISelectionSection extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           usesOAuth
-              ? 'Connect one server ChatGPT account for users with included access.'
+              ? 'Connect one server OpenAI OAuth account for users with included access.'
               : 'Select the server provider and model for included access.',
           style: const TextStyle(
             color: AppTheme.textSecondary,
@@ -568,6 +628,64 @@ class _AISelectionSection extends StatelessWidget {
   }
 }
 
+class _AIHealthCheckSection extends StatelessWidget {
+  final bool enabled;
+  final int intervalHours;
+  final DateTime? lastCheckedAt;
+  final ValueChanged<bool>? onChanged;
+
+  const _AIHealthCheckSection({
+    required this.enabled,
+    required this.intervalHours,
+    required this.lastCheckedAt,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lastTest = lastCheckedAt == null
+        ? ''
+        : '\nLast tested ${_shortDate(lastCheckedAt!)}.';
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: SwitchListTile.adaptive(
+        key: const ValueKey('ai-health-check-toggle'),
+        value: enabled,
+        onChanged: onChanged,
+        title: const Text(
+          'Daily shared-model test',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          'Runs one small message and response turn every $intervalHours hours. '
+          'A failure opens an admin issue. Turn this off to eliminate '
+          'background AI usage; provider and model saves still always run '
+          'their own test.$lastTest',
+          style: const TextStyle(
+            color: AppTheme.textSecondary,
+            fontSize: 12,
+            height: 1.38,
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _shortDate(DateTime value) {
+    final local = value.toLocal();
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${local.month}/${local.day}/${local.year} '
+        '${local.hour}:$minute';
+  }
+}
+
 class _SharedCodexPanel extends StatelessWidget {
   final AsyncValue<CodexConnectionStatus> status;
   final VoidCallback onManage;
@@ -595,7 +713,7 @@ class _SharedCodexPanel extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Shared ChatGPT allowance',
+                      'Shared OpenAI OAuth allowance',
                       style: TextStyle(
                         color: AppTheme.textPrimary,
                         fontWeight: FontWeight.w700,
@@ -631,10 +749,10 @@ class _SharedCodexPanel extends StatelessWidget {
             ),
             label: Text(
               connected
-                  ? 'Manage shared ChatGPT'
+                  ? 'Manage shared OpenAI OAuth'
                   : status.hasError
-                      ? 'Retry shared ChatGPT status'
-                      : 'Connect shared ChatGPT',
+                      ? 'Retry shared OpenAI OAuth status'
+                      : 'Connect shared OpenAI OAuth',
             ),
           ),
         ],

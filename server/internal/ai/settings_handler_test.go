@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
@@ -105,5 +108,98 @@ func TestAISettingsRemainsManageableWhenSharedCredentialIsCorrupt(t *testing.T) 
 	}
 	if !strings.Contains(rec.Body.String(), `"source":"personal"`) || !strings.Contains(rec.Body.String(), `"reason":"storage_error"`) {
 		t.Fatalf("unexpected settings body: %s", rec.Body.String())
+	}
+}
+
+func TestPersonalAIValidationFailureLeavesSettingsAndKeyUnchanged(t *testing.T) {
+	h, registry, _, userID := newResolverTestHandler(t)
+	if err := registry.SetUserAIConfig(userID, credentials.AIProviderAnthropic, "old-model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetUserAICredential(userID, credentials.AIProviderAnthropic, "old-secret"); err != nil {
+		t.Fatal(err)
+	}
+	var got credentials.AIProfile
+	h.validationProbe = func(_ context.Context, profile credentials.AIProfile, account codexapp.AccountRef) error {
+		got = profile
+		if account != codexapp.PersonalAccount(userID) {
+			t.Fatalf("account = %#v, want personal user %d", account, userID)
+		}
+		return errors.New("candidate rejected")
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/ai/settings", strings.NewReader(`{"provider":"anthropic","model":"new-model","api_key":"new-secret"}`))
+	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{UserID: userID, Role: auth.RoleUser}))
+	rec := httptest.NewRecorder()
+	h.UpdateAISettings(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got.Config.Model != "new-model" || got.APIKey != "new-secret" {
+		t.Fatalf("validated profile = %#v", got)
+	}
+	config, found, err := registry.GetUserAIConfig(userID)
+	if err != nil || !found || config.Model != "old-model" {
+		t.Fatalf("stored config=%#v found=%t err=%v", config, found, err)
+	}
+	key, found, err := registry.UserAICredential(userID, credentials.AIProviderAnthropic)
+	if err != nil || !found || key != "old-secret" {
+		t.Fatalf("stored key=%q found=%t err=%v", key, found, err)
+	}
+}
+
+func TestPersonalAICombinedSaveValidatesExactCandidateOnce(t *testing.T) {
+	h, registry, _, userID := newResolverTestHandler(t)
+	calls := 0
+	h.validationProbe = func(_ context.Context, profile credentials.AIProfile, account codexapp.AccountRef) error {
+		calls++
+		if account != codexapp.PersonalAccount(userID) || profile.Config.Provider != credentials.AIProviderOpenAI || profile.Config.Model != "gpt-personal" || profile.APIKey != "personal-secret" {
+			t.Fatalf("probe account=%#v profile=%#v", account, profile)
+		}
+		return nil
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/ai/settings", strings.NewReader(`{"provider":"openai","model":"gpt-personal","api_key":"personal-secret"}`))
+	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{UserID: userID, Role: auth.RoleUser}))
+	rec := httptest.NewRecorder()
+	h.UpdateAISettings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("validation calls=%d, want 1", calls)
+	}
+	profile, found, err := registry.LoadUserAIProfile(context.Background(), userID)
+	if err != nil || !found || profile.Config.Model != "gpt-personal" || profile.APIKey != "personal-secret" {
+		t.Fatalf("stored profile=%#v found=%t err=%v", profile, found, err)
+	}
+}
+
+func TestPersonalAIKeyRotationTestsCurrentlySelectedModel(t *testing.T) {
+	h, registry, _, userID := newResolverTestHandler(t)
+	if err := registry.SetUserAIConfig(userID, credentials.AIProviderOpenAI, "active-model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetUserAICredential(userID, credentials.AIProviderOpenAI, "old-secret"); err != nil {
+		t.Fatal(err)
+	}
+	h.validationProbe = func(_ context.Context, profile credentials.AIProfile, _ codexapp.AccountRef) error {
+		if profile.Config.Model != "active-model" || profile.APIKey != "new-secret" {
+			t.Fatalf("validated profile=%#v", profile)
+		}
+		return nil
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/ai/credentials/openai", strings.NewReader(`{"api_key":"new-secret","model":"unused-model"}`))
+	route := chi.NewRouteContext()
+	route.URLParams.Add("provider", credentials.AIProviderOpenAI)
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, route)
+	ctx = context.WithValue(ctx, auth.ClaimsKey, &auth.Claims{UserID: userID, Role: auth.RoleUser})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.UpdatePersonalAICredential(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	key, found, err := registry.UserAICredential(userID, credentials.AIProviderOpenAI)
+	if err != nil || !found || key != "new-secret" {
+		t.Fatalf("stored key=%q found=%t err=%v", key, found, err)
 	}
 }

@@ -20,7 +20,7 @@ final codexExternalUrlLauncherProvider = Provider<CodexExternalUrlLauncher>(
   (_) => (uri) => launchUrl(uri, mode: LaunchMode.externalApplication),
 );
 
-/// Self-service ChatGPT connection for the current Cantinarr user.
+/// Self-service OpenAI OAuth connection for the current Cantinarr user.
 class CodexConnectionScreen extends ConsumerStatefulWidget {
   final CodexOAuthScope scope;
 
@@ -87,7 +87,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _flowError = 'Could not start ChatGPT sign-in. Try again.';
+        _flowError = 'Could not start OpenAI OAuth sign-in. Try again.';
       });
     } finally {
       if (mounted) setState(() => _starting = false);
@@ -121,7 +121,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Could not open ChatGPT. Copy the code and try Reopen.',
+            'Could not open ChatGPT sign-in. Copy the code and try Reopen.',
           ),
         ),
       );
@@ -167,34 +167,14 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           } else {
             ref.invalidate(codexConnectionStatusProvider);
             ref.invalidate(aiSettingsProvider);
-            // Connecting a personal provider is an explicit choice: make it
-            // the active override rather than silently leaving included AI in
-            // charge after the browser flow succeeds.
-            try {
-              await ref.read(aiSettingsServiceProvider).usePersonal(
-                    provider: 'codex',
-                    model: 'default',
-                  );
-            } catch (_) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'ChatGPT connected, but could not make it active. '
-                      'Choose it from AI Access.',
-                    ),
-                  ),
-                );
-              }
-            }
           }
           await _refreshAppAvailability();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(_isShared
-                    ? 'Shared ChatGPT account connected'
-                    : 'Personal ChatGPT account connected'),
+                    ? 'Shared OpenAI OAuth connected'
+                    : 'Personal OpenAI OAuth connected'),
               ),
             );
           }
@@ -208,6 +188,12 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
                 ? 'ChatGPT did not approve the connection. Start again.'
                 : result.error,
           );
+          ref.invalidate(
+            _isShared
+                ? adminCodexConnectionStatusProvider
+                : codexConnectionStatusProvider,
+          );
+          await _refreshAppAvailability();
           return;
       }
     } catch (_) {
@@ -276,8 +262,8 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(_isShared
-            ? 'Disconnect shared ChatGPT?'
-            : 'Disconnect personal ChatGPT?'),
+            ? 'Disconnect shared OpenAI OAuth?'
+            : 'Disconnect personal OpenAI OAuth?'),
         content: Text(
           _isShared
               ? 'Included AI will stop working for every user who relies on '
@@ -315,8 +301,8 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(_isShared
-                ? 'Shared ChatGPT account disconnected'
-                : 'Personal ChatGPT account disconnected'),
+                ? 'Shared OpenAI OAuth disconnected'
+                : 'Personal OpenAI OAuth disconnected'),
           ),
         );
       }
@@ -324,7 +310,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Could not disconnect ChatGPT. Try again.'),
+            content: Text('Could not disconnect OpenAI OAuth. Try again.'),
           ),
         );
       }
@@ -359,7 +345,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     );
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isShared ? 'Shared ChatGPT' : 'Personal ChatGPT'),
+        title: Text(
+          _isShared ? 'Shared OpenAI (OAuth)' : 'Personal OpenAI (OAuth)',
+        ),
         actions: [
           IconButton(
             onPressed: () => ref.invalidate(
@@ -399,6 +387,10 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           const SizedBox(height: 14),
           const _SharedAccountWarning(),
         ],
+        if (_flowError != null) ...[
+          const SizedBox(height: 14),
+          _InlineMessage(message: _flowError!, isError: true),
+        ],
         const SizedBox(height: 20),
         if (status.connected)
           _buildConnected(status)
@@ -416,10 +408,6 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_flowError != null) ...[
-          _InlineMessage(message: _flowError!, isError: true),
-          const SizedBox(height: 16),
-        ],
         Text(
           _isShared ? 'Connect the server account' : 'Connect your own account',
           style: const TextStyle(
@@ -449,7 +437,9 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Icon(Icons.open_in_browser, size: 19),
-          label: Text(_isShared ? 'Connect shared ChatGPT' : 'Connect ChatGPT'),
+          label: Text(
+            _isShared ? 'Connect shared OpenAI OAuth' : 'Connect OpenAI OAuth',
+          ),
         ),
       ],
     );
@@ -556,7 +546,7 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
             OutlinedButton.icon(
               onPressed: () => _openVerificationPage(flow.verificationUri),
               icon: const Icon(Icons.open_in_new, size: 17),
-              label: const Text('Reopen ChatGPT'),
+              label: const Text('Reopen ChatGPT sign-in'),
             ),
             TextButton(
               onPressed: _cancelling ? null : _cancelConnection,
@@ -679,8 +669,8 @@ class _CodexConnectionScreenState extends ConsumerState<CodexConnectionScreen> {
           label: Text(_unlinking
               ? 'Disconnecting…'
               : _isShared
-                  ? 'Disconnect shared ChatGPT'
-                  : 'Disconnect ChatGPT'),
+                  ? 'Disconnect shared OpenAI OAuth'
+                  : 'Disconnect OpenAI OAuth'),
           style: OutlinedButton.styleFrom(foregroundColor: AppTheme.error),
         ),
       ],
@@ -750,21 +740,21 @@ class _UnavailablePanel extends StatelessWidget {
               ? selected
                   ? 'The shared account remains connected, but Codex is '
                       'currently unavailable on this server.'
-                  : 'The shared account remains connected. Select ChatGPT '
-                      '(Codex) as the included provider to use it.'
+                  : 'The shared account remains connected. Select OpenAI '
+                      '(OAuth) as the included provider to use it.'
               : selected
-                  ? 'ChatGPT is selected for included AI, but the Codex '
+                  ? 'OpenAI OAuth is selected for included AI, but the Codex '
                       'runtime is currently unavailable.'
-                  : 'Select ChatGPT (Codex) as the included provider before '
+                  : 'Select OpenAI (OAuth) as the included provider before '
                       'connecting the shared account.'
           : connected
               ? selected
-                  ? 'Your personal ChatGPT account remains connected, but Codex '
+                  ? 'Your personal OpenAI OAuth remains connected, but Codex '
                       'is currently unavailable on this server.'
-                  : 'Your personal ChatGPT connection is saved while you use a '
+                  : 'Your personal OpenAI OAuth is saved while you use a '
                       'different AI source.'
               : selected
-                  ? 'Personal ChatGPT is selected, but Codex is currently '
+                  ? 'Personal OpenAI OAuth is selected, but Codex is currently '
                       'unavailable on this server.'
                   : 'This personal connection is saved even while you use a '
                       'different AI source.',
@@ -787,7 +777,7 @@ class _SharedAccountWarning extends StatelessWidget {
           Expanded(
             child: Text(
               'Sharing this connection means enabled users send prompts and '
-              'tool context through the same ChatGPT account and consume one '
+              'tool context through the same OpenAI OAuth account and consume one '
               'Codex allowance. Activity is attributable to that account, and '
               'any subscription or usage costs remain with it. ChatGPT '
               'accounts are intended for one person; only enable this for '
@@ -913,7 +903,7 @@ class _StatusError extends StatelessWidget {
                 color: AppTheme.textSecondary, size: 42),
             const SizedBox(height: 12),
             const Text(
-              'Could not load the ChatGPT connection.',
+              'Could not load the OpenAI OAuth connection.',
               style: TextStyle(color: AppTheme.textSecondary),
               textAlign: TextAlign.center,
             ),

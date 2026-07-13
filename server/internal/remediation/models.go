@@ -37,8 +37,9 @@ const (
 
 // Issue source values.
 const (
-	SourceUser = "user"
-	SourceAuto = "auto"
+	SourceUser   = "user"
+	SourceAuto   = "auto"
+	SourceSystem = "system"
 )
 
 // User-selectable issue categories (NULL/"" for auto-detected issues).
@@ -68,12 +69,13 @@ const ResolutionUserUnresponsive = "user_unresponsive"
 // seeing a queue signal disappear proves only that the original incident is no
 // longer present, not who fixed it.
 const (
-	ResolutionAgentConcluded  = "agent_concluded"
-	ResolutionArrStateCleared = "arr_state_cleared"
-	ResolutionReporterTimeout = "reporter_timeout"
-	ResolutionAdminDismissed  = "admin_dismissed"
-	ResolutionAdminCompleted  = "admin_completed"
-	ResolutionLegacyUnknown   = "legacy_unknown"
+	ResolutionAgentConcluded   = "agent_concluded"
+	ResolutionArrStateCleared  = "arr_state_cleared"
+	ResolutionReporterTimeout  = "reporter_timeout"
+	ResolutionAdminDismissed   = "admin_dismissed"
+	ResolutionAdminCompleted   = "admin_completed"
+	ResolutionAIHealthRestored = "ai_health_restored"
+	ResolutionLegacyUnknown    = "legacy_unknown"
 )
 
 // AdminIssueDisposition is the explicit human judgment recorded by the admin

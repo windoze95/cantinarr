@@ -45,9 +45,9 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
 - **Books too** -- A Chaptarr (Readarr-API) module with per-format smarts: request the ebook, the audiobook, or both; owned-aware search; per-format monitoring from the author page. Access is granted per user.
 - **Request approvals** -- Optional approval queue, globally or per user. Admins also control per-user season choice, quality choice, and default quality profiles. Approve/deny lands as a push notification for the requester.
-- **AI assistant** -- "What should I watch tonight?" Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link ChatGPT (Codex) with a one-time browser code—even without included access, and their choice never has to match the server's provider. Admins can configure the same providers as an included server profile and grant that shared access per user. A personal provider is an explicit override; Cantinarr never silently spends the shared account when that override needs attention. The assistant searches your library, checks availability, requests for you, and gives admins conversational queue and release control.
-- **AI remediation agent** -- Users tap "Report a problem" (or Cantinarr detects one in the queue); each report is bound to the exact Radarr/Sonarr instance and begins with a quiet observation window. Cantinarr gives Sonarr/Radarr time to retry or replace a download before it alerts anyone or starts the agent; a persistent quiet problem then enters the supervised workflow. Recovery cancels stale proposals before dispatch. Automatic resolution requires an exact changed file plus a matching post-incident import record—not queue disappearance or a file that was already there. Remediation is server-owned: it always uses the admin's shared API key or shared ChatGPT (Codex) connection and never a reporter's personal provider or per-user included-access grant.
-- **MCP server** -- The same 26 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, with OAuth discovery, browser/passkey login, dynamic client registration, and persistent rotating refresh tokens. This inbound OAuth lets external clients access Cantinarr; it is separate from the outbound personal/shared ChatGPT sign-in used by Codex chat. Every tool can be toggled on/off from Settings > AI Tools.
+- **AI assistant** -- "What should I watch tonight?" Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link OpenAI (OAuth) with a one-time ChatGPT browser code—even without included access, and their choice never has to match the server's provider. Admins can configure the same providers as an included server profile and grant that shared access per user. A personal provider is an explicit override; Cantinarr never silently spends the shared account when that override needs attention. The assistant searches your library, checks availability, requests for you, and gives admins conversational queue and release control.
+- **AI remediation agent** -- Users tap "Report a problem" (or Cantinarr detects one in the queue); each report is bound to the exact Radarr/Sonarr instance and begins with a quiet observation window. Cantinarr gives Sonarr/Radarr time to retry or replace a download before it alerts anyone or starts the agent; a persistent quiet problem then enters the supervised workflow. Recovery cancels stale proposals before dispatch. Automatic resolution requires an exact changed file plus a matching post-incident import record—not queue disappearance or a file that was already there. Remediation is server-owned: it always uses the admin's shared API key or shared OpenAI OAuth connection and never a reporter's personal provider or per-user included-access grant.
+- **MCP server** -- The same 26 AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, with OAuth discovery, browser/passkey login, dynamic client registration, and persistent rotating refresh tokens. This inbound OAuth lets external clients access Cantinarr; it is separate from the outbound personal/shared OpenAI OAuth used by Codex chat. Every tool can be toggled on/off from Settings > AI Tools.
 - **Deep *arr control** -- SABnzbd, qBittorrent, NZBGet, and Transmission modules with live queue management, plus drill-down Radarr/Sonarr control: series → season → episode with per-item progress, quality, and history; episode multi-select with batch search; long-press action menus; Edit Series; interactive release search everywhere.
 - **Import Doctor** -- when a download is stuck, Cantinarr explains *why* in plain English (sample file, un-extracted archive, unconfirmed TheXEM mapping, "not an upgrade", unparseable/invalid file, remote-path-mapping or download-client problems, stalled torrent, permissions...) and offers **one-click fixes** with full transparency: manual/force import with the candidate files shown, remove + blocklist + re-search, hand-off to a tool like Unpackerr, or rescan. The same diagnosis backs the app, the AI assistant, the remediation agent, and MCP.
 - **Flexible requests** -- request a whole title in one tap, or pick exactly which **seasons** (or book **formats**) you want; partially-available shows surface per-season availability and a one-tap path to request the rest.
@@ -55,7 +55,7 @@ Cantinarr makes it dead simple for your family and friends to discover and reque
 - **Push notifications** -- APNs via a self-hosted push gateway with zero-config auto-enrollment: new-content alerts for everyone, approval/issue alerts for admins, per-user preference toggles, deep links into the right screen.
 - **Plex onboarding** -- new users request access right from the in-app guide with their Plex email. Link your Plex account once and the server invite is one tap from the Users screen -- or fully automatic, with the user pushed a "check your inbox" the moment it's sent.
 - **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
-- **Secrets encrypted at rest** -- arr API keys, download-client passwords, webhook tokens, shared and personal AI credentials, and ChatGPT authorization are AES-256-GCM encrypted in the database.
+- **Secrets encrypted at rest** -- arr API keys, download-client passwords, webhook tokens, shared and personal AI credentials, and OpenAI OAuth authorization are AES-256-GCM encrypted in the database.
 - **Household-friendly** -- Connect links, passwordless by default, role-based access, per-user default instances. Admins manage services; users just browse and request.
 - **Guided setup** -- a live checklist wizard derived from what's actually configured: every step opens the real settings screen, progress can't go stale, and newly shipped features appear on the list automatically.
 - **Single container** -- The static Go API/web server plus a pinned Codex app-server helper, with one exposed port. Runs great on a Raspberry Pi or NAS.
@@ -117,9 +117,11 @@ cantinarr/
 
 ## Configuration
 
-Shared service credentials are managed through the admin UI -- no environment variables are needed for API keys. AI is different from the other integrations: an admin can configure a server profile using an API key or a shared ChatGPT (Codex) link, while every user can independently configure the same choices as a personal override. API keys and OAuth authorization stay encrypted and server-side.
+Shared service credentials are managed through the admin UI -- no environment variables are needed for API keys. AI is different from the other integrations: an admin can configure a server profile using an API key or a shared OpenAI (OAuth) link, while every user can independently configure the same choices as a personal override. API keys and OAuth authorization stay encrypted and server-side. Every provider, model, or key save -- and every completed OAuth selection -- must complete one small real message-response turn before Cantinarr activates it. OpenAI OAuth offers the recommended Codex model plus GPT-5.6 Sol, Terra, and Luna.
 
-Included AI is an explicit per-user entitlement for new accounts; the initial admin starts enabled. Upgrades preserve the previous global-provider behavior for existing users so access does not disappear, after which the admin can revoke or grant it from **Settings > Users**. Enabling a ChatGPT-backed grant shows the shared-account allowance and cost warning before it is applied.
+The server also runs one small shared-model health turn every 24 hours by default. A failure opens one deduplicated admin-only issue; a later successful turn resolves it. Admins who want zero background AI usage can disable this check in **Settings > Providers & Credentials** without weakening the mandatory save-time test. The remediation agent remains independent of this monitor and always resolves credentials directly from the admin's shared profile.
+
+Included AI is an explicit per-user entitlement for new accounts; the initial admin starts enabled. Upgrades preserve the previous global-provider behavior for existing users so access does not disappear, after which the admin can revoke or grant it from **Settings > Users**. Enabling an OpenAI OAuth-backed grant shows the shared-account allowance and cost warning before it is applied.
 
 | Setting | Where | Description |
 |---|---|---|
@@ -129,7 +131,7 @@ Included AI is an explicit per-user entitlement for new accounts; the initial ad
 | SABnzbd/qBittorrent/NZBGet/Transmission | Admin UI | Download client modules (queue, history, speeds) |
 | Tautulli instance | Admin UI | Plex activity, watch history, stats |
 | Anthropic/OpenAI/Gemini API key | Admin UI | Enables shared API-key-backed AI chat and autonomous remediation |
-| ChatGPT (Codex) | Personal link under Settings > AI Access, or an admin-managed shared link | Runs interactive chat against the selected personal or included Codex allowance; the admin-shared link also powers server-owned remediation. Per-user shared chat access is opt-in and carries a quota/cost warning |
+| OpenAI (OAuth) | Personal link under Settings > AI Access, or an admin-managed shared link | Uses a ChatGPT account's Codex allowance for the selected personal or included model; the admin-shared link also powers server-owned remediation. Per-user shared chat access is opt-in and carries a quota/cost warning |
 | Trakt client ID | Admin UI | Enhances discovery + fallback ID bridging |
 
 Optional server env vars for deployment tuning:
@@ -154,7 +156,7 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Additional WebAuthn origins to trust |
 | `CANTINARR_DISABLE_UPDATE_CHECK` | unset | Set to `1` to disable the periodic GitHub release check behind the admin "update available" banner |
 
-ChatGPT (Codex) source deployments are supported only on Linux; non-Linux hosts report this provider unavailable even when a Codex binary is installed. The runtime directory's parent must exist, and the directory must be on tmpfs or ramfs—not persistent storage. Give each concurrently running Cantinarr process its own runtime directory; startup removes stale `session-*` entries from that dedicated root. The official container uses its private Docker `/dev/shm` tmpfs. Use the tested Codex 0.144.3 release or a protocol-compatible build.
+OpenAI (OAuth) source deployments use Codex app-server and are supported only on Linux; non-Linux hosts report this provider unavailable even when a Codex binary is installed. The runtime directory's parent must exist, and the directory must be on tmpfs or ramfs—not persistent storage. Give each concurrently running Cantinarr process its own runtime directory; startup removes stale `session-*` entries from that dedicated root. The official container uses its private Docker `/dev/shm` tmpfs. Use the tested Codex 0.144.3 release or a protocol-compatible build.
 
 Native app passkeys require a public HTTPS server domain associated with the app (AASA for Apple, Digital Asset Links for Android). Browser passkey setup remains available when native association isn't possible. See [`server/README.md`](server/README.md#configuration) for details.
 
@@ -173,7 +175,7 @@ By default, users are passwordless and passkeyless: a connect link starts a perm
 
 ### For Admins
 1. Deploy the container and complete the setup wizard
-2. Add your shared API credentials and service instances from Settings; for included AI, either add an Anthropic/OpenAI/Gemini key or link a shared ChatGPT (Codex) account
+2. Add your shared API credentials and service instances from Settings; for included AI, either add an Anthropic/OpenAI/Gemini key or link a shared OpenAI (OAuth) account
 3. Generate connect links for your household, grant included AI access where wanted, and pin per-user default instances if you run several
 4. Optionally require approval for requests -- pending ones arrive as push notifications
 5. Tap **Configure instant updates** on each Radarr/Sonarr instance so the server installs its authenticated webhook
@@ -205,7 +207,7 @@ Movies don't need bridging -- Radarr natively supports TMDB IDs. Books are keyed
 | Server | Go 1.25, Chi router, SQLite (pure Go) |
 | Client | Flutter (Dart), Riverpod, GoRouter |
 | Auth | JWT (HS256), bcrypt, connect tokens, WebAuthn passkeys |
-| AI | Personal or admin-shared Anthropic, OpenAI, and Gemini API credentials, plus personal or shared ChatGPT/Codex via the bundled pinned Codex app-server; SSE app streaming |
+| AI | Personal or admin-shared Anthropic, OpenAI, and Gemini API credentials, plus personal or shared OpenAI OAuth via the bundled pinned Codex app-server; SSE app streaming |
 | MCP | [mcp-go](https://github.com/mark3labs/mcp-go), Streamable HTTP + inbound Cantinarr OAuth |
 | Real-time | gorilla/websocket + arr webhooks |
 | Push | Self-hosted push gateway (APNs) |

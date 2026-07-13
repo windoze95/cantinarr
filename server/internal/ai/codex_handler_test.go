@@ -3,12 +3,14 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 )
 
@@ -149,11 +151,44 @@ func TestPublicRateLimitsRejectsMalformedOrEmptySnapshots(t *testing.T) {
 
 func TestCompletedLegacyPersonalCodexFlowSelectsPersonalOverride(t *testing.T) {
 	h, registry, _, userID := newResolverTestHandler(t)
-	if err := h.selectPersonalCodex(userID); err != nil {
+	if err := h.selectPersonalCodex(context.Background(), userID); err != nil {
 		t.Fatal(err)
 	}
 	config, found, err := registry.GetUserAIConfig(userID)
 	if err != nil || !found || config.Provider != "codex" || config.Model != "default" {
 		t.Fatalf("personal config = %#v found=%t err=%v", config, found, err)
+	}
+}
+
+func TestPersonalCodexFlowDoesNotSelectProviderWhenResponseTestFails(t *testing.T) {
+	h, registry, _, userID := newResolverTestHandler(t)
+	h.validationProbe = func(context.Context, credentials.AIProfile, codexapp.AccountRef) error {
+		return errors.New("model did not respond")
+	}
+	if err := h.selectPersonalCodex(context.Background(), userID); err == nil {
+		t.Fatal("selectPersonalCodex succeeded after a failed response test")
+	}
+	if config, found, err := registry.GetUserAIConfig(userID); err != nil || found {
+		t.Fatalf("personal config=%#v found=%t err=%v", config, found, err)
+	}
+}
+
+func TestPersonalCodexReconnectPreservesAndTestsSelectedModel(t *testing.T) {
+	h, registry, _, userID := newResolverTestHandler(t)
+	if err := registry.SetUserAIConfig(userID, credentials.AIProviderCodex, "gpt-5.6-luna"); err != nil {
+		t.Fatal(err)
+	}
+	h.validationProbe = func(_ context.Context, profile credentials.AIProfile, account codexapp.AccountRef) error {
+		if account != codexapp.PersonalAccount(userID) || profile.Config.Model != "gpt-5.6-luna" {
+			t.Fatalf("account=%#v profile=%#v", account, profile)
+		}
+		return nil
+	}
+	if err := h.selectPersonalCodex(context.Background(), userID); err != nil {
+		t.Fatal(err)
+	}
+	config, found, err := registry.GetUserAIConfig(userID)
+	if err != nil || !found || config.Model != "gpt-5.6-luna" {
+		t.Fatalf("config=%#v found=%t err=%v", config, found, err)
 	}
 }

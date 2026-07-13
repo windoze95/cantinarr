@@ -12,8 +12,9 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   testWidgets('Codex provider is described as shared included access',
       (tester) async {
+    final adapter = _CredentialsAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
-      ..httpClientAdapter = _CredentialsAdapter();
+      ..httpClientAdapter = adapter;
 
     await tester.pumpWidget(
       ProviderScope(
@@ -26,27 +27,56 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('ChatGPT (Codex)'), findsOneWidget);
+    expect(find.text('OpenAI (OAuth)'), findsOneWidget);
     expect(find.text('Shared account'), findsOneWidget);
     expect(
       find.text(
-        'Connect one server ChatGPT account for users with included access.',
+        'Connect one server OpenAI OAuth account for users with included access.',
       ),
       findsOneWidget,
     );
     expect(find.textContaining('one ChatGPT account and one Codex meter'),
         findsOneWidget);
     expect(find.text('Key missing'), findsNothing);
+    expect(find.text('Daily shared-model test'), findsOneWidget);
+
+    final healthToggle = find.byKey(const ValueKey('ai-health-check-toggle'));
+    await tester.ensureVisible(healthToggle);
+    await tester.tap(healthToggle);
+    await tester.drag(
+      find.byType(Scrollable).first,
+      const Offset(0, -1200),
+    );
+    await tester.pumpAndSettle();
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate?['ai_health_check_enabled'], 'false');
   });
 }
 
 class _CredentialsAdapter implements HttpClientAdapter {
+  Map<String, dynamic>? lastUpdate;
+
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.method == 'PUT' && requestStream != null) {
+      final bytes = await requestStream.expand((chunk) => chunk).toList();
+      lastUpdate = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+      return ResponseBody.fromString(
+        jsonEncode({'status': 'ok'}),
+        200,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType],
+        },
+      );
+    }
     return ResponseBody.fromString(
       jsonEncode({
         'credentials': const <String, bool>{},
@@ -58,7 +88,7 @@ class _CredentialsAdapter implements HttpClientAdapter {
           'providers': [
             {
               'id': 'codex',
-              'label': 'ChatGPT (Codex)',
+              'label': 'OpenAI (OAuth)',
               'auth_type': 'user_oauth',
               'credential_key': '',
               'models': [
@@ -66,6 +96,11 @@ class _CredentialsAdapter implements HttpClientAdapter {
               ],
             },
           ],
+          'health_check': {
+            'enabled': true,
+            'interval_hours': 24,
+            'last_checked_at': null,
+          },
         },
       }),
       200,

@@ -27,6 +27,11 @@ void main() {
               ],
             },
           ],
+          'health_check': {
+            'enabled': false,
+            'interval_hours': 24,
+            'last_checked_at': '2026-07-13T12:00:00Z',
+          },
         },
       });
 
@@ -34,6 +39,9 @@ void main() {
       expect(status.ai.provider, 'openai');
       expect(status.ai.model, 'gpt-5.4-mini');
       expect(status.ai.providers.single.credentialKey, 'openai_key');
+      expect(status.ai.healthCheckEnabled, isFalse);
+      expect(status.ai.healthCheckIntervalHours, 24);
+      expect(status.ai.healthLastCheckedAt, isNotNull);
     });
 
     test('handles legacy AI status without provider metadata', () {
@@ -59,7 +67,7 @@ void main() {
           'providers': [
             {
               'id': 'codex',
-              'label': 'ChatGPT (Codex)',
+              'label': 'OpenAI (OAuth)',
               'auth_type': 'user_oauth',
               'models': [
                 {'id': 'gpt-5.4', 'label': 'GPT-5.4'},

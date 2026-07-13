@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/backend_client.dart';
 
+const _oauthValidationReceiveTimeout = Duration(seconds: 75);
+
 enum CodexOAuthScope { personal, adminShared }
 
 /// One Codex usage window reported by the linked ChatGPT account.
@@ -47,7 +49,7 @@ class CodexRateLimits {
 CodexRateLimitWindow? _rateLimitWindow(Object? value) =>
     value is Map<String, dynamic> ? CodexRateLimitWindow.fromJson(value) : null;
 
-/// Personal or admin-shared ChatGPT/Codex connection status.
+/// Personal or admin-shared OpenAI OAuth connection status.
 ///
 /// [selected] applies to the requested scope. Personal metadata belongs only
 /// to the authenticated user; shared metadata is available only on admin
@@ -211,7 +213,10 @@ class CodexOAuthService {
   Future<CodexDeviceFlowResult> checkDeviceAuthorization(String flowId) async {
     final safeFlowId = Uri.encodeComponent(flowId);
     try {
-      final response = await _dio.get('$_basePath/device/$safeFlowId');
+      final response = await _dio.get(
+        '$_basePath/device/$safeFlowId',
+        options: Options(receiveTimeout: _oauthValidationReceiveTimeout),
+      );
       return CodexDeviceFlowResult.fromJson(
         response.data as Map<String, dynamic>,
       );
@@ -220,6 +225,12 @@ class CodexOAuthService {
       if (statusCode == 404 || statusCode == 410) {
         return CodexDeviceFlowResult(
           status: CodexDeviceFlowStatus.expired,
+          error: _responseError(error.response?.data),
+        );
+      }
+      if (statusCode == 422) {
+        return CodexDeviceFlowResult(
+          status: CodexDeviceFlowStatus.failed,
           error: _responseError(error.response?.data),
         );
       }

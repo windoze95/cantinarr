@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -11,9 +12,10 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
-// CodexStatus reports only safe metadata for the current user's ChatGPT link.
+// CodexStatus reports only safe metadata for the current user's OpenAI OAuth link.
 // The encrypted auth blob and app-server details never cross this boundary.
 func (h *Handler) CodexStatus(w http.ResponseWriter, r *http.Request) {
 	setCodexNoStore(w)
@@ -77,7 +79,7 @@ func (h *Handler) CodexStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
-// BeginCodexDeviceLogin starts one user-owned ChatGPT device authorization.
+// BeginCodexDeviceLogin starts one user-owned OpenAI device authorization.
 func (h *Handler) BeginCodexDeviceLogin(w http.ResponseWriter, r *http.Request) {
 	setCodexNoStore(w)
 	claims := auth.GetClaims(r.Context())
@@ -86,11 +88,11 @@ func (h *Handler) BeginCodexDeviceLogin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.codex == nil || !h.codex.Available() {
-		writeCodexError(w, http.StatusServiceUnavailable, "ChatGPT (Codex) is unavailable on this server")
+		writeCodexError(w, http.StatusServiceUnavailable, "OpenAI OAuth is unavailable on this server")
 		return
 	}
 	if h.codex.HasAccount(claims.UserID) {
-		writeCodexError(w, http.StatusConflict, "Disconnect the current ChatGPT account before linking another one")
+		writeCodexError(w, http.StatusConflict, "Disconnect the current OpenAI OAuth account before linking another one")
 		return
 	}
 
@@ -103,7 +105,7 @@ func (h *Handler) BeginCodexDeviceLogin(w http.ResponseWriter, r *http.Request) 
 }
 
 // SharedCodexStatus reports safe metadata for the singleton admin-funded
-// ChatGPT account. This handler is mounted only behind CredentialsManage.
+// OpenAI OAuth account. This handler is mounted only behind CredentialsManage.
 func (h *Handler) SharedCodexStatus(w http.ResponseWriter, r *http.Request) {
 	setCodexNoStore(w)
 	if !hasSharedCodexAdmin(r) {
@@ -155,16 +157,16 @@ func (h *Handler) BeginSharedCodexDeviceLogin(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if h.codex == nil || !h.codex.Available() {
-		writeCodexError(w, http.StatusServiceUnavailable, "ChatGPT (Codex) is unavailable on this server")
+		writeCodexError(w, http.StatusServiceUnavailable, "OpenAI OAuth is unavailable on this server")
 		return
 	}
 	connected, err := h.codex.AccountExists(codexapp.SharedAccount())
 	if err != nil {
-		writeCodexError(w, http.StatusInternalServerError, "Could not check the shared ChatGPT account")
+		writeCodexError(w, http.StatusInternalServerError, "Could not check the shared OpenAI OAuth account")
 		return
 	}
 	if connected {
-		writeCodexError(w, http.StatusConflict, "Disconnect the shared ChatGPT account before linking another one")
+		writeCodexError(w, http.StatusConflict, "Disconnect the shared OpenAI OAuth account before linking another one")
 		return
 	}
 	login, err := h.codex.BeginDeviceLoginForAccount(r.Context(), codexapp.SharedAccount(), claims.UserID)
@@ -183,13 +185,32 @@ func (h *Handler) CheckSharedCodexDeviceLogin(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if h.codex == nil {
-		writeCodexError(w, http.StatusServiceUnavailable, "ChatGPT (Codex) is unavailable on this server")
+		writeCodexError(w, http.StatusServiceUnavailable, "OpenAI OAuth is unavailable on this server")
 		return
 	}
 	check, err := h.codex.CheckDeviceLoginForAccount(r.Context(), codexapp.SharedAccount(), claims.UserID, chi.URLParam(r, "flowID"))
 	if err != nil {
 		writeCodexManagerError(w, err)
 		return
+	}
+	if check.Status == codexapp.LoginConnected {
+		config := credentials.AIConfig{
+			Provider: credentials.AIProviderCodex,
+			Model:    credentials.DefaultAIModel(credentials.AIProviderCodex),
+		}
+		selected := false
+		if profile, profileErr := h.creds.LoadSharedAIProfile(r.Context()); profileErr == nil && profile.Config.Provider == credentials.AIProviderCodex {
+			config = profile.Config
+			selected = true
+		}
+		if validateErr := h.ValidateSharedAISettings(r.Context(), credentials.AIProfile{Config: config, CredentialPresent: true}); validateErr != nil {
+			log.Printf("shared OpenAI OAuth validation failed model=%q: %v", config.Model, secrets.RedactError(validateErr))
+			writeCodexError(w, http.StatusUnprocessableEntity, "OpenAI OAuth connected, but the selected model could not complete a test message")
+			return
+		}
+		if selected {
+			h.SharedAISettingsValidated(config)
+		}
 	}
 	writeDeviceLoginCheck(w, check)
 }
@@ -202,7 +223,7 @@ func (h *Handler) CancelSharedCodexDeviceLogin(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if h.codex == nil {
-		writeCodexError(w, http.StatusServiceUnavailable, "ChatGPT (Codex) is unavailable on this server")
+		writeCodexError(w, http.StatusServiceUnavailable, "OpenAI OAuth is unavailable on this server")
 		return
 	}
 	if err := h.codex.CancelDeviceLoginForAccount(codexapp.SharedAccount(), claims.UserID, chi.URLParam(r, "flowID")); err != nil {
@@ -219,12 +240,12 @@ func (h *Handler) UnlinkSharedCodex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.codex == nil {
-		writeCodexError(w, http.StatusServiceUnavailable, "ChatGPT (Codex) is unavailable on this server")
+		writeCodexError(w, http.StatusServiceUnavailable, "OpenAI OAuth is unavailable on this server")
 		return
 	}
 	if err := h.codex.UnlinkAccount(codexapp.SharedAccount()); err != nil {
 		log.Printf("shared codex unlink failed: %v", err)
-		writeCodexError(w, http.StatusInternalServerError, "Could not disconnect shared ChatGPT")
+		writeCodexError(w, http.StatusInternalServerError, "Could not disconnect shared OpenAI OAuth")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -244,7 +265,7 @@ func (h *Handler) CheckCodexDeviceLogin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.codex == nil {
-		writeCodexError(w, http.StatusServiceUnavailable, "ChatGPT (Codex) is unavailable on this server")
+		writeCodexError(w, http.StatusServiceUnavailable, "OpenAI OAuth is unavailable on this server")
 		return
 	}
 	check, err := h.codex.CheckDeviceLogin(r.Context(), claims.UserID, chi.URLParam(r, "flowID"))
@@ -253,8 +274,9 @@ func (h *Handler) CheckCodexDeviceLogin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if check.Status == codexapp.LoginConnected {
-		if err := h.selectPersonalCodex(claims.UserID); err != nil {
-			writeCodexError(w, http.StatusInternalServerError, "ChatGPT was linked but the personal AI selection could not be saved")
+		if err := h.selectPersonalCodex(r.Context(), claims.UserID); err != nil {
+			log.Printf("personal OpenAI OAuth validation failed user_id=%d: %v", claims.UserID, secrets.RedactError(err))
+			writeCodexError(w, http.StatusUnprocessableEntity, "OpenAI OAuth connected, but its default model could not complete a test message")
 			return
 		}
 	}
@@ -262,8 +284,22 @@ func (h *Handler) CheckCodexDeviceLogin(w http.ResponseWriter, r *http.Request) 
 	writeDeviceLoginCheck(w, check)
 }
 
-func (h *Handler) selectPersonalCodex(userID int64) error {
-	return h.creds.SetUserAIConfig(userID, credentials.AIProviderCodex, credentials.DefaultAIModel(credentials.AIProviderCodex))
+func (h *Handler) selectPersonalCodex(ctx context.Context, userID int64) error {
+	h.settingsMu.Lock()
+	defer h.settingsMu.Unlock()
+	config := credentials.AIConfig{
+		Provider: credentials.AIProviderCodex,
+		Model:    credentials.DefaultAIModel(credentials.AIProviderCodex),
+	}
+	if selected, found, err := h.creds.GetUserAIConfig(userID); err != nil {
+		return err
+	} else if found && selected.Provider == credentials.AIProviderCodex {
+		config = selected
+	}
+	if err := h.ValidatePersonalAISettings(ctx, userID, credentials.AIProfile{Config: config, CredentialPresent: true}); err != nil {
+		return err
+	}
+	return h.creds.SetUserAIConfig(userID, config.Provider, config.Model)
 }
 
 func writeDeviceLogin(w http.ResponseWriter, login codexapp.DeviceLogin) {
@@ -302,7 +338,7 @@ func (h *Handler) CancelCodexDeviceLogin(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if h.codex == nil {
-		writeCodexError(w, http.StatusServiceUnavailable, "ChatGPT (Codex) is unavailable on this server")
+		writeCodexError(w, http.StatusServiceUnavailable, "OpenAI OAuth is unavailable on this server")
 		return
 	}
 	if err := h.codex.CancelDeviceLogin(claims.UserID, chi.URLParam(r, "flowID")); err != nil {
@@ -312,7 +348,7 @@ func (h *Handler) CancelCodexDeviceLogin(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// UnlinkCodex deletes the caller's encrypted ChatGPT authorization and any
+// UnlinkCodex deletes the caller's encrypted OpenAI authorization and any
 // pending device flow. It does not affect another Cantinarr user.
 func (h *Handler) UnlinkCodex(w http.ResponseWriter, r *http.Request) {
 	setCodexNoStore(w)
@@ -322,12 +358,12 @@ func (h *Handler) UnlinkCodex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.codex == nil {
-		writeCodexError(w, http.StatusServiceUnavailable, "ChatGPT (Codex) is unavailable on this server")
+		writeCodexError(w, http.StatusServiceUnavailable, "OpenAI OAuth is unavailable on this server")
 		return
 	}
 	if err := h.codex.Unlink(claims.UserID); err != nil {
 		log.Printf("codex unlink failed for user_id=%d: %v", claims.UserID, err)
-		writeCodexError(w, http.StatusInternalServerError, "Could not disconnect ChatGPT")
+		writeCodexError(w, http.StatusInternalServerError, "Could not disconnect OpenAI OAuth")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -336,9 +372,9 @@ func (h *Handler) UnlinkCodex(w http.ResponseWriter, r *http.Request) {
 func writeCodexManagerError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, codexapp.ErrUnavailable):
-		writeCodexError(w, http.StatusServiceUnavailable, "ChatGPT (Codex) is unavailable on this server")
+		writeCodexError(w, http.StatusServiceUnavailable, "OpenAI OAuth is unavailable on this server")
 	case errors.Is(err, codexapp.ErrNotConnected):
-		writeCodexError(w, http.StatusConflict, "No ChatGPT account is linked")
+		writeCodexError(w, http.StatusConflict, "No OpenAI OAuth account is linked")
 	case errors.Is(err, codexapp.ErrFlowNotFound):
 		writeCodexError(w, http.StatusNotFound, "ChatGPT sign-in flow not found")
 	case errors.Is(err, codexapp.ErrFlowExpired):
@@ -346,7 +382,7 @@ func writeCodexManagerError(w http.ResponseWriter, err error) {
 	case errors.Is(err, codexapp.ErrLoginInProgress):
 		writeCodexError(w, http.StatusConflict, "A ChatGPT sign-in is already in progress")
 	case errors.Is(err, codexapp.ErrAlreadyConnected):
-		writeCodexError(w, http.StatusConflict, "Disconnect the current ChatGPT account before linking another one")
+		writeCodexError(w, http.StatusConflict, "Disconnect the current OpenAI OAuth account before linking another one")
 	default:
 		log.Printf("codex account operation failed: %v", err)
 		writeCodexError(w, http.StatusBadGateway, "ChatGPT sign-in could not be completed")

@@ -38,7 +38,11 @@ void main() {
     final service = AiSettingsService(backendDio: dio);
 
     await service.getSettings();
-    await service.setApiKey('openai', 'sk-personal');
+    await service.setApiKey(
+      'openai',
+      'sk-personal',
+      model: 'gpt-5.4-mini',
+    );
     await service.usePersonal(provider: 'openai', model: 'gpt-5.4-mini');
     await service.deleteApiKey('openai');
     await service.useIncluded();
@@ -53,7 +57,10 @@ void main() {
         ('DELETE', '/api/ai/settings'),
       ],
     );
-    expect(adapter.requests[1].$3, {'api_key': 'sk-personal'});
+    expect(adapter.requests[1].$3, {
+      'api_key': 'sk-personal',
+      'model': 'gpt-5.4-mini',
+    });
     expect(adapter.requests[2].$3, {
       'provider': 'openai',
       'model': 'gpt-5.4-mini',
@@ -83,11 +90,11 @@ Map<String, dynamic> _settingsJson({
         },
         {
           'id': 'codex',
-          'label': 'ChatGPT (Codex)',
+          'label': 'OpenAI (OAuth)',
           'auth_type': 'user_oauth',
           'credential_key': '',
           'models': [
-            {'id': 'default', 'label': 'Codex default'},
+            {'id': 'default', 'label': 'OpenAI recommended'},
           ],
         },
       ],
