@@ -148,7 +148,7 @@ func newTestRunner(t *testing.T, host toolHost, script *scriptedTurn) (*Runner, 
 	svc := NewService(database, nil, nil, &fakeNotifier{})
 	// Enable the feature and pin a tiny step budget by default; individual tests
 	// override bounds as needed.
-	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestRunnerMaxStepsGivesUp(t *testing.T) {
 	r, svc, issueID := newTestRunner(t, host, script)
 
 	// Tighten the step bound to 2.
-	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 2, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 2, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 

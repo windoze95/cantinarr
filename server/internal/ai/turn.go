@@ -92,7 +92,7 @@ type TurnParams struct {
 	// in text (used to coerce a final diagnosis when bounds are nearly spent).
 	ForceNoTools bool
 	// MaxTokens is the per-turn output cap. 0 falls back to a small default so a
-	// single turn cannot blow the per-run cost ceiling.
+	// single turn cannot produce an unbounded response.
 	MaxTokens int
 }
 
@@ -281,8 +281,8 @@ func (s *openAIService) NextTurn(ctx context.Context, p TurnParams) (TurnResult,
 
 // openAINextTurnParams builds the exact request used by the remediation
 // single-turn stream. Streaming chat completions omit their final usage-only
-// chunk unless include_usage is explicitly requested; without it every OpenAI
-// remediation run records zero tokens and the cost guardrails cannot engage.
+// chunk unless include_usage is explicitly requested; request it so run audits
+// retain useful token diagnostics.
 func openAINextTurnParams(model openai.ChatModel, p TurnParams) openai.ChatCompletionNewParams {
 	messages := []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(p.System)}
 	messages = append(messages, toOpenAIMessages(p.History.toPrivate())...)
@@ -306,8 +306,7 @@ func openAINextTurnParams(model openai.ChatModel, p TurnParams) openai.ChatCompl
 
 func openAIUsage(u openai.CompletionUsage) Usage {
 	// OpenAI reports prompt_tokens inclusive of cached tokens; carry the cached
-	// portion separately so the cost map can discount it, mirroring how the
-	// Anthropic cache fields are billed.
+	// portion separately to preserve the provider's useful cache diagnostics.
 	return Usage{
 		InputTokens:     u.PromptTokens,
 		OutputTokens:    u.CompletionTokens,

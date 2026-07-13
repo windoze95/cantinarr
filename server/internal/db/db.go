@@ -273,6 +273,8 @@ CREATE TABLE IF NOT EXISTS issue_observation_downloads (
     issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
     download_id TEXT NOT NULL,
     first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    arr_added_at DATETIME,                         -- attempt boundary from the arr queue (arr clock)
+	queue_file_id INTEGER CHECK (queue_file_id >= 0), -- exact media file: NULL unknown, 0 absent, positive present
     PRIMARY KEY(issue_id, download_id)
 );
 
@@ -347,10 +349,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_micros INTEGER NOT NULL DEFAULT 0,      -- accumulated cost in millionths of a USD
     active_seconds INTEGER NOT NULL DEFAULT 0,   -- wall-clock excluding paused waits
     deadline_at DATETIME,                        -- active-work deadline; NULL while parked
-    stop_reason TEXT,                            -- resolved|max_steps|max_cost|timeout|repeated_failure|awaiting_approval|awaiting_user|tool_error
+    stop_reason TEXT,                            -- resolved|max_steps|timeout|repeated_failure|awaiting_approval|awaiting_user|tool_error
     transcript_json TEXT NOT NULL DEFAULT '',    -- UNTRUNCATED provider-neutral transcript for resume (NOT the audit ledger)
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     finished_at DATETIME
@@ -502,6 +503,8 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE issues ADD COLUMN arr_queue_id INTEGER"},
 		{alter: "ALTER TABLE issues ADD COLUMN resolution_kind TEXT NOT NULL DEFAULT ''"},
 		{alter: "ALTER TABLE agent_actions ADD COLUMN approved_params TEXT"},
+		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN arr_added_at DATETIME"},
+		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN queue_file_id INTEGER CHECK (queue_file_id >= 0)"},
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m.alter); err != nil {
@@ -517,6 +520,14 @@ func Open(dbPath string) (*sql.DB, error) {
 				return nil, fmt.Errorf("apply backfill %q: %w", stmt, err)
 			}
 		}
+	}
+	// Monetary estimates were briefly stored on remediation runs using a
+	// hardcoded model-price table. They are not reliable audit data, so erase
+	// legacy values without dropping the column: retaining the unused column
+	// keeps rollback to an older server binary schema-compatible.
+	if err := clearLegacyAgentRunCost(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("clear legacy agent-run cost estimates: %w", err)
 	}
 
 	// Chaptarr has no global default — instances are granted per user — but
@@ -618,6 +629,34 @@ func Open(dbPath string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+func clearLegacyAgentRunCost(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(agent_runs)")
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "cost_micros" {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	_, err = db.Exec("UPDATE agent_runs SET cost_micros = 0 WHERE cost_micros != 0")
+	return err
 }
 
 // repairReleaseActionReferences removes legacy raw release capabilities from

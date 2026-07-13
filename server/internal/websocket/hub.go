@@ -487,8 +487,10 @@ func radarrQueueSignal(item radarr.DetailedQueueItem) arr.QueueObservation {
 		media.TmdbID = item.Movie.TmdbID
 	}
 	return arr.QueueObservation{
-		DownloadID: item.DownloadID,
-		Media:      media,
+		DownloadID:       item.DownloadID,
+		AddedAt:          item.Added,
+		FileIDAtSnapshot: item.FileIDAtSnapshot(),
+		Media:            media,
 		Signal: arr.QueueSignal{
 			Status:                item.Status,
 			TrackedDownloadStatus: item.TrackedDownloadStatus,
@@ -520,8 +522,10 @@ func sonarrQueueSignal(item sonarr.DetailedQueueItem) arr.QueueObservation {
 		media.EpisodeNumber = item.Episode.EpisodeNumber
 	}
 	return arr.QueueObservation{
-		DownloadID: item.DownloadID,
-		Media:      media,
+		DownloadID:       item.DownloadID,
+		AddedAt:          item.Added,
+		FileIDAtSnapshot: item.FileIDAtSnapshot(),
+		Media:            media,
 		Signal: arr.QueueSignal{
 			Status:                item.Status,
 			TrackedDownloadStatus: item.TrackedDownloadStatus,

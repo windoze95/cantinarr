@@ -12,7 +12,7 @@ import 'issue_refresh_banner.dart';
 
 /// Read-only audit timeline for one agent run (`GET /api/admin/agent-runs/{id}`).
 ///
-/// Renders the run's bounds/cost summary and its ordered steps (each model turn
+/// Renders the run's summary and its ordered steps (each model turn
 /// and tool call) as a passive timeline. Every step's text — tool input/output,
 /// assistant reasoning — is UNTRUSTED and rendered as selectable, truncated
 /// text only. Nothing here is a control.
@@ -161,7 +161,7 @@ class _AgentRunScreenState extends ConsumerState<AgentRunScreen>
   }
 }
 
-/// The run's bounds + cost ledger, shown above the step timeline.
+/// The run summary, shown above the step timeline.
 class _RunSummary extends StatelessWidget {
   final AgentRun run;
   const _RunSummary({required this.run});
@@ -171,7 +171,6 @@ class _RunSummary extends StatelessWidget {
     final chips = <String>[
       if (run.model.isNotEmpty) run.model,
       '${run.stepCount} step${run.stepCount == 1 ? '' : 's'}',
-      run.costLabel,
       if (run.stopReasonLabel != null) run.stopReasonLabel!,
     ];
     return Container(

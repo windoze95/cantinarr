@@ -28,6 +28,23 @@ const (
 	observationSweepPeriod     = time.Minute
 )
 
+const observationDownloadUpsertSQL = `INSERT INTO issue_observation_downloads
+	(issue_id,download_id,first_seen_at,arr_added_at,queue_file_id)
+	VALUES (?,?,?,?,?)
+	ON CONFLICT(issue_id,download_id) DO UPDATE SET
+	queue_file_id = CASE
+		WHEN excluded.arr_added_at IS NOT NULL AND
+			(issue_observation_downloads.arr_added_at IS NULL OR excluded.arr_added_at > issue_observation_downloads.arr_added_at)
+		THEN excluded.queue_file_id
+		WHEN issue_observation_downloads.queue_file_id IS NULL AND
+			excluded.arr_added_at IS issue_observation_downloads.arr_added_at
+		THEN excluded.queue_file_id
+		ELSE issue_observation_downloads.queue_file_id END,
+	arr_added_at = CASE
+		WHEN excluded.arr_added_at IS NOT NULL AND
+			(issue_observation_downloads.arr_added_at IS NULL OR excluded.arr_added_at > issue_observation_downloads.arr_added_at)
+		THEN excluded.arr_added_at ELSE issue_observation_downloads.arr_added_at END`
+
 const recoveryInFlightResult = "Superseded because the live arr state changed or the arr continued its own retry before approval; no fix was executed."
 const arrStateClearedResolution = "The requested movie or episode is now available."
 const observationNeedsCloserLook = "We couldn't confirm the latest status from the connected media service. We didn't make automated changes, and this needs a closer look."
@@ -136,8 +153,16 @@ func mediaServiceType(mediaType string) string {
 func observationSignature(items []arr.QueueObservation) string {
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
-		parts = append(parts, fmt.Sprintf("%s|%d|%s|%s|%s|%.0f|%.0f|%s|%s",
-			item.DownloadID, item.Media.QueueID,
+		addedAt := ""
+		if item.AddedAt != nil {
+			addedAt = item.AddedAt.UTC().Format(time.RFC3339Nano)
+		}
+		fileID := "unknown"
+		if item.FileIDAtSnapshot != nil {
+			fileID = strconv.FormatInt(*item.FileIDAtSnapshot, 10)
+		}
+		parts = append(parts, fmt.Sprintf("%s|%s|%s|%d|%s|%s|%s|%.0f|%.0f|%s|%s",
+			item.DownloadID, addedAt, fileID, item.Media.QueueID,
 			strings.ToLower(item.Signal.Status),
 			strings.ToLower(item.Signal.TrackedDownloadStatus),
 			strings.ToLower(item.Signal.TrackedDownloadState),
@@ -386,7 +411,8 @@ func (s *Service) storeQueueSnapshot(serviceType, instanceID string, items []arr
 	safeItems := make([]arr.QueueObservation, 0, len(items))
 	for _, item := range items {
 		safeItems = append(safeItems, arr.QueueObservation{
-			DownloadID: item.DownloadID,
+			DownloadID: item.DownloadID, AddedAt: cloneTime(item.AddedAt),
+			FileIDAtSnapshot: cloneInt64(item.FileIDAtSnapshot),
 			Media: arr.QueueMediaContext{
 				QueueID: item.Media.QueueID, Title: secrets.RedactText(item.Media.Title),
 				TmdbID: item.Media.TmdbID, TvdbID: item.Media.TvdbID,
@@ -1107,8 +1133,8 @@ func (s *Service) recordObservationDownloads(issueID int64, items []arr.QueueObs
 			continue
 		}
 		if _, err := s.db.Exec(
-			`INSERT OR IGNORE INTO issue_observation_downloads(issue_id,download_id,first_seen_at)
-			 VALUES (?,?,?)`, issueID, item.DownloadID, now,
+			observationDownloadUpsertSQL,
+			issueID, item.DownloadID, now, sqlTimeOrNil(item.AddedAt), sqlInt64PointerOrNil(item.FileIDAtSnapshot),
 		); err != nil {
 			return err
 		}
@@ -1215,16 +1241,15 @@ func (s *Service) exactRecoveryProven(issue *Issue) (proven, known bool, err err
 	var baselineHasFile sql.NullBool
 	var baselineFileID sql.NullInt64
 	var captured sql.NullTime
-	var firstSeen time.Time
 	var receiptHistoryID, receiptFileID sql.NullInt64
 	var receiptDownloadID sql.NullString
 	var provenAt sql.NullTime
 	if err := s.db.QueryRow(
-		`SELECT baseline_has_file,baseline_file_id,baseline_captured_at,first_seen_at,
+		`SELECT baseline_has_file,baseline_file_id,baseline_captured_at,
 		 import_history_id,import_download_id,import_file_id,recovery_proven_at
 		 FROM issue_observations WHERE issue_id=?`,
 		issue.ID,
-	).Scan(&baselineHasFile, &baselineFileID, &captured, &firstSeen,
+	).Scan(&baselineHasFile, &baselineFileID, &captured,
 		&receiptHistoryID, &receiptDownloadID, &receiptFileID, &provenAt); err != nil {
 		return false, false, err
 	}
@@ -1249,10 +1274,18 @@ func (s *Service) exactRecoveryProven(issue *Issue) (proven, known bool, err err
 	if baselineHasFile.Bool && current.hasFile && baselineFileID.Valid && baselineFileID.Int64 > 0 && current.fileID > 0 && current.fileID != baselineFileID.Int64 {
 		transitioned = true
 	}
-	if !transitioned || current.fileID <= 0 {
+	baselineCaughtImport := baselineHasFile.Bool && current.hasFile && baselineFileID.Valid &&
+		baselineFileID.Int64 > 0 && baselineFileID.Int64 == current.fileID
+	if (!transitioned && !baselineCaughtImport) || !current.hasFile || current.fileID <= 0 {
 		return false, true, nil
 	}
-	receipt, err := s.exactImportWitness(issue, current.fileID, current.mediaID, firstSeen)
+	// An import can finish before the immediately following baseline read, or a
+	// completed queue row can linger after its exact file was imported. In either
+	// case the baseline and current file IDs are equal. The exact import receipt
+	// must bind the observed download to this live media/file identity, while the
+	// queue response must have supplied an exact file state and an arr-clock Added
+	// boundary no newer than that receipt. Unknown queue identity fails closed.
+	receipt, err := s.exactImportWitness(issue, current.fileID, current.mediaID, baselineCaughtImport && !transitioned)
 	if err != nil || receipt.historyID == 0 {
 		return false, true, err
 	}
@@ -1303,26 +1336,89 @@ type importReceipt struct {
 	fileID     int64
 }
 
-func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internalMediaID int, firstSeen time.Time) (importReceipt, error) {
-	downloadIDs := map[string]string{}
-	if issue.DownloadID != "" {
-		downloadIDs[strings.ToLower(issue.DownloadID)] = issue.DownloadID
+type observedDownload struct {
+	id          string
+	addedAt     sql.NullTime
+	queueFileID sql.NullInt64
+	firstSeenAt time.Time
+}
+
+func mergeObservedDownload(existing, candidate observedDownload) observedDownload {
+	merged := existing
+	if candidate.firstSeenAt.After(existing.firstSeenAt) {
+		merged.id = candidate.id
+		merged.firstSeenAt = candidate.firstSeenAt
 	}
-	remaining := 20 - len(downloadIDs)
+	switch {
+	case candidate.addedAt.Valid && (!existing.addedAt.Valid || candidate.addedAt.Time.After(existing.addedAt.Time)):
+		merged.addedAt = candidate.addedAt
+		merged.queueFileID = candidate.queueFileID
+	case existing.addedAt.Valid && (!candidate.addedAt.Valid || existing.addedAt.Time.After(candidate.addedAt.Time)):
+		// Keep the file-state evidence paired with the newest arr attempt.
+	case existing.addedAt.Valid && candidate.addedAt.Valid && existing.addedAt.Time.Equal(candidate.addedAt.Time):
+		if !existing.queueFileID.Valid || !candidate.queueFileID.Valid || existing.queueFileID.Int64 != candidate.queueFileID.Int64 {
+			merged.queueFileID = sql.NullInt64{}
+		}
+	default:
+		// No arr attempt boundary means the merged evidence cannot prove the
+		// baseline race, even if one case-variant row carried a file ID.
+		merged.addedAt = sql.NullTime{}
+		merged.queueFileID = sql.NullInt64{}
+	}
+	return merged
+}
+
+func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internalMediaID int, requireAttemptBoundary bool) (importReceipt, error) {
+	downloadsByKey := map[string]observedDownload{}
 	rows, err := s.db.Query(
-		"SELECT download_id FROM issue_observation_downloads WHERE issue_id=? ORDER BY first_seen_at DESC,download_id LIMIT ?",
-		issue.ID, remaining,
+		"SELECT download_id,arr_added_at,queue_file_id,first_seen_at FROM issue_observation_downloads WHERE issue_id=? ORDER BY first_seen_at DESC,download_id",
+		issue.ID,
 	)
 	if err != nil {
 		return importReceipt{}, err
 	}
 	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil {
-			downloadIDs[strings.ToLower(id)] = id
+		var download observedDownload
+		if err := rows.Scan(&download.id, &download.addedAt, &download.queueFileID, &download.firstSeenAt); err != nil {
+			rows.Close()
+			return importReceipt{}, err
+		}
+		key := strings.ToLower(download.id)
+		if existing, ok := downloadsByKey[key]; ok {
+			downloadsByKey[key] = mergeObservedDownload(existing, download)
+		} else {
+			downloadsByKey[key] = download
 		}
 	}
-	rows.Close()
+	if err := rows.Close(); err != nil {
+		return importReceipt{}, err
+	}
+	if err := rows.Err(); err != nil {
+		return importReceipt{}, err
+	}
+
+	// The issue's current download identity is always checked first. Fill the
+	// remaining bounded history lookups with the 19 most recently seen distinct
+	// IDs; a reused old ID must not fall out merely because its first sighting is
+	// older than a long replacement chain.
+	downloadIDs := make([]observedDownload, 0, 20)
+	currentKey := strings.ToLower(issue.DownloadID)
+	if issue.DownloadID != "" {
+		current := downloadsByKey[currentKey]
+		current.id = issue.DownloadID
+		downloadIDs = append(downloadIDs, current)
+		delete(downloadsByKey, currentKey)
+	}
+	others := make([]observedDownload, 0, len(downloadsByKey))
+	for _, download := range downloadsByKey {
+		others = append(others, download)
+	}
+	sort.Slice(others, func(i, j int) bool { return others[i].firstSeenAt.After(others[j].firstSeenAt) })
+	remaining := 20 - len(downloadIDs)
+	if remaining > len(others) {
+		remaining = len(others)
+	}
+	downloadIDs = append(downloadIDs, others[:remaining]...)
 	if len(downloadIDs) == 0 {
 		return importReceipt{}, nil
 	}
@@ -1341,15 +1437,21 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 		if err != nil {
 			return importReceipt{}, err
 		}
-		for _, downloadID := range downloadIDs {
+		for _, download := range downloadIDs {
+			downloadID := download.id
 			history, err := client.GetImportHistory(internalMediaID, downloadID, 20)
 			if err != nil {
 				return importReceipt{}, err
 			}
 			for _, record := range history {
-				if !strings.EqualFold(record.EventType, "downloadFolderImported") || record.Date.Before(firstSeen.Truncate(time.Second)) ||
+				if !strings.EqualFold(record.EventType, "downloadFolderImported") ||
 					!strings.EqualFold(record.DownloadID, downloadID) || !fileIDMatches(record.Data) ||
 					record.MovieID != internalMediaID || record.ID <= 0 {
+					continue
+				}
+				if requireAttemptBoundary && (!download.addedAt.Valid || !download.queueFileID.Valid ||
+					(download.queueFileID.Int64 > 0 && download.queueFileID.Int64 != currentFileID) ||
+					record.Date.Before(download.addedAt.Time)) {
 					continue
 				}
 				if record.Movie != nil && (record.Movie.ID != internalMediaID || record.Movie.TmdbID != issue.TmdbID) {
@@ -1363,15 +1465,21 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 		if err != nil {
 			return importReceipt{}, err
 		}
-		for _, downloadID := range downloadIDs {
+		for _, download := range downloadIDs {
+			downloadID := download.id
 			history, err := client.GetImportHistory(internalMediaID, downloadID, 20)
 			if err != nil {
 				return importReceipt{}, err
 			}
 			for _, record := range history {
-				if !strings.EqualFold(record.EventType, "downloadFolderImported") || record.Date.Before(firstSeen.Truncate(time.Second)) ||
+				if !strings.EqualFold(record.EventType, "downloadFolderImported") ||
 					!strings.EqualFold(record.DownloadID, downloadID) || !fileIDMatches(record.Data) ||
 					record.EpisodeID != internalMediaID || record.ID <= 0 {
+					continue
+				}
+				if requireAttemptBoundary && (!download.addedAt.Valid || !download.queueFileID.Valid ||
+					(download.queueFileID.Int64 > 0 && download.queueFileID.Int64 != currentFileID) ||
+					record.Date.Before(download.addedAt.Time)) {
 					continue
 				}
 				if record.Series != nil && record.Series.TvdbID != issue.TvdbID {
@@ -1975,7 +2083,7 @@ func radarrObservation(item radarr.DetailedQueueItem) arr.QueueObservation {
 		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
 		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
 	}
-	return arr.QueueObservation{DownloadID: item.DownloadID, Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
+	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, FileIDAtSnapshot: item.FileIDAtSnapshot(), Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
 }
 
 func sonarrObservation(item sonarr.DetailedQueueItem) arr.QueueObservation {
@@ -1998,5 +2106,5 @@ func sonarrObservation(item sonarr.DetailedQueueItem) arr.QueueObservation {
 		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
 		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
 	}
-	return arr.QueueObservation{DownloadID: item.DownloadID, Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
+	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, FileIDAtSnapshot: item.FileIDAtSnapshot(), Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
 }

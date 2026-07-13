@@ -252,32 +252,46 @@ func (c *Client) GetQueue() ([]QueueItem, error) {
 
 // MovieContext is the lean movie object embedded in queue/history records.
 type MovieContext struct {
-	ID     int    `json:"id"`
-	Title  string `json:"title"`
-	Year   int    `json:"year"`
-	TmdbID int    `json:"tmdbId"`
+	ID          int    `json:"id"`
+	Title       string `json:"title"`
+	Year        int    `json:"year"`
+	TmdbID      int    `json:"tmdbId"`
+	MovieFileID *int   `json:"movieFileId"`
 }
 
 type DetailedQueueItem struct {
-	ID                    int     `json:"id"`
-	MovieID               int     `json:"movieId"`
-	Title                 string  `json:"title"`
-	Status                string  `json:"status"`
-	TrackedDownloadStatus string  `json:"trackedDownloadStatus"`
-	TrackedDownloadState  string  `json:"trackedDownloadState"`
-	Timeleft              string  `json:"timeleft"`
-	Size                  float64 `json:"size"`
-	Sizeleft              float64 `json:"sizeleft"`
-	DownloadClient        string  `json:"downloadClient"`
-	DownloadID            string  `json:"downloadId"`
-	Indexer               string  `json:"indexer"`
-	Protocol              string  `json:"protocol"`
-	ErrorMessage          string  `json:"errorMessage"`
+	ID                    int        `json:"id"`
+	MovieID               int        `json:"movieId"`
+	Title                 string     `json:"title"`
+	Status                string     `json:"status"`
+	TrackedDownloadStatus string     `json:"trackedDownloadStatus"`
+	TrackedDownloadState  string     `json:"trackedDownloadState"`
+	Timeleft              string     `json:"timeleft"`
+	Size                  float64    `json:"size"`
+	Sizeleft              float64    `json:"sizeleft"`
+	DownloadClient        string     `json:"downloadClient"`
+	DownloadID            string     `json:"downloadId"`
+	Indexer               string     `json:"indexer"`
+	Protocol              string     `json:"protocol"`
+	Added                 *time.Time `json:"added"`
+	ErrorMessage          string     `json:"errorMessage"`
 	StatusMessages        []struct {
 		Title    string   `json:"title"`
 		Messages []string `json:"messages"`
 	} `json:"statusMessages"`
 	Movie *MovieContext `json:"movie,omitempty"`
+}
+
+// FileIDAtSnapshot returns the exact embedded movie's file ID when Radarr
+// supplied enough identity and file-id data to prove it. Zero means known
+// absent. Queue movie.hasFile is not populated, while movieFileId is.
+func (item DetailedQueueItem) FileIDAtSnapshot() *int64 {
+	if item.Movie == nil || item.MovieID <= 0 || item.Movie.ID != item.MovieID ||
+		item.Movie.TmdbID <= 0 || item.Movie.MovieFileID == nil || *item.Movie.MovieFileID < 0 {
+		return nil
+	}
+	fileID := int64(*item.Movie.MovieFileID)
+	return &fileID
 }
 
 // queueMaxRecords is both the requested single-page size and a safety cap.

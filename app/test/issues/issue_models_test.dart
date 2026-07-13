@@ -169,9 +169,7 @@ void main() {
         maxSteps: 12,
         maxTurnTokens: 4096,
         maxWallClockSecs: 300,
-        maxCostMicros: 500000,
         dailyRunCap: 50,
-        dailyCostCeilingMicros: 5000000,
         circuitBreakerGiveups: 5,
         maxUserWaitHours: 48,
         observationMinMinutes: 12,
@@ -182,12 +180,13 @@ void main() {
       expect(back.provider, 'openai');
       expect(back.model, 'gpt-5');
       expect(back.mode, RemediationMode.supervised);
-      expect(back.maxCostMicros, 500000);
       expect(back.maxUserWaitHours, 48);
       expect(back.observationMinMinutes, 12);
       expect(back.observationQuietMinutes, 7);
       expect(back.observationSettleMinutes, 3);
       expect(back.markResolvedAsRead, isFalse); // explicit false round-trips
+      expect(back.toJson(), isNot(contains('max_cost_micros')));
+      expect(back.toJson(), isNot(contains('daily_cost_ceiling_micros')));
     });
 
     test('blank provider/model means "inherit server default"', () {
@@ -200,6 +199,16 @@ void main() {
       expect(s.observationQuietMinutes, 5);
       expect(s.observationSettleMinutes, 2);
       expect(s.markResolvedAsRead, isTrue); // defaults on when absent
+    });
+
+    test('ignores legacy cost controls instead of sending them back', () {
+      final s = RemediationSettings.fromJson({
+        'max_cost_micros': 500000,
+        'daily_cost_ceiling_micros': 5000000,
+      });
+
+      expect(s.toJson(), isNot(contains('max_cost_micros')));
+      expect(s.toJson(), isNot(contains('daily_cost_ceiling_micros')));
     });
   });
 }

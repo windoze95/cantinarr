@@ -29,9 +29,7 @@ const (
 	maxConfiguredSteps          = 50
 	maxConfiguredTurnTokens     = 32768
 	maxConfiguredWallClockSecs  = 1800
-	maxConfiguredRunCostMicros  = 10_000_000
 	maxConfiguredDailyRuns      = 1000
-	maxConfiguredDailyCost      = 100_000_000
 	maxConfiguredBreakerGiveups = 100
 	maxConfiguredUserWaitHours  = 24 * 30
 	maxObservationMinMinutes    = 24 * 60
@@ -64,9 +62,7 @@ type Settings struct {
 	MaxSteps                 int    `json:"max_steps"`                  // total tool calls per investigation
 	MaxTurnTokens            int    `json:"max_turn_tokens"`            // per-turn output cap
 	MaxWallClockSecs         int    `json:"max_wall_clock_secs"`        // active wall-clock budget
-	MaxCostMicros            int    `json:"max_cost_micros"`            // per-run cost ceiling (millionths USD)
 	DailyRunCap              int    `json:"daily_run_cap"`              // max runs/day
-	DailyCostCeilingMicros   int    `json:"daily_cost_ceiling_micros"`  // global cost ceiling/day (millionths USD)
 	CircuitBreakerGiveups    int    `json:"circuit_breaker_giveups"`    // consecutive auto give-ups -> auto-dispatch off
 	MaxUserWaitHours         int    `json:"max_user_wait_hours"`        // W4: reply-TTL — close an awaiting_user issue with no reply within this window
 	ObservationMinMinutes    int    `json:"observation_min_minutes"`    // minimum persistent-problem age before promotion
@@ -116,7 +112,7 @@ func legacyAutonomyMode(autonomy string) (string, bool) {
 // Defaults returns the built-in remediation settings. Provider and Model are
 // empty so the agent inherits the configured AI provider/model unless an admin
 // overrides them; every mutation is admin-approved (mode "supervised"); the
-// feature ships OFF. The cost ceilings are best-effort guardrails.
+// feature ships OFF.
 func Defaults() Settings {
 	return Settings{
 		Enabled:                  false,
@@ -129,9 +125,7 @@ func Defaults() Settings {
 		MaxSteps:                 12,
 		MaxTurnTokens:            4096,
 		MaxWallClockSecs:         300,
-		MaxCostMicros:            500000, // ~$0.50/run
 		DailyRunCap:              50,
-		DailyCostCeilingMicros:   5000000, // ~$5/day, global
 		CircuitBreakerGiveups:    5,
 		MaxUserWaitHours:         72, // W4: 3 days for a reporter to answer before wont_fix(user_unresponsive)
 		ObservationMinMinutes:    10,
@@ -174,20 +168,10 @@ func (g *Settings) normalize() {
 	} else if g.MaxWallClockSecs > maxConfiguredWallClockSecs {
 		g.MaxWallClockSecs = maxConfiguredWallClockSecs
 	}
-	if g.MaxCostMicros <= 0 {
-		g.MaxCostMicros = d.MaxCostMicros
-	} else if g.MaxCostMicros > maxConfiguredRunCostMicros {
-		g.MaxCostMicros = maxConfiguredRunCostMicros
-	}
 	if g.DailyRunCap <= 0 {
 		g.DailyRunCap = d.DailyRunCap
 	} else if g.DailyRunCap > maxConfiguredDailyRuns {
 		g.DailyRunCap = maxConfiguredDailyRuns
-	}
-	if g.DailyCostCeilingMicros <= 0 {
-		g.DailyCostCeilingMicros = d.DailyCostCeilingMicros
-	} else if g.DailyCostCeilingMicros > maxConfiguredDailyCost {
-		g.DailyCostCeilingMicros = maxConfiguredDailyCost
 	}
 	if g.CircuitBreakerGiveups <= 0 {
 		g.CircuitBreakerGiveups = d.CircuitBreakerGiveups

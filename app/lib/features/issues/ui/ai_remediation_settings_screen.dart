@@ -311,22 +311,10 @@ class _AiRemediationSettingsScreenState
               setState(() => _edited = s.copyWith(maxWallClockSecs: v)),
         ),
         _NumberTile(
-          label: 'Max cost per run (micros)',
-          value: s.maxCostMicros,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(maxCostMicros: v)),
-        ),
-        _NumberTile(
           label: 'Daily run cap',
           value: s.dailyRunCap,
           onChanged: (v) =>
               setState(() => _edited = s.copyWith(dailyRunCap: v)),
-        ),
-        _NumberTile(
-          label: 'Daily cost ceiling (micros)',
-          value: s.dailyCostCeilingMicros,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(dailyCostCeilingMicros: v)),
         ),
         _NumberTile(
           label: 'Wait for a user reply (hours)',

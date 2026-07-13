@@ -345,3 +345,30 @@ func TestGetQueueDetailedRejectsClampedSinglePage(t *testing.T) {
 		t.Fatalf("queue requests=%d, want one atomic bounded page", requests)
 	}
 }
+
+func TestDetailedQueueFileStateRequiresConsistentEpisodeIdentity(t *testing.T) {
+	noFile := 0
+	falseValue, trueValue := false, true
+	item := DetailedQueueItem{
+		SeriesID:       2,
+		EpisodeID:      4,
+		EpisodeHasFile: &falseValue,
+		Series:         &SeriesContext{ID: 2, TvdbID: 100},
+		Episode: &EpisodeContext{
+			ID: 4, SeriesID: 2, SeasonNumber: 0, EpisodeNumber: 1,
+			EpisodeFileID: &noFile, HasFile: &falseValue,
+		},
+	}
+	if got := item.FileIDAtSnapshot(); got == nil || *got != 0 {
+		t.Fatalf("exact episode file ID = %v, want known absent", got)
+	}
+	item.EpisodeHasFile = &trueValue
+	if got := item.FileIDAtSnapshot(); got != nil {
+		t.Fatalf("contradictory episode state produced file ID %v", *got)
+	}
+	item.EpisodeHasFile = &falseValue
+	item.Episode.ID = 5
+	if got := item.FileIDAtSnapshot(); got != nil {
+		t.Fatalf("mismatched episode identity produced file ID %v", *got)
+	}
+}

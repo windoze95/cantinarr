@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -177,19 +178,30 @@ func TestAutoDispatchSuccessfulEmptyReadDeliversSnapshot(t *testing.T) {
 // TestQueueSignalMappers confirms the real Radarr/Sonarr detailed queue types
 // preserve stable media identity, classification input, and byte progress.
 func TestQueueSignalMappers(t *testing.T) {
+	added := time.Date(2026, 7, 12, 15, 0, 0, 0, time.UTC)
+	noFile, hasFile := 0, 12
+	trueValue := true
 	r := radarrQueueSignal(radarr.DetailedQueueItem{
 		ID:                    41,
+		MovieID:               7,
 		DownloadID:            "rdl",
 		Status:                "completed",
 		TrackedDownloadState:  "importPending",
 		TrackedDownloadStatus: "warning",
 		Protocol:              "usenet",
+		Added:                 &added,
 		Size:                  800,
 		Sizeleft:              120,
-		Movie:                 &radarr.MovieContext{Title: "Movie", TmdbID: 101},
+		Movie:                 &radarr.MovieContext{ID: 7, Title: "Movie", TmdbID: 101, MovieFileID: &noFile},
 	})
 	if r.DownloadID != "rdl" || r.Signal.TrackedDownloadState != "importPending" {
 		t.Fatalf("radarr mapping = %+v, want downloadID=rdl state=importPending", r)
+	}
+	if r.AddedAt == nil || !r.AddedAt.Equal(added) {
+		t.Fatalf("radarr attempt boundary = %v, want %v", r.AddedAt, added)
+	}
+	if r.FileIDAtSnapshot == nil || *r.FileIDAtSnapshot != 0 {
+		t.Fatalf("radarr queue file ID = %v, want known absent", r.FileIDAtSnapshot)
 	}
 	if r.Media.QueueID != 41 || r.Media.TmdbID != 101 || r.Media.Title != "Movie" {
 		t.Fatalf("radarr media context = %+v", r.Media)
@@ -203,16 +215,26 @@ func TestQueueSignalMappers(t *testing.T) {
 
 	s := sonarrQueueSignal(sonarr.DetailedQueueItem{
 		ID:                    42,
+		SeriesID:              6,
+		EpisodeID:             8,
 		DownloadID:            "sdl",
+		Added:                 &added,
+		EpisodeHasFile:        &trueValue,
 		TrackedDownloadStatus: "error",
 		ErrorMessage:          "The download is stalled with no connections",
 		Size:                  900,
 		Sizeleft:              300,
-		Series:                &sonarr.SeriesContext{Title: "Show", TvdbID: 202, TmdbID: 303},
-		Episode:               &sonarr.EpisodeContext{SeasonNumber: 1, EpisodeNumber: 2},
+		Series:                &sonarr.SeriesContext{ID: 6, Title: "Show", TvdbID: 202, TmdbID: 303},
+		Episode:               &sonarr.EpisodeContext{ID: 8, SeriesID: 6, SeasonNumber: 1, EpisodeNumber: 2, EpisodeFileID: &hasFile, HasFile: &trueValue},
 	})
 	if s.DownloadID != "sdl" {
 		t.Fatalf("sonarr mapping downloadID = %q, want sdl", s.DownloadID)
+	}
+	if s.AddedAt == nil || !s.AddedAt.Equal(added) {
+		t.Fatalf("sonarr attempt boundary = %v, want %v", s.AddedAt, added)
+	}
+	if s.FileIDAtSnapshot == nil || *s.FileIDAtSnapshot != int64(hasFile) {
+		t.Fatalf("sonarr queue file ID = %v, want %d", s.FileIDAtSnapshot, hasFile)
 	}
 	if s.Media.QueueID != 42 || s.Media.TmdbID != 303 || s.Media.TvdbID != 202 ||
 		s.Media.SeasonNumber != 1 || s.Media.EpisodeNumber != 2 || s.Media.Title != "Show" {

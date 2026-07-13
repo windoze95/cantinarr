@@ -108,7 +108,7 @@ func approvalFixture(t *testing.T) (*Service, *fakeExecutor, int64, int64) {
 	}
 	// Feature on so a resume is enqueued (the worker pool isn't running in these
 	// tests, so the resume job is simply queued and harmless).
-	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 
@@ -134,7 +134,7 @@ func approvalFixture(t *testing.T) (*Service, *fakeExecutor, int64, int64) {
 	}
 	htData, _ := json.Marshal(history)
 	runRes, err := database.Exec(
-		"INSERT INTO agent_runs (issue_id, trigger, status, model, step_count, cost_micros, transcript_json) VALUES (?, 'user_report', ?, 'claude-haiku-4-5', 3, 1200, ?)",
+		"INSERT INTO agent_runs (issue_id, trigger, status, model, step_count, transcript_json) VALUES (?, 'user_report', ?, 'claude-haiku-4-5', 3, ?)",
 		issueID, runStatusWaitingApproval, string(htData),
 	)
 	if err != nil {
@@ -606,6 +606,27 @@ func TestActionAPIsExposeImmutableTargetInstance(t *testing.T) {
 		t.Fatalf("GetIssueActivity = %d actions, err %v", len(activity.Actions), err)
 	}
 	assertTarget("activity", &activity.Actions[0])
+	if len(activity.Runs) != 1 || activity.Runs[0].StepCount != 3 || activity.Runs[0].StartedAt.IsZero() {
+		t.Fatalf("activity run metadata = %+v, want one run with steps and timestamp", activity.Runs)
+	}
+	activityWire, err := json.Marshal(activity)
+	if err != nil {
+		t.Fatalf("marshal issue activity: %v", err)
+	}
+	if strings.Contains(string(activityWire), "cost") {
+		t.Fatalf("issue activity still exposes a monetary estimate: %s", activityWire)
+	}
+	detail, err := svc.GetRunDetail(activity.Runs[0].ID)
+	if err != nil {
+		t.Fatalf("GetRunDetail: %v", err)
+	}
+	detailWire, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatalf("marshal run detail: %v", err)
+	}
+	if strings.Contains(string(detailWire), "cost") {
+		t.Fatalf("run detail still exposes a monetary estimate: %s", detailWire)
+	}
 }
 
 func TestDenyAfterApprovalReturnsConflict(t *testing.T) {
@@ -1048,7 +1069,7 @@ func newProposeCycleRunner(t *testing.T) (*Runner, *Service, *fakeExecutor, int6
 	svc := NewService(database, nil, nil, &fakeNotifier{})
 	fx := &fakeExecutor{out: "Release sent to the download client."}
 	svc.executor = fx
-	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 	if _, err := database.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (?, 'admin', '', 'admin')", testAdminID); err != nil {

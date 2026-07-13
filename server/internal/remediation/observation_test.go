@@ -239,7 +239,7 @@ func TestAbsentToPresentExactFileClosesUnpromotedObservationSilently(t *testing.
 	fileState.hasFile = true
 	fileState.fileID = 20
 	fileState.importDownloadID = "old"
-	fileState.importDate = base // equal-second evidence is valid (SQLite timestamps are second precision).
+	fileState.importDate = base
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", nil, base.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -257,6 +257,220 @@ func TestAbsentToPresentExactFileClosesUnpromotedObservationSilently(t *testing.
 	var downloadID string
 	if err := svc.db.QueryRow("SELECT import_history_id,import_download_id,import_file_id FROM issue_observations WHERE issue_id=?", issues[0].ID).Scan(&historyID, &downloadID, &fileID); err != nil || historyID != 77 || downloadID != "old" || fileID != 20 {
 		t.Fatalf("receipt history=%d download=%q file=%d err=%v", historyID, downloadID, fileID, err)
+	}
+}
+
+func TestSonarrAlreadyImportedQueueRowClosesWithoutAttention(t *testing.T) {
+	base := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	attemptAdded := base.Add(-20 * time.Minute)
+	queueFileID := int64(20)
+	fileState := &testFileState{
+		hasFile:          true,
+		fileID:           20,
+		importDownloadID: "episode-download",
+		importDate:       base.Add(-10 * time.Minute),
+	}
+	svc, notifier, _ := setupObservationServiceWithState(t, fileState)
+	enableAutoDispatch(t, svc, 5)
+
+	signal := arr.QueueSignal{
+		Status:                "completed",
+		TrackedDownloadStatus: "warning",
+		TrackedDownloadState:  "importPending",
+	}
+	item := arr.QueueObservation{
+		DownloadID:       "episode-download",
+		AddedAt:          &attemptAdded,
+		FileIDAtSnapshot: &queueFileID,
+		Media: arr.QueueMediaContext{
+			QueueID: 8, Title: "Series", TmdbID: 55, TvdbID: 100,
+			SeasonNumber: 0, EpisodeNumber: 1,
+		},
+		Signal: signal, Diagnosis: arr.Diagnose(signal),
+	}
+	if err := svc.observeQueueSnapshot("sonarr", "sonarr-observe", []arr.QueueObservation{item}, base); err != nil {
+		t.Fatal(err)
+	}
+	// Sonarr already reports the exact episode file and an exact receipt for this
+	// download, but its completed importPending row lingered into Cantinarr's
+	// snapshot. The stale row must settle silently instead of becoming an issue.
+	if err := svc.observeQueueSnapshot("sonarr", "sonarr-observe", nil, base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.observeQueueSnapshot("sonarr", "sonarr-observe", nil, base.Add(11*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	issues, err := svc.ListIssues("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || issues[0].Status != IssueResolved || issues[0].ClosedAt == nil ||
+		issues[0].ResolutionKind != ResolutionArrStateCleared {
+		t.Fatalf("resolved issue = %+v", issues)
+	}
+	if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_updated" || drainJobs(svc) != 0 {
+		t.Fatalf("completed import drew attention: events=%v", notifier.adminEvents)
+	}
+}
+
+func TestBaselineCaughtImportRequiresFreshArrAttemptReceipt(t *testing.T) {
+	base := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	attemptAdded := base
+	queueFileID, differentFileID := int64(0), int64(19)
+	for _, tc := range []struct {
+		name           string
+		addedAt        *time.Time
+		snapshotFileID *int64
+		importDate     time.Time
+	}{
+		{name: "old receipt for reused download id", addedAt: &attemptAdded, snapshotFileID: &queueFileID, importDate: base.Add(-time.Hour)},
+		{name: "missing arr attempt boundary", snapshotFileID: &queueFileID, importDate: base.Add(time.Minute)},
+		{name: "missing exact queue file state", addedAt: &attemptAdded, importDate: base.Add(time.Minute)},
+		{name: "different queue file", addedAt: &attemptAdded, snapshotFileID: &differentFileID, importDate: base.Add(time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fileState := &testFileState{
+				hasFile:          true,
+				fileID:           20,
+				importDownloadID: "reused-download",
+				importDate:       tc.importDate,
+			}
+			svc, notifier, _ := setupObservationServiceWithState(t, fileState)
+			enableAutoDispatch(t, svc, 5)
+			item := observedProblem("reused-download", 1, 100)
+			item.AddedAt = tc.addedAt
+			item.FileIDAtSnapshot = tc.snapshotFileID
+			if err := svc.observeQueueSnapshot("radarr", "radarr-observe", []arr.QueueObservation{item}, base); err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.observeQueueSnapshot("radarr", "radarr-observe", nil, base.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.observeQueueSnapshot("radarr", "radarr-observe", nil, base.Add(11*time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+
+			issues, err := svc.ListIssues("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(issues) != 1 || issues[0].Status != IssueOpen || issues[0].ClosedAt != nil {
+				t.Fatalf("ambiguous receipt falsely proved recovery: %+v", issues)
+			}
+			if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_created" || drainJobs(svc) != 1 {
+				t.Fatalf("ambiguous receipt bypassed attention: events=%v", notifier.adminEvents)
+			}
+		})
+	}
+}
+
+func TestQueueSnapshotRoundTripPreservesAttemptEvidence(t *testing.T) {
+	svc, _, _ := setupObservationService(t, false)
+	now := time.Now().UTC().Truncate(time.Second)
+	knownAbsent, knownPresent := int64(0), int64(20)
+	items := []arr.QueueObservation{
+		{DownloadID: "absent", AddedAt: &now, FileIDAtSnapshot: &knownAbsent, Media: arr.QueueMediaContext{TmdbID: 41}},
+		{DownloadID: "present", AddedAt: &now, FileIDAtSnapshot: &knownPresent, Media: arr.QueueMediaContext{TmdbID: 42}},
+		{DownloadID: "unknown", AddedAt: &now, Media: arr.QueueMediaContext{TmdbID: 43}},
+	}
+	if err := svc.storeQueueSnapshot("radarr", "radarr-observe", items, now); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range items {
+		got, ok := svc.recentQueueObservationForUser(
+			"radarr-observe", "movie", arr.QueueMediaContext{TmdbID: want.Media.TmdbID}, now,
+		)
+		if !ok || len(got.items) != 1 {
+			t.Fatalf("snapshot %d round trip = %+v ok=%t", i, got, ok)
+		}
+		item := got.items[0]
+		if item.AddedAt == nil || !item.AddedAt.Equal(now) {
+			t.Fatalf("snapshot %d addedAt = %v, want %v", i, item.AddedAt, now)
+		}
+		if want.FileIDAtSnapshot == nil {
+			if item.FileIDAtSnapshot != nil {
+				t.Fatalf("snapshot %d file ID = %v, want unknown", i, *item.FileIDAtSnapshot)
+			}
+		} else if item.FileIDAtSnapshot == nil || *item.FileIDAtSnapshot != *want.FileIDAtSnapshot {
+			t.Fatalf("snapshot %d file ID = %v, want %v", i, item.FileIDAtSnapshot, *want.FileIDAtSnapshot)
+		}
+	}
+}
+
+func TestExactImportWitnessUsesNewestBoundaryAcrossCaseVariants(t *testing.T) {
+	base := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	state := &testFileState{
+		hasFile: true, fileID: 20, importDownloadID: "Reuse-ID", importDate: base.Add(-time.Hour),
+	}
+	svc, _, _ := setupObservationServiceWithState(t, state)
+	res, err := svc.db.Exec(
+		"INSERT INTO issues(source,status,media_type,tmdb_id,title,instance_id,download_id) VALUES ('auto',?,'movie',42,'Example','radarr-observe','rEuSe-Id')",
+		IssueObserving,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issueID, _ := res.LastInsertId()
+	queueFileID := int64(0)
+	oldAdded, newAdded := base.Add(-2*time.Hour), base
+	if err := svc.recordObservationDownloads(issueID, []arr.QueueObservation{{DownloadID: "Reuse-ID", AddedAt: &oldAdded, FileIDAtSnapshot: &queueFileID}}, base.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.recordObservationDownloads(issueID, []arr.QueueObservation{{DownloadID: "reuse-id", AddedAt: &newAdded, FileIDAtSnapshot: &queueFileID}}, base); err != nil {
+		t.Fatal(err)
+	}
+	issue, _ := svc.GetIssue(issueID)
+	if receipt, err := svc.exactImportWitness(issue, 20, 1, true); err != nil || receipt.historyID != 0 {
+		t.Fatalf("old receipt crossed newer case-variant boundary: %+v err=%v", receipt, err)
+	}
+	state.importDate = base.Add(time.Minute)
+	if receipt, err := svc.exactImportWitness(issue, 20, 1, true); err != nil || receipt.historyID != 77 || receipt.downloadID != "Reuse-ID" || receipt.fileID != 20 {
+		t.Fatalf("fresh case-variant receipt = %+v err=%v", receipt, err)
+	}
+}
+
+func TestExactImportWitnessAlwaysIncludesCurrentDownloadPastLimit(t *testing.T) {
+	base := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	state := &testFileState{
+		hasFile: true, fileID: 20, importDownloadID: "current-download", importDate: base.Add(time.Minute),
+	}
+	svc, _, _ := setupObservationServiceWithState(t, state)
+	res, err := svc.db.Exec(
+		"INSERT INTO issues(source,status,media_type,tmdb_id,title,instance_id,download_id) VALUES ('auto',?,'movie',42,'Example','radarr-observe','current-download')",
+		IssueObserving,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issueID, _ := res.LastInsertId()
+	queueFileID := int64(0)
+	if err := svc.recordObservationDownloads(issueID, []arr.QueueObservation{{DownloadID: "current-download", AddedAt: &base, FileIDAtSnapshot: &queueFileID}}, base); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		added := base.Add(time.Duration(i+1) * time.Minute)
+		item := arr.QueueObservation{DownloadID: fmt.Sprintf("replacement-%02d", i), AddedAt: &added, FileIDAtSnapshot: &queueFileID}
+		if err := svc.recordObservationDownloads(issueID, []arr.QueueObservation{item}, added); err != nil {
+			t.Fatal(err)
+		}
+	}
+	issue, _ := svc.GetIssue(issueID)
+	if receipt, err := svc.exactImportWitness(issue, 20, 1, true); err != nil || receipt.historyID != 77 || receipt.downloadID != "current-download" || receipt.fileID != 20 {
+		t.Fatalf("current receipt beyond cap = %+v err=%v", receipt, err)
+	}
+}
+
+func TestObservationSignatureChangesWhenDownloadIDIsReused(t *testing.T) {
+	firstAdded := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	secondAdded := firstAdded.Add(time.Hour)
+	item := observedProblem("reused-download", 1, 100)
+	item.AddedAt = &firstAdded
+	first := observationSignature([]arr.QueueObservation{item})
+	item.AddedAt = &secondAdded
+	second := observationSignature([]arr.QueueObservation{item})
+	if first == second {
+		t.Fatal("reused download ID with a new arr attempt kept the old observation signature")
 	}
 }
 

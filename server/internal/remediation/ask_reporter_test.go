@@ -31,7 +31,7 @@ func askCycleRunner(t *testing.T, withReporter bool) (*Runner, *Service, *fakeEx
 	svc := NewService(database, nil, nil, &fakeNotifier{})
 	fx := &fakeExecutor{out: "Release sent to the download client."}
 	svc.executor = fx
-	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, MaxCostMicros: 500000, DailyRunCap: 50, DailyCostCeilingMicros: 5000000, MaxUserWaitHours: 72}); err != nil {
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised, MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50, MaxUserWaitHours: 72}); err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
 	if _, err := database.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (?, 'admin', '', 'admin')", testAdminID); err != nil {

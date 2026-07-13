@@ -90,7 +90,9 @@ AgentRun _completedRun() => AgentRun.fromJson({
       'output_tokens': 5,
       'cache_creation_tokens': 0,
       'cache_read_tokens': 0,
-      'cost_micros': 100,
+      // Older servers may still include this accounting field. The app must
+      // ignore it rather than turning it into a user-facing dollar estimate.
+      'cost_micros': 80000,
       'stop_reason': 'resolved',
       'started_at': '2026-07-10T10:00:00Z',
       'finished_at': '2026-07-10T10:01:00Z',
@@ -107,7 +109,6 @@ AgentRun _resumePendingRun() => AgentRun.fromJson({
       'output_tokens': 5,
       'cache_creation_tokens': 0,
       'cache_read_tokens': 0,
-      'cost_micros': 100,
       'stop_reason': null,
       'started_at': '2026-07-10T10:00:00Z',
       'finished_at': null,
@@ -404,6 +405,8 @@ void main() {
     );
     await _resumeApp(tester);
     expect(find.text('Investigation completed'), findsOneWidget);
+    expect(find.textContaining('3 steps'), findsOneWidget);
+    expect(find.textContaining('\$'), findsNothing);
 
     service.failActivity = true;
     final beforePoll = service.threadLoads;
@@ -604,5 +607,29 @@ void main() {
       find.text("Couldn't refresh agent activity. Showing the last update."),
       findsOneWidget,
     );
+  });
+
+  testWidgets('agent run detail keeps useful metadata without a cost estimate',
+      (tester) async {
+    final service = _FakeIssuesService(
+      thread: IssueThread.fromJson({
+        'issue': _issueJson(),
+        'thread': const [],
+      }),
+      runDetail: AgentRunDetail(
+        run: _completedRun(),
+        steps: const <AgentStep>[],
+      ),
+    );
+
+    await _pumpScreen(
+      tester,
+      service: service,
+      screen: const AgentRunScreen(runId: 9),
+    );
+
+    expect(find.text('3 steps'), findsOneWidget);
+    expect(find.textContaining('Started Jul 10'), findsOneWidget);
+    expect(find.textContaining('\$'), findsNothing);
   });
 }

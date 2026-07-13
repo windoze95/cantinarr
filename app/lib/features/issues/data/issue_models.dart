@@ -347,9 +347,7 @@ class RemediationSettings {
   final int maxSteps;
   final int maxTurnTokens;
   final int maxWallClockSecs;
-  final int maxCostMicros;
   final int dailyRunCap;
-  final int dailyCostCeilingMicros;
   final int circuitBreakerGiveups;
   final int maxUserWaitHours;
   final int observationMinMinutes;
@@ -367,9 +365,7 @@ class RemediationSettings {
     required this.maxSteps,
     required this.maxTurnTokens,
     required this.maxWallClockSecs,
-    required this.maxCostMicros,
     required this.dailyRunCap,
-    required this.dailyCostCeilingMicros,
     required this.circuitBreakerGiveups,
     required this.maxUserWaitHours,
     required this.observationMinMinutes,
@@ -390,9 +386,7 @@ class RemediationSettings {
         maxSteps: json['max_steps'] as int? ?? 0,
         maxTurnTokens: json['max_turn_tokens'] as int? ?? 0,
         maxWallClockSecs: json['max_wall_clock_secs'] as int? ?? 0,
-        maxCostMicros: json['max_cost_micros'] as int? ?? 0,
         dailyRunCap: json['daily_run_cap'] as int? ?? 0,
-        dailyCostCeilingMicros: json['daily_cost_ceiling_micros'] as int? ?? 0,
         circuitBreakerGiveups: json['circuit_breaker_giveups'] as int? ?? 0,
         // Match the server default for older/partial responses; serializing 0
         // back would otherwise look like a deliberate timeout change.
@@ -414,9 +408,7 @@ class RemediationSettings {
         'max_steps': maxSteps,
         'max_turn_tokens': maxTurnTokens,
         'max_wall_clock_secs': maxWallClockSecs,
-        'max_cost_micros': maxCostMicros,
         'daily_run_cap': dailyRunCap,
-        'daily_cost_ceiling_micros': dailyCostCeilingMicros,
         'circuit_breaker_giveups': circuitBreakerGiveups,
         'max_user_wait_hours': maxUserWaitHours,
         'observation_min_minutes': observationMinMinutes,
@@ -435,9 +427,7 @@ class RemediationSettings {
     int? maxSteps,
     int? maxTurnTokens,
     int? maxWallClockSecs,
-    int? maxCostMicros,
     int? dailyRunCap,
-    int? dailyCostCeilingMicros,
     int? circuitBreakerGiveups,
     int? maxUserWaitHours,
     int? observationMinMinutes,
@@ -455,10 +445,7 @@ class RemediationSettings {
         maxSteps: maxSteps ?? this.maxSteps,
         maxTurnTokens: maxTurnTokens ?? this.maxTurnTokens,
         maxWallClockSecs: maxWallClockSecs ?? this.maxWallClockSecs,
-        maxCostMicros: maxCostMicros ?? this.maxCostMicros,
         dailyRunCap: dailyRunCap ?? this.dailyRunCap,
-        dailyCostCeilingMicros:
-            dailyCostCeilingMicros ?? this.dailyCostCeilingMicros,
         circuitBreakerGiveups:
             circuitBreakerGiveups ?? this.circuitBreakerGiveups,
         maxUserWaitHours: maxUserWaitHours ?? this.maxUserWaitHours,
