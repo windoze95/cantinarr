@@ -260,7 +260,17 @@ func (r *Runner) resolveTurn(settings Settings) (ai.TurnRunner, string, error) {
 			model = cfg.Model
 		}
 	}
-	apiKey := r.creds.GetCredential(credentials.AIKeyCredentialKey(provider))
+	// Codex credentials belong to an interactive caller and are never available
+	// to this autonomous server-side worker. Do not silently borrow a different
+	// provider's API key or attempt to route remediation through user OAuth.
+	if provider == credentials.AIProviderCodex {
+		return nil, model, fmt.Errorf("Codex uses per-user OAuth and is unavailable for AI remediation")
+	}
+	credentialKey := credentials.AIKeyCredentialKey(provider)
+	if credentialKey == "" {
+		return nil, model, fmt.Errorf("AI provider not configured")
+	}
+	apiKey := r.creds.GetCredential(credentialKey)
 	if apiKey == "" {
 		return nil, model, fmt.Errorf("AI provider not configured")
 	}

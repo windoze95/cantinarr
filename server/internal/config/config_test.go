@@ -73,6 +73,27 @@ func TestLoadValidatesPublicURL(t *testing.T) {
 	}
 }
 
+func TestLoadCodexRuntimeConfig(t *testing.T) {
+	t.Setenv("CANTINARR_CODEX_BIN", " /opt/codex-app-server ")
+	t.Setenv("CANTINARR_CODEX_RUNTIME_DIR", "/dev/shm/cantinarr-test")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.CodexBin != "/opt/codex-app-server" {
+		t.Fatalf("CodexBin = %q", cfg.CodexBin)
+	}
+	if cfg.CodexRuntimeDir != "/dev/shm/cantinarr-test" {
+		t.Fatalf("CodexRuntimeDir = %q", cfg.CodexRuntimeDir)
+	}
+
+	t.Setenv("CANTINARR_CODEX_RUNTIME_DIR", "relative/codex")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want relative Codex runtime dir rejection")
+	}
+}
+
 func contains(values []string, needle string) bool {
 	for _, value := range values {
 		if value == needle {

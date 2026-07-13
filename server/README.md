@@ -30,15 +30,15 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 - **Automatic ID bridging** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then title+year search. Results cached in SQLite for 30 days.
 - **Availability computed live** -- Request status is derived from the arrs' real episode/file state (never from a stale snapshot or monitored-only stats), refreshed by queue polling and instant arr webhooks.
 - **Connect link auth, passwordless by default** -- Admins generate connect links; redeeming one starts a permanent device session (an opaque refresh token validated against the DB -- never expires, never rotates, independent of the JWT secret) that mints 15-minute access JWTs. Sessions end only by device revocation or user deletion. Passwords and passkeys (WebAuthn, incl. native iOS/Android/Windows) are admin-gated per user.
-- **AI assistant + remediation agent** -- Anthropic, OpenAI, or Gemini-powered chat with server-side tool execution, plus an autonomous investigation agent that diagnoses reported/detected media problems and proposes fixes an admin approves.
-- **MCP server** -- The same 26 tools exposed at `/mcp` (Streamable HTTP) with full OAuth: discovery metadata, dynamic client registration, PKCE, browser/passkey login, rotating refresh tokens.
+- **AI assistant + remediation agent** -- Interactive chat can use an admin-supplied Anthropic, OpenAI, or Gemini API key, or per-user ChatGPT (Codex) account links and their subscription usage/rate limits. The autonomous investigation agent requires an API-key provider and proposes fixes an admin approves.
+- **MCP server** -- The same 26 tools exposed at `/mcp` (Streamable HTTP) with full inbound Cantinarr OAuth: discovery metadata, dynamic client registration, PKCE, browser/passkey login, rotating refresh tokens. This is separate from the outbound ChatGPT account link used by Codex chat.
 - **Import Doctor** -- Plain-English diagnosis of stuck downloads with one-click fixes (manual/force import, remove+blocklist+re-search, category hand-off, rescan), shared by the app, the AI assistant, and MCP.
 - **Push notifications** -- APNs delivery through a self-hosted push gateway with zero-config auto-enrollment, per-user preference categories, and admin-scoped alerts.
 - **Real-time updates** -- WebSocket hub polls arr queues (30s) and download clients (15s) and pushes progress, queue snapshots, and change pings; arr webhooks make external changes (manual imports, deletes) land instantly.
 - **Arr proxy** -- Read-only Radarr/Sonarr browsing for users, full passthrough for admins, without exposing API keys.
-- **Secrets encrypted at rest** -- Instance API keys/passwords, external credentials, webhook tokens, and the JWT secret are AES-256-GCM encrypted in SQLite.
+- **Secrets encrypted at rest** -- Instance API keys/passwords, external credentials, per-user ChatGPT authorization, webhook tokens, and the JWT secret are AES-256-GCM encrypted in SQLite.
 - **Flutter web embed** -- The web build ships inside the binary via `go:embed`. One container, one port, API + UI.
-- **Tiny footprint** -- Pure Go (no CGO), static binary, Alpine-based image.
+- **Single Alpine image** -- A static, no-CGO Go server plus the pinned Codex app-server helper, with one exposed port.
 
 ## Quick Start
 
@@ -62,7 +62,7 @@ services:
 docker compose up -d
 ```
 
-Open `http://your-server:8585` -- the setup wizard creates your admin account. Then configure API credentials and service instances from the admin UI.
+Open `http://your-server:8585` -- the setup wizard creates your admin account. Then configure API credentials and service instances from the admin UI. When **ChatGPT (Codex)** is the selected AI provider, each user links their own account with the device flow under **Settings > ChatGPT**.
 
 ### From Source
 
@@ -75,7 +75,7 @@ go build -o cantinarr ./cmd/server
 
 ## Configuration
 
-Service credentials (TMDB, Anthropic/OpenAI/Gemini, Trakt) and all service instances (Radarr, Sonarr, Chaptarr, SABnzbd, qBittorrent, NZBGet, Transmission, Tautulli) are managed through the admin UI. No environment variables needed for API keys.
+Service credentials (TMDB, Anthropic/OpenAI/Gemini, Trakt), AI provider selection, and all service instances (Radarr, Sonarr, Chaptarr, SABnzbd, qBittorrent, NZBGet, Transmission, Tautulli) are managed through the admin UI. ChatGPT (Codex) does not use a shared API key: each user links their own ChatGPT account. No environment variables are needed for credentials.
 
 Optional env vars for deployment tuning (a `.env` file next to the binary is auto-loaded):
 
@@ -86,8 +86,10 @@ Optional env vars for deployment tuning (a `.env` file next to the binary is aut
 | `CANTINARR_PUBLIC_URL` | direct request origin | Trusted public origin (for example `https://cantinarr.example.com`) used when installing authenticated Radarr/Sonarr webhooks; set this behind a reverse proxy because forwarded host/protocol headers are deliberately ignored |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for signing short-lived access tokens (persisted encrypted when auto-generated). Opaque device-session refresh tokens do not depend on it, so changing it never signs devices out |
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
-| `CANTINARR_AI_PROVIDER` | `anthropic` | Fallback AI provider when none is saved in the admin UI (`anthropic`, `openai`, `gemini`) |
+| `CANTINARR_AI_PROVIDER` | `anthropic` | Fallback AI provider when none is saved in the admin UI (`anthropic`, `openai`, `gemini`, `codex`) |
 | `CANTINARR_AI_MODEL` | provider default | Fallback model when none is saved in the admin UI |
+| `CANTINARR_CODEX_BIN` | auto-discovered | Optional path to `codex-app-server` or the full `codex` CLI; official container images bundle the tested 0.144.3 app-server at `/usr/local/bin/codex-app-server` |
+| `CANTINARR_CODEX_RUNTIME_DIR` | `/dev/shm/cantinarr-codex` | Absolute Linux tmpfs/ramfs directory used for server-owned, ephemeral per-session Codex state; if it already exists, it must be owned by the server user with mode `0700` |
 | `CANTINARR_PUSH_GATEWAY_URL` | unset | Push gateway origin; setting it **enables** push notifications |
 | `CANTINARR_PUSH_API_KEY` | unset | Optional pinned gateway key -- leave blank and the server auto-enrolls on first start, persisting its issued key encrypted in the DB |
 | `CANTINARR_PUSH_ENROLL_TOKEN` | unset | Shared enroll token, only for gateways with gated enrollment |
@@ -96,6 +98,8 @@ Optional env vars for deployment tuning (a `.env` file next to the binary is aut
 | `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Comma-separated Android signing cert SHA-256 fingerprints for `/.well-known/assetlinks.json` and Android WebAuthn origins |
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Additional WebAuthn origins to trust (e.g. non-standard HTTPS ports) |
 | `CANTINARR_DISABLE_UPDATE_CHECK` | unset | Set to `1` to disable the periodic GitHub release check behind the admin "update available" banner |
+
+ChatGPT (Codex) source deployments are supported only on Linux; non-Linux hosts report this provider unavailable even when a Codex binary is installed. The runtime directory's parent must exist, and the directory must be on tmpfs or ramfs—not persistent storage. Give each concurrently running Cantinarr process its own runtime directory; startup removes stale `session-*` entries from that dedicated root. The official container uses its private Docker `/dev/shm` tmpfs. Use the tested Codex 0.144.3 release or a protocol-compatible build.
 
 The database lives at `/config/cantinarr.db` (SQLite, WAL mode). Keep the `/config` volume -- it holds the DB and the auto-generated encryption key, and encrypted secrets are unrecoverable without that key.
 
@@ -222,10 +226,17 @@ TMDB and Trakt are proxied server-side -- client devices never hold those keys.
 
 ### AI chat (user)
 ```
-POST   /api/ai/chat             # SSE-streamed conversation with tool use
-GET    /api/ai/available        # { available: bool }
+POST   /api/ai/chat                         # SSE-streamed conversation with tool use
+GET    /api/ai/available                    # availability for the current user
+GET    /api/ai/codex/status                 # selected/linked state, safe account metadata, usage windows
+POST   /api/ai/codex/device/begin           # begin ChatGPT device authorization
+GET    /api/ai/codex/device/{flowID}        # poll this user's pending device flow
+DELETE /api/ai/codex/device/{flowID}        # cancel this user's pending device flow
+DELETE /api/ai/codex                        # unlink this user's ChatGPT account
 ```
-The chat request accepts an optional `conversation_id`; the server replays its provider-neutral stored transcript (including tool results) so follow-up turns keep full grounding across Anthropic, OpenAI, and Gemini. SSE frames: `{conversation_id}`, `{text}`, `{tool_start: {name, label}}`, `{tool_end: {name, ok}}`, `{media_results}`, `{error}`, then `[DONE]`.
+All Codex account and device-flow routes require a signed-in user and are scoped to that user. `device/begin` returns a verification URL, one-time code, flow ID, expiry, and polling interval; the app opens the explicit ChatGPT browser sign-in while keeping access and refresh tokens off the device. When the flow completes, the server encrypts the returned authorization at rest. If Codex is selected, chat availability is false until the current user links an account, and chat consumes that account's ChatGPT/Codex subscription allowance and rate limits.
+
+The chat request accepts an optional `conversation_id`; the server replays its provider-neutral stored transcript (including tool results) so follow-up turns keep full grounding across Anthropic, OpenAI, Gemini, and Codex. Transcripts are byte-bounded and kept only in process memory: they become inaccessible after four hours of inactivity, are evicted by later chat activity, and disappear on restart or a failed provider turn. Prompts, conversation context, and scrubbed tool results are sent to the selected provider (OpenAI for Codex). SSE frames: `{conversation_id}`, `{text}`, `{tool_start: {name, label}}`, `{tool_end: {name, ok}}`, `{media_results}`, `{error}`, then `[DONE]`.
 
 ### AI tool toggles (admin)
 ```
@@ -281,6 +292,7 @@ GET|POST /oauth/authorize                    # browser login (password or passke
 POST /oauth/token                            # code/refresh grants, PKCE, rotating refresh
 GET  /passkeys/setup | /passkeys/create      # passkey pages for MCP/browser setup links
 ```
+These endpoints are Cantinarr's **inbound** OAuth authorization server: an external MCP client signs in to access Cantinarr. They do not link a ChatGPT account. Per-user Codex chat uses the separate **outbound** device flow under `/api/ai/codex/*`.
 
 ### Real-time
 ```
@@ -339,7 +351,7 @@ The instance registry supports eight service types: `radarr`, `sonarr`, `chaptar
 The issue system turns "my episode won't download" into a supervised agent workflow:
 
 1. **Observe, then report or detect** -- users tap "Report a problem" on media (admin-toggleable); every report names the exact active/detail Radarr or Sonarr instance, and otherwise-identical reports against different instances remain distinct. Every user report and auto detection starts silently as `observing`/`recovering`: read, excluded from the badge, no push, no agent run, and no proposal. Successful complete queue snapshots are cached briefly and drive durable observation; incomplete/capped or failed reads are never interpreted as an empty queue. Replacement download IDs stay in one incident keyed by exact instance + movie/episode scope (including exact S00 specials), and every observed ID is retained for recovery attribution. A problem is promoted once only after both the configured minimum age (10 minutes) and unchanged quiet window (5 minutes); absence must also pass the settle window (2 minutes). Continuous connection/proof uncertainty lasting the minimum window becomes `needs_admin` without starting the agent, so reports neither alert prematurely nor disappear forever. Queue disappearance or file presence alone never proves resolution. `arr_state_cleared` requires the exact live file plus an exact-media import-history record that binds its file ID to one observed download ID. If Cantinarr's first baseline already contains that file, the queue response must have supplied the exact media's file ID (or known absence), any supplied positive ID must match the live/imported file, and the receipt must be no older than the queue attempt's arr-provided `added` time. This handles imports that beat the baseline and already-imported queue rows without trusting cross-service clocks. Cantinarr persists only the compact validated receipt (history/download/file IDs and timestamp), never raw history data.
-2. **Investigate** -- an AI agent (provider/model configurable, defaulting to the chat provider) runs a budgeted tool loop against read-only arr state bound to that issue's instance and media scope. Budgets cover total tool calls, accumulated active wall-clock time across approval/reporter pauses, and daily run count.
+2. **Investigate** -- an AI agent (provider/model configurable, defaulting to the chat provider only when that provider uses an API key) runs a budgeted tool loop against read-only arr state bound to that issue's instance and media scope. Per-user Codex OAuth cannot be used for autonomous remediation; when global chat uses Codex, an admin must select an Anthropic, OpenAI, or Gemini API-key provider/model override. Budgets cover total tool calls, accumulated active wall-clock time across approval/reporter pauses, and daily run count.
 3. **Ask** -- if the agent needs information only the reporter has, the issue flips to `awaiting_user` and the reporter answers in the issue thread.
 4. **Propose** -- in `supervised` mode, mutating fixes (grab release, remediate queue, manual import, trigger search, rescan) become typed `agent_actions` that always require admin confirmation. `investigate_only` mode records no proposal. The server validates the action against the issue's authoritative instance/media/queue/download/episode scope, permits only one active proposal, and stores an admin override separately from the agent's immutable proposal. For a release grab, the server binds title, quality, size, protocol, indexer, and rejection details from the latest exact scoped search; the approval card shows that server-observed metadata. Raw indexer capabilities are replaced by one-way references before persistence or API delivery. Approval refreshes the exact movie, season, or episode search, requires both the reference and metadata to match, and resolves the live capability only in memory for immediate dispatch; episode reports also trigger only an episode search. A manual import filters the just-fetched candidates by the same movie/series/episode identity even when `force` is approved. Book issues currently permit only exact queue/manual-import actions; title-level book mutations fail closed until issues store a durable book id.
 5. **Decide** -- every approval card and confirmation names the exact target service, instance name, and immutable instance ID. Approval uses a compare-and-swap claim so retries reconcile the durable state instead of dispatching again; denial (with an optional note) resumes the investigation. A fresh exact-scope recovery check runs both before and immediately after the execution claim: if the arr has begun retrying/replacing, the proposal is superseded, its run is aborted, the issue returns silently to `recovering`, and the executor is never called. A losing concurrent decision returns `409 Conflict`, prompting the app to re-read the winner instead of claiming the attempted decision succeeded. Recovery never hides `needs_admin`, `executing`, or `outcome_unknown`. A process loss after dispatch cannot prove the remote outcome, so startup marks that action `outcome_unknown` and never guesses or silently replays it. Partial or unknown outcomes stop at `needs_admin` and abort the parked run; the model cannot propose another mutation until a human has verified remote state.
@@ -378,7 +390,7 @@ Linking a Plex account (Settings > Plex Invites in the app) uses plex.tv's PIN f
 
 ### MCP server endpoint
 
-Cantinarr exposes its tools as a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` (Streamable HTTP, session tracked via `Mcp-Session-Id`). External clients (Claude Desktop, Claude Code, Codex, ...) discover auth from the well-known metadata, register dynamically, and log in through a browser page -- with a Cantinarr password or a passkey. Connect-link-only users can create their first passkey from the MCP login flow; a password is what authorizes MCP on plain-HTTP deployments where WebAuthn is unavailable.
+Cantinarr exposes its tools as a [Model Context Protocol](https://modelcontextprotocol.io/) server at `/mcp` (Streamable HTTP, session tracked via `Mcp-Session-Id`). External clients (Claude Desktop, Claude Code, Codex, ...) discover auth from the well-known metadata, register dynamically, and log in through a browser page -- with a Cantinarr password or a passkey. This browser login grants an external client access **to Cantinarr**; it is unrelated to the Settings > ChatGPT device-code flow that grants Cantinarr outbound access to one user's ChatGPT/Codex account. Connect-link-only users can create their first passkey from the MCP login flow; a password is what authorizes MCP on plain-HTTP deployments where WebAuthn is unavailable.
 
 Access tokens are short-lived and audience-bound to `/mcp`. Refresh tokens are persisted, rotate on use, have a one-year sliding lifetime, and are tied to a Cantinarr device record -- revoking the device revokes the MCP client. Registered clients and token state live in the database, so they survive restarts and upgrades.
 
@@ -436,6 +448,7 @@ SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db
 | Requests | `request_log` (approval + season/quality/book-format capture), `user_request_settings` |
 | Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials), `user_default_instances` |
 | Push | `push_tokens` (one per device), `notification_prefs` |
+| AI accounts | `user_codex_accounts` (per-user encrypted ChatGPT authorization, account metadata, latest usage snapshot) |
 | Remediation | `issues` (exact arr scope + closure provenance), `issue_observations` (durable retry/settle clocks, baseline + compact import receipt), `issue_observation_downloads` (incident download IDs + arr attempt/file boundaries), `issue_observation_attempts` (transition audit), `remediation_queue_snapshots` (latest successful minimal typed snapshot), `remediation_observation_failures` (bounded outage timer), `remediation_observation_watermarks` (monotonic per-instance success/failure ordering), `issue_messages`, `agent_runs`, `agent_steps`, `agent_actions` (one active proposal per issue; immutable proposal + approved params) |
 | MCP OAuth | `oauth_clients`, `oauth_authorization_codes`, `oauth_refresh_tokens` |
 | Misc | `settings` (encrypted KV: JWT secret, push key, request policy, Plex token + invite config), `tmdb_tvdb_cache` (30-day TTL) |
@@ -446,14 +459,15 @@ SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db
 server/
 ├── cmd/server/main.go        # Entry point, dependency wiring
 ├── internal/
-│   ├── ai/                   # Multi-provider chat: SSE handler, Anthropic/OpenAI/Gemini
-│   │                         #   streaming loops, provider-neutral conversation store
+│   ├── ai/                   # Multi-provider chat: SSE handler, API-key providers
+│   │                         #   provider-neutral streaming + conversation store
 │   ├── api/router.go         # Chi router: routes, CORS, permissions, /api/config payload
 │   ├── arr/doctor.go         # Shared Import Doctor classifier (app + AI + MCP agree)
 │   ├── auth/                 # JWT, connect links, users/devices, WebAuthn, OAuth AS, RBAC
 │   ├── cache/                # Small TTL cache used by request-side digests
 │   ├── chaptarr/             # Chaptarr (Readarr v1) client for the books module
-│   ├── config/               # Env config (port, name, passkey/push settings)
+│   ├── codexapp/             # Per-user Codex app-server auth, chat, usage + lifecycle
+│   ├── config/               # Env config (port, name, passkey/push/Codex settings)
 │   ├── credentials/          # External credential registry + lazy client caching
 │   ├── db/db.go              # SQLite setup, WAL, THE live schema + in-code migrations
 │   ├── discover/             # TMDB/Trakt discovery + media detail proxy handlers
@@ -490,7 +504,8 @@ server/
 - **JWT** via [golang-jwt](https://github.com/golang-jwt/jwt), **WebAuthn** via [go-webauthn](https://github.com/go-webauthn/webauthn)
 - **WebSocket** via [gorilla/websocket](https://github.com/gorilla/websocket)
 - **MCP** via [mcp-go](https://github.com/mark3labs/mcp-go) (Streamable HTTP)
-- **Anthropic Messages API**, **OpenAI Chat Completions API**, and **Gemini streamGenerateContent** -- all streaming, behind one provider-neutral loop
+- **Anthropic Messages API**, **OpenAI Chat Completions API**, and **Gemini streamGenerateContent**, plus per-user ChatGPT/Codex through `internal/codexapp`
+- **Codex app-server** bundled by both Dockerfiles with a pinned `CODEX_VERSION` and checksum-verified amd64/arm64 binaries; its upstream Apache-2.0 `LICENSE` and `NOTICE` ship under `/usr/share/licenses/codex-app-server/`. Source runs can override discovery with `CANTINARR_CODEX_BIN`.
 
 ## License
 

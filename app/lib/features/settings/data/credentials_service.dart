@@ -70,20 +70,25 @@ class AiProviderOption {
   final String id;
   final String label;
   final String credentialKey;
+  final String authType;
   final List<AiModelOption> models;
 
   const AiProviderOption({
     required this.id,
     required this.label,
     required this.credentialKey,
+    this.authType = 'api_key',
     required this.models,
   });
+
+  bool get usesUserOAuth => authType == 'user_oauth';
 
   factory AiProviderOption.fromJson(Map<String, dynamic> json) =>
       AiProviderOption(
         id: json['id'] as String,
         label: json['label'] as String? ?? json['id'] as String,
-        credentialKey: json['credential_key'] as String,
+        credentialKey: json['credential_key'] as String? ?? '',
+        authType: json['auth_type'] as String? ?? 'api_key',
         models: ((json['models'] as List?) ?? const [])
             .map((e) => AiModelOption.fromJson(e as Map<String, dynamic>))
             .toList(),

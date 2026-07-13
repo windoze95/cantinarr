@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../ai_assistant/data/codex_oauth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
 
@@ -113,11 +114,14 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _geminiController.clear();
       _traktIdController.clear();
       await _loadStatus();
-      // Refresh config so service availability updates app-wide
+      // Provider selection and per-user Codex availability are separate live
+      // server facts. Refresh both so the underlying Settings screen and the
+      // assistant cannot retain the pre-save provider state.
+      ref.invalidate(codexConnectionStatusProvider);
       ref.read(authProvider.notifier).refreshConfig();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Credentials saved')),
+          const SnackBar(content: Text('Settings saved')),
         );
       }
     } catch (e) {
@@ -262,6 +266,11 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                     'anthropic_key',
                               ) ??
                               false,
+                          selectedProviderAuthType: _providerFor(
+                                _selectedProvider,
+                                _status?.ai.providers ?? const [],
+                              )?.authType ??
+                              'api_key',
                           onProviderChanged: _selectProvider,
                           onModelChanged: (value) =>
                               setState(() => _selectedModel = value),
@@ -354,6 +363,7 @@ class _AISelectionSection extends StatelessWidget {
   final String customModelValue;
   final TextEditingController customModelController;
   final bool isSelectedProviderConfigured;
+  final String selectedProviderAuthType;
   final ValueChanged<String> onProviderChanged;
   final ValueChanged<String> onModelChanged;
 
@@ -364,6 +374,7 @@ class _AISelectionSection extends StatelessWidget {
     required this.customModelValue,
     required this.customModelController,
     required this.isSelectedProviderConfigured,
+    required this.selectedProviderAuthType,
     required this.onProviderChanged,
     required this.onModelChanged,
   });
@@ -394,6 +405,7 @@ class _AISelectionSection extends StatelessWidget {
     final provider = _currentProvider;
     final models = provider?.models ?? const <AiModelOption>[];
     final providerValue = provider?.id ?? selectedProvider;
+    final usesUserOAuth = selectedProviderAuthType == 'user_oauth';
     final modelIds = models.map((model) => model.id).toSet();
     final modelValue =
         modelIds.contains(selectedModel) ? selectedModel : customModelValue;
@@ -416,17 +428,25 @@ class _AISelectionSection extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: isSelectedProviderConfigured
-                    ? AppTheme.available.withValues(alpha: 0.15)
-                    : AppTheme.unavailable.withValues(alpha: 0.15),
+                color: usesUserOAuth
+                    ? AppTheme.signal.withValues(alpha: 0.15)
+                    : isSelectedProviderConfigured
+                        ? AppTheme.available.withValues(alpha: 0.15)
+                        : AppTheme.unavailable.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
-                isSelectedProviderConfigured ? 'Key set' : 'Key missing',
+                usesUserOAuth
+                    ? 'Per-user sign-in'
+                    : isSelectedProviderConfigured
+                        ? 'Key set'
+                        : 'Key missing',
                 style: TextStyle(
-                  color: isSelectedProviderConfigured
-                      ? AppTheme.available
-                      : AppTheme.unavailable,
+                  color: usesUserOAuth
+                      ? AppTheme.signal
+                      : isSelectedProviderConfigured
+                          ? AppTheme.available
+                          : AppTheme.unavailable,
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
                 ),
@@ -435,9 +455,14 @@ class _AISelectionSection extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 4),
-        const Text(
-          'Select which provider and model the assistant should use.',
-          style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        Text(
+          usesUserOAuth
+              ? 'Each person connects their own ChatGPT account from Settings.'
+              : 'Select which provider and model the assistant should use.',
+          style: const TextStyle(
+            color: AppTheme.textSecondary,
+            fontSize: 13,
+          ),
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(

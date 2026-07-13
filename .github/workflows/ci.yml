@@ -28,6 +28,29 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Cache pinned Codex app-server
+        id: codex-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/codex-app-server-x86_64-unknown-linux-musl.tar.gz
+          key: codex-app-server-linux-amd64-0.144.3-6fa4467489ac5a0a
+
+      - name: Download pinned Codex app-server
+        if: steps.codex-cache.outputs.cache-hit != 'true'
+        run: |
+          archive="$RUNNER_TEMP/codex-app-server-x86_64-unknown-linux-musl.tar.gz"
+          curl --fail --location --retry 3 \
+            https://github.com/openai/codex/releases/download/rust-v0.144.3/codex-app-server-x86_64-unknown-linux-musl.tar.gz \
+            --output "$archive"
+
+      - name: Verify and enable real Codex protocol smoke
+        run: |
+          archive="$RUNNER_TEMP/codex-app-server-x86_64-unknown-linux-musl.tar.gz"
+          echo "6fa4467489ac5a0ae5bf0057d39f6d14a7f50f5fa70b8a10933888d92d1b75ab  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          install -m 0755 "$RUNNER_TEMP/codex-app-server-x86_64-unknown-linux-musl" "$RUNNER_TEMP/codex-app-server"
+          echo "CANTINARR_CODEX_APP_SERVER_SMOKE_BINARY=$RUNNER_TEMP/codex-app-server" >> "$GITHUB_ENV"
+
       - name: Test
         run: go test ./...
 

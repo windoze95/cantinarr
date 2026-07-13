@@ -7,6 +7,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
+import '../../ai_assistant/data/codex_oauth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
@@ -49,6 +50,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final instances = connection?.instances ?? [];
     final setupStatus = ref.watch(setupStatusProvider);
     final updateStatus = ref.watch(updateStatusProvider);
+    final codexStatus = ref.watch(codexConnectionStatusProvider).valueOrNull;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -169,6 +171,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ? 'Change your sign-in password'
                       : 'Add a password for sign-in & MCP'),
               onTap: () => context.push('/settings/password'),
+            ),
+          if (codexStatus?.selected == true || codexStatus?.connected == true)
+            _SettingsTile(
+              icon: Icons.auto_awesome_outlined,
+              title: 'ChatGPT',
+              subtitle: codexStatus!.connected
+                  ? (codexStatus.accountEmail.isEmpty
+                      ? 'Connected for AI assistant usage'
+                      : 'Connected as ${codexStatus.accountEmail}')
+                  : codexStatus.available
+                      ? 'Connect your account for AI assistant usage'
+                      : 'Sign-in is unavailable on this server',
+              onTap: () => context.push('/settings/chatgpt'),
             ),
 
           const SizedBox(height: 16),

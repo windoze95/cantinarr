@@ -225,7 +225,7 @@ func requestConfig(
 	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, claims))
 	rec := httptest.NewRecorder()
 
-	configHandler(&config.Config{}, store, creds, remediationSvc)(rec, req)
+	configHandler(&config.Config{}, store, creds, nil, remediationSvc)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)

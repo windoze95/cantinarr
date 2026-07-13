@@ -17,6 +17,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/api"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/cache"
+	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
@@ -194,7 +195,14 @@ func main() {
 
 	// MCP tool server + AI handler
 	toolServer := mcp.NewToolServer(creds, requestService, registry, bridge)
-	aiHandler := ai.NewHandler(creds, toolServer)
+	codexManager := codexapp.NewManager(database, cipher, toolServer, codexapp.Options{
+		Binary:     cfg.CodexBin,
+		RuntimeDir: cfg.CodexRuntimeDir,
+	})
+	if !codexManager.Available() {
+		log.Printf("ChatGPT (Codex) provider unavailable: %v", codexManager.AvailabilityError())
+	}
+	aiHandler := ai.NewHandler(creds, toolServer, codexManager)
 
 	// Remediation read-only agent (Wave 2). The agent investigates one issue
 	// read-only and posts a diagnosis; it has NO path to mutate the *arr (the

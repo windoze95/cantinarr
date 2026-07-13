@@ -27,8 +27,9 @@ class _AiRemediationSettingsScreenState
   bool _saving = false;
   int _loadEpoch = 0;
 
-  // Free-text controllers for provider/model so a blank means "server
-  // default". The agent is provider-agnostic — no fixed dropdown here.
+  // Free-text provider/model overrides. A blank provider can inherit only a
+  // server-wide API-key provider; per-user Codex auth cannot run background
+  // remediation because no requester is present to supply an account.
   final _providerController = TextEditingController();
   final _modelController = TextEditingController();
 
@@ -283,8 +284,11 @@ class _AiRemediationSettingsScreenState
         _TextField(
           controller: _providerController,
           label: 'AI provider',
-          help: "Leave blank to use the server's configured AI provider.",
-          hint: 'e.g. anthropic, openai',
+          help: 'Leave blank only when the server-wide provider uses an API '
+              'key. Per-user ChatGPT (Codex) sign-in cannot run autonomous '
+              'remediation. If Codex is selected globally, enter anthropic, '
+              'openai, or gemini here and store its matching API key.',
+          hint: 'anthropic, openai, or gemini',
         ),
         _TextField(
           controller: _modelController,

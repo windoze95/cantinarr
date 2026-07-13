@@ -108,6 +108,9 @@ func NewRouter(
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
 		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+		// Keep authenticated ChatGPT device-flow churn from consuming the public
+		// password/passkey budget for everyone behind the same household proxy.
+		codexLoginLimiter := auth.NewRateLimiter(10, 1*time.Minute)
 
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
@@ -156,7 +159,7 @@ func NewRouter(
 
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
-			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, plexService))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, plexService))
 
 			// Update availability + the admin-configured management-portal URL that
 			// backs the "update available" banner. GET returns both; PUT sets the
@@ -224,7 +227,7 @@ func NewRouter(
 		// Config route (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Get("/config", configHandler(cfg, instanceStore, creds, remediationService))
+			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService))
 		})
 
 		// Device push-token + notification preference routes (authenticated).
@@ -308,9 +311,20 @@ func NewRouter(
 		// AI routes (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Use(auth.RequirePermission(auth.PermissionAIChat))
-			r.Post("/ai/chat", aiHandler.Chat)
-			r.Get("/ai/available", aiHandler.Available)
+
+			// Account visibility and revocation remain available to the account
+			// owner even if their role later loses AI access.
+			r.Get("/ai/codex/status", aiHandler.CodexStatus)
+			r.Delete("/ai/codex", aiHandler.UnlinkCodex)
+			r.Delete("/ai/codex/device/{flowID}", aiHandler.CancelCodexDeviceLogin)
+
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequirePermission(auth.PermissionAIChat))
+				r.Post("/ai/chat", aiHandler.Chat)
+				r.Get("/ai/available", aiHandler.Available)
+				r.With(codexLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginCodexDeviceLogin)
+				r.Get("/ai/codex/device/{flowID}", aiHandler.CheckCodexDeviceLogin)
+			})
 		})
 
 		// Instance routes (authenticated)
@@ -427,7 +441,7 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 	}
 }
 
-func configHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, remediationService *remediation.Service) http.HandlerFunc {
+func configHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Build instances list
 		type instanceInfo struct {
@@ -483,11 +497,15 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 
 		// Derive service availability from the per-user filtered instance list,
 		// so a user without a chaptarr grant sees services.chaptarr == false.
+		aiAvailable := creds.IsAIConfigured()
+		if aiHandler != nil && userID != 0 {
+			aiAvailable = aiHandler.AvailableForUser(userID)
+		}
 		services := map[string]bool{
 			"radarr":   false,
 			"sonarr":   false,
 			"chaptarr": false,
-			"ai":       creds.IsAIConfigured(),
+			"ai":       aiAvailable,
 			"tmdb":     creds.IsConfigured(credentials.KeyTMDBAccessToken),
 			"trakt":    creds.IsConfigured(credentials.KeyTraktClientID),
 		}

@@ -63,6 +63,73 @@ jobs:
             type=sha
             type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
 
+      - name: Build published image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: cantinarr-root-smoke:${{ github.sha }}
+          cache-from: type=gha,scope=published
+          cache-to: type=gha,mode=max,scope=published
+
+      - name: Verify published-image Codex runtime and notices
+        run: |
+          docker run --rm cantinarr-root-smoke:${{ github.sha }} sh -ec '
+            test -x /usr/local/bin/codex-app-server
+            test -s /usr/share/licenses/codex-app-server/LICENSE
+            test -s /usr/share/licenses/codex-app-server/NOTICE
+            /usr/local/bin/codex-app-server --help | grep -q -- --listen
+          '
+
+      - name: Build arm64 published image for smoke test
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: cantinarr-root-arm64-smoke:${{ github.sha }}
+          cache-from: type=gha,scope=published
+          cache-to: type=gha,mode=max,scope=published
+
+      - name: Verify arm64 Codex runtime and notices
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
+        run: |
+          docker run --rm --platform linux/arm64 cantinarr-root-arm64-smoke:${{ github.sha }} sh -ec '
+            test -x /usr/local/bin/codex-app-server
+            test -s /usr/share/licenses/codex-app-server/LICENSE
+            test -s /usr/share/licenses/codex-app-server/NOTICE
+            /usr/local/bin/codex-app-server --help | grep -q -- --listen
+          '
+
+      - name: Build server-only image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: server
+          file: server/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: cantinarr-server-smoke:${{ github.sha }}
+          cache-from: type=gha,scope=server-only
+          cache-to: type=gha,mode=max,scope=server-only
+
+      - name: Verify server-only Codex runtime and notices
+        run: |
+          docker run --rm cantinarr-server-smoke:${{ github.sha }} sh -ec '
+            test -x /usr/local/bin/codex-app-server
+            test -s /usr/share/licenses/codex-app-server/LICENSE
+            test -s /usr/share/licenses/codex-app-server/NOTICE
+            /usr/local/bin/codex-app-server --help | grep -q -- --listen
+          '
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -73,5 +140,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=published
+          cache-to: type=gha,mode=max,scope=published

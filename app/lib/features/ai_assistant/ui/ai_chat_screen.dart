@@ -5,17 +5,20 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
 import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../data/ai_models.dart';
+import '../data/codex_oauth_service.dart';
 import '../logic/ai_chat_provider.dart';
 import 'chat_bubble.dart';
 
 /// The AI assistant chat screen.
 class AiChatScreen extends ConsumerStatefulWidget {
-  final bool aiAvailable;
+  /// Optional test/preview override. Production reads live per-user config.
+  final bool? aiAvailable;
 
   const AiChatScreen({
     super.key,
-    this.aiAvailable = false,
+    this.aiAvailable,
   });
 
   @override
@@ -82,55 +85,124 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.aiAvailable) {
-      _setNotifier(null);
-      return Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: _exitAssistant,
-            tooltip: 'Exit assistant',
-          ),
-          title: const Text('AI Assistant'),
+    final cachedAiAvailable = (widget.aiAvailable ??
+            ref.watch(
+              authProvider.select(
+                (state) => state.valueOrNull?.connection?.services.ai ?? false,
+              ),
+            )) ==
+        true;
+    final codexStatus = ref.watch(codexConnectionStatusProvider);
+    return codexStatus.when(
+      loading: () {
+        _setNotifier(null);
+        return _buildUnavailable(loading: true);
+      },
+      error: (_, __) {
+        if (cachedAiAvailable) return _buildAvailableChat(context);
+        _setNotifier(null);
+        return _buildUnavailable();
+      },
+      data: (status) {
+        if (status.selected) {
+          if (status.available && status.connected) {
+            return _buildAvailableChat(context);
+          }
+          _setNotifier(null);
+          return _buildUnavailable(
+            codexAvailable: status.available,
+            codexSelected: true,
+          );
+        }
+        if (cachedAiAvailable) return _buildAvailableChat(context);
+        _setNotifier(null);
+        return _buildUnavailable();
+      },
+    );
+  }
+
+  Widget _buildAvailableChat(BuildContext context) {
+    final notifier = ref.watch(aiChatProvider);
+    _setNotifier(notifier);
+    return _buildChat(context, notifier);
+  }
+
+  Widget _buildUnavailable({
+    bool codexAvailable = false,
+    bool codexSelected = false,
+    bool loading = false,
+  }) {
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: _exitAssistant,
+          tooltip: 'Exit assistant',
         ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 480),
-              child: const Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.smart_toy_outlined,
-                      size: 64, color: AppTheme.accent),
-                  SizedBox(height: 16),
-                  Text(
-                    'AI Assistant',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
+        title: const Text('AI Assistant'),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.smart_toy_outlined,
+                  size: 64,
+                  color: AppTheme.accent,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'AI Assistant',
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
                   ),
-                  SizedBox(height: 12),
+                ),
+                const SizedBox(height: 12),
+                if (loading)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: CircularProgressIndicator(
+                      color: AppTheme.accent,
+                      strokeWidth: 2,
+                    ),
+                  )
+                else ...[
                   Text(
-                    'The AI assistant is not configured on this server. Ask your server admin to set up an AI provider.',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 15),
+                    codexAvailable
+                        ? 'Connect your ChatGPT account to use the AI assistant on this server.'
+                        : codexSelected
+                            ? 'ChatGPT is selected for this server, but it is currently unavailable. Ask your server admin to check the Codex integration.'
+                            : 'The AI assistant is not configured on this server. Ask your server admin to set up an AI provider.',
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 15,
+                    ),
                     textAlign: TextAlign.center,
                   ),
+                  if (codexAvailable) ...[
+                    const SizedBox(height: 20),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        await context.push('/settings/chatgpt');
+                        ref.invalidate(codexConnectionStatusProvider);
+                      },
+                      icon: const Icon(Icons.open_in_browser, size: 18),
+                      label: const Text('Connect ChatGPT'),
+                    ),
+                  ],
                 ],
-              ),
+              ],
             ),
           ),
         ),
-      );
-    }
-
-    final notifier = ref.watch(aiChatProvider);
-    _setNotifier(notifier);
-
-    return _buildChat(context, notifier);
+      ),
+    );
   }
 
   Widget _buildChat(BuildContext context, AiChatNotifier notifier) {

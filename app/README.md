@@ -2,7 +2,7 @@
 
 The client for [Cantinarr](https://github.com/windoze95/cantinarr) -- a frictionless media request app for Plex and Jellyfin households.
 
-Built with Flutter; iOS, Android, and web are the shipping targets (web is embedded in the server binary). One dark, warm cinematic theme, TMDB/Trakt-powered discovery, one-tap requests with approvals, deep *arr control, books, an AI assistant, and push notifications -- all through the Cantinarr backend, which is the only API the app talks to.
+Built with Flutter; iOS, Android, and web are the shipping targets (web is embedded in the server binary). One dark, warm cinematic theme, TMDB/Trakt-powered discovery, one-tap requests with approvals, deep *arr control, books, an AI assistant, and push notifications -- all app API traffic goes through the Cantinarr backend, while a ChatGPT account link explicitly hands authorization off to the external browser.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -88,7 +88,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Live badges** -- Approvals / actionable Issues / Agent fixes counts in the drawer, kept current over WebSocket; quietly observed or actively retrying arr issues are tracked without adding alert pressure. A **Plex invites** entry appears (with count) only while someone is waiting on a Plex invite -- the persistent surface behind the miss-able push -- and lands on the Users screen, where waiting users carry a "Needs Plex invite" tag. A **Setup checklist** entry (with unconfigured-feature count) appears for admins until everything is configured or they mute it from the checklist.
 
 ### AI assistant
-- **Multi-provider chat** (Anthropic, OpenAI, or Gemini -- server-configured) with SSE streaming, visible tool activity, and a poster carousel for results.
+- **Multi-provider chat** with SSE streaming, visible tool activity, and a poster carousel for results. Admins can supply an Anthropic, OpenAI, or Gemini API key, or select **ChatGPT (Codex)** so every user links their own ChatGPT account with a browser device code. Codex turns use that user's subscription allowance and rate limits; unlinked users cannot chat while Codex is selected.
 - **Server-side tools** -- the assistant searches, checks availability, and requests on your behalf; admins can triage queues conversationally.
 - **Persistent session** -- the focused `/assistant` workspace keeps one conversation alive across navigation (30-minute idle expiry).
 
@@ -103,9 +103,10 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Plex Invites** (admin) -- link a Plex account via the PIN flow, pick the server and libraries invites share, and toggle **auto-invite** (a user sharing their Plex email gets invited with zero admin taps).
 - **Request policy** (admin) -- global require-approval, season choice + default scope, quality choice + default profiles.
 - **Devices** (admin) -- every connected device with hardware model, last-seen, "This device" badge, and revoke.
-- **Credentials** (admin, write-only) -- TMDB, Trakt, and AI provider keys + provider/model selection.
+- **Credentials** (admin, write-only) -- TMDB, Trakt, and Anthropic/OpenAI/Gemini provider keys, plus provider/model selection including ChatGPT (Codex).
+- **ChatGPT** (self-service) -- when the admin selects ChatGPT (Codex), **Settings > ChatGPT** opens a device-code flow in the user's browser, polls until approval, shows that account's current Codex usage windows, and supports disconnecting it. The password and OAuth tokens never pass through the app; authorization is encrypted on the server.
 - **AI tools** (admin) -- per-tool toggles for chat + MCP, and a one-hour debug-logging switch.
-- **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, mark-resolved-issues-as-read, `supervised`/`investigate_only` mode, provider/model, step/turn/time and daily-run budgets, reporter-reply timeout, and minimum-watch / arr-quiet / recovery-settle timers that delay investigation and alerts while Radarr or Sonarr can still recover on its own.
+- **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, mark-resolved-issues-as-read, `supervised`/`investigate_only` mode, provider/model, step/turn/time and daily-run budgets, reporter-reply timeout, and minimum-watch / arr-quiet / recovery-settle timers that delay investigation and alerts while Radarr or Sonarr can still recover on its own. Autonomous remediation cannot use a person's Codex OAuth session, so a ChatGPT-backed assistant needs an Anthropic, OpenAI, or Gemini API-key provider override here.
 - **Update Portal** (admin) -- optional link to your own container-management portal (e.g. an Unraid or Portainer page). When the server sees a newer published release, an admin-only banner appears app-wide and links here (or to the update guide when unset); it's dismissible per release. The About sheet also shows the running server version.
 - **Notifications, Passkeys, Password** -- self-service (passkey/password screens appear when admin-enabled).
 - **Watch on Plex guide** -- requester-focused walkthrough (install the Plex app, sign in, accept the invite, start watching) with a **Request your invite** step: the user shares their Plex email, admins get a push pointing at the Users screen, and once the invite goes out (one-tap or auto) the card flips to "check your inbox" and the user gets a push. Hideable from the guide itself or via a Settings toggle that also removes it from the menu.
@@ -115,6 +116,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **First-run setup** -- the auth screen walks through server URL → admin account creation → an optional passkey offer.
 - **Passkeys & passwords** -- native passkey sign-in on associated deployments (iOS/Android/Windows platform plugins, browser fallback), password login where enabled.
 - **Session resilience** -- the session survives transport failures and VPN flaps; only a genuine 401 clears it. There is deliberately no logout button -- admins revoke devices server-side.
+- **Separate OAuth directions** -- ChatGPT device authorization is an explicit outbound sign-in that lets Cantinarr use one user's Codex allowance. Cantinarr's MCP OAuth is a different inbound login that lets an external client access Cantinarr.
 
 ## Getting Started
 
@@ -148,7 +150,8 @@ Feature-first structure with data / logic / ui layers per feature. State is Rive
 | Requests & approvals | Backend `/api/requests`, `/api/admin/requests` | ID bridging + policy live server-side |
 | Arr management | Backend `/api/instances/{id}/api/v3` (credential-scrubbed proxy) | API keys never reach devices; reads allowed for users, writes admin-only |
 | Books | Backend proxy to Chaptarr (Readarr API v1) | Per-user grant enforced server-side |
-| AI chat | Backend `/api/ai/chat` (SSE) | Provider keys + tool execution server-side |
+| AI chat | Backend `/api/ai/chat` (SSE) | Tool execution stays server-side; chat uses an admin API key or the current user's encrypted ChatGPT/Codex link |
+| ChatGPT link | Backend `/api/ai/codex/*` + explicit browser sign-in | Device code and safe status reach the app; OAuth tokens remain encrypted on the server |
 | Realtime | Backend `/api/ws` | Queue snapshots, status pings, badges |
 | Push | Native APNs token → backend → push gateway | No Firebase |
 
@@ -170,7 +173,7 @@ app/lib/
 │   └── widgets/                  # Ambient canvas, panels, heroes, media primitives, sheets...
 ├── features/
 │   ├── auth/                     # Auth screen (setup/login/connect), passkeys, session
-│   ├── ai_assistant/             # SSE chat, tool activity, media carousel
+│   ├── ai_assistant/             # SSE chat, tool activity, media carousel, ChatGPT link
 │   ├── chaptarr/                 # Books module: library/queue/history/wanted + doctor
 │   ├── dashboard/                # Movies/TV/Releases/Books home tabs
 │   ├── discover/                 # Discovery rows + multi-search (backend-proxied)
@@ -204,7 +207,7 @@ One authenticated shell hosts both module pages and secondary work screens over 
 
 ¹ Books appears only with a Chaptarr grant.
 
-`/login` is the only route outside the authenticated shell. Secondary routes inside it include `/assistant`, `/detail/:type/:id`, `/approvals`, `/issues`, `/issues/:id`, `/agent-actions`, `/agent-runs/:id`, `/settings/...`, `/plex-guide`, and `/setup`.
+`/login` is the only route outside the authenticated shell. Secondary routes inside it include `/assistant`, `/detail/:type/:id`, `/approvals`, `/issues`, `/issues/:id`, `/agent-actions`, `/agent-runs/:id`, `/settings/chatgpt`, `/settings/...`, `/plex-guide`, and `/setup`.
 
 The router guard redirects unauthenticated users to `/login`, remembers safe internal deep-link targets through sign-in, centrally bounces non-admins from admin routes, and gates Books on the user's Chaptarr grant. Modules with multiple instances get an instance selector in the drawer/app bar.
 
@@ -220,7 +223,7 @@ The router guard redirects unauthenticated users to `/login`, remembers safe int
 | `flutter_secure_storage` / `shared_preferences` | Tokens + device id / lightweight prefs |
 | `passkeys_ios` / `passkeys_android` / `passkeys_windows` | Native WebAuthn |
 | `app_links` | `cantinarr://` connect-link deep linking |
-| `url_launcher` | External links (trailers, IMDb/TVDB/TMDB/Trakt) |
+| `url_launcher` | External links (ChatGPT device authorization, trailers, IMDb/TVDB/TMDB/Trakt) |
 | `device_info_plus` / `package_info_plus` | Device naming, version display |
 | `shimmer`, `intl`, `uuid` | Loading placeholders, formatting, ids |
 

@@ -199,6 +199,22 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
     last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Per-user ChatGPT/Codex account state for the interactive AI assistant.
+-- auth_blob is the complete Codex auth.json encrypted with Cantinarr's
+-- AES-256-GCM secrets cipher. It is materialized only in a server-owned tmpfs
+-- session directory during an operation, removed on normal completion, and
+-- scrubbed as stale session state on the next startup after a crash.
+-- Display metadata and the last rate-limit snapshot contain no usable
+-- credential, but remain user-owned and disappear with the account.
+CREATE TABLE IF NOT EXISTS user_codex_accounts (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    auth_blob TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    rate_limits_json TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- AI remediation / issue reporting (Wave 1 ships issues + issue_messages; the
 -- agent_* tables are created now so later waves need no migration). One row per
 -- problem to work (auto-detected or user-reported). Media-scoped like

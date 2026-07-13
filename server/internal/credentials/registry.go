@@ -31,6 +31,10 @@ const (
 	AIProviderAnthropic = "anthropic"
 	AIProviderOpenAI    = "openai"
 	AIProviderGemini    = "gemini"
+	AIProviderCodex     = "codex"
+
+	AIAuthTypeAPIKey    = "api_key"
+	AIAuthTypeUserOAuth = "user_oauth"
 
 	DefaultAIProvider = AIProviderAnthropic
 )
@@ -46,6 +50,7 @@ type AIModelOption struct {
 type AIProviderOption struct {
 	ID            string          `json:"id"`
 	Label         string          `json:"label"`
+	AuthType      string          `json:"auth_type"`
 	CredentialKey string          `json:"credential_key"`
 	Models        []AIModelOption `json:"models"`
 }
@@ -60,6 +65,7 @@ var AIProviders = []AIProviderOption{
 	{
 		ID:            AIProviderAnthropic,
 		Label:         "Anthropic",
+		AuthType:      AIAuthTypeAPIKey,
 		CredentialKey: KeyAnthropicKey,
 		Models: []AIModelOption{
 			{ID: "claude-opus-4-8", Label: "Claude Opus 4.8", Description: "Most capable Claude Opus-tier model"},
@@ -71,6 +77,7 @@ var AIProviders = []AIProviderOption{
 	{
 		ID:            AIProviderOpenAI,
 		Label:         "OpenAI",
+		AuthType:      AIAuthTypeAPIKey,
 		CredentialKey: KeyOpenAIKey,
 		Models: []AIModelOption{
 			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Flagship OpenAI model"},
@@ -84,6 +91,7 @@ var AIProviders = []AIProviderOption{
 	{
 		ID:            AIProviderGemini,
 		Label:         "Google Gemini",
+		AuthType:      AIAuthTypeAPIKey,
 		CredentialKey: KeyGeminiKey,
 		Models: []AIModelOption{
 			{ID: "gemini-3.5-flash", Label: "Gemini 3.5 Flash", Description: "Current stable Gemini Flash model"},
@@ -92,6 +100,14 @@ var AIProviders = []AIProviderOption{
 			{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro", Description: "Advanced reasoning and coding"},
 			{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash", Description: "Low-latency reasoning"},
 			{ID: "gemini-2.5-flash-lite", Label: "Gemini 2.5 Flash-Lite", Description: "Fastest budget Gemini option"},
+		},
+	},
+	{
+		ID:       AIProviderCodex,
+		Label:    "ChatGPT (Codex)",
+		AuthType: AIAuthTypeUserOAuth,
+		Models: []AIModelOption{
+			{ID: "default", Label: "Codex default", Description: "Uses the model selected by Codex"},
 		},
 	},
 }
@@ -116,13 +132,14 @@ func DefaultAIModel(provider string) string {
 }
 
 // AIKeyCredentialKey returns the secret setting key for a provider API key.
+// Providers authenticated some other way, and unknown providers, return empty.
 func AIKeyCredentialKey(provider string) string {
 	for _, p := range AIProviders {
 		if p.ID == provider {
 			return p.CredentialKey
 		}
 	}
-	return KeyAnthropicKey
+	return ""
 }
 
 // IsValidAIProvider reports whether provider is supported.
@@ -306,10 +323,13 @@ func (r *Registry) SetAIConfig(provider, model string) error {
 	return r.SetSetting(KeyAIModel, model)
 }
 
-// IsAIConfigured reports whether the selected provider has an API key.
+// IsAIConfigured reports whether the globally selected provider has a server
+// API key. User-OAuth providers are resolved per caller and therefore never
+// make the global AI service available on their own.
 func (r *Registry) IsAIConfigured() bool {
 	cfg := r.GetAIConfig()
-	return r.IsConfigured(AIKeyCredentialKey(cfg.Provider))
+	key := AIKeyCredentialKey(cfg.Provider)
+	return key != "" && r.IsConfigured(key)
 }
 
 // DeleteCredential removes a credential from the DB.
