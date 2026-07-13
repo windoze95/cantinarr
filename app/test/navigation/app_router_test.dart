@@ -5,6 +5,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
+import 'package:cantinarr/features/ai_assistant/ui/codex_connection_screen.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
@@ -131,6 +132,17 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(router.routeInformationProvider.value.uri.path, '/issues/42');
+  });
+
+  testWidgets('a requester can open their ChatGPT connection settings',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/settings/chatgpt');
+    await tester.pumpAndSettle();
+
+    expect(router.routeInformationProvider.value.uri.path, '/settings/chatgpt');
+    expect(find.byType(CodexConnectionScreen), findsOneWidget);
   });
 
   testWidgets('books route requires the Chaptarr grant', (tester) async {

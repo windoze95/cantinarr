@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_panel.dart';
+import '../../ai_assistant/data/codex_oauth_service.dart';
+import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
 
@@ -113,11 +117,16 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _geminiController.clear();
       _traktIdController.clear();
       await _loadStatus();
-      // Refresh config so service availability updates app-wide
+      // Provider selection and scoped Codex availability are separate live
+      // server facts. Refresh both so the underlying Settings screen and the
+      // assistant cannot retain the pre-save provider state.
+      ref.invalidate(codexConnectionStatusProvider);
+      ref.invalidate(adminCodexConnectionStatusProvider);
+      ref.invalidate(aiSettingsProvider);
       ref.read(authProvider.notifier).refreshConfig();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Credentials saved')),
+          const SnackBar(content: Text('Settings saved')),
         );
       }
     } catch (e) {
@@ -155,6 +164,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     try {
       await _service.delete(key);
       await _loadStatus();
+      ref.invalidate(aiSettingsProvider);
       ref.read(authProvider.notifier).refreshConfig();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -220,7 +230,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('API Credentials')),
+      appBar: AppBar(title: const Text('Providers & Credentials')),
       body: CenteredContent(
           child: _isLoading
               ? const Center(
@@ -243,7 +253,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                       padding: const EdgeInsets.all(16),
                       children: [
                         const Text(
-                          'Credentials are write-only. Enter a new value to set or replace.',
+                          'Server credentials are write-only. Users you include '
+                          'can use the selected AI provider; personal providers '
+                          'always take priority.',
                           style: TextStyle(
                               color: AppTheme.textSecondary, fontSize: 13),
                         ),
@@ -262,10 +274,44 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                     'anthropic_key',
                               ) ??
                               false,
+                          selectedProviderAuthType: _providerFor(
+                                _selectedProvider,
+                                _status?.ai.providers ?? const [],
+                              )?.authType ??
+                              'api_key',
                           onProviderChanged: _selectProvider,
                           onModelChanged: (value) =>
                               setState(() => _selectedModel = value),
                         ),
+                        const SizedBox(height: 14),
+                        if (_selectedProvider == 'codex')
+                          _SharedCodexPanel(
+                            status: ref.watch(
+                              adminCodexConnectionStatusProvider,
+                            ),
+                            onManage: () async {
+                              await context.push(
+                                '/settings/credentials/chatgpt',
+                              );
+                              if (!mounted) return;
+                              ref.invalidate(
+                                adminCodexConnectionStatusProvider,
+                              );
+                              ref.invalidate(aiSettingsProvider);
+                              await _loadStatus();
+                              await ref
+                                  .read(authProvider.notifier)
+                                  .refreshConfig();
+                            },
+                          )
+                        else
+                          _SharedApiCostNotice(
+                            provider: _providerFor(
+                                  _selectedProvider,
+                                  _status?.ai.providers ?? const [],
+                                )?.label ??
+                                _selectedProvider,
+                          ),
                         const SizedBox(height: 24),
                         _CredentialSection(
                           title: 'TMDB',
@@ -282,7 +328,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                         const SizedBox(height: 20),
                         _CredentialSection(
                           title: 'Anthropic (AI)',
-                          description: 'Claude model provider',
+                          description:
+                              'Shared Claude API key for included AI usage',
                           isConfigured:
                               _status?.isConfigured('anthropic_key') ?? false,
                           controller: _anthropicController,
@@ -294,7 +341,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           const SizedBox(height: 20),
                           _CredentialSection(
                             title: 'OpenAI (AI)',
-                            description: 'GPT model provider',
+                            description:
+                                'Shared OpenAI API key for included AI usage',
                             isConfigured:
                                 _status?.isConfigured('openai_key') ?? false,
                             controller: _openAIController,
@@ -305,7 +353,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           const SizedBox(height: 20),
                           _CredentialSection(
                             title: 'Google Gemini (AI)',
-                            description: 'Gemini model provider',
+                            description:
+                                'Shared Gemini API key for included AI usage',
                             isConfigured:
                                 _status?.isConfigured('gemini_key') ?? false,
                             controller: _geminiController,
@@ -354,6 +403,7 @@ class _AISelectionSection extends StatelessWidget {
   final String customModelValue;
   final TextEditingController customModelController;
   final bool isSelectedProviderConfigured;
+  final String selectedProviderAuthType;
   final ValueChanged<String> onProviderChanged;
   final ValueChanged<String> onModelChanged;
 
@@ -364,6 +414,7 @@ class _AISelectionSection extends StatelessWidget {
     required this.customModelValue,
     required this.customModelController,
     required this.isSelectedProviderConfigured,
+    required this.selectedProviderAuthType,
     required this.onProviderChanged,
     required this.onModelChanged,
   });
@@ -394,6 +445,7 @@ class _AISelectionSection extends StatelessWidget {
     final provider = _currentProvider;
     final models = provider?.models ?? const <AiModelOption>[];
     final providerValue = provider?.id ?? selectedProvider;
+    final usesOAuth = selectedProviderAuthType != 'api_key';
     final modelIds = models.map((model) => model.id).toSet();
     final modelValue =
         modelIds.contains(selectedModel) ? selectedModel : customModelValue;
@@ -416,17 +468,25 @@ class _AISelectionSection extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: isSelectedProviderConfigured
-                    ? AppTheme.available.withValues(alpha: 0.15)
-                    : AppTheme.unavailable.withValues(alpha: 0.15),
+                color: usesOAuth
+                    ? AppTheme.signal.withValues(alpha: 0.15)
+                    : isSelectedProviderConfigured
+                        ? AppTheme.available.withValues(alpha: 0.15)
+                        : AppTheme.unavailable.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
-                isSelectedProviderConfigured ? 'Key set' : 'Key missing',
+                usesOAuth
+                    ? 'Shared account'
+                    : isSelectedProviderConfigured
+                        ? 'Key set'
+                        : 'Key missing',
                 style: TextStyle(
-                  color: isSelectedProviderConfigured
-                      ? AppTheme.available
-                      : AppTheme.unavailable,
+                  color: usesOAuth
+                      ? AppTheme.signal
+                      : isSelectedProviderConfigured
+                          ? AppTheme.available
+                          : AppTheme.unavailable,
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
                 ),
@@ -435,9 +495,14 @@ class _AISelectionSection extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 4),
-        const Text(
-          'Select which provider and model the assistant should use.',
-          style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        Text(
+          usesOAuth
+              ? 'Connect one server ChatGPT account for users with included access.'
+              : 'Select the server provider and model for included access.',
+          style: const TextStyle(
+            color: AppTheme.textSecondary,
+            fontSize: 13,
+          ),
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(
@@ -500,6 +565,117 @@ class _AISelectionSection extends StatelessWidget {
       if (provider.id == selectedProvider) return provider;
     }
     return providers.isNotEmpty ? providers.first : null;
+  }
+}
+
+class _SharedCodexPanel extends StatelessWidget {
+  final AsyncValue<CodexConnectionStatus> status;
+  final VoidCallback onManage;
+
+  const _SharedCodexPanel({
+    required this.status,
+    required this.onManage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final connected = status.valueOrNull?.connected == true;
+    return AppPanel(
+      accentColor: AppTheme.warning,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: AppTheme.warning),
+              SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Shared ChatGPT allowance',
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 5),
+                    Text(
+                      'Prompts and tool context from every enabled user use '
+                      'one ChatGPT account and one Codex meter. Activity is '
+                      'attributable to that account, and any subscription or '
+                      'usage costs remain with it. ChatGPT accounts are '
+                      'intended for one person; enable only people or devices '
+                      'you control.',
+                      style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 13,
+                        height: 1.42,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          OutlinedButton.icon(
+            onPressed: status.isLoading ? null : onManage,
+            icon: Icon(
+              connected
+                  ? Icons.manage_accounts_outlined
+                  : Icons.open_in_browser_rounded,
+              size: 18,
+            ),
+            label: Text(
+              connected
+                  ? 'Manage shared ChatGPT'
+                  : status.hasError
+                      ? 'Retry shared ChatGPT status'
+                      : 'Connect shared ChatGPT',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SharedApiCostNotice extends StatelessWidget {
+  final String provider;
+
+  const _SharedApiCostNotice({required this.provider});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: AppTheme.signal.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        border: Border.all(color: AppTheme.signal.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.payments_outlined, color: AppTheme.signal, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Included requests use the server $provider key. Usage counts '
+              'against its paid quota and may create provider charges.',
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

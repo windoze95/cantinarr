@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../features/ai_assistant/ui/ai_chat_screen.dart';
+import '../features/ai_assistant/ui/ai_access_screen.dart';
+import '../features/ai_assistant/ui/codex_connection_screen.dart';
+import '../features/ai_assistant/data/codex_oauth_service.dart';
 import '../features/auth/logic/auth_provider.dart';
 import '../features/auth/ui/auth_screen.dart';
 import '../features/auth/ui/passkey_create_screen.dart';
@@ -402,11 +405,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           // each screen's own back affordance.
           GoRoute(
             path: '/assistant',
-            builder: (_, __) {
-              final auth = ref.read(authProvider).valueOrNull;
-              final hasAi = auth?.connection?.services.ai ?? false;
-              return AiChatScreen(aiAvailable: hasAi);
-            },
+            builder: (_, __) => const AiChatScreen(),
           ),
           GoRoute(
             path: '/detail/:type/:id',
@@ -431,6 +430,20 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/settings',
             builder: (_, __) => const SettingsScreen(),
+          ),
+          GoRoute(
+            path: '/settings/ai',
+            builder: (_, __) => const AiAccessScreen(),
+          ),
+          GoRoute(
+            path: '/settings/chatgpt',
+            builder: (_, __) => const CodexConnectionScreen(),
+          ),
+          GoRoute(
+            path: '/settings/credentials/chatgpt',
+            builder: (_, __) => const CodexConnectionScreen(
+              scope: CodexOAuthScope.adminShared,
+            ),
           ),
           GoRoute(
             path: '/settings/credentials',

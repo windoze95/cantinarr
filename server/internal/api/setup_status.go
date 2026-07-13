@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -107,7 +108,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "ai",
 			Title:       "AI assistant",
-			Description: "Conversational discovery, requests, and server management. Bring an Anthropic, OpenAI, or Gemini key.",
+			Description: "Conversational discovery, requests, and server management. Configure a shared provider; users may override it with their own credentials.",
 			Configured:  f.AI,
 			Optional:    true,
 		},
@@ -116,7 +117,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 
 // setupStatusHandler answers the admin setup checklist: which features are
 // configured right now. Everything is re-derived per request.
-func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, plexService *plex.Service) http.HandlerFunc {
+func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, plexService *plex.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var facts setupFacts
 		if instances, err := store.ListAll(); err == nil {
@@ -138,6 +139,9 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 		facts.TMDB = creds.IsConfigured(credentials.KeyTMDBAccessToken)
 		facts.Trakt = creds.IsConfigured(credentials.KeyTraktClientID)
 		facts.AI = creds.IsAIConfigured()
+		if aiHandler != nil {
+			facts.AI = aiHandler.ProviderConfigured()
+		}
 		facts.Push = cfg.PushGatewayURL != ""
 		facts.PlexInvites = plexService.Status().Configured
 

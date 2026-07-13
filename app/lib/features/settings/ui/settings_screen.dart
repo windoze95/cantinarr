@@ -7,6 +7,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
+import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
@@ -49,6 +50,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final instances = connection?.instances ?? [];
     final setupStatus = ref.watch(setupStatusProvider);
     final updateStatus = ref.watch(updateStatusProvider);
+    final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
+    final aiAvailable =
+        aiSettings?.effective.available ?? connection?.services.ai ?? false;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -170,6 +174,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       : 'Add a password for sign-in & MCP'),
               onTap: () => context.push('/settings/password'),
             ),
+          if (user?.hasPermission('ai:chat') == true)
+            _SettingsTile(
+              icon: Icons.auto_awesome_outlined,
+              title: 'AI Access',
+              subtitle: _aiAccessSubtitle(aiSettings),
+              onTap: () => context.push('/settings/ai'),
+            ),
 
           const SizedBox(height: 16),
 
@@ -205,15 +216,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _SettingsTile(
             icon: Icons.smart_toy_outlined,
             title: 'AI Assistant',
-            subtitle: connection?.services.ai == true
-                ? 'Available'
-                : 'Not configured',
+            subtitle: aiAvailable ? 'Available' : 'Not configured',
             trailing: Icon(
               Icons.circle,
               size: 12,
-              color: connection?.services.ai == true
-                  ? AppTheme.available
-                  : AppTheme.unavailable,
+              color: aiAvailable ? AppTheme.available : AppTheme.unavailable,
             ),
           ),
           if (user?.isAdmin == true)
@@ -257,8 +264,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             _SettingsTile(
               icon: Icons.key_outlined,
-              title: 'API Credentials',
-              subtitle: 'TMDB, AI, and Trakt configuration',
+              title: 'Providers & Credentials',
+              subtitle: 'Included AI, TMDB, and Trakt',
               onTap: () => context.push('/settings/credentials'),
             ),
             _SettingsTile(
@@ -602,6 +609,28 @@ String _serviceLabel(String serviceType) {
     default:
       return serviceType;
   }
+}
+
+String _aiAccessSubtitle(AiSettings? settings) {
+  if (settings == null) return 'Choose personal or included AI';
+  final effective = settings.effective;
+  final provider = effective.provider.isEmpty
+      ? ''
+      : settings.providerLabel(effective.provider);
+  if (effective.source == AiAccessSource.personal) {
+    return effective.available
+        ? 'Personal · $provider'
+        : 'Personal AI needs attention';
+  }
+  if (effective.source == AiAccessSource.shared) {
+    return effective.available
+        ? 'Included · $provider'
+        : 'Included AI unavailable';
+  }
+  if (settings.shared.granted) {
+    return 'Included access needs server setup';
+  }
+  return 'Add a personal provider';
 }
 
 class _SectionHeader extends StatelessWidget {

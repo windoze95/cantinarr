@@ -176,6 +176,7 @@ func (h *Handler) HandleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	users, err := h.service.ListUsers()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list users"})
@@ -248,6 +249,32 @@ func (h *Handler) HandleUpdateUserAuthMethods(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	writeJSON(w, http.StatusOK, user)
+}
+
+// HandleUpdateUserAIAccess changes only the user's grant to the shared AI
+// profile; personal provider credentials are owned and managed by that user.
+func (h *Handler) HandleUpdateUserAIAccess(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil || userID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid user ID"})
+		return
+	}
+	var req UpdateUserAIAccessRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil || req.SharedEnabled == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "shared_ai_enabled is required"})
+		return
+	}
+	user, err := h.service.SetUserAISharedAccess(userID, *req.SharedEnabled)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update AI access"})
+		}
+		return
+	}
 	writeJSON(w, http.StatusOK, user)
 }
 

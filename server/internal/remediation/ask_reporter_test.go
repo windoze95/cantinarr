@@ -71,11 +71,8 @@ func askCycleRunner(t *testing.T, withReporter bool) (*Runner, *Service, *fakeEx
 		db:         database,
 		svc:        svc,
 		toolServer: &serviceBackedHost{svc: svc},
-		creds:      newFakeCreds(t, database),
+		turns:      scriptedTurnResolver(script),
 		procToken:  "test",
-		newTurn: func(provider, apiKey, model string) (ai.TurnRunner, error) {
-			return script, nil
-		},
 	}
 	return r, svc, fx, issueID, reporterID
 }

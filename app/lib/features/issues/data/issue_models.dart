@@ -337,12 +337,12 @@ class RemediationSettings {
   final bool markResolvedAsRead;
   final RemediationMode mode;
 
-  /// AI provider override (e.g. "anthropic", "openai"). Empty means "use the
-  /// server's configured provider". The agent is provider-agnostic, so this is
-  /// a free-text field, never a fixed list.
+  /// Deprecated server compatibility field. The remediation settings screen
+  /// always sends this empty so the shared provider is authoritative.
   final String provider;
 
-  /// Model override. Empty means "use the server's configured model".
+  /// Deprecated server compatibility field. The remediation settings screen
+  /// always sends this empty so the shared model is authoritative.
   final String model;
   final int maxSteps;
   final int maxTurnTokens;

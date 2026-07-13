@@ -157,7 +157,7 @@ void main() {
   });
 
   group('RemediationSettings', () {
-    test('round-trips, including the provider/model override fields', () {
+    test('round-trips legacy provider and model compatibility fields', () {
       const s = RemediationSettings(
         enabled: true,
         autoDispatch: false,
@@ -189,7 +189,7 @@ void main() {
       expect(back.toJson(), isNot(contains('daily_cost_ceiling_micros')));
     });
 
-    test('blank provider/model means "inherit server default"', () {
+    test('blank provider follows shared selection and model inherits', () {
       final s = RemediationSettings.fromJson({});
       expect(s.provider, '');
       expect(s.model, '');

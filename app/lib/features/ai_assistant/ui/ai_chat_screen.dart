@@ -5,17 +5,20 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
 import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../data/ai_models.dart';
+import '../data/ai_settings_service.dart';
 import '../logic/ai_chat_provider.dart';
 import 'chat_bubble.dart';
 
 /// The AI assistant chat screen.
 class AiChatScreen extends ConsumerStatefulWidget {
-  final bool aiAvailable;
+  /// Optional test/preview override. Production reads live per-user config.
+  final bool? aiAvailable;
 
   const AiChatScreen({
     super.key,
-    this.aiAvailable = false,
+    this.aiAvailable,
   });
 
   @override
@@ -82,55 +85,129 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.aiAvailable) {
-      _setNotifier(null);
-      return Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: _exitAssistant,
-            tooltip: 'Exit assistant',
-          ),
-          title: const Text('AI Assistant'),
+    final cachedAiAvailable = (widget.aiAvailable ??
+            ref.watch(
+              authProvider.select(
+                (state) => state.valueOrNull?.connection?.services.ai ?? false,
+              ),
+            )) ==
+        true;
+    final aiSettings = ref.watch(aiSettingsProvider);
+    return aiSettings.when(
+      loading: () {
+        _setNotifier(null);
+        return _buildUnavailable(loading: true);
+      },
+      error: (_, __) {
+        if (cachedAiAvailable) return _buildAvailableChat(context);
+        _setNotifier(null);
+        return _buildUnavailable();
+      },
+      data: (settings) {
+        if (settings.effective.available) return _buildAvailableChat(context);
+        _setNotifier(null);
+        return _buildUnavailable(settings: settings);
+      },
+    );
+  }
+
+  Widget _buildAvailableChat(BuildContext context) {
+    final notifier = ref.watch(aiChatProvider);
+    _setNotifier(notifier);
+    return _buildChat(context, notifier);
+  }
+
+  Widget _buildUnavailable({
+    AiSettings? settings,
+    bool loading = false,
+  }) {
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: _exitAssistant,
+          tooltip: 'Exit assistant',
         ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 480),
-              child: const Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.smart_toy_outlined,
-                      size: 64, color: AppTheme.accent),
-                  SizedBox(height: 16),
-                  Text(
-                    'AI Assistant',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
+        title: const Text('AI Assistant'),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.smart_toy_outlined,
+                  size: 64,
+                  color: AppTheme.accent,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'AI Assistant',
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
                   ),
-                  SizedBox(height: 12),
+                ),
+                const SizedBox(height: 12),
+                if (loading)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: CircularProgressIndicator(
+                      color: AppTheme.accent,
+                      strokeWidth: 2,
+                    ),
+                  )
+                else ...[
                   Text(
-                    'The AI assistant is not configured on this server. Ask your server admin to set up an AI provider.',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 15),
+                    _unavailableCopy(settings),
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 15,
+                    ),
                     textAlign: TextAlign.center,
                   ),
+                  const SizedBox(height: 20),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      await context.push('/settings/ai');
+                      ref.invalidate(aiSettingsProvider);
+                    },
+                    icon: const Icon(Icons.tune_rounded, size: 18),
+                    label: const Text('Set up AI access'),
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
+
+  String _unavailableCopy(AiSettings? settings) {
+    if (settings == null) {
+      return 'AI access is not ready. Choose a personal provider or ask your '
+          'server admin about included access.';
     }
-
-    final notifier = ref.watch(aiChatProvider);
-    _setNotifier(notifier);
-
-    return _buildChat(context, notifier);
+    final effective = settings.effective;
+    if (effective.source == AiAccessSource.personal) {
+      return 'Your selected personal provider needs attention. Cantinarr did '
+          'not fall back to included access.';
+    }
+    if (settings.shared.granted && !settings.shared.configured) {
+      return 'Your account has included AI access, but the server provider '
+          'still needs admin setup. You can use a personal provider now.';
+    }
+    if (!settings.shared.granted) {
+      return 'Add your own AI provider, or ask your server admin to include '
+          'AI access for this account.';
+    }
+    return 'Included AI is temporarily unavailable. You can use a personal '
+        'provider or ask your server admin to check the provider.';
   }
 
   Widget _buildChat(BuildContext context, AiChatNotifier notifier) {

@@ -4,11 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
+import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../notifications/push_service.dart';
 import '../data/plex_admin_service.dart';
+import '../data/credentials_service.dart';
 import '../logic/plex_invites_provider.dart';
 
 /// Admin screen for managing user accounts: change roles, remove users, and
@@ -24,6 +27,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   List<UserSummary>? _users;
   bool _isLoading = true;
   String? _error;
+  String _sharedAiProvider = '';
 
   @override
   void initState() {
@@ -38,6 +42,15 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     });
     try {
       final users = await ref.read(authProvider.notifier).listUsers();
+      try {
+        final credentials = await CredentialsService(
+          backendDio: ref.read(backendClientProvider),
+        ).getStatus();
+        _sharedAiProvider = credentials.ai.provider;
+      } catch (_) {
+        // User management remains usable if provider status is temporarily
+        // unavailable. The confirmation falls back to a generic quota warning.
+      }
       // Keep the drawer's "Plex invites" badge in step with what this
       // screen just learned (e.g. an invite sent here clears the count).
       ref.read(plexInvitesWaitingProvider.notifier).refresh();
@@ -316,6 +329,104 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     }
   }
 
+  Future<void> _setSharedAiAccess(UserSummary user, bool enabled) async {
+    if (enabled) {
+      // Re-read at the decision boundary: another admin/device may have
+      // switched the included provider since this screen loaded. A failed
+      // refresh deliberately becomes "unknown" so the stronger combined
+      // warning is shown instead of trusting a stale API-key snapshot.
+      var currentProvider = '';
+      try {
+        final credentials = await CredentialsService(
+          backendDio: ref.read(backendClientProvider),
+        ).getStatus();
+        currentProvider = credentials.ai.provider;
+        if (mounted) {
+          setState(() => _sharedAiProvider = currentProvider);
+        }
+      } catch (_) {
+        if (mounted) {
+          setState(() => _sharedAiProvider = '');
+        }
+      }
+      if (!mounted) return;
+      final codex = currentProvider == 'codex';
+      final providerUnknown = currentProvider.isEmpty;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('Include AI access for ${user.username}?'),
+          content: Text(
+            codex
+                ? 'Prompts and tool context will use the shared ChatGPT '
+                    'account. All enabled users consume the same Codex '
+                    'allowance, and activity is attributable to that account. '
+                    'Any subscription or usage costs remain with it. ChatGPT '
+                    'accounts are intended for one person—only enable this for '
+                    'people or devices you control.'
+                : providerUnknown
+                    ? 'Cantinarr could not confirm which shared provider is '
+                        'selected. If it is ChatGPT, prompts and tool context '
+                        'will use one shared account and Codex allowance, '
+                        'activity is attributable to that account, and any '
+                        'subscription or usage costs remain with it. ChatGPT '
+                        'accounts are intended for one person—only enable this '
+                        'for people or devices you control. If it uses an API '
+                        'key, requests count against that provider\'s paid quota '
+                        'and may create charges.'
+                    : 'This user can send prompts and tool context through the '
+                        'server AI provider. Requests count against its paid quota '
+                        'and may create provider charges. Their selected personal '
+                        'provider still takes priority.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Include AI access'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
+    try {
+      await ref
+          .read(authProvider.notifier)
+          .updateUserAiAccess(user.id, enabled);
+      final currentUserID = ref.read(authProvider).valueOrNull?.user?.id;
+      if (currentUserID == user.id) {
+        ref.invalidate(aiSettingsProvider);
+        try {
+          await ref.read(authProvider.notifier).refreshConfig();
+        } catch (_) {
+          // The grant is already saved. Config refresh retries on resume, and
+          // the AI settings screen re-fetches its authoritative source now.
+        }
+      }
+      await _loadUsers();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(enabled
+              ? 'Included AI enabled for ${user.username}'
+              : 'Included AI removed for ${user.username}'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_friendlyError(error, 'Failed to update AI access')),
+        ),
+      );
+    }
+  }
+
   String _friendlyError(Object e, String fallback) {
     final msg = e.toString();
     // Surface the backend's error message when present.
@@ -392,6 +503,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
               passwordEnabled: passwordEnabled,
               passkeyEnabled: passkeyEnabled,
             ),
+            onSetSharedAiAccess: (enabled) => _setSharedAiAccess(user, enabled),
+            sharedAiProvider: _sharedAiProvider,
           );
         },
       ),
@@ -412,6 +525,8 @@ class _UserTile extends StatelessWidget {
     required this.onInviteInPlex,
     required this.onSetAuthMethods,
     required this.onRequestSettings,
+    required this.onSetSharedAiAccess,
+    required this.sharedAiProvider,
   });
 
   final UserSummary user;
@@ -426,6 +541,8 @@ class _UserTile extends StatelessWidget {
   final void Function({bool? passwordEnabled, bool? passkeyEnabled})
       onSetAuthMethods;
   final VoidCallback onRequestSettings;
+  final ValueChanged<bool> onSetSharedAiAccess;
+  final String sharedAiProvider;
 
   /// A user who has never connected a device is stuck in "invited limbo":
   /// either their invite is still pending or the link was lost/expired.
@@ -488,6 +605,8 @@ class _UserTile extends StatelessWidget {
               const _Tag(label: 'Password', color: AppTheme.textSecondary),
             if (user.passkeyEnabled)
               const _Tag(label: 'Passkey', color: AppTheme.textSecondary),
+            if (user.sharedAiEnabled)
+              const _Tag(label: 'AI included', color: AppTheme.signal),
             if (user.plexEmail.isNotEmpty)
               _Tag(label: user.plexEmail, color: AppTheme.textSecondary),
             if (user.plexInvitedAt != null)
@@ -527,6 +646,9 @@ class _UserTile extends StatelessWidget {
           case 'request_settings':
             onRequestSettings();
             break;
+          case 'toggle_shared_ai':
+            onSetSharedAiAccess(!user.sharedAiEnabled);
+            break;
           case 'enable_password':
             onSetAuthMethods(passwordEnabled: true);
             break;
@@ -550,6 +672,28 @@ class _UserTile extends StatelessWidget {
           child: ListTile(
             leading: Icon(Icons.tune),
             title: Text('User settings…'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          value: 'toggle_shared_ai',
+          child: ListTile(
+            leading: const Icon(Icons.auto_awesome_outlined),
+            title: const Text('Included AI access'),
+            subtitle: Text(
+              sharedAiProvider == 'codex'
+                  ? 'Shared ChatGPT allowance'
+                  : sharedAiProvider.isEmpty
+                      ? 'Provider status unavailable'
+                      : 'Server provider quota',
+            ),
+            trailing: IgnorePointer(
+              child: Switch(
+                value: user.sharedAiEnabled,
+                onChanged: (_) {},
+                activeThumbColor: AppTheme.accent,
+              ),
+            ),
             contentPadding: EdgeInsets.zero,
           ),
         ),

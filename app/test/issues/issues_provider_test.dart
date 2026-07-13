@@ -97,7 +97,11 @@ void main() {
       data: {'issue_id': 1, 'open_count': 99},
     ));
 
-    await _waitFor(() => service.listCalls >= 2);
+    // listCalls increments before the async refresh publishes its derived
+    // count. Wait for the observable contract rather than racing that internal
+    // implementation detail.
+    await _waitFor(() => container.read(openIssuesProvider) == 1);
+    expect(service.listCalls, greaterThanOrEqualTo(2));
     expect(container.read(openIssuesProvider), 1);
   });
 }

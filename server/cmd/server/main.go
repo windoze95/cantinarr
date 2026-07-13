@@ -17,6 +17,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/api"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/cache"
+	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
@@ -194,7 +195,15 @@ func main() {
 
 	// MCP tool server + AI handler
 	toolServer := mcp.NewToolServer(creds, requestService, registry, bridge)
-	aiHandler := ai.NewHandler(creds, toolServer)
+	codexManager := codexapp.NewManager(database, cipher, toolServer, codexapp.Options{
+		Binary:     cfg.CodexBin,
+		RuntimeDir: cfg.CodexRuntimeDir,
+	})
+	if !codexManager.Available() {
+		log.Printf("ChatGPT (Codex) provider unavailable: %v", codexManager.AvailabilityError())
+	}
+	aiHandler := ai.NewHandler(creds, toolServer, codexManager)
+	credHandler.SetSharedAIConfigured(aiHandler.ProviderConfigured)
 
 	// Remediation read-only agent (Wave 2). The agent investigates one issue
 	// read-only and posts a diagnosis; it has NO path to mutate the *arr (the
@@ -204,7 +213,7 @@ func main() {
 	// small bounded worker pool that drains enqueued investigation jobs.
 	toolServer.SetIssueStore(remediationService)
 	remediationProcToken := newProcToken()
-	remediationRunner := remediation.NewRunner(database, remediationService, toolServer, creds, remediationProcToken)
+	remediationRunner := remediation.NewRunner(database, remediationService, toolServer, aiHandler, remediationProcToken)
 	remediationService.StartWorkers(ctx, remediationRunner, 2)
 	// Reply-TTL sweep (Wave 4): periodically close awaiting_user issues whose
 	// reporter never answered the agent's clarifying question within the window.

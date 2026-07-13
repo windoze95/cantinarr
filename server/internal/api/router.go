@@ -108,6 +108,9 @@ func NewRouter(
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
 		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+		// Keep authenticated ChatGPT device-flow churn from consuming the public
+		// password/passkey budget for everyone behind the same household proxy.
+		codexLoginLimiter := auth.NewRateLimiter(10, 1*time.Minute)
 
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
@@ -150,13 +153,14 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users", authHandler.HandleListUsers)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}", authHandler.HandleUpdateUserRole)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}/auth-methods", authHandler.HandleUpdateUserAuthMethods)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/ai-access", authHandler.HandleUpdateUserAIAccess)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}", authHandler.HandleDeleteUser)
 			// Send a test push to a specific user's devices (delivery diagnostics).
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/test-push", pushHandler.TestPushToUser)
 
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
-			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, plexService))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, plexService))
 
 			// Update availability + the admin-configured management-portal URL that
 			// backs the "update available" banner. GET returns both; PUT sets the
@@ -187,6 +191,11 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/credentials", credHandler.Get)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/credentials", credHandler.Update)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/credentials/{key}", credHandler.Delete)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/codex/status", aiHandler.SharedCodexStatus)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), codexLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginSharedCodexDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/codex/device/{flowID}", aiHandler.CheckSharedCodexDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/codex/device/{flowID}", aiHandler.CancelSharedCodexDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/codex", aiHandler.UnlinkSharedCodex)
 
 			// AI tool toggles
 			aiToolsHandler := mcp.NewToolSettingsHandler(toolServer)
@@ -224,7 +233,7 @@ func NewRouter(
 		// Config route (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Get("/config", configHandler(cfg, instanceStore, creds, remediationService))
+			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService))
 		})
 
 		// Device push-token + notification preference routes (authenticated).
@@ -308,9 +317,25 @@ func NewRouter(
 		// AI routes (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Use(auth.RequirePermission(auth.PermissionAIChat))
-			r.Post("/ai/chat", aiHandler.Chat)
-			r.Get("/ai/available", aiHandler.Available)
+
+			// Account visibility and revocation remain available to the account
+			// owner even if their role later loses AI access.
+			r.Get("/ai/codex/status", aiHandler.CodexStatus)
+			r.Delete("/ai/codex", aiHandler.UnlinkCodex)
+			r.Delete("/ai/codex/device/{flowID}", aiHandler.CancelCodexDeviceLogin)
+			r.Get("/ai/settings", aiHandler.AISettings)
+			r.Delete("/ai/settings", aiHandler.DeleteAISettings)
+			r.Delete("/ai/credentials/{provider}", aiHandler.DeletePersonalAICredential)
+
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequirePermission(auth.PermissionAIChat))
+				r.Post("/ai/chat", aiHandler.Chat)
+				r.Get("/ai/available", aiHandler.Available)
+				r.Put("/ai/settings", aiHandler.UpdateAISettings)
+				r.Put("/ai/credentials/{provider}", aiHandler.UpdatePersonalAICredential)
+				r.With(codexLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginCodexDeviceLogin)
+				r.Get("/ai/codex/device/{flowID}", aiHandler.CheckCodexDeviceLogin)
+			})
 		})
 
 		// Instance routes (authenticated)
@@ -427,8 +452,9 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 	}
 }
 
-func configHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, remediationService *remediation.Service) http.HandlerFunc {
+func configHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		// Build instances list
 		type instanceInfo struct {
 			ID          string `json:"id"`
@@ -483,11 +509,15 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 
 		// Derive service availability from the per-user filtered instance list,
 		// so a user without a chaptarr grant sees services.chaptarr == false.
+		aiAvailable := creds.IsAIConfigured()
+		if aiHandler != nil && userID != 0 {
+			aiAvailable = aiHandler.AvailableForUser(userID)
+		}
 		services := map[string]bool{
 			"radarr":   false,
 			"sonarr":   false,
 			"chaptarr": false,
-			"ai":       creds.IsAIConfigured(),
+			"ai":       aiAvailable,
 			"tmdb":     creds.IsConfigured(credentials.KeyTMDBAccessToken),
 			"trakt":    creds.IsConfigured(credentials.KeyTraktClientID),
 		}

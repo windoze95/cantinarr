@@ -252,6 +252,23 @@ class AuthService {
     return UserSummary.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Grant or revoke use of the server's shared AI provider. Personal AI
+  /// credentials remain self-service and are not affected by this switch.
+  Future<UserSummary> updateUserAiAccess(
+    String serverUrl,
+    String accessToken,
+    int userId,
+    bool sharedAiEnabled,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.put(
+      '/api/admin/users/$userId/ai-access',
+      data: {'shared_ai_enabled': sharedAiEnabled},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return UserSummary.fromJson(resp.data as Map<String, dynamic>);
+  }
+
   // ─── Passkey API Methods ─────────────────────────────
 
   /// Begin passkey registration (authenticated).
@@ -435,6 +452,7 @@ class UserSummary {
   final bool passwordEnabled;
   final bool passkeyEnabled;
   final bool hasPendingInvite;
+  final bool sharedAiEnabled;
 
   /// The email this user shared for their Plex server invite ('' = none yet),
   /// and when Cantinarr last sent their invite (null = never).
@@ -452,6 +470,7 @@ class UserSummary {
     required this.passwordEnabled,
     required this.passkeyEnabled,
     required this.hasPendingInvite,
+    this.sharedAiEnabled = false,
     this.plexEmail = '',
     this.plexInvitedAt,
   });
@@ -472,6 +491,7 @@ class UserSummary {
         passwordEnabled: json['password_enabled'] as bool? ?? false,
         passkeyEnabled: json['passkey_enabled'] as bool? ?? false,
         hasPendingInvite: json['has_pending_invite'] as bool? ?? false,
+        sharedAiEnabled: json['ai_shared_enabled'] as bool? ?? false,
         plexEmail: json['plex_email'] as String? ?? '',
         plexInvitedAt: json['plex_invited_at'] as String?,
       );

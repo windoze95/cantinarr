@@ -140,10 +140,14 @@ steps below must be done in the UI.
    fails, see fastlane#20538, so the listing sync deliberately leaves review details to the
    console). Paste the standing note: the app is an open-source client for a self-hosted server,
    and a demo server URL + connect link are provided before each submission.
-2. App Privacy (App Store Connect → the app → App Privacy): answer "do you collect data" → **No**
-   → the label becomes "Data Not Collected". Rationale if asked: the app has no developer backend,
-   no analytics/ads/crash SDKs; it talks only to the user's own self-hosted server, and poster art
-   comes from the TMDB CDN as plain image requests.
+2. App Privacy (App Store Connect → the app → App Privacy): **reassess this form before the next
+   submission** against Apple's current [App privacy details](https://developer.apple.com/app-store/app-privacy-details/)
+   definitions. The developer still operates no backend and receives nothing, but optional AI
+   use sends prompts/context to a personal or admin-included provider and the user's self-hosted server
+   keeps short-lived conversation context in memory. This likely requires an optional
+   **Other User Content / App Functionality** disclosure; the account owner must confirm the exact
+   linked-to-user and optional-disclosure answers in App Store Connect. Do not reuse the previous
+   categorical "Data Not Collected" answer without that review.
 3. Age rating questionnaire: all descriptors None, gambling No, unrestricted web access No
    (the in-app web view is scoped to auth/help flows). Strictly accurate result is 4+; setting
    "Mature/Suggestive Themes: Infrequent/Mild" → **12+** is the conservative choice for an app
@@ -158,10 +162,14 @@ steps below must be done in the UI.
 
 Prepared answers, in console order:
 
-- **Data safety**: "Does your app collect or share any of the required user data types?" → **No**
-  (self-hosted client; the developer operates no backend and receives nothing; app↔own-server
-  traffic and TMDB CDN image fetches are servicing the user's request, not collection). Ads: No.
-  Result shows "No data collected".
+- **Data safety**: **reassess before the next submission** against Google's current
+  [Data safety definitions](https://support.google.com/googleplay/android-developer/answer/10787469).
+  Google defines collection around off-device transmission, not only data received by the app
+  developer. Optional AI use sends prompts/context to a personal or admin-included provider and retains short-lived context on
+  the user's self-hosted server, so the previous categorical "No data collected" answer must not be
+  reused without review. The likely disclosure is optional user-generated/other user content for
+  app functionality; the account owner must confirm whether Google's user-initiated-transfer
+  sharing exception applies to the exact flow. Ads remain No.
 - **Content rating (IARC)**: category "Utility, Productivity, Communication, or Other"; no
   violence/sexuality/language/gambling in app content; users can exchange text only with members
   of their own private server (no public UGC, no location sharing). Expected result: Everyone.

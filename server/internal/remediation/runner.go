@@ -12,7 +12,6 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/auth"
-	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
@@ -80,10 +79,12 @@ const (
 	stepTruncateBytes    = 4000
 )
 
-// turnRunnerFactory builds an ai.TurnRunner for a provider/model/key. It is a
-// field so tests can inject a fake provider without real network/credentials.
-// The production factory (set in NewRunner) closes over the concrete ToolServer.
-type turnRunnerFactory func(provider, apiKey, model string) (ai.TurnRunner, error)
+// autonomousTurnResolver is the narrow shared-provider seam supplied by the AI
+// handler. Production resolves only the strict admin-owned profile; tests inject
+// a fake turn without network credentials.
+type autonomousTurnResolver interface {
+	ResolveSharedAutonomousTurn(ctx context.Context) (ai.AutonomousTurn, error)
+}
 
 // toolHost is the narrow tool-execution surface the Runner depends on. *mcp.ToolServer
 // satisfies it; a fake satisfies it in tests so the enforcement boundary (which
@@ -113,27 +114,20 @@ type Runner struct {
 	db         *sql.DB
 	svc        *Service
 	toolServer toolHost
-	creds      *credentials.Registry
-	newTurn    turnRunnerFactory
+	turns      autonomousTurnResolver
 	procToken  string
 }
 
-// NewRunner constructs the remediation Runner. creds resolves the AI
-// provider/model/key (remediation Settings may override provider/model; empty
-// means inherit the server's configured AI). procToken is a process-start token
+// NewRunner constructs the remediation Runner. turns resolves the strict
+// admin-owned shared provider and model. procToken is a process-start token
 // stamped on agent_runs so a watchdog can tell crashed-mid-run from parked.
-func NewRunner(db *sql.DB, svc *Service, toolServer *mcp.ToolServer, creds *credentials.Registry, procToken string) *Runner {
+func NewRunner(db *sql.DB, svc *Service, toolServer *mcp.ToolServer, turns autonomousTurnResolver, procToken string) *Runner {
 	return &Runner{
 		db:         db,
 		svc:        svc,
 		toolServer: toolServer,
-		creds:      creds,
+		turns:      turns,
 		procToken:  procToken,
-		// Production factory: build a real provider TurnRunner against the concrete
-		// tool server (which the provider services use to convert tool defs).
-		newTurn: func(provider, apiKey, model string) (ai.TurnRunner, error) {
-			return ai.NewTurnRunner(provider, apiKey, model, toolServer)
-		},
 	}
 }
 
@@ -180,7 +174,7 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 		return nil
 	}
 
-	turn, model, err := r.resolveTurn(settings)
+	turn, model, err := r.resolveTurn(ctx)
 	if err != nil {
 		// No key / provider setup failed: cannot run. Park the issue with a clear
 		// admin-facing note.
@@ -241,34 +235,22 @@ func (r *Runner) runOwnsIssue(runID, issueID int64) bool {
 	return err == nil && owns != 0
 }
 
-// resolveTurn resolves the provider/model/key from remediation settings (empty
-// inherits the server's configured AI, mirroring ai/handler.go) and builds the
-// single-turn runner. It returns the model id alongside so callers can record it
-// on a give-up even when no run row was created. An error means the AI is
-// unconfigured or the provider failed to construct.
-func (r *Runner) resolveTurn(settings Settings) (ai.TurnRunner, string, error) {
-	cfg := r.creds.GetAIConfig()
-	provider := settings.Provider
-	if provider == "" {
-		provider = cfg.Provider
+// resolveTurn snapshots the strict admin-owned profile. It never reads an issue
+// reporter, personal override, per-user included-access grant, or legacy
+// remediation provider/model field. Both provider and model always come from
+// the currently selected shared profile.
+func (r *Runner) resolveTurn(ctx context.Context) (ai.TurnRunner, string, error) {
+	if r.turns == nil {
+		return nil, "", fmt.Errorf("shared AI resolver is unavailable")
 	}
-	model := settings.Model
-	if model == "" {
-		if settings.Provider != "" {
-			model = credentials.DefaultAIModel(provider)
-		} else {
-			model = cfg.Model
-		}
-	}
-	apiKey := r.creds.GetCredential(credentials.AIKeyCredentialKey(provider))
-	if apiKey == "" {
-		return nil, model, fmt.Errorf("AI provider not configured")
-	}
-	turn, err := r.newTurn(provider, apiKey, model)
+	resolved, err := r.turns.ResolveSharedAutonomousTurn(ctx)
 	if err != nil {
-		return nil, model, fmt.Errorf("build turn runner: %w", err)
+		return nil, resolved.Model, err
 	}
-	return turn, model, nil
+	if resolved.Runner == nil {
+		return nil, resolved.Model, fmt.Errorf("shared AI runner is unavailable")
+	}
+	return resolved.Runner, resolved.Model, nil
 }
 
 // Resume re-enters the SAME parked run after an admin decision (approve/deny) has
@@ -321,7 +303,7 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 		return nil
 	}
 
-	turn, model, err := r.resolveTurn(settings)
+	turn, model, err := r.resolveTurn(ctx)
 	if err != nil {
 		return r.giveUp(ctx, issueID, runID, model, stopModelError,
 			"I couldn't continue after the decision because the AI provider isn't configured. Flagging for an admin.")

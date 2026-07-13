@@ -47,5 +47,33 @@ void main() {
       expect(status.ai.model, 'claude-opus-4-8');
       expect(status.ai.providers, isEmpty);
     });
+
+    test('parses an OAuth provider without a credential key', () {
+      final status = CredentialsStatus.fromJson({
+        'credentials': const <String, bool>{},
+        'ai': {
+          'config': {
+            'provider': 'codex',
+            'model': 'gpt-5.4',
+          },
+          'providers': [
+            {
+              'id': 'codex',
+              'label': 'ChatGPT (Codex)',
+              'auth_type': 'user_oauth',
+              'models': [
+                {'id': 'gpt-5.4', 'label': 'GPT-5.4'},
+              ],
+            },
+          ],
+        },
+      });
+
+      final provider = status.ai.providers.single;
+      expect(provider.id, 'codex');
+      expect(provider.credentialKey, isEmpty);
+      expect(provider.authType, 'user_oauth');
+      expect(provider.usesUserOAuth, isTrue);
+    });
   });
 }

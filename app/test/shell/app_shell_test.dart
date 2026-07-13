@@ -8,6 +8,7 @@ import 'package:cantinarr/core/providers/instance_provider.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/features/ai_assistant/data/ai_chat_service.dart';
+import 'package:cantinarr/features/ai_assistant/data/codex_oauth_service.dart';
 import 'package:cantinarr/features/ai_assistant/logic/ai_chat_provider.dart';
 import 'package:cantinarr/features/ai_assistant/ui/ai_chat_screen.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
@@ -56,7 +57,17 @@ void main() {
           authProvider.overrideWith(
             () => _FakeAuthNotifier(_authenticatedAiState),
           ),
-          aiChatProvider.overrideWith((ref) => chatNotifier),
+          aiChatProvider.overrideWith((ref) {
+            ref.keepAlive();
+            return chatNotifier;
+          }),
+          codexConnectionStatusProvider.overrideWith(
+            (_) => const CodexConnectionStatus(
+              selected: false,
+              available: false,
+              connected: false,
+            ),
+          ),
         ],
         child: MaterialApp.router(routerConfig: router),
       ),

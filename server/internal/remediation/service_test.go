@@ -382,7 +382,7 @@ func TestAgentAuthoredTextLimits(t *testing.T) {
 
 // TestSettingsRoundTrip proves the remediation settings persist and reload
 // (mirroring request_settings), defaults apply for an unset blob, and out-of-
-// range bound fields normalize while empty provider/model stay empty (inherit).
+// range bound fields normalize while legacy provider/model values are cleared.
 func TestSettingsRoundTrip(t *testing.T) {
 	svc, _, _ := setupTestService(t)
 
@@ -398,13 +398,15 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("default mode = %q, want supervised", d.Mode)
 	}
 	if d.Provider != "" || d.Model != "" {
-		t.Fatalf("default provider/model = %q/%q, want empty (inherit)", d.Provider, d.Model)
+		t.Fatalf("default provider/model = %q/%q, want empty compatibility fields", d.Provider, d.Model)
 	}
 	if d.MaxUserWaitHours != 72 {
 		t.Fatalf("default max_user_wait_hours = %d, want 72", d.MaxUserWaitHours)
 	}
 
-	// Round-trip a populated settings value.
+	// Round-trip a populated settings value. Provider and Model remain on the wire
+	// for older clients but are normalized away: remediation always follows the
+	// live admin-owned shared profile.
 	in := Settings{
 		Enabled:                  true,
 		AutoDispatch:             true,
@@ -427,17 +429,20 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetSettings: %v", err)
 	}
-	if saved != in {
-		t.Fatalf("SetSettings returned %+v, want the input echoed", saved)
+	want := in
+	want.Provider = ""
+	want.Model = ""
+	if saved != want {
+		t.Fatalf("SetSettings returned %+v, want %+v", saved, want)
 	}
 	got := svc.Settings()
-	if got != in {
-		t.Fatalf("reloaded settings = %+v, want %+v", got, in)
+	if got != want {
+		t.Fatalf("reloaded settings = %+v, want %+v", got, want)
 	}
 
-	// Out-of-range bounds normalize back to defaults; an unknown mode too;
-	// empty provider/model are left empty (inherit), not defaulted.
-	norm, err := svc.SetSettings(Settings{Mode: "bogus", MaxSteps: 0})
+	// Out-of-range bounds normalize back to defaults; an unknown mode too. A
+	// model-only legacy write is cleared even without a legacy provider value.
+	norm, err := svc.SetSettings(Settings{Mode: "bogus", Model: "stale-model", MaxSteps: 0})
 	if err != nil {
 		t.Fatalf("SetSettings normalize: %v", err)
 	}
@@ -449,7 +454,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("normalized max steps = %d, want %d", norm.MaxSteps, def.MaxSteps)
 	}
 	if norm.Provider != "" || norm.Model != "" {
-		t.Fatalf("normalized provider/model = %q/%q, want empty (inherit)", norm.Provider, norm.Model)
+		t.Fatalf("normalized provider/model = %q/%q, want empty compatibility fields", norm.Provider, norm.Model)
 	}
 
 	high, err := svc.SetSettings(Settings{

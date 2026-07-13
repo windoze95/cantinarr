@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'user',
     password_enabled BOOLEAN NOT NULL DEFAULT 0,
     passkey_enabled BOOLEAN NOT NULL DEFAULT 0,
+    ai_shared_enabled BOOLEAN NOT NULL DEFAULT 0,
     plex_email TEXT NOT NULL DEFAULT '',
     plex_invited_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -197,6 +199,54 @@ CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
     expires_at DATETIME NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Per-user ChatGPT/Codex account state for the interactive AI assistant.
+-- auth_blob is the complete Codex auth.json encrypted with Cantinarr's
+-- AES-256-GCM secrets cipher. It is materialized only in a server-owned tmpfs
+-- session directory during an operation, removed on normal completion, and
+-- scrubbed as stale session state on the next startup after a crash.
+-- Display metadata and the last rate-limit snapshot contain no usable
+-- credential, but remain user-owned and disappear with the account.
+CREATE TABLE IF NOT EXISTS user_codex_accounts (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    auth_blob TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    rate_limits_json TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- A user's explicit AI provider override. No row means the user may use the
+-- admin-funded shared provider when granted. A row is intentionally
+-- fail-closed: its provider never silently falls through to shared billing.
+CREATE TABLE IF NOT EXISTS user_ai_settings (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Write-only, per-user API credentials. credential_blob is always encrypted
+-- with Cantinarr's AES-256-GCM secrets cipher; plaintext has no legacy format.
+CREATE TABLE IF NOT EXISTS user_ai_credentials (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    credential_blob TEXT NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, provider)
+);
+
+-- One server-wide ChatGPT authorization for the admin-funded shared provider.
+-- The fixed primary key enforces the singleton independently of any admin
+-- account, so deleting or demoting the admin who linked it cannot orphan it.
+CREATE TABLE IF NOT EXISTS shared_codex_account (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    auth_blob TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    rate_limits_json TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- AI remediation / issue reporting (Wave 1 ships issues + issue_messages; the
@@ -403,6 +453,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_actions_status ON agent_actions(status);
 CREATE INDEX IF NOT EXISTS idx_agent_actions_issue ON agent_actions(issue_id);
 `
 
+type schemaMigration struct {
+	alter    string
+	backfill []string
+	after    func(*sql.Tx) error
+}
+
 func Open(dbPath string) (*sql.DB, error) {
 	dir := filepath.Dir(dbPath)
 	if dir != "." && dir != "" {
@@ -426,10 +482,7 @@ func Open(dbPath string) (*sql.DB, error) {
 	// so each new column gets a tolerant ALTER TABLE (duplicate-column errors
 	// are ignored). Backfill statements run only when the column is first added
 	// so they execute exactly once per database.
-	migrations := []struct {
-		alter    string
-		backfill []string
-	}{
+	migrations := []schemaMigration{
 		{alter: "ALTER TABLE service_instances ADD COLUMN username TEXT NOT NULL DEFAULT ''"},
 		{alter: "ALTER TABLE service_instances ADD COLUMN password TEXT NOT NULL DEFAULT ''"},
 		{
@@ -447,6 +500,17 @@ func Open(dbPath string) (*sql.DB, error) {
 			backfill: []string{
 				"UPDATE users SET passkey_enabled = 1 WHERE role = 'admin' OR id IN (SELECT DISTINCT user_id FROM webauthn_credentials)",
 			},
+		},
+		{
+			// Shared AI access is opt-in for newly created accounts. Preserve the
+			// shipped global-provider behavior for every account that predates the
+			// grant, and preserve Codex links created by the per-user OAuth release
+			// as explicit personal overrides.
+			alter: "ALTER TABLE users ADD COLUMN ai_shared_enabled BOOLEAN NOT NULL DEFAULT 0",
+			backfill: []string{
+				"UPDATE users SET ai_shared_enabled = 1",
+			},
+			after: backfillLegacyPersonalCodex,
 		},
 		{alter: "ALTER TABLE refresh_tokens ADD COLUMN superseded_at DATETIME"},
 		// Media-request approval queue + per-request option capture. All
@@ -507,18 +571,9 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN queue_file_id INTEGER CHECK (queue_file_id >= 0)"},
 	}
 	for _, m := range migrations {
-		if _, err := db.Exec(m.alter); err != nil {
-			if strings.Contains(err.Error(), "duplicate column") {
-				continue // already applied; skip the one-time backfill
-			}
+		if err := applySchemaMigration(db, m); err != nil {
 			db.Close()
-			return nil, fmt.Errorf("apply migration %q: %w", m.alter, err)
-		}
-		for _, stmt := range m.backfill {
-			if _, err := db.Exec(stmt); err != nil {
-				db.Close()
-				return nil, fmt.Errorf("apply backfill %q: %w", stmt, err)
-			}
+			return nil, err
 		}
 	}
 	// Monetary estimates were briefly stored on remediation runs using a
@@ -629,6 +684,69 @@ func Open(dbPath string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+// backfillLegacyPersonalCodex runs only when the shared-AI grant column is
+// first added. It preserves personal links from the original Codex release,
+// including installs whose global selection/model came only from environment
+// defaults. Running it on every startup would resurrect an override a user
+// intentionally disabled.
+// applySchemaMigration keeps the schema marker (the added column), its
+// compatibility backfills, and any data-dependent post-step in one SQLite
+// transaction. If the process stops or a step fails, the ALTER rolls back too,
+// so the next startup can retry instead of mistaking a partial migration for a
+// completed one.
+func applySchemaMigration(db *sql.DB, migration schemaMigration) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration %q: %w", migration.alter, err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(migration.alter); err != nil {
+		if strings.Contains(err.Error(), "duplicate column") {
+			return nil // already applied; skip the one-time backfill
+		}
+		return fmt.Errorf("apply migration %q: %w", migration.alter, err)
+	}
+	for _, stmt := range migration.backfill {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("apply backfill %q: %w", stmt, err)
+		}
+	}
+	if migration.after != nil {
+		if err := migration.after(tx); err != nil {
+			return fmt.Errorf("apply post-migration step for %q: %w", migration.alter, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %q: %w", migration.alter, err)
+	}
+	return nil
+}
+
+func backfillLegacyPersonalCodex(tx *sql.Tx) error {
+	var provider, model string
+	_ = tx.QueryRow(`SELECT value FROM settings WHERE key = 'ai_provider'`).Scan(&provider)
+	_ = tx.QueryRow(`SELECT value FROM settings WHERE key = 'ai_model'`).Scan(&model)
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" {
+		provider = strings.TrimSpace(os.Getenv("CANTINARR_AI_PROVIDER"))
+	}
+	if model == "" {
+		model = strings.TrimSpace(os.Getenv("CANTINARR_AI_MODEL"))
+	}
+	if provider != "codex" {
+		return nil
+	}
+	if model == "" {
+		model = "default"
+	}
+	_, err := tx.Exec(`
+		INSERT OR IGNORE INTO user_ai_settings (user_id, provider, model)
+		SELECT user_id, 'codex', ? FROM user_codex_accounts`, model)
+	return err
 }
 
 func clearLegacyAgentRunCost(db *sql.DB) error {

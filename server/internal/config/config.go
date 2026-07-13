@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -45,6 +46,13 @@ type Config struct {
 	// DisableUpdateCheck turns off the periodic GitHub release check that powers
 	// the admin "update available" banner (CANTINARR_DISABLE_UPDATE_CHECK).
 	DisableUpdateCheck bool
+	// CodexBin optionally overrides the Codex app-server executable. Empty lets
+	// the adapter discover codex-app-server first and the full codex CLI second.
+	CodexBin string
+	// CodexRuntimeDir is the private memory-backed root where decrypted, per-user
+	// Codex auth state may exist while an app-server process is running. Empty
+	// lets the adapter use /dev/shm/cantinarr-codex when available.
+	CodexRuntimeDir string
 }
 
 func Load() (*Config, error) {
@@ -67,6 +75,8 @@ func Load() (*Config, error) {
 		PushGatewayURL:     strings.TrimRight(os.Getenv("CANTINARR_PUSH_GATEWAY_URL"), "/"),
 		PushAPIKey:         os.Getenv("CANTINARR_PUSH_API_KEY"),
 		PushEnrollToken:    os.Getenv("CANTINARR_PUSH_ENROLL_TOKEN"),
+		CodexBin:           strings.TrimSpace(os.Getenv("CANTINARR_CODEX_BIN")),
+		CodexRuntimeDir:    strings.TrimSpace(os.Getenv("CANTINARR_CODEX_RUNTIME_DIR")),
 	}
 
 	cfg.DisableUpdateCheck = envBool(os.Getenv("CANTINARR_DISABLE_UPDATE_CHECK"))
@@ -79,6 +89,9 @@ func Load() (*Config, error) {
 	}
 	if err := validatePublicURL(cfg.PublicURL); err != nil {
 		return nil, fmt.Errorf("invalid CANTINARR_PUBLIC_URL: %w", err)
+	}
+	if cfg.CodexRuntimeDir != "" && !filepath.IsAbs(cfg.CodexRuntimeDir) {
+		return nil, fmt.Errorf("invalid CANTINARR_CODEX_RUNTIME_DIR: must be an absolute path")
 	}
 
 	androidFingerprints := os.Getenv("CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS")

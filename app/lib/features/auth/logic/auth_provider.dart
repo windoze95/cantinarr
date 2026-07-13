@@ -717,6 +717,22 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     );
   }
 
+  /// Enable or disable this user's access to the server-provided AI account.
+  /// Their own API keys and ChatGPT link are intentionally untouched.
+  Future<UserSummary> updateUserAiAccess(
+    int userId,
+    bool sharedAiEnabled,
+  ) async {
+    final conn = state.valueOrNull?.connection;
+    if (conn == null) throw Exception('Not authenticated');
+    return _authService.updateUserAiAccess(
+      conn.serverUrl,
+      conn.accessToken,
+      userId,
+      sharedAiEnabled,
+    );
+  }
+
   // ─── Passkey Methods ─────────────────────────────────
 
   /// Register a new passkey for the current user.
