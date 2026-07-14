@@ -131,6 +131,67 @@ func TestToolDefinitionsDeclarePermissions(t *testing.T) {
 	}
 }
 
+func TestToolRBACMatrixCoversEveryDefinition(t *testing.T) {
+	server := NewToolServer(nil, nil, nil, nil)
+	listedByRole := map[string]map[string]bool{}
+	for _, role := range []string{auth.RoleAdmin, auth.RoleUser, "unknown"} {
+		listedByRole[role] = make(map[string]bool)
+		for _, tool := range server.GetToolsForRole(role) {
+			if listedByRole[role][tool.Name] {
+				t.Fatalf("role %q received duplicate tool %q", role, tool.Name)
+			}
+			listedByRole[role][tool.Name] = true
+		}
+	}
+
+	seen := make(map[string]bool, len(toolDefinitions))
+	for _, tool := range toolDefinitions {
+		if seen[tool.Name] {
+			t.Fatalf("duplicate tool definition %q", tool.Name)
+		}
+		seen[tool.Name] = true
+
+		for _, role := range []string{auth.RoleAdmin, auth.RoleUser, "unknown"} {
+			want := auth.HasPermission(role, tool.RequiredPermission())
+			if got := listedByRole[role][tool.Name]; got != want {
+				t.Errorf("role %q listed tool %q = %t, want %t for permission %q", role, tool.Name, got, want, tool.RequiredPermission())
+			}
+			if want {
+				continue
+			}
+
+			result, err := server.ExecuteTool(
+				context.Background(),
+				tool.Name,
+				json.RawMessage(`{}`),
+				CallContext{UserID: 1, Role: role},
+			)
+			if err != nil {
+				t.Errorf("role %q denied tool %q with error: %v", role, tool.Name, err)
+				continue
+			}
+			if result == nil || result.Text != "This action is not permitted for your role." {
+				t.Errorf("role %q tool %q denial = %#v", role, tool.Name, result)
+			}
+		}
+	}
+
+	if len(listedByRole[auth.RoleAdmin]) != len(toolDefinitions) {
+		t.Fatalf("admin tool count = %d, want all %d definitions", len(listedByRole[auth.RoleAdmin]), len(toolDefinitions))
+	}
+	if len(listedByRole["unknown"]) != 0 {
+		t.Fatalf("unknown role received %d tools", len(listedByRole["unknown"]))
+	}
+	for _, tool := range AgentTools() {
+		if tool.RequiredPermission() != auth.PermissionRemediationManage {
+			t.Errorf("agent-only tool %q permission = %q", tool.Name, tool.RequiredPermission())
+		}
+		if seen[tool.Name] || hasTool(server.GetToolsForRole(auth.RoleAdmin), tool.Name) || hasTool(server.GetToolsForRole(auth.RoleUser), tool.Name) {
+			t.Errorf("agent-only tool %q leaked into interactive chat tools", tool.Name)
+		}
+	}
+}
+
 func TestGetToolsForRoleFiltersOperationalTools(t *testing.T) {
 	server := NewToolServer(nil, nil, nil, nil)
 	userTools := server.GetToolsForRole(auth.RoleUser)

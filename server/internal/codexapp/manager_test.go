@@ -1494,6 +1494,7 @@ func assertAppServerCommandSurface(t *testing.T, path string, prefix []string) {
 	}
 	defer func() {
 		_ = stdin.Close()
+		_ = stdout.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	}()
@@ -1507,26 +1508,88 @@ func assertAppServerCommandSurface(t *testing.T, path string, prefix []string) {
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), maxProtocolBytes)
-	for scanner.Scan() {
-		var response rpcEnvelope
-		if json.Unmarshal(scanner.Bytes(), &response) != nil || string(response.ID) != "1" {
-			continue
+	replies := make(chan rpcEnvelope, 64)
+	scanDone := make(chan error, 1)
+	go func() {
+		defer close(replies)
+		for scanner.Scan() {
+			var response rpcEnvelope
+			if json.Unmarshal(scanner.Bytes(), &response) == nil {
+				replies <- response
+			}
 		}
-		if response.Error != nil {
-			t.Fatalf("app-server rejected initialize with production arguments: code %d", response.Error.Code)
+		scanDone <- scanner.Err()
+	}()
+	readReply := func(id string) rpcEnvelope {
+		t.Helper()
+		for {
+			select {
+			case response, ok := <-replies:
+				if !ok {
+					t.Fatalf("app-server exited before response %s: %v", id, <-scanDone)
+				}
+				if string(response.ID) == id {
+					return response
+				}
+			case <-ctx.Done():
+				t.Fatalf("app-server request %s timed out", id)
+			}
 		}
-		var result struct {
-			CodexHome string `json:"codexHome"`
-		}
-		if json.Unmarshal(response.Result, &result) != nil || !sameDirectory(result.CodexHome, home) {
-			t.Fatalf("app-server did not honor isolated CODEX_HOME: got %q, want %q", result.CodexHome, home)
-		}
-		return
 	}
-	if ctx.Err() != nil {
-		t.Fatalf("app-server initialize timed out with production arguments")
+
+	initialize := readReply("1")
+	if initialize.Error != nil {
+		t.Fatalf("app-server rejected initialize with production arguments: code %d", initialize.Error.Code)
 	}
-	t.Fatalf("app-server exited before initialize response: %v", scanner.Err())
+	var initializeResult struct {
+		CodexHome string `json:"codexHome"`
+	}
+	if json.Unmarshal(initialize.Result, &initializeResult) != nil || !sameDirectory(initializeResult.CodexHome, home) {
+		t.Fatalf("app-server did not honor isolated CODEX_HOME: got %q, want %q", initializeResult.CodexHome, home)
+	}
+
+	encoder := json.NewEncoder(stdin)
+	if err := encoder.Encode(map[string]any{"method": "initialized"}); err != nil {
+		t.Fatalf("write initialized notification: %v", err)
+	}
+	if err := encoder.Encode(map[string]any{
+		"id": 2, "method": "thread/start", "params": map[string]any{
+			"cwd":                     work,
+			"runtimeWorkspaceRoots":   []any{},
+			"approvalPolicy":          "never",
+			"sandbox":                 "read-only",
+			"baseInstructions":        "Cantinarr protocol smoke test",
+			"developerInstructions":   "Do not run a model turn.",
+			"ephemeral":               true,
+			"environments":            []any{},
+			"dynamicTools":            []any{},
+			"selectedCapabilityRoots": []any{},
+			"config":                  restrictedThreadConfig(),
+			"serviceName":             "Cantinarr",
+			"threadSource":            "cantinarr",
+		},
+	}); err != nil {
+		t.Fatalf("write thread/start request: %v", err)
+	}
+	threadStart := readReply("2")
+	if threadStart.Error != nil {
+		t.Fatalf("app-server rejected production thread/start config: code %d: %s", threadStart.Error.Code, threadStart.Error.Message)
+	}
+	var threadResult struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+		ApprovalPolicy string `json:"approvalPolicy"`
+		Sandbox        struct {
+			Type string `json:"type"`
+		} `json:"sandbox"`
+	}
+	if err := json.Unmarshal(threadStart.Result, &threadResult); err != nil {
+		t.Fatalf("decode thread/start response: %v", err)
+	}
+	if threadResult.Thread.ID == "" || threadResult.ApprovalPolicy != "never" || threadResult.Sandbox.Type != "readOnly" {
+		t.Fatalf("unsafe or incomplete thread/start response: %#v", threadResult)
+	}
 }
 
 func TestPrepareRuntimeScrubsOnlyStaleAdapterSessions(t *testing.T) {
@@ -1813,7 +1876,7 @@ func assertRestrictedProtocol(t *testing.T, entries []fakeLogEntry) {
 	config := params["config"].(map[string]any)
 	for _, key := range []string{
 		"features.shell_tool", "features.unified_exec", "features.browser_use", "features.computer_use",
-		"features.image_generation", "apps.enabled", "features.plugins", "features.multi_agent",
+		"features.image_generation", "features.apps", "features.plugins", "features.multi_agent",
 		"features.shell_snapshot", "features.standalone_web_search", "features.request_permissions_tool",
 		"features.memories", "features.guardian_approval", "features.goals", "features.auth_elicitation",
 		"features.personality", "features.artifact", "features.realtime_conversation", "features.remote_compaction_v2",
@@ -1821,6 +1884,9 @@ func assertRestrictedProtocol(t *testing.T, entries []fakeLogEntry) {
 		if config[key] != false {
 			t.Fatalf("thread config did not disable %s: %#v", key, config[key])
 		}
+	}
+	if _, invalid := config["apps.enabled"]; invalid {
+		t.Fatal("thread config included invalid app-server key apps.enabled")
 	}
 	if config["web_search"] != "disabled" {
 		t.Fatalf("web search not disabled: %#v", config["web_search"])
