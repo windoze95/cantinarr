@@ -1084,7 +1084,7 @@ func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu
 		// Admin CallContext so the read tool's permission check passes — reached
 		// ONLY because the name is in the hardcoded read allow-list above.
 		res, err := r.toolServer.ExecuteTool(ctx, tu.Name, scopedInput,
-			mcp.CallContext{UserID: 0, Role: auth.RoleAdmin, InstanceID: issue.InstanceID})
+			mcp.CallContext{UserID: 0, Role: auth.RoleAdmin, TrustedInternal: true, InstanceID: issue.InstanceID})
 		if err != nil {
 			return "Error: " + secrets.RedactText(err.Error()), true, ctrl
 		}

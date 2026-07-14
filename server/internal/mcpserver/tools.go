@@ -78,7 +78,12 @@ func makeToolHandler(toolServer *internalmcp.ToolServer, toolName string) server
 			return mcp.NewToolResultError("invalid arguments"), nil
 		}
 
-		callCtx := internalmcp.CallContext{UserID: userID, Role: GetRoleFromContext(ctx)}
+		callCtx := internalmcp.CallContext{
+			UserID:      userID,
+			Role:        GetRoleFromContext(ctx),
+			DeviceID:    GetDeviceIDFromContext(ctx),
+			Reauthorize: true,
+		}
 		result, err := toolServer.ExecuteTool(ctx, toolName, inputJSON, callCtx)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil

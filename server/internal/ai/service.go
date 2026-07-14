@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -56,10 +57,12 @@ type ContentBlock struct {
 
 // ChatContext carries per-request user and deployment context into the loop.
 type ChatContext struct {
-	UserID   int64
-	Username string
-	Role     string
-	Services []string // human-readable names of configured backends
+	UserID          int64
+	Username        string
+	Role            string
+	DeviceID        string
+	RequireSharedAI bool
+	Services        []string // human-readable names of configured backends
 }
 
 // StreamCallbacks receives streaming output from the agent loop. All callbacks
@@ -127,6 +130,9 @@ func (s *Service) SendMessage(ctx context.Context, history transcript, chatCtx C
 		if err != nil {
 			return finalHistory, err
 		}
+		if err := validateAnthropicMessage(message); err != nil {
+			return finalHistory, err
+		}
 
 		params.Messages = append(params.Messages, message.ToParam())
 		finalHistory = append(finalHistory, anthropicMessageToTranscript(*message))
@@ -145,7 +151,10 @@ func (s *Service) SendMessage(ctx context.Context, history transcript, chatCtx C
 			if !ok {
 				continue
 			}
-			result, transcriptBlock := s.runTool(ctx, toolUse, chatCtx, cb)
+			result, transcriptBlock, toolErr := s.runTool(ctx, toolUse, chatCtx, cb)
+			if toolErr != nil {
+				return finalHistory, toolErr
+			}
 			toolResults = append(toolResults, result)
 			toolResultBlocks = append(toolResultBlocks, transcriptBlock)
 		}
@@ -165,6 +174,7 @@ func supportsAnthropicAdaptiveThinking(model anthropic.Model) bool {
 	m := string(model)
 	return strings.Contains(m, "opus-4") ||
 		strings.Contains(m, "sonnet-4") ||
+		strings.Contains(m, "sonnet-5") ||
 		strings.Contains(m, "fable-5") ||
 		strings.Contains(m, "mythos-5")
 }
@@ -191,9 +201,35 @@ func (s *Service) streamOne(ctx context.Context, params anthropic.MessageNewPara
 	return &message, nil
 }
 
+func validateAnthropicMessage(message *anthropic.Message) error {
+	if message == nil {
+		return fmt.Errorf("anthropic stream: response was empty")
+	}
+	switch message.StopReason {
+	case anthropic.StopReasonRefusal:
+		return fmt.Errorf("anthropic stream: model refused the response")
+	case anthropic.StopReasonPauseTurn:
+		return fmt.Errorf("anthropic stream: model paused without completing the response")
+	}
+	hasText := false
+	hasTool := false
+	for _, block := range message.Content {
+		switch value := block.AsAny().(type) {
+		case anthropic.TextBlock:
+			hasText = hasText || strings.TrimSpace(value.Text) != ""
+		case anthropic.ToolUseBlock:
+			hasTool = true
+		}
+	}
+	if !hasText && !hasTool {
+		return fmt.Errorf("anthropic stream: response contained no text or tool calls")
+	}
+	return nil
+}
+
 // runTool executes one tool call and returns provider-specific and neutral
 // tool_result blocks.
-func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, chatCtx ChatContext, cb StreamCallbacks) (anthropic.ContentBlockParamUnion, transcriptBlock) {
+func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, chatCtx ChatContext, cb StreamCallbacks) (anthropic.ContentBlockParamUnion, transcriptBlock, error) {
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(toolUse.Name, toolLabel(toolUse.Name))
 	}
@@ -203,10 +239,19 @@ func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, c
 		input = json.RawMessage("{}")
 	}
 
-	result, err := s.toolServer.ExecuteTool(ctx, toolUse.Name, input, mcp.CallContext{UserID: chatCtx.UserID, Role: chatCtx.Role})
+	result, err := s.toolServer.ExecuteTool(ctx, toolUse.Name, input, mcp.CallContext{
+		UserID:          chatCtx.UserID,
+		Role:            chatCtx.Role,
+		DeviceID:        chatCtx.DeviceID,
+		RequireSharedAI: chatCtx.RequireSharedAI,
+		Reauthorize:     true,
+	})
 	if err != nil {
 		if cb.OnToolEnd != nil {
 			cb.OnToolEnd(toolUse.Name, false)
+		}
+		if errors.Is(err, mcp.ErrToolAuthorization) {
+			return anthropic.ContentBlockParamUnion{}, transcriptBlock{}, mcp.ErrToolAuthorization
 		}
 		content := fmt.Sprintf("Error: %s", err.Error())
 		return anthropic.NewToolResultBlock(toolUse.ID, content, true), transcriptBlock{
@@ -215,7 +260,7 @@ func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, c
 			Name:      toolUse.Name,
 			Content:   content,
 			IsError:   true,
-		}
+		}, nil
 	}
 
 	if result.StructuredData != nil && mcp.ToolsWithUI[toolUse.Name] && cb.OnToolResult != nil {
@@ -229,7 +274,7 @@ func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, c
 		ToolUseID: toolUse.ID,
 		Name:      toolUse.Name,
 		Content:   result.Text,
-	}
+	}, nil
 }
 
 // dynamicContext renders per-request context placed after the cache breakpoint.
@@ -288,6 +333,10 @@ func toSDKContentBlocks(blocks []transcriptBlock) []anthropic.ContentBlockParamU
 			if block.Text != "" {
 				out = append(out, anthropic.NewTextBlock(block.Text))
 			}
+		case blockTypeAnthropicThinking:
+			out = append(out, anthropic.NewThinkingBlock(block.Signature, block.Text))
+		case blockTypeAnthropicRedactedThinking:
+			out = append(out, anthropic.NewRedactedThinkingBlock(block.Data))
 		case blockTypeToolUse:
 			out = append(out, anthropic.NewToolUseBlock(block.ID, rawJSONValue(block.Input), block.Name))
 		case blockTypeToolResult:
@@ -308,6 +357,14 @@ func anthropicMessageToTranscript(message anthropic.Message) transcriptMessage {
 			if v.Text != "" {
 				out.Content = append(out.Content, transcriptBlock{Type: blockTypeText, Text: v.Text})
 			}
+		case anthropic.ThinkingBlock:
+			out.Content = append(out.Content, transcriptBlock{
+				Type: blockTypeAnthropicThinking, Text: v.Thinking, Signature: v.Signature,
+			})
+		case anthropic.RedactedThinkingBlock:
+			out.Content = append(out.Content, transcriptBlock{
+				Type: blockTypeAnthropicRedactedThinking, Data: v.Data,
+			})
 		case anthropic.ToolUseBlock:
 			input := append(json.RawMessage(nil), v.Input...)
 			if len(input) == 0 || string(input) == "null" {

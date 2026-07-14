@@ -14,8 +14,9 @@ import (
 )
 
 type callbackSink struct {
-	mu sync.Mutex
-	cb Callbacks
+	mu      sync.Mutex
+	cb      Callbacks
+	stopped bool
 }
 
 func (s *callbackSink) text(text string) {
@@ -23,8 +24,11 @@ func (s *callbackSink) text(text string) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
 	s.cb.OnText(text)
-	s.mu.Unlock()
 }
 
 func (s *callbackSink) toolStart(name string) {
@@ -32,8 +36,11 @@ func (s *callbackSink) toolStart(name string) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
 	s.cb.OnToolStart(name)
-	s.mu.Unlock()
 }
 
 func (s *callbackSink) toolEnd(name string, ok bool) {
@@ -41,8 +48,11 @@ func (s *callbackSink) toolEnd(name string, ok bool) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
 	s.cb.OnToolEnd(name, ok)
-	s.mu.Unlock()
 }
 
 func (s *callbackSink) toolResult(name string, data any) {
@@ -50,8 +60,11 @@ func (s *callbackSink) toolResult(name string, data any) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
 	s.cb.OnToolResult(name, data)
-	s.mu.Unlock()
 }
 
 func (s *callbackSink) toolRecord(name string, input json.RawMessage, result string, isError bool) {
@@ -59,7 +72,16 @@ func (s *callbackSink) toolRecord(name string, input json.RawMessage, result str
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
 	s.cb.OnToolRecord(name, cloneRaw(input), result, isError)
+}
+
+func (s *callbackSink) stop() {
+	s.mu.Lock()
+	s.stopped = true
 	s.mu.Unlock()
 }
 
@@ -90,14 +112,17 @@ type turnCompleteParams struct {
 const remediationActorKey = "system:remediation"
 
 type runBehavior struct {
-	actorKey      string
-	actorID       int64
-	role          string
-	executeTools  bool
-	explicitTools []mcp.Tool
-	callbacks     Callbacks
-	captured      *AutonomousTurnResult
-	maxOutput     int64
+	actorKey        string
+	actorID         int64
+	role            string
+	deviceID        string
+	reauthorize     bool
+	requireSharedAI bool
+	executeTools    bool
+	explicitTools   []mcp.Tool
+	callbacks       Callbacks
+	captured        *AutonomousTurnResult
+	maxOutput       int64
 }
 
 // Run executes one ephemeral, dynamic-tools-only Codex turn. baseInstructions
@@ -128,6 +153,30 @@ func (m *Manager) RunWithAccount(
 		role:         role,
 		executeTools: true,
 		callbacks:    callbacks,
+	})
+}
+
+// RunWithAccountSession is the interactive, device-bound variant used by the
+// HTTP AI surface. Unlike the compatibility helper above, every dynamic tool
+// call is reauthorized against the actor's current device, role, and (when the
+// account is shared) included-AI grant immediately before execution.
+func (m *Manager) RunWithAccountSession(
+	ctx context.Context,
+	account AccountRef,
+	actorID int64,
+	deviceID string,
+	role, model, baseInstructions, developerInstructions, prompt string,
+	callbacks Callbacks,
+) (err error) {
+	return m.runWithAccount(ctx, account, model, baseInstructions, developerInstructions, prompt, runBehavior{
+		actorKey:        "user:" + strconv.FormatInt(actorID, 10),
+		actorID:         actorID,
+		role:            role,
+		deviceID:        deviceID,
+		reauthorize:     true,
+		requireSharedAI: account.shared,
+		executeTools:    true,
+		callbacks:       callbacks,
 	})
 }
 
@@ -193,6 +242,7 @@ func (m *Manager) runWithAccount(
 	}
 	if !account.valid() || behavior.actorKey == "" || strings.TrimSpace(baseInstructions) == "" || strings.TrimSpace(prompt) == "" ||
 		(behavior.executeTools && behavior.actorID <= 0) || (behavior.executeTools == (behavior.captured != nil)) ||
+		(behavior.reauthorize && behavior.deviceID == "") ||
 		(behavior.captured != nil && behavior.maxOutput <= 0) {
 		return ErrInvalidInput
 	}
@@ -291,6 +341,8 @@ func (m *Manager) runWithAccount(
 	var capturedOnce sync.Once
 	outputLimitHit := make(chan struct{})
 	var outputLimitOnce sync.Once
+	authorizationLost := make(chan struct{})
+	var authorizationLostOnce sync.Once
 	session.setRequestHandler(func(callCtx context.Context, method string, raw json.RawMessage) (any, error) {
 		if method != "item/tool/call" {
 			return nil, ErrInvalidInput
@@ -355,7 +407,13 @@ func (m *Manager) runWithAccount(
 		}
 
 		sink.toolStart(call.Tool)
-		callContext := mcp.CallContext{UserID: behavior.actorID, Role: behavior.role}
+		callContext := mcp.CallContext{
+			UserID:          behavior.actorID,
+			Role:            behavior.role,
+			DeviceID:        behavior.deviceID,
+			RequireSharedAI: behavior.requireSharedAI,
+			Reauthorize:     behavior.reauthorize,
+		}
 		if m.toolCallObserver != nil {
 			m.toolCallObserver(callContext)
 		}
@@ -367,6 +425,16 @@ func (m *Manager) runWithAccount(
 			return dynamicToolResponse("Tool call was canceled.", false), nil
 		}
 		if toolErr != nil {
+			if errors.Is(toolErr, mcp.ErrToolAuthorization) {
+				sink.toolEnd(call.Tool, false)
+				sink.stop()
+				authorizationLostOnce.Do(func() { close(authorizationLost) })
+				// Do not send a dynamic-tool result (or even a JSON-RPC tool error)
+				// back into the model turn. The run loop observes authorizationLost,
+				// stops the app-server session, and cancellation releases this handler.
+				<-callCtx.Done()
+				return nil, callCtx.Err()
+			}
 			safe := secrets.RedactError(toolErr)
 			text := "Tool failed."
 			if safe != nil && safe.Error() != "" {
@@ -562,6 +630,8 @@ func (m *Manager) runWithAccount(
 		case <-limitHit:
 			interruptTurn(session, threadStart.Thread.ID, turnStart.Turn.ID)
 			return ErrProvider
+		case <-authorizationLost:
+			return mcp.ErrToolAuthorization
 		case <-toolCaptured:
 			return waitForInterruptedTurn()
 		case <-outputLimitHit:

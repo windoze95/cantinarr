@@ -198,7 +198,7 @@ func (r *Registry) GetUserAIConfig(userID int64) (cfg AIConfig, found bool, err 
 	cfg.Provider = strings.TrimSpace(cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	if !IsValidAIProvider(cfg.Provider) || cfg.Model == "" {
-		return AIConfig{}, true, ErrAIStorage
+		return cfg, true, ErrAIStorage
 	}
 	return cfg, true, nil
 }

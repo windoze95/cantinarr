@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -164,7 +165,7 @@ func TestToolRBACMatrixCoversEveryDefinition(t *testing.T) {
 				context.Background(),
 				tool.Name,
 				json.RawMessage(`{}`),
-				CallContext{UserID: 1, Role: role},
+				CallContext{Role: role, TrustedInternal: true},
 			)
 			if err != nil {
 				t.Errorf("role %q denied tool %q with error: %v", role, tool.Name, err)
@@ -219,7 +220,7 @@ func TestExecuteToolDeniesRoleBeforeRunningTool(t *testing.T) {
 		context.Background(),
 		"get_queue",
 		json.RawMessage(`{}`),
-		CallContext{UserID: 1, Role: auth.RoleUser},
+		CallContext{Role: auth.RoleUser, TrustedInternal: true},
 	)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
@@ -227,6 +228,100 @@ func TestExecuteToolDeniesRoleBeforeRunningTool(t *testing.T) {
 	if result == nil || result.Text != "This action is not permitted for your role." {
 		t.Fatalf("unexpected result: %#v", result)
 	}
+}
+
+func TestExecuteToolReauthorizesAgainstCurrentRole(t *testing.T) {
+	server := NewToolServer(nil, nil, nil, nil)
+	var observed CallContext
+	server.SetCallAuthorizer(func(_ context.Context, callCtx CallContext) (string, error) {
+		observed = callCtx
+		return auth.RoleUser, nil
+	})
+
+	result, err := server.ExecuteTool(
+		context.Background(),
+		"get_queue",
+		json.RawMessage(`{}`),
+		CallContext{
+			UserID:          42,
+			Role:            auth.RoleAdmin, // stale role from the start of the turn
+			DeviceID:        "device-42",
+			RequireSharedAI: true,
+			Reauthorize:     true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+	if observed.UserID != 42 || observed.Role != auth.RoleAdmin || observed.DeviceID != "device-42" || !observed.RequireSharedAI {
+		t.Fatalf("authorizer context = %#v", observed)
+	}
+	if result == nil || result.Text != "This action is not permitted for your role." {
+		t.Fatalf("demoted actor result = %#v", result)
+	}
+}
+
+func TestExecuteToolReauthorizationFailsClosed(t *testing.T) {
+	tests := []struct {
+		name       string
+		authorizer CallAuthorizer
+	}{
+		{name: "missing authorizer"},
+		{
+			name: "revoked authorization",
+			authorizer: func(context.Context, CallContext) (string, error) {
+				return "", errors.New("revoked")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewToolServer(nil, nil, nil, nil)
+			if tt.authorizer != nil {
+				server.SetCallAuthorizer(tt.authorizer)
+			}
+			result, err := server.ExecuteTool(
+				context.Background(),
+				"search_movies",
+				json.RawMessage(`{"query":"example"}`),
+				CallContext{UserID: 1, Role: auth.RoleAdmin, DeviceID: "device", Reauthorize: true},
+			)
+			if !errors.Is(err, ErrToolAuthorization) {
+				t.Fatalf("ExecuteTool error = %v, want ErrToolAuthorization", err)
+			}
+			if result != nil {
+				t.Fatalf("reauthorization denial returned result %#v", result)
+			}
+		})
+	}
+}
+
+func TestExecuteToolReauthorizesByDefaultAndRestrictsTrustedBypass(t *testing.T) {
+	t.Run("omitted interactive marker still fails closed", func(t *testing.T) {
+		server := NewToolServer(nil, nil, nil, nil)
+		result, err := server.ExecuteTool(
+			context.Background(),
+			"search_movies",
+			json.RawMessage(`{"query":"example"}`),
+			CallContext{UserID: 7, Role: auth.RoleUser, DeviceID: "device-7"},
+		)
+		if !errors.Is(err, ErrToolAuthorization) || result != nil {
+			t.Fatalf("default authorization result=%#v error=%v", result, err)
+		}
+	})
+
+	t.Run("trusted bypass rejects user identity", func(t *testing.T) {
+		server := NewToolServer(nil, nil, nil, nil)
+		result, err := server.ExecuteTool(
+			context.Background(),
+			"search_movies",
+			json.RawMessage(`{"query":"example"}`),
+			CallContext{UserID: 7, Role: auth.RoleAdmin, TrustedInternal: true},
+		)
+		if !errors.Is(err, ErrToolAuthorization) || result != nil {
+			t.Fatalf("invalid trusted identity result=%#v error=%v", result, err)
+		}
+	})
 }
 
 func TestSanitizeToolResultScrubsTextErrorsAndStructuredData(t *testing.T) {

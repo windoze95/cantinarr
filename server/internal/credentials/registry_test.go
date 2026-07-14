@@ -100,6 +100,40 @@ func TestAIKeyCredentialKeyNeverFallsBack(t *testing.T) {
 	}
 }
 
+func TestAIConfigInvalidProviderIsVisibleAndRejected(t *testing.T) {
+	t.Setenv("CANTINARR_AI_PROVIDER", "")
+	t.Setenv("CANTINARR_AI_MODEL", "")
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x68}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(database, cipher)
+	if err := registry.SetSetting(KeyAIProvider, "corrupt-provider"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetSetting(KeyAIModel, "corrupt-model"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := registry.GetAIConfig(); got.Provider != "corrupt-provider" || got.Model != "corrupt-model" {
+		t.Fatalf("invalid stored config was masked as %#v", got)
+	}
+	if registry.IsAIConfigured() {
+		t.Fatal("invalid provider reported as configured")
+	}
+	if err := registry.SetAIConfig("still-invalid", "model"); err == nil {
+		t.Fatal("SetAIConfig silently accepted an invalid provider")
+	}
+	if got := registry.GetAIConfig(); got.Provider != "corrupt-provider" || got.Model != "corrupt-model" {
+		t.Fatalf("rejected write changed config to %#v", got)
+	}
+}
+
 func TestIsAIConfiguredExcludesUserOAuth(t *testing.T) {
 	database, err := db.Open(":memory:")
 	if err != nil {

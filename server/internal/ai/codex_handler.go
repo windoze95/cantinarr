@@ -12,7 +12,6 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
-	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 // CodexStatus reports only safe metadata for the current user's OpenAI OAuth link.
@@ -194,6 +193,12 @@ func (h *Handler) CheckSharedCodexDeviceLogin(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if check.Status == codexapp.LoginConnected {
+		// A newly published shared authorization may belong to a different
+		// ChatGPT account than an earlier link. Never replay prior users'
+		// transcripts across that external account boundary.
+		if h.conversations != nil {
+			h.conversations.DeleteAll()
+		}
 		config := credentials.AIConfig{
 			Provider: credentials.AIProviderCodex,
 			Model:    credentials.DefaultAIModel(credentials.AIProviderCodex),
@@ -204,8 +209,8 @@ func (h *Handler) CheckSharedCodexDeviceLogin(w http.ResponseWriter, r *http.Req
 			selected = true
 		}
 		if validateErr := h.ValidateSharedAISettings(r.Context(), credentials.AIProfile{Config: config, CredentialPresent: true}); validateErr != nil {
-			log.Printf("shared OpenAI OAuth validation failed model=%q: %v", config.Model, secrets.RedactError(validateErr))
-			writeCodexError(w, http.StatusUnprocessableEntity, "OpenAI OAuth connected, but the selected model could not complete a test message")
+			log.Printf("shared OpenAI OAuth validation failed model=%q: %s", config.Model, AIValidationDiagnostic(validateErr))
+			writeCodexError(w, http.StatusUnprocessableEntity, AIValidationUserMessage(validateErr))
 			return
 		}
 		if selected {
@@ -248,6 +253,9 @@ func (h *Handler) UnlinkSharedCodex(w http.ResponseWriter, r *http.Request) {
 		writeCodexError(w, http.StatusInternalServerError, "Could not disconnect shared OpenAI OAuth")
 		return
 	}
+	if h.conversations != nil {
+		h.conversations.DeleteAll()
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -274,9 +282,16 @@ func (h *Handler) CheckCodexDeviceLogin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if check.Status == codexapp.LoginConnected {
+		if h.conversations != nil {
+			h.conversations.DeleteForUser(claims.UserID)
+		}
 		if err := h.selectPersonalCodex(r.Context(), claims.UserID); err != nil {
-			log.Printf("personal OpenAI OAuth validation failed user_id=%d: %v", claims.UserID, secrets.RedactError(err))
-			writeCodexError(w, http.StatusUnprocessableEntity, "OpenAI OAuth connected, but its default model could not complete a test message")
+			log.Printf("personal OpenAI OAuth validation failed user_id=%d: %s", claims.UserID, AIValidationDiagnostic(err))
+			message := "OpenAI OAuth connected, but Cantinarr could not activate the personal provider. Nothing was saved."
+			if errors.Is(err, ErrAIValidation) {
+				message = AIValidationUserMessage(err)
+			}
+			writeCodexError(w, http.StatusUnprocessableEntity, message)
 			return
 		}
 	}
@@ -365,6 +380,9 @@ func (h *Handler) UnlinkCodex(w http.ResponseWriter, r *http.Request) {
 		log.Printf("codex unlink failed for user_id=%d: %v", claims.UserID, err)
 		writeCodexError(w, http.StatusInternalServerError, "Could not disconnect OpenAI OAuth")
 		return
+	}
+	if h.conversations != nil {
+		h.conversations.DeleteForUser(claims.UserID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

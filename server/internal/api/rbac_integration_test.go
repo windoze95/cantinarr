@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -372,6 +373,14 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	remediationService := remediation.NewService(database, instanceRegistry, bridge, nil)
 	remediationHandler := remediation.NewHandler(remediationService)
 	toolServer := mcp.NewToolServer(registry, requestService, instanceRegistry, bridge)
+	toolServer.SetCallAuthorizer(func(ctx context.Context, callCtx mcp.CallContext) (string, error) {
+		return authService.AuthorizeInteractiveToolCall(
+			ctx,
+			callCtx.UserID,
+			callCtx.DeviceID,
+			callCtx.RequireSharedAI,
+		)
+	})
 	var codexManager *codexapp.Manager
 	if withCodex {
 		codexManager = codexapp.NewManager(database, cipher, toolServer, codexapp.Options{

@@ -319,12 +319,20 @@ func TestSharedAccountIsIndependentAndToolsUseRequestingActor(t *testing.T) {
 	}
 	manager.args = append(manager.args, "--fake-allowed-tool")
 	var observed mcp.CallContext
+	var authorized mcp.CallContext
 	manager.toolCallObserver = func(call mcp.CallContext) { observed = call }
-	if err := manager.RunWithAccount(context.Background(), SharedAccount(), 2, auth.RoleUser, "", "base", "context", "prompt", Callbacks{}); err != nil {
+	manager.toolServer.SetCallAuthorizer(func(_ context.Context, call mcp.CallContext) (string, error) {
+		authorized = call
+		return auth.RoleUser, nil
+	})
+	if err := manager.RunWithAccountSession(context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "", "base", "context", "prompt", Callbacks{}); err != nil {
 		t.Fatal(err)
 	}
-	if observed.UserID != 2 || observed.Role != auth.RoleUser {
+	if observed.UserID != 2 || observed.Role != auth.RoleUser || observed.DeviceID != "device-2" || !observed.RequireSharedAI || !observed.Reauthorize {
 		t.Fatalf("shared tool actor = %#v, want requester user 2", observed)
+	}
+	if authorized != observed {
+		t.Fatalf("live authorizer actor = %#v, want %#v", authorized, observed)
 	}
 	if err := manager.UnlinkAccount(SharedAccount()); err != nil {
 		t.Fatal(err)
@@ -337,6 +345,67 @@ func TestSharedAccountIsIndependentAndToolsUseRequestingActor(t *testing.T) {
 	}
 	if err := manager.Unlink(1); err != nil {
 		t.Fatal(err)
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestInteractiveAuthorizationRevocationTerminatesCodexTurn(t *testing.T) {
+	manager, _, _, runtimeDir, logPath := fakeManager(t)
+	if err := manager.saveAccount(
+		SharedAccount(),
+		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+		AccountStatus{Connected: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	manager.args = append(manager.args, "--fake-allowed-tool")
+	manager.toolServer.SetCallAuthorizer(func(context.Context, mcp.CallContext) (string, error) {
+		return "", errors.New("device revoked")
+	})
+
+	var text string
+	var starts []string
+	var ends []struct {
+		name string
+		ok   bool
+	}
+	recorded := false
+	err := manager.RunWithAccountSession(
+		context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "",
+		"base", "context", "prompt",
+		Callbacks{
+			OnText:      func(delta string) { text += delta },
+			OnToolStart: func(name string) { starts = append(starts, name) },
+			OnToolEnd: func(name string, ok bool) {
+				ends = append(ends, struct {
+					name string
+					ok   bool
+				}{name: name, ok: ok})
+			},
+			OnToolRecord: func(string, json.RawMessage, string, bool) { recorded = true },
+		},
+	)
+	if !errors.Is(err, mcp.ErrToolAuthorization) {
+		t.Fatalf("run error = %v, want ErrToolAuthorization", err)
+	}
+	if len(starts) != 1 || starts[0] != "search_movies" {
+		t.Fatalf("tool starts = %v, want search_movies", starts)
+	}
+	if len(ends) != 1 || ends[0].name != "search_movies" || ends[0].ok {
+		t.Fatalf("tool ends = %#v, want one failed search_movies", ends)
+	}
+	if text != "" || recorded {
+		t.Fatalf("revoked turn continued callbacks: text=%q recorded=%t", text, recorded)
+	}
+
+	for _, entry := range readFakeLog(t, logPath) {
+		if entry.Kind != "received" {
+			continue
+		}
+		var message map[string]any
+		if json.Unmarshal(entry.Value, &message) == nil && fmt.Sprint(message["id"]) == "server-tool-2" && message["method"] == nil {
+			t.Fatalf("revoked tool received a model-visible response: %#v", message)
+		}
 	}
 	assertRuntimeEmpty(t, runtimeDir)
 }

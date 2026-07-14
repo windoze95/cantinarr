@@ -3,6 +3,7 @@ package credentials
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -201,8 +202,8 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, profile := range profiles {
 		if err := h.validateSharedAI(r.Context(), profile); err != nil {
-			log.Printf("credentials: shared AI validation failed provider=%q model=%q: %v", profile.Config.Provider, profile.Config.Model, secrets.RedactError(err))
-			http.Error(w, `{"error":"The selected AI provider and model could not complete a test message. Nothing was saved."}`, http.StatusUnprocessableEntity)
+			log.Printf("credentials: shared AI validation failed provider=%q model=%q: %s", profile.Config.Provider, profile.Config.Model, credentialValidationDiagnostic(err))
+			writeCredentialValidationError(w, err)
 			return
 		}
 	}
@@ -219,6 +220,31 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func writeCredentialValidationError(w http.ResponseWriter, err error) {
+	message := "The selected AI provider and model could not complete a test message. Nothing was saved."
+	var safe interface{ SafeUserMessage() string }
+	if errors.As(err, &safe) && strings.TrimSpace(safe.SafeUserMessage()) != "" {
+		message = safe.SafeUserMessage()
+	}
+	payload, marshalErr := json.Marshal(map[string]string{"error": message})
+	if marshalErr != nil {
+		http.Error(w, `{"error":"AI settings validation failed. Nothing was saved."}`, http.StatusUnprocessableEntity)
+		return
+	}
+	http.Error(w, string(payload), http.StatusUnprocessableEntity)
+}
+
+func credentialValidationDiagnostic(err error) string {
+	if err == nil {
+		return ""
+	}
+	var safe interface{ SafeDiagnostic() string }
+	if errors.As(err, &safe) && strings.TrimSpace(safe.SafeDiagnostic()) != "" {
+		return safe.SafeDiagnostic()
+	}
+	return secrets.RedactError(err).Error()
 }
 
 func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet bool, healthEnabled, healthSet bool) error {

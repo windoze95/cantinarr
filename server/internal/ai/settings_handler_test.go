@@ -147,6 +147,52 @@ func TestPersonalAIValidationFailureLeavesSettingsAndKeyUnchanged(t *testing.T) 
 	}
 }
 
+func TestPersonalAIInvalidSelectionCanBeInspectedAndDeleted(t *testing.T) {
+	h, registry, database, userID := newResolverTestHandler(t)
+	if _, err := database.Exec(`INSERT INTO user_ai_settings (user_id, provider, model) VALUES (?, 'corrupt-provider', 'corrupt-model')`, userID); err != nil {
+		t.Fatal(err)
+	}
+	claims := &auth.Claims{UserID: userID, Role: auth.RoleUser}
+	request := httptest.NewRequest(http.MethodGet, "/api/ai/settings", nil)
+	request = request.WithContext(context.WithValue(request.Context(), auth.ClaimsKey, claims))
+	recorder := httptest.NewRecorder()
+	h.AISettings(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("settings status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Personal struct {
+			Selected bool                 `json:"selected"`
+			Config   credentials.AIConfig `json:"config"`
+			Reason   string               `json:"reason"`
+		} `json:"personal"`
+		Effective struct {
+			Source string `json:"source"`
+			Reason string `json:"reason"`
+		} `json:"effective"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Personal.Selected || response.Personal.Config.Provider != "corrupt-provider" || response.Personal.Config.Model != "corrupt-model" || response.Personal.Reason != "storage_error" {
+		t.Fatalf("personal repair state=%#v", response.Personal)
+	}
+	if response.Effective.Source != aiSourcePersonal || response.Effective.Reason != "storage_error" {
+		t.Fatalf("effective repair state=%#v", response.Effective)
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, "/api/ai/settings", nil)
+	request = request.WithContext(context.WithValue(request.Context(), auth.ClaimsKey, claims))
+	recorder = httptest.NewRecorder()
+	h.DeleteAISettings(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if _, found, err := registry.GetUserAIConfig(userID); err != nil || found {
+		t.Fatalf("personal selection after repair delete: found=%t err=%v", found, err)
+	}
+}
+
 func TestPersonalAICombinedSaveValidatesExactCandidateOnce(t *testing.T) {
 	h, registry, _, userID := newResolverTestHandler(t)
 	calls := 0

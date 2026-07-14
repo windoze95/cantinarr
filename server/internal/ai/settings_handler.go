@@ -10,7 +10,6 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
-	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 const (
@@ -84,8 +83,8 @@ func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
 		profile.APIKey, profile.CredentialPresent = key, found
 	}
 	if err := h.ValidatePersonalAISettings(r.Context(), claims.UserID, profile); err != nil {
-		log.Printf("personal AI validation failed user_id=%d provider=%q model=%q: %v", claims.UserID, req.Provider, req.Model, secrets.RedactError(err))
-		writeAISettingsError(w, http.StatusUnprocessableEntity, "The selected AI provider and model could not complete a test message. Nothing was saved.")
+		log.Printf("personal AI validation failed user_id=%d provider=%q model=%q: %s", claims.UserID, req.Provider, req.Model, AIValidationDiagnostic(err))
+		writeAISettingsError(w, http.StatusUnprocessableEntity, AIValidationUserMessage(err))
 		return
 	}
 	if err := h.creds.SetUserAIProfile(claims.UserID, req.Provider, req.Model, req.APIKey); err != nil {
@@ -151,8 +150,8 @@ func (h *Handler) UpdatePersonalAICredential(w http.ResponseWriter, r *http.Requ
 		CredentialPresent: true,
 	}
 	if err := h.ValidatePersonalAISettings(r.Context(), claims.UserID, profile); err != nil {
-		log.Printf("personal AI credential validation failed user_id=%d provider=%q model=%q: %v", claims.UserID, provider, req.Model, secrets.RedactError(err))
-		writeAISettingsError(w, http.StatusUnprocessableEntity, "The AI key and model could not complete a test message. Nothing was saved.")
+		log.Printf("personal AI credential validation failed user_id=%d provider=%q model=%q: %s", claims.UserID, provider, req.Model, AIValidationDiagnostic(err))
+		writeAISettingsError(w, http.StatusUnprocessableEntity, AIValidationUserMessage(err))
 		return
 	}
 	setAINoStore(w)
@@ -187,7 +186,11 @@ func (h *Handler) DeletePersonalAICredential(w http.ResponseWriter, r *http.Requ
 func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID int64) {
 	setAINoStore(w)
 	personalConfig, selected, err := h.creds.GetUserAIConfig(userID)
-	if err != nil {
+	personalStorageOK := err == nil
+	// An invalid-but-present personal selection is intentionally repairable:
+	// return its non-secret provider/model plus storage_error so the caller can
+	// delete or replace it. A general lookup failure still fails closed.
+	if err != nil && !selected {
 		writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
 		return
 	}
@@ -238,6 +241,12 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 			"selected":    selected,
 			"config":      personalConfigJSON,
 			"credentials": personalCredentials,
+			"reason": func() string {
+				if !personalStorageOK {
+					return "storage_error"
+				}
+				return ""
+			}(),
 		},
 		"shared": map[string]any{
 			"granted":    granted,

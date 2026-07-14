@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -81,6 +82,7 @@ var AIProviders = []AIProviderOption{
 		Models: []AIModelOption{
 			{ID: "claude-opus-4-8", Label: "Claude Opus 4.8", Description: "Most capable Claude Opus-tier model"},
 			{ID: "claude-fable-5", Label: "Claude Fable 5", Description: "Highest-capability Claude model"},
+			{ID: "claude-sonnet-5", Label: "Claude Sonnet 5", Description: "Latest balanced Claude model"},
 			{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Description: "Balanced speed and intelligence"},
 			{ID: "claude-haiku-4-5", Label: "Claude Haiku 4.5", Description: "Fastest, lowest-cost Claude option"},
 		},
@@ -106,6 +108,7 @@ var AIProviders = []AIProviderOption{
 		CredentialKey: KeyGeminiKey,
 		Models: []AIModelOption{
 			{ID: "gemini-3.5-flash", Label: "Gemini 3.5 Flash", Description: "Current stable Gemini Flash model"},
+			{ID: "gemini-3.1-flash-lite", Label: "Gemini 3.1 Flash-Lite", Description: "Current stable low-cost Gemini model"},
 			{ID: "gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro Preview", Description: "Preview model optimized for agentic and coding workflows"},
 			{ID: "gemini-3.1-pro-preview-customtools", Label: "Gemini 3.1 Pro Preview Custom Tools", Description: "Gemini 3.1 Pro endpoint tuned for custom tool-heavy workflows"},
 			{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro", Description: "Advanced reasoning and coding"},
@@ -362,8 +365,15 @@ func (r *Registry) GetAIConfig() AIConfig {
 	if provider == "" {
 		provider = inferAIProvider(model)
 	}
-	if !IsValidAIProvider(provider) {
+	if provider == "" {
 		provider = DefaultAIProvider
+	}
+	// Preserve an explicitly invalid stored/environment value instead of
+	// presenting a healthy-looking default that the strict runtime resolver
+	// will refuse. The settings surface can then report and repair the real
+	// configuration rather than masking it.
+	if !IsValidAIProvider(provider) {
+		return AIConfig{Provider: provider, Model: model}
 	}
 	if model == "" {
 		model = DefaultAIModel(provider)
@@ -375,7 +385,7 @@ func (r *Registry) GetAIConfig() AIConfig {
 // rejected; model is intentionally free-form so admins can use new provider IDs.
 func (r *Registry) SetAIConfig(provider, model string) error {
 	if !IsValidAIProvider(provider) {
-		provider = DefaultAIProvider
+		return fmt.Errorf("invalid AI provider %q", provider)
 	}
 	if model == "" {
 		model = DefaultAIModel(provider)
