@@ -23,12 +23,29 @@ func redactTranscriptMessage(message ai.TranscriptMessage) ai.TranscriptMessage 
 	redacted := ai.TranscriptMessage{Role: message.Role, Content: make([]ai.TranscriptBlock, len(message.Content))}
 	for i, block := range message.Content {
 		redactedBlock := block
+		if isOpaqueContinuationBlock(block) {
+			// Provider continuation state is an opaque signed capability. Redacting
+			// even secret-shaped bytes would invalidate the signature and poison the
+			// next request, so preserve the whole block byte-for-byte. These blocks
+			// originate at the hosted provider and are never rendered to users.
+			redactedBlock.Input = append(json.RawMessage(nil), block.Input...)
+			redactedBlock.ThoughtSignature = append([]byte(nil), block.ThoughtSignature...)
+			redacted.Content[i] = redactedBlock
+			continue
+		}
 		redactedBlock.Text = secrets.RedactText(block.Text)
 		redactedBlock.Content = secrets.RedactText(block.Content)
 		redactedBlock.Input = redactRawJSON(block.Input)
 		redacted.Content[i] = redactedBlock
 	}
 	return redacted
+}
+
+func isOpaqueContinuationBlock(block ai.TranscriptBlock) bool {
+	return block.Type == ai.BlockAnthropicThinking ||
+		block.Type == ai.BlockAnthropicRedactedThinking ||
+		block.Type == ai.BlockGeminiThought ||
+		block.Signature != "" || block.Data != "" || len(block.ThoughtSignature) > 0
 }
 
 func redactRawJSON(raw json.RawMessage) json.RawMessage {

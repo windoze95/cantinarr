@@ -195,6 +195,14 @@ func main() {
 
 	// MCP tool server + AI handler
 	toolServer := mcp.NewToolServer(creds, requestService, registry, bridge)
+	toolServer.SetCallAuthorizer(func(ctx context.Context, callCtx mcp.CallContext) (string, error) {
+		return authService.AuthorizeInteractiveToolCall(
+			ctx,
+			callCtx.UserID,
+			callCtx.DeviceID,
+			callCtx.RequireSharedAI,
+		)
+	})
 	codexManager := codexapp.NewManager(database, cipher, toolServer, codexapp.Options{
 		Binary:     cfg.CodexBin,
 		RuntimeDir: cfg.CodexRuntimeDir,

@@ -122,7 +122,7 @@ func TestReleaseSearchHidesCapabilityAndGrabResolvesFreshOnAuthoritativeInstance
 		}
 	}
 	toolServer := NewToolServer(nil, nil, instance.NewRegistry(store), nil)
-	callCtx := CallContext{UserID: 1, Role: auth.RoleAdmin, InstanceID: targetInstanceID}
+	callCtx := CallContext{Role: auth.RoleAdmin, TrustedInternal: true, InstanceID: targetInstanceID}
 
 	searchInput := json.RawMessage(`{"media_type":"movie","tmdb_id":42}`)
 	searchResult, err := toolServer.ExecuteTool(context.Background(), "search_releases", searchInput, callCtx)

@@ -70,6 +70,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	aiConfig := credentials.AIConfig{Provider: resolved.Provider, Model: resolved.Model}
 	apiKey := resolved.APIKey
+	conversationBinding := h.conversations.newBinding(claims.UserID, resolved)
 
 	var req chatRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
@@ -164,10 +165,12 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chatCtx := ChatContext{
-		UserID:   claims.UserID,
-		Username: claims.Username,
-		Role:     claims.Role,
-		Services: h.configuredServices(),
+		UserID:          claims.UserID,
+		Username:        claims.Username,
+		Role:            claims.Role,
+		DeviceID:        claims.DeviceID,
+		RequireSharedAI: resolved.Source == aiSourceShared,
+		Services:        h.configuredServices(),
 	}
 	if h.toolServer.IsAIDebugEnabled() {
 		log.Printf("ai debug: chat start source=%s provider=%s model=%s user_id=%d role=%s requested_conversation_id=%s messages=%d latest_user=%q",
@@ -180,7 +183,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	convID := req.ConversationID
 	var history transcript
 	if convID != "" {
-		if stored, ok := h.conversations.Get(convID, claims.UserID); ok {
+		if stored, ok := h.conversations.Get(convID, claims.UserID, conversationBinding); ok {
 			if text := latestUserText(req.Messages); text != "" {
 				history = append(stored, textTranscriptMessage(agentRoleUser, text))
 			}
@@ -188,9 +191,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	if history == nil {
 		// New conversation, or a client-supplied id we couldn't validate
-		// (expired, unknown, or owned by another user): always mint a fresh
-		// id so an attacker-supplied id can never overwrite someone else's
-		// stored conversation.
+		// (expired, unknown, owned by another user, or bound to a different
+		// provider account): always mint a fresh id so an attacker-supplied id
+		// can never overwrite someone else's stored conversation.
 		convID = newConversationID()
 		history = transcriptFromClient(req.Messages)
 	}
@@ -218,10 +221,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		if model == "default" {
 			model = ""
 		}
-		err = h.codex.RunWithAccount(
+		err = h.codex.RunWithAccountSession(
 			r.Context(),
 			resolved.Account,
 			claims.UserID,
+			claims.DeviceID,
 			claims.Role,
 			model,
 			systemPrompt,
@@ -296,7 +300,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 		emit(map[string]string{"error": clientError})
 	} else {
-		h.conversations.Put(convID, claims.UserID, sanitizeTranscript(finalHistory))
+		h.conversations.Put(convID, claims.UserID, conversationBinding, sanitizeTranscript(finalHistory))
 	}
 
 	if err == nil && h.toolServer.IsAIDebugEnabled() {

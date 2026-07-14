@@ -37,6 +37,34 @@ func updateCredentialSettings(t *testing.T, handler *Handler, body string) *http
 	return recorder
 }
 
+type safeCredentialValidationError struct{}
+
+func (safeCredentialValidationError) Error() string {
+	return "raw upstream diagnostic containing api_key=must-not-escape"
+}
+
+func (safeCredentialValidationError) SafeUserMessage() string {
+	return "The provider rejected the API credential. Check or replace the API key. Nothing was saved."
+}
+
+func TestAISettingsValidationReturnsSafeActionableFailure(t *testing.T) {
+	handler, _ := newCredentialHandlerTest(t)
+	handler.SetSharedAIValidator(func(context.Context, AIProfile) error {
+		return safeCredentialValidationError{}
+	}, nil)
+
+	recorder := updateCredentialSettings(t, handler, `{"openai_key":"candidate-secret","ai_provider":"openai","ai_model":"gpt-candidate"}`)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "provider rejected the API credential") {
+		t.Fatalf("actionable failure missing: %s", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "must-not-escape") || strings.Contains(recorder.Body.String(), "candidate-secret") {
+		t.Fatalf("validation response leaked diagnostic or credential: %s", recorder.Body.String())
+	}
+}
+
 func TestAISettingsValidationFailureLeavesSharedProfileUnchanged(t *testing.T) {
 	handler, registry := newCredentialHandlerTest(t)
 	if err := registry.SetCredential(KeyOpenAIKey, "old-secret"); err != nil {

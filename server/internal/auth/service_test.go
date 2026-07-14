@@ -1,9 +1,11 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +138,84 @@ func TestSharedAIAccessDefaultsAndAdminToggle(t *testing.T) {
 	}
 	if _, err := svc.SetUserAISharedAccess(99999, true); !errors.Is(err, ErrUserNotFound) {
 		t.Fatalf("missing user error = %v, want ErrUserNotFound", err)
+	}
+}
+
+func TestAuthorizeInteractiveToolCallRechecksRoleDeviceAndSharedGrant(t *testing.T) {
+	svc := setupTestService(t)
+	ctx := context.Background()
+
+	adminLogin, err := svc.Login("admin", "testpass123", "Admin Device", "admin-device")
+	if err != nil {
+		t.Fatalf("login admin: %v", err)
+	}
+	role, err := svc.AuthorizeInteractiveToolCall(ctx, adminLogin.User.ID, adminLogin.DeviceID, true)
+	if err != nil || role != RoleAdmin {
+		t.Fatalf("authorize shared admin = role %q, err %v", role, err)
+	}
+
+	if _, err := svc.SetUserAISharedAccess(adminLogin.User.ID, false); err != nil {
+		t.Fatalf("revoke admin shared access: %v", err)
+	}
+	if _, err := svc.AuthorizeInteractiveToolCall(ctx, adminLogin.User.ID, adminLogin.DeviceID, true); !errors.Is(err, ErrSharedAIAccessRevoked) {
+		t.Fatalf("revoked admin shared grant error = %v, want ErrSharedAIAccessRevoked", err)
+	}
+	role, err = svc.AuthorizeInteractiveToolCall(ctx, adminLogin.User.ID, adminLogin.DeviceID, false)
+	if err != nil || role != RoleAdmin {
+		t.Fatalf("personal admin after shared revoke = role %q, err %v", role, err)
+	}
+	if _, err := svc.SetUserAISharedAccess(adminLogin.User.ID, true); err != nil {
+		t.Fatalf("restore admin shared access: %v", err)
+	}
+
+	connect, err := svc.CreateConnectToken(adminLogin.User.ID, "tool-user", "http://example.com")
+	if err != nil {
+		t.Fatalf("create user connect token: %v", err)
+	}
+	connectURL, err := url.Parse(connect.Link)
+	if err != nil {
+		t.Fatalf("parse connect link: %v", err)
+	}
+	userLogin, err := svc.RedeemConnectToken(connectURL.Query().Get("token"), "User Device", "user-device")
+	if err != nil {
+		t.Fatalf("redeem user connect token: %v", err)
+	}
+	role, err = svc.AuthorizeInteractiveToolCall(ctx, userLogin.User.ID, userLogin.DeviceID, false)
+	if err != nil || role != RoleUser {
+		t.Fatalf("authorize personal user = role %q, err %v", role, err)
+	}
+	if _, err := svc.AuthorizeInteractiveToolCall(ctx, userLogin.User.ID, userLogin.DeviceID, true); !errors.Is(err, ErrSharedAIAccessRevoked) {
+		t.Fatalf("ungranted user shared error = %v, want ErrSharedAIAccessRevoked", err)
+	}
+	if _, err := svc.SetUserAISharedAccess(userLogin.User.ID, true); err != nil {
+		t.Fatalf("grant user shared access: %v", err)
+	}
+	role, err = svc.AuthorizeInteractiveToolCall(ctx, userLogin.User.ID, userLogin.DeviceID, true)
+	if err != nil || role != RoleUser {
+		t.Fatalf("authorize granted shared user = role %q, err %v", role, err)
+	}
+
+	// Role comes from the same live authorization query, not the access-token
+	// snapshot that started the model turn.
+	if _, err := svc.db.Exec("UPDATE users SET role = ? WHERE id = ?", RoleUser, adminLogin.User.ID); err != nil {
+		t.Fatalf("demote admin in database: %v", err)
+	}
+	role, err = svc.AuthorizeInteractiveToolCall(ctx, adminLogin.User.ID, adminLogin.DeviceID, true)
+	if err != nil || role != RoleUser {
+		t.Fatalf("authorize after demotion = role %q, err %v", role, err)
+	}
+
+	if _, err := svc.AuthorizeInteractiveToolCall(ctx, userLogin.User.ID, adminLogin.DeviceID, false); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("cross-user device error = %v, want ErrInvalidCredentials", err)
+	}
+	if _, err := svc.AuthorizeInteractiveToolCall(ctx, userLogin.User.ID, "", false); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("missing device error = %v, want ErrInvalidCredentials", err)
+	}
+	if err := svc.RevokeDevice(userLogin.DeviceID); err != nil {
+		t.Fatalf("revoke user device: %v", err)
+	}
+	if _, err := svc.AuthorizeInteractiveToolCall(ctx, userLogin.User.ID, userLogin.DeviceID, false); !errors.Is(err, ErrDeviceRevoked) {
+		t.Fatalf("revoked device error = %v, want ErrDeviceRevoked", err)
 	}
 }
 

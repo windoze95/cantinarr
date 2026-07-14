@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -23,23 +24,24 @@ func hashToken(token string) string {
 }
 
 var (
-	ErrInvalidCredentials   = errors.New("invalid credentials")
-	ErrUserExists           = errors.New("username already taken")
-	ErrTokenExpired         = errors.New("connect token has expired")
-	ErrTokenRedeemed        = errors.New("connect token has already been used")
-	ErrTokenNotFound        = errors.New("connect token not found")
-	ErrDeviceRevoked        = errors.New("device has been revoked")
-	ErrDeviceNotFound       = errors.New("device not found")
-	ErrSetupAlreadyComplete = errors.New("setup has already been completed")
-	ErrUserNotFound         = errors.New("user not found")
-	ErrInvalidRole          = errors.New("invalid role")
-	ErrLastAdmin            = errors.New("cannot remove the last admin")
-	ErrCannotDeleteSelf     = errors.New("cannot delete your own account")
-	ErrPasswordTooShort     = errors.New("password is too short")
-	ErrPasswordNotAllowed   = errors.New("password sign-in is not enabled for this account")
-	ErrPasskeyNotAllowed    = errors.New("passkeys are not enabled for this account")
-	ErrCannotModifyAdmin    = errors.New("cannot change sign-in methods for an admin")
-	ErrInvalidPlexEmail     = errors.New("invalid email address")
+	ErrInvalidCredentials    = errors.New("invalid credentials")
+	ErrUserExists            = errors.New("username already taken")
+	ErrTokenExpired          = errors.New("connect token has expired")
+	ErrTokenRedeemed         = errors.New("connect token has already been used")
+	ErrTokenNotFound         = errors.New("connect token not found")
+	ErrDeviceRevoked         = errors.New("device has been revoked")
+	ErrDeviceNotFound        = errors.New("device not found")
+	ErrSetupAlreadyComplete  = errors.New("setup has already been completed")
+	ErrUserNotFound          = errors.New("user not found")
+	ErrInvalidRole           = errors.New("invalid role")
+	ErrLastAdmin             = errors.New("cannot remove the last admin")
+	ErrCannotDeleteSelf      = errors.New("cannot delete your own account")
+	ErrPasswordTooShort      = errors.New("password is too short")
+	ErrPasswordNotAllowed    = errors.New("password sign-in is not enabled for this account")
+	ErrPasskeyNotAllowed     = errors.New("passkeys are not enabled for this account")
+	ErrCannotModifyAdmin     = errors.New("cannot change sign-in methods for an admin")
+	ErrInvalidPlexEmail      = errors.New("invalid email address")
+	ErrSharedAIAccessRevoked = errors.New("shared AI access has been revoked")
 	// ErrAuthUnavailable marks a failure to *evaluate* credentials (DB error,
 	// signing error) as opposed to a rejection of them. Handlers must map it to
 	// a 5xx, never a 401: clients treat a 401 as "this session is dead" and
@@ -999,6 +1001,53 @@ func (s *Service) authenticateClaims(claims *Claims) (*Claims, *User, error) {
 	claims.Username = withPerms.Username
 	claims.Role = withPerms.Role
 	return claims, &withPerms, nil
+}
+
+// AuthorizeInteractiveToolCall re-checks the authoritative user, device, role,
+// and (for an administrator-funded turn) shared-AI grant immediately before an
+// interactive AI or MCP tool executes. A model turn can outlive the request's
+// initial middleware check, so relying on its role snapshot would let a device
+// revocation, role demotion, or grant revocation take effect one tool too late.
+func (s *Service) AuthorizeInteractiveToolCall(
+	ctx context.Context,
+	userID int64,
+	deviceID string,
+	requireSharedAI bool,
+) (string, error) {
+	if userID <= 0 || deviceID == "" {
+		return "", ErrInvalidCredentials
+	}
+
+	var (
+		role            string
+		sharedAIEnabled bool
+		revokedAt       sql.NullTime
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT u.role, u.ai_shared_enabled, d.revoked_at
+		FROM users u
+		JOIN devices d ON d.user_id = u.id
+		WHERE u.id = ? AND d.id = ?
+	`, userID, deviceID).Scan(&role, &sharedAIEnabled, &revokedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrInvalidCredentials
+	}
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", fmt.Errorf("%w: authorize interactive tool call: %v", ErrAuthUnavailable, err)
+	}
+	if revokedAt.Valid {
+		return "", ErrDeviceRevoked
+	}
+	if role != RoleAdmin && role != RoleUser {
+		return "", ErrInvalidCredentials
+	}
+	if requireSharedAI && !sharedAIEnabled {
+		return "", ErrSharedAIAccessRevoked
+	}
+	return role, nil
 }
 
 func hasAudience(claims *Claims, audience string) bool {

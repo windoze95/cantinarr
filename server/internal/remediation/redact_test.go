@@ -1,14 +1,58 @@
 package remediation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
 )
+
+func TestRedactTranscriptPreservesOpaqueSignedProviderBlocksByteForByte(t *testing.T) {
+	thoughtSignature := []byte("token=synthetic-gemini-signature")
+	message := ai.TranscriptMessage{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{
+		{
+			Type: ai.BlockAnthropicThinking, Text: "Authorization: Bearer synthetic-thought-token",
+			Signature: "signature=synthetic-anthropic-secret",
+		},
+		{
+			Type: ai.BlockAnthropicRedactedThinking,
+			Data: `{"api_key":"synthetic-redacted-thinking"}`,
+		},
+		{
+			Type: ai.BlockGeminiThought, Text: "token=synthetic-gemini-thought",
+			ThoughtSignature: thoughtSignature,
+		},
+		{
+			Type: ai.BlockToolUse, ID: "signed-tool", Name: "search_movies",
+			Input: json.RawMessage(`{"api_key":"synthetic-signed-input"}`), ThoughtSignature: thoughtSignature,
+		},
+		{
+			Type: ai.BlockText, Text: "Authorization: Bearer synthetic-ordinary-output",
+		},
+	}}
+
+	redacted := redactTranscriptMessage(message)
+	if !reflect.DeepEqual(redacted.Content[:4], message.Content[:4]) {
+		t.Fatalf("opaque provider state was altered:\n got: %#v\nwant: %#v", redacted.Content[:4], message.Content[:4])
+	}
+	if strings.Contains(redacted.Content[4].Text, "synthetic-ordinary-output") || !strings.Contains(redacted.Content[4].Text, "REDACTED") {
+		t.Fatalf("ordinary assistant text was not redacted: %q", redacted.Content[4].Text)
+	}
+
+	// The byte slices are equal but independently owned, so later assembly of a
+	// provider request cannot mutate persisted state through an alias.
+	redacted.Content[2].ThoughtSignature[0] = 'X'
+	redacted.Content[3].Input[0] = ' '
+	if !bytes.Equal(message.Content[2].ThoughtSignature, []byte("token=synthetic-gemini-signature")) ||
+		string(message.Content[3].Input) != `{"api_key":"synthetic-signed-input"}` {
+		t.Fatal("opaque provider state was returned with aliased byte slices")
+	}
+}
 
 func TestPersistedAuditAndTranscriptRedactCredentialBearingText(t *testing.T) {
 	runner, _, issueID := newTestRunner(t, &fakeToolHost{}, &scriptedTurn{})

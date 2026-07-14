@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -19,6 +20,10 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
+// ErrToolAuthorization is returned when an interactive tool call cannot prove
+// that its device-bound actor is still authorized at execution time.
+var ErrToolAuthorization = errors.New("tool authorization is no longer valid")
+
 // Tool describes a tool that the AI can invoke.
 type Tool struct {
 	Name        string                 `json:"name"`
@@ -32,10 +37,24 @@ type Tool struct {
 
 // CallContext carries per-call user identity into tool execution.
 type CallContext struct {
-	UserID     int64
-	Role       string
-	InstanceID string // authoritative arr instance for scoped remediation reads
+	UserID          int64
+	Role            string
+	DeviceID        string
+	RequireSharedAI bool
+	// Reauthorize is an explicit marker retained on interactive call sites and
+	// observability hooks. ExecuteTool nevertheless reauthorizes every
+	// non-trusted call so omitting this marker cannot weaken enforcement.
+	Reauthorize bool
+	// TrustedInternal is reserved for server-owned workflows with no user
+	// session. It must be set only by a hardcoded dispatcher, never from request
+	// or model input; nonzero user/device identity makes the bypass invalid.
+	TrustedInternal bool
+	InstanceID      string // authoritative arr instance for scoped remediation reads
 }
+
+// CallAuthorizer returns the actor's current role after re-checking the
+// authoritative account/device state represented by callCtx.
+type CallAuthorizer func(ctx context.Context, callCtx CallContext) (role string, err error)
 
 // ToolServer executes tools in-process on behalf of the AI.
 type ToolServer struct {
@@ -43,6 +62,10 @@ type ToolServer struct {
 	request  *request.Service
 	registry *instance.Registry
 	bridge   *tmdb.Bridge
+	// callAuthorizer is injected by the server's auth service. User-originated
+	// calls reauthorize by default; a missing hook fails closed. The server-owned
+	// remediation dispatcher is the sole production trusted bypass.
+	callAuthorizer CallAuthorizer
 
 	// issueStore is the remediation write surface used ONLY by the agent-only
 	// tools (post_issue_message / conclude_issue). It is injected after
@@ -53,6 +76,13 @@ type ToolServer struct {
 	toggleMu      sync.RWMutex
 	disabledTools map[string]bool
 	togglesLoaded bool
+}
+
+// SetCallAuthorizer wires the live account/device authorization check used by
+// interactive AI and MCP tool calls. It must be set during server startup,
+// before any requests are served.
+func (s *ToolServer) SetCallAuthorizer(authorizer CallAuthorizer) {
+	s.callAuthorizer = authorizer
 }
 
 func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, registry *instance.Registry, bridge *tmdb.Bridge) *ToolServer {
@@ -183,6 +213,21 @@ func (t Tool) IsAdminOnly() bool {
 
 // ExecuteTool runs the named tool with the given JSON input.
 func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.RawMessage, callCtx CallContext) (result *ToolResult, err error) {
+	trustedInternal := callCtx.TrustedInternal && callCtx.UserID == 0 && callCtx.DeviceID == "" && !callCtx.RequireSharedAI
+	if callCtx.TrustedInternal && !trustedInternal {
+		return nil, ErrToolAuthorization
+	}
+	if !trustedInternal {
+		if s.callAuthorizer == nil {
+			return nil, ErrToolAuthorization
+		}
+		currentRole, authErr := s.callAuthorizer(ctx, callCtx)
+		if authErr != nil {
+			return nil, ErrToolAuthorization
+		}
+		callCtx.Role = currentRole
+	}
+
 	debug := s.IsAIDebugEnabled()
 	start := time.Now()
 	logName := safeToolLogName(name)

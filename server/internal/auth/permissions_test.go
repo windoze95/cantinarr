@@ -19,6 +19,11 @@ func TestHasPermission_UserAndAdmin(t *testing.T) {
 	if !HasPermission(RoleAdmin, PermissionDownloadsManage) {
 		t.Fatal("admin should have all permissions")
 	}
+	for _, role := range []string{RoleAdmin, RoleUser, "unknown"} {
+		if HasPermission(role, "") {
+			t.Fatalf("role %q received an undeclared permission", role)
+		}
+	}
 }
 
 func TestRolePermissionMatrixIsExact(t *testing.T) {

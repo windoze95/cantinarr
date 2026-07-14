@@ -10,8 +10,9 @@ import (
 type contextKey string
 
 const (
-	userIDKey contextKey = "mcp_user_id"
-	roleKey   contextKey = "mcp_user_role"
+	userIDKey   contextKey = "mcp_user_id"
+	roleKey     contextKey = "mcp_user_role"
+	deviceIDKey contextKey = "mcp_device_id"
 )
 
 // AuthContextFunc bridges chi's auth context into mcp-go's context.
@@ -22,8 +23,16 @@ func AuthContextFunc(ctx context.Context, r *http.Request) context.Context {
 	if claims != nil {
 		ctx = context.WithValue(ctx, userIDKey, claims.UserID)
 		ctx = context.WithValue(ctx, roleKey, claims.Role)
+		ctx = context.WithValue(ctx, deviceIDKey, claims.DeviceID)
 	}
 	return ctx
+}
+
+// GetDeviceIDFromContext extracts the device-bound session identity set by
+// AuthContextFunc. Empty means no interactive session was authenticated.
+func GetDeviceIDFromContext(ctx context.Context) string {
+	deviceID, _ := ctx.Value(deviceIDKey).(string)
+	return deviceID
 }
 
 // GetUserIDFromContext extracts the userID set by AuthContextFunc.

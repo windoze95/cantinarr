@@ -48,11 +48,12 @@ var rolePermissions = map[string]map[Permission]bool{
 	},
 }
 
-// HasPermission answers whether a role is allowed to perform an action.
-// Empty permissions are allowed so legacy call sites can opt in incrementally.
+// HasPermission answers whether a role is allowed to perform an action. An
+// empty permission is never authorized: every protected surface must name the
+// capability it requires so a missing declaration fails closed.
 func HasPermission(role string, permission Permission) bool {
 	if permission == "" {
-		return true
+		return false
 	}
 	perms := rolePermissions[role]
 	if perms == nil {

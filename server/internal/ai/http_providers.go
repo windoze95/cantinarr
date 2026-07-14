@@ -3,7 +3,9 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -17,6 +19,9 @@ import (
 const (
 	httpProviderMaxOutputTokens int64 = 16000
 	httpProviderStreamTimeout         = 5 * time.Minute
+	geminiStreamMaxAttempts           = 3
+	geminiRetryBaseDelay              = 100 * time.Millisecond
+	geminiMetadataBufferLimit         = 32
 )
 
 type openAIService struct {
@@ -80,7 +85,10 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 		finalHistory = append(finalHistory, openAIMessageToTranscript(message))
 		var toolResultBlocks []transcriptBlock
 		for _, toolCall := range message.ToolCalls {
-			result, transcriptBlock := s.runOpenAITool(ctx, toolCall, chatCtx, cb)
+			result, transcriptBlock, toolErr := s.runOpenAITool(ctx, toolCall, chatCtx, cb)
+			if toolErr != nil {
+				return finalHistory, toolErr
+			}
 			messages = append(messages, result)
 			toolResultBlocks = append(toolResultBlocks, transcriptBlock)
 		}
@@ -117,10 +125,17 @@ func (s *openAIService) chatStream(ctx context.Context, params openai.ChatComple
 	}
 
 	choice := acc.Choices[0]
-	return openAIMessageFromSDK(choice.Message), string(choice.FinishReason), nil
+	message := openAIMessageFromSDK(choice.Message)
+	if strings.TrimSpace(message.Refusal) != "" {
+		return openAIMessage{}, "", fmt.Errorf("openai chat stream: model refused the response")
+	}
+	if strings.TrimSpace(message.Content) == "" && len(message.ToolCalls) == 0 {
+		return openAIMessage{}, "", fmt.Errorf("openai chat stream: response contained no text or tool calls")
+	}
+	return message, string(choice.FinishReason), nil
 }
 
-func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCall, chatCtx ChatContext, cb StreamCallbacks) (openai.ChatCompletionMessageParamUnion, transcriptBlock) {
+func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCall, chatCtx ChatContext, cb StreamCallbacks) (openai.ChatCompletionMessageParamUnion, transcriptBlock, error) {
 	name := toolCall.Function.Name
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(name, toolLabel(name))
@@ -131,10 +146,19 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 		input = json.RawMessage("{}")
 	}
 
-	result, err := s.toolServer.ExecuteTool(ctx, name, input, mcp.CallContext{UserID: chatCtx.UserID, Role: chatCtx.Role})
+	result, err := s.toolServer.ExecuteTool(ctx, name, input, mcp.CallContext{
+		UserID:          chatCtx.UserID,
+		DeviceID:        chatCtx.DeviceID,
+		Role:            chatCtx.Role,
+		RequireSharedAI: chatCtx.RequireSharedAI,
+		Reauthorize:     true,
+	})
 	if err != nil {
 		if cb.OnToolEnd != nil {
 			cb.OnToolEnd(name, false)
+		}
+		if errors.Is(err, mcp.ErrToolAuthorization) {
+			return openai.ChatCompletionMessageParamUnion{}, transcriptBlock{}, mcp.ErrToolAuthorization
 		}
 		content := "Error: " + err.Error()
 		return openai.ToolMessage(content, toolCall.ID), transcriptBlock{
@@ -143,7 +167,7 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 			Name:      name,
 			Content:   content,
 			IsError:   true,
-		}
+		}, nil
 	}
 	if result.StructuredData != nil && mcp.ToolsWithUI[name] && cb.OnToolResult != nil {
 		cb.OnToolResult(name, result.StructuredData)
@@ -156,12 +180,13 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 		ToolUseID: toolCall.ID,
 		Name:      name,
 		Content:   result.Text,
-	}
+	}, nil
 }
 
 type openAIMessage struct {
 	Role       string
 	Content    string
+	Refusal    string
 	ToolCalls  []openAIToolCall
 	ToolCallID string
 }
@@ -248,6 +273,7 @@ func openAIMessageFromSDK(message openai.ChatCompletionMessage) openAIMessage {
 	out := openAIMessage{
 		Role:    string(message.Role),
 		Content: message.Content,
+		Refusal: message.Refusal,
 	}
 	if out.Role == "" {
 		out.Role = "assistant"
@@ -381,7 +407,10 @@ func (s *geminiService) SendMessage(ctx context.Context, history transcript, cha
 		resultParts := make([]*genai.Part, 0, len(functionCalls))
 		toolResultBlocks := make([]transcriptBlock, 0, len(functionCalls))
 		for _, call := range functionCalls {
-			result, transcriptBlock := s.runGeminiTool(ctx, call, chatCtx, cb)
+			result, transcriptBlock, toolErr := s.runGeminiTool(ctx, call, chatCtx, cb)
+			if toolErr != nil {
+				return finalHistory, toolErr
+			}
 			resultParts = append(resultParts, result)
 			toolResultBlocks = append(toolResultBlocks, transcriptBlock)
 		}
@@ -393,30 +422,62 @@ func (s *geminiService) SendMessage(ctx context.Context, history transcript, cha
 }
 
 func (s *geminiService) streamGenerate(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, cb StreamCallbacks) (*genai.GenerateContentResponse, error) {
+	for attempt := 0; attempt < geminiSemanticMaxAttempts; attempt++ {
+		response, emittedText, err := s.streamGenerateOnce(ctx, contents, config, cb)
+		if err == nil {
+			return response, nil
+		}
+		if errors.Is(err, errGeminiIncompleteStream) && (emittedText || attempt == geminiSemanticMaxAttempts-1) {
+			// Text already delivered cannot be replayed, and a second clean EOF is
+			// enough evidence to accept the fully parsed response as an implicit stop.
+			return response, nil
+		}
+		retryable := errors.Is(err, errGeminiIncompleteStream) || isRetryableGeminiError(err)
+		if emittedText || !retryable || attempt == geminiSemanticMaxAttempts-1 {
+			return nil, err
+		}
+		if waitErr := waitForGeminiSemanticRetry(ctx, attempt); waitErr != nil {
+			return nil, fmt.Errorf("gemini semantic retry: %w", waitErr)
+		}
+	}
+	return nil, errGeminiIncompleteStream
+}
+
+// streamGenerateOnce owns fresh aggregation state. An incomplete stream may be
+// replayed only before text has reached a callback; function calls remain local
+// until this method returns, so retrying them cannot duplicate tool effects.
+func (s *geminiService) streamGenerateOnce(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, cb StreamCallbacks) (*genai.GenerateContentResponse, bool, error) {
 	aggregated := &genai.GenerateContentResponse{}
 	content := genai.NewContentFromParts(nil, genai.RoleModel)
 	var finishReason genai.FinishReason
+	var finishMessage string
+	sawCandidate := false
+	emittedText := false
 
-	for chunk, err := range s.client.Models.GenerateContentStream(ctx, s.model, contents, config) {
-		if err != nil {
-			return nil, fmt.Errorf("gemini stream generate: %w", err)
-		}
+	err := s.forEachGeminiStream(ctx, contents, config, func(chunk *genai.GenerateContentResponse) {
 		if chunk == nil {
-			continue
+			return
 		}
 		if chunk.PromptFeedback != nil {
 			aggregated.PromptFeedback = chunk.PromptFeedback
 		}
+		if chunk.UsageMetadata != nil {
+			aggregated.UsageMetadata = chunk.UsageMetadata
+		}
 		if len(chunk.Candidates) == 0 || chunk.Candidates[0] == nil {
-			continue
+			return
 		}
 
+		sawCandidate = true
 		candidate := chunk.Candidates[0]
 		if candidate.FinishReason != "" {
 			finishReason = candidate.FinishReason
 		}
+		if candidate.FinishMessage != "" {
+			finishMessage = candidate.FinishMessage
+		}
 		if candidate.Content == nil {
-			continue
+			return
 		}
 		if candidate.Content.Role != "" {
 			content.Role = candidate.Content.Role
@@ -427,19 +488,154 @@ func (s *geminiService) streamGenerate(ctx context.Context, contents []*genai.Co
 			}
 			content.Parts = append(content.Parts, part)
 			if part.Text != "" && !part.Thought && cb.OnText != nil {
+				emittedText = true
 				cb.OnText(part.Text)
 			}
 		}
+	})
+	if err != nil {
+		return nil, emittedText, fmt.Errorf("gemini stream generate: %w", err)
+	}
+	if reason := geminiPromptBlockReason(aggregated.PromptFeedback); reason != "" {
+		return nil, emittedText, fmt.Errorf("gemini: prompt blocked (%s)", reason)
+	}
+	if !sawCandidate {
+		return nil, emittedText, fmt.Errorf("gemini: response had no candidates")
+	}
+	if (finishReason == "" || finishReason == genai.FinishReasonUnspecified) && geminiContentHasUsableOutput(content) {
+		aggregated.Candidates = []*genai.Candidate{{
+			Content: content,
+		}}
+		return aggregated, emittedText, errGeminiIncompleteStream
+	}
+	if err := validateGeminiFinishReason(finishReason); err != nil {
+		return nil, emittedText, err
+	}
+	if !geminiContentHasUsableOutput(content) {
+		return nil, emittedText, fmt.Errorf("gemini: response contained no text or tool calls")
 	}
 
 	aggregated.Candidates = []*genai.Candidate{{
-		Content:      content,
-		FinishReason: finishReason,
+		Content:       content,
+		FinishReason:  finishReason,
+		FinishMessage: finishMessage,
 	}}
-	return aggregated, nil
+	return aggregated, emittedText, nil
 }
 
-func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionCall, chatCtx ChatContext, cb StreamCallbacks) (*genai.Part, transcriptBlock) {
+func (s *geminiService) forEachGeminiStream(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, consume func(*genai.GenerateContentResponse)) error {
+	for attempt := 0; attempt < geminiStreamMaxAttempts; attempt++ {
+		sawOutput := false
+		pendingMetadata := make([]*genai.GenerateContentResponse, 0, 4)
+		var streamErr error
+		for chunk, err := range s.client.Models.GenerateContentStream(ctx, s.model, contents, config) {
+			if err != nil {
+				streamErr = err
+				break
+			}
+			if !sawOutput && !geminiChunkHasOutput(chunk) && len(pendingMetadata) < geminiMetadataBufferLimit {
+				pendingMetadata = append(pendingMetadata, chunk)
+				continue
+			}
+			if !sawOutput {
+				sawOutput = true
+				for _, pending := range pendingMetadata {
+					consume(pending)
+				}
+				pendingMetadata = nil
+			}
+			consume(chunk)
+		}
+		if streamErr == nil {
+			for _, pending := range pendingMetadata {
+				consume(pending)
+			}
+			return nil
+		}
+		if sawOutput || attempt == geminiStreamMaxAttempts-1 || !isRetryableGeminiError(streamErr) {
+			return streamErr
+		}
+		timer := time.NewTimer(geminiRetryBaseDelay << attempt)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
+}
+
+func geminiChunkHasOutput(chunk *genai.GenerateContentResponse) bool {
+	if chunk == nil {
+		return false
+	}
+	for _, candidate := range chunk.Candidates {
+		if candidate == nil {
+			continue
+		}
+		if candidate.Content == nil {
+			continue
+		}
+		for _, part := range candidate.Content.Parts {
+			if part != nil && (part.Text != "" || len(part.ThoughtSignature) > 0 || part.FunctionCall != nil) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isRetryableGeminiError(err error) bool {
+	var apiErr genai.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.Code == http.StatusRequestTimeout ||
+		apiErr.Code == http.StatusConflict ||
+		apiErr.Code == http.StatusTooManyRequests ||
+		apiErr.Code >= http.StatusInternalServerError
+}
+
+func geminiPromptBlockReason(feedback *genai.GenerateContentResponsePromptFeedback) string {
+	if feedback == nil || feedback.BlockReason == "" || feedback.BlockReason == genai.BlockedReasonUnspecified {
+		return ""
+	}
+	return string(feedback.BlockReason)
+}
+
+func validateGeminiFinishReason(reason genai.FinishReason) error {
+	switch reason {
+	case genai.FinishReasonStop, genai.FinishReasonMaxTokens:
+		return nil
+	case "", genai.FinishReasonUnspecified:
+		return fmt.Errorf("gemini: stream ended without a terminal finish reason")
+	default:
+		return fmt.Errorf("gemini: generation stopped (%s)", reason)
+	}
+}
+
+func geminiContentHasUsableOutput(content *genai.Content) bool {
+	if content == nil {
+		return false
+	}
+	for _, part := range content.Parts {
+		if part == nil {
+			continue
+		}
+		if (!part.Thought && strings.TrimSpace(part.Text) != "") || part.FunctionCall != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionCall, chatCtx ChatContext, cb StreamCallbacks) (*genai.Part, transcriptBlock, error) {
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(call.Name, toolLabel(call.Name))
 	}
@@ -449,10 +645,19 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionC
 		input = []byte("{}")
 	}
 
-	result, err := s.toolServer.ExecuteTool(ctx, call.Name, json.RawMessage(input), mcp.CallContext{UserID: chatCtx.UserID, Role: chatCtx.Role})
+	result, err := s.toolServer.ExecuteTool(ctx, call.Name, json.RawMessage(input), mcp.CallContext{
+		UserID:          chatCtx.UserID,
+		DeviceID:        chatCtx.DeviceID,
+		Role:            chatCtx.Role,
+		RequireSharedAI: chatCtx.RequireSharedAI,
+		Reauthorize:     true,
+	})
 	if err != nil {
 		if cb.OnToolEnd != nil {
 			cb.OnToolEnd(call.Name, false)
+		}
+		if errors.Is(err, mcp.ErrToolAuthorization) {
+			return nil, transcriptBlock{}, mcp.ErrToolAuthorization
 		}
 		content := "Error: " + err.Error()
 		return &genai.Part{FunctionResponse: &genai.FunctionResponse{
@@ -465,7 +670,7 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionC
 				Name:      call.Name,
 				Content:   content,
 				IsError:   true,
-			}
+			}, nil
 	}
 	if result.StructuredData != nil && mcp.ToolsWithUI[call.Name] && cb.OnToolResult != nil {
 		cb.OnToolResult(call.Name, result.StructuredData)
@@ -482,7 +687,7 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionC
 			ToolUseID: call.ID,
 			Name:      call.Name,
 			Content:   result.Text,
-		}
+		}, nil
 }
 
 func toGeminiContents(messages transcript) []*genai.Content {
@@ -498,14 +703,23 @@ func toGeminiContents(messages transcript) []*genai.Content {
 				switch block.Type {
 				case blockTypeText:
 					if block.Text != "" {
-						content.Parts = append(content.Parts, genai.NewPartFromText(block.Text))
+						content.Parts = append(content.Parts, &genai.Part{
+							Text: block.Text, ThoughtSignature: append([]byte(nil), block.ThoughtSignature...),
+						})
 					}
+				case blockTypeGeminiThought:
+					content.Parts = append(content.Parts, &genai.Part{
+						Text: block.Text, Thought: true, ThoughtSignature: append([]byte(nil), block.ThoughtSignature...),
+					})
 				case blockTypeToolUse:
-					content.Parts = append(content.Parts, &genai.Part{FunctionCall: &genai.FunctionCall{
-						Name: block.Name,
-						Args: rawJSONMap(block.Input),
-						ID:   block.ID,
-					}})
+					content.Parts = append(content.Parts, &genai.Part{
+						FunctionCall: &genai.FunctionCall{
+							Name: block.Name,
+							Args: rawJSONMap(block.Input),
+							ID:   block.ID,
+						},
+						ThoughtSignature: append([]byte(nil), block.ThoughtSignature...),
+					})
 				}
 			}
 			if len(content.Parts) > 0 {
@@ -548,19 +762,27 @@ func geminiContentToTranscript(content *genai.Content) transcriptMessage {
 		if part == nil {
 			continue
 		}
-		if part.Text != "" && !part.Thought {
-			out.Content = append(out.Content, transcriptBlock{Type: blockTypeText, Text: part.Text})
-		}
-		if part.FunctionCall != nil {
+		signature := append([]byte(nil), part.ThoughtSignature...)
+		switch {
+		case part.FunctionCall != nil:
 			input, err := json.Marshal(part.FunctionCall.Args)
 			if err != nil || len(input) == 0 || string(input) == "null" {
 				input = []byte("{}")
 			}
 			out.Content = append(out.Content, transcriptBlock{
-				Type:  blockTypeToolUse,
-				ID:    part.FunctionCall.ID,
-				Name:  part.FunctionCall.Name,
-				Input: json.RawMessage(input),
+				Type:             blockTypeToolUse,
+				ID:               part.FunctionCall.ID,
+				Name:             part.FunctionCall.Name,
+				Input:            json.RawMessage(input),
+				ThoughtSignature: signature,
+			})
+		case part.Thought:
+			out.Content = append(out.Content, transcriptBlock{
+				Type: blockTypeGeminiThought, Text: part.Text, ThoughtSignature: signature,
+			})
+		case part.Text != "" || len(signature) > 0:
+			out.Content = append(out.Content, transcriptBlock{
+				Type: blockTypeText, Text: part.Text, ThoughtSignature: signature,
 			})
 		}
 	}
