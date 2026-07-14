@@ -343,8 +343,17 @@ class RemediationSettings {
   final String provider;
 
   /// Deprecated server compatibility field. The remediation settings screen
-  /// always sends this empty so the shared model is authoritative.
+  /// always sends this empty; [modelOverride] is the supported model-only field.
   final String model;
+
+  /// Optional model designation used only for remediation runs. The provider,
+  /// credential, and billing source still come from the shared AI profile.
+  final String modelOverride;
+
+  /// Shared provider against which [modelOverride] was tested. If the global
+  /// provider changes, the server ignores the stale override until it is saved
+  /// and tested again.
+  final String modelOverrideProvider;
   final int maxSteps;
   final int maxTurnTokens;
   final int maxWallClockSecs;
@@ -363,6 +372,8 @@ class RemediationSettings {
     required this.mode,
     required this.provider,
     required this.model,
+    required this.modelOverride,
+    required this.modelOverrideProvider,
     required this.maxSteps,
     required this.maxTurnTokens,
     required this.maxWallClockSecs,
@@ -384,6 +395,8 @@ class RemediationSettings {
         mode: RemediationMode.fromValue(json['mode'] as String?),
         provider: json['provider'] as String? ?? '',
         model: json['model'] as String? ?? '',
+        modelOverride: json['model_override'] as String? ?? '',
+        modelOverrideProvider: json['model_override_provider'] as String? ?? '',
         maxSteps: json['max_steps'] as int? ?? 0,
         maxTurnTokens: json['max_turn_tokens'] as int? ?? 0,
         maxWallClockSecs: json['max_wall_clock_secs'] as int? ?? 0,
@@ -406,6 +419,8 @@ class RemediationSettings {
         'mode': mode.value,
         'provider': provider,
         'model': model,
+        'model_override': modelOverride,
+        'model_override_provider': modelOverrideProvider,
         'max_steps': maxSteps,
         'max_turn_tokens': maxTurnTokens,
         'max_wall_clock_secs': maxWallClockSecs,
@@ -425,6 +440,8 @@ class RemediationSettings {
     RemediationMode? mode,
     String? provider,
     String? model,
+    String? modelOverride,
+    String? modelOverrideProvider,
     int? maxSteps,
     int? maxTurnTokens,
     int? maxWallClockSecs,
@@ -443,6 +460,9 @@ class RemediationSettings {
         mode: mode ?? this.mode,
         provider: provider ?? this.provider,
         model: model ?? this.model,
+        modelOverride: modelOverride ?? this.modelOverride,
+        modelOverrideProvider:
+            modelOverrideProvider ?? this.modelOverrideProvider,
         maxSteps: maxSteps ?? this.maxSteps,
         maxTurnTokens: maxTurnTokens ?? this.maxTurnTokens,
         maxWallClockSecs: maxWallClockSecs ?? this.maxWallClockSecs,

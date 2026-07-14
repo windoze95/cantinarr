@@ -83,7 +83,7 @@ const (
 // handler. Production resolves only the strict admin-owned profile; tests inject
 // a fake turn without network credentials.
 type autonomousTurnResolver interface {
-	ResolveSharedAutonomousTurn(ctx context.Context) (ai.AutonomousTurn, error)
+	ResolveSharedAutonomousTurn(ctx context.Context, override ai.AutonomousModelOverride) (ai.AutonomousTurn, error)
 }
 
 // toolHost is the narrow tool-execution surface the Runner depends on. *mcp.ToolServer
@@ -119,7 +119,7 @@ type Runner struct {
 }
 
 // NewRunner constructs the remediation Runner. turns resolves the strict
-// admin-owned shared provider and model. procToken is a process-start token
+// admin-owned shared provider plus the effective tested model. procToken is a process-start token
 // stamped on agent_runs so a watchdog can tell crashed-mid-run from parked.
 func NewRunner(db *sql.DB, svc *Service, toolServer *mcp.ToolServer, turns autonomousTurnResolver, procToken string) *Runner {
 	return &Runner{
@@ -174,7 +174,7 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 		return nil
 	}
 
-	turn, model, err := r.resolveTurn(ctx)
+	turn, model, err := r.resolveTurn(ctx, settings)
 	if err != nil {
 		// No key / provider setup failed: cannot run. Park the issue with a clear
 		// admin-facing note.
@@ -237,13 +237,17 @@ func (r *Runner) runOwnsIssue(runID, issueID int64) bool {
 
 // resolveTurn snapshots the strict admin-owned profile. It never reads an issue
 // reporter, personal override, per-user included-access grant, or legacy
-// remediation provider/model field. Both provider and model always come from
-// the currently selected shared profile.
-func (r *Runner) resolveTurn(ctx context.Context) (ai.TurnRunner, string, error) {
+// remediation provider/model field. The provider and credential always come
+// from the shared profile; only a provider-bound tested model may override its
+// model designation.
+func (r *Runner) resolveTurn(ctx context.Context, settings Settings) (ai.TurnRunner, string, error) {
 	if r.turns == nil {
 		return nil, "", fmt.Errorf("shared AI resolver is unavailable")
 	}
-	resolved, err := r.turns.ResolveSharedAutonomousTurn(ctx)
+	resolved, err := r.turns.ResolveSharedAutonomousTurn(ctx, ai.AutonomousModelOverride{
+		Provider: settings.ModelOverrideProvider,
+		Model:    settings.ModelOverride,
+	})
 	if err != nil {
 		return nil, resolved.Model, err
 	}
@@ -303,7 +307,7 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 		return nil
 	}
 
-	turn, model, err := r.resolveTurn(ctx)
+	turn, model, err := r.resolveTurn(ctx, settings)
 	if err != nil {
 		return r.giveUp(ctx, issueID, runID, model, stopModelError,
 			"I couldn't continue after the decision because the AI provider isn't configured. Flagging for an admin.")

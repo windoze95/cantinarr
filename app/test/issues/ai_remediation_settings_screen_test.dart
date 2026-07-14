@@ -29,7 +29,8 @@ void main() {
 
     expect(
         find.textContaining('This server-owned agent always'), findsOneWidget);
-    expect(find.textContaining('shared OpenAI OAuth usage meter'), findsOneWidget);
+    expect(
+        find.textContaining('shared OpenAI OAuth usage meter'), findsOneWidget);
     expect(
       find.textContaining(
         'Personal providers and per-user AI access switches are never used',
@@ -38,11 +39,12 @@ void main() {
     );
     await _scrollUntilBuilt(tester, find.text('SHARED AI'));
     expect(
-      find.textContaining('Always uses the provider and model currently'),
+      find.textContaining('Uses the shared OpenAI provider and credential'),
       findsOneWidget,
     );
     expect(find.textContaining('Provider override'), findsNothing);
-    expect(find.textContaining('Model override'), findsNothing);
+    await _scrollUntilBuilt(tester, find.text('Remediation model'));
+    expect(find.text('Remediation model'), findsOneWidget);
   });
 
   testWidgets('clears legacy provider and model fields when settings are saved',
@@ -76,6 +78,39 @@ void main() {
     expect(adapter.saved?['provider'], '');
     expect(adapter.saved?['model'], '');
   });
+
+  testWidgets('saves a remediation-only model with the shared provider binding',
+      (tester) async {
+    final adapter = _RemediationSettingsAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [backendClientProvider.overrideWithValue(dio)],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const AiRemediationSettingsScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _scrollUntilBuilt(tester, find.text('Remediation model'));
+    await tester.tap(find.text('Use shared model (gpt-5.5)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('GPT-5.4 mini').last);
+    await tester.pumpAndSettle();
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await _scrollUntilBuilt(tester, save);
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.saved?['model_override'], 'gpt-5.4-mini');
+    expect(adapter.saved?['model_override_provider'], 'openai');
+  });
 }
 
 Future<void> _scrollUntilBuilt(WidgetTester tester, Finder finder) async {
@@ -102,6 +137,8 @@ class _RemediationSettingsAdapter implements HttpClientAdapter {
         'mode': 'supervised',
         'provider': provider,
         'model': model,
+        'model_override': '',
+        'model_override_provider': '',
         'max_steps': 12,
         'max_turn_tokens': 4096,
         'max_wall_clock_secs': 300,
@@ -121,7 +158,9 @@ class _RemediationSettingsAdapter implements HttpClientAdapter {
   ) async {
     final body = options.method == 'PUT'
         ? Map<String, dynamic>.from(options.data as Map)
-        : _settings;
+        : options.path == '/api/admin/credentials'
+            ? _credentials
+            : _settings;
     if (options.method == 'PUT') saved = body;
     return ResponseBody.fromString(
       jsonEncode(body),
@@ -134,4 +173,24 @@ class _RemediationSettingsAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+
+  Map<String, dynamic> get _credentials => {
+        'credentials': <String, bool>{},
+        'ai': {
+          'config': {'provider': 'openai', 'model': 'gpt-5.5'},
+          'providers': [
+            {
+              'id': 'openai',
+              'label': 'OpenAI',
+              'auth_type': 'api_key',
+              'credential_key': 'openai_key',
+              'models': [
+                {'id': 'gpt-5.5', 'label': 'GPT-5.5'},
+                {'id': 'gpt-5.4-mini', 'label': 'GPT-5.4 mini'},
+              ],
+            },
+          ],
+          'health_check': {'enabled': true, 'interval_hours': 24},
+        },
+      };
 }

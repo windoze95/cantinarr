@@ -183,6 +183,26 @@ func (h *Handler) ValidateSharedAISettings(ctx context.Context, profile credenti
 	return h.validateAIProfile(ctx, profile, codexapp.SharedAccount())
 }
 
+// ValidateSharedAIModelOverride proves a remediation-only model designation
+// against the current shared provider and credential. It returns the provider
+// snapshot that must be stored with the model so a later provider change cannot
+// accidentally reuse the override.
+func (h *Handler) ValidateSharedAIModelOverride(ctx context.Context, model string) (string, error) {
+	resolved := h.resolveSharedAI(ctx)
+	if !resolved.Available {
+		return resolved.Provider, ErrAIValidation
+	}
+	profile := credentials.AIProfile{
+		Config: credentials.AIConfig{
+			Provider: resolved.Provider,
+			Model:    strings.TrimSpace(model),
+		},
+		APIKey:            resolved.APIKey,
+		CredentialPresent: resolved.APIKey != "" || resolved.Provider == credentials.AIProviderCodex,
+	}
+	return resolved.Provider, h.ValidateSharedAISettings(ctx, profile)
+}
+
 // ValidatePersonalAISettings applies the same save-time invariant to a user's
 // own provider. Personal and shared account references remain explicit.
 func (h *Handler) ValidatePersonalAISettings(ctx context.Context, userID int64, profile credentials.AIProfile) error {

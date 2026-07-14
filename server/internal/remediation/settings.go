@@ -3,6 +3,9 @@ package remediation
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/windoze95/cantinarr-server/internal/credentials"
 )
 
 // remediationSettingsKey is the settings-table key holding the autonomous AI
@@ -35,6 +38,7 @@ const (
 	maxObservationMinMinutes    = 24 * 60
 	maxObservationQuietMinutes  = 6 * 60
 	maxObservationSettleMinutes = 60
+	maxModelOverrideLength      = 256
 )
 
 // Settings is the autonomous AI remediation configuration. It is stored as the
@@ -43,9 +47,10 @@ const (
 //
 // The remediation agent is provider-agnostic and reuses Cantinarr's existing
 // multi-provider AI layer. Provider and Model are deprecated wire-compatibility
-// fields and are always normalized empty; autonomous work follows both values
-// from the current included profile. Neither field selects personal credentials
-// or a different stored shared key.
+// fields and are always normalized empty. ModelOverride may select a different
+// model for autonomous work, but ModelOverrideProvider binds that tested model
+// to the live shared provider so it can never drift onto a different provider's
+// credential after an admin changes the global profile.
 type Settings struct {
 	Enabled                  bool   `json:"enabled"`                    // master switch — ships OFF
 	AutoDispatch             bool   `json:"auto_dispatch"`              // poller may open auto issues — ships OFF
@@ -54,6 +59,8 @@ type Settings struct {
 	Mode                     string `json:"mode"`                       // investigate_only | supervised
 	Provider                 string `json:"provider"`                   // deprecated compatibility field; always normalized to ""
 	Model                    string `json:"model"`                      // deprecated compatibility field; always normalized to ""
+	ModelOverride            string `json:"model_override"`             // optional model used with the shared provider/credential
+	ModelOverrideProvider    string `json:"model_override_provider"`    // provider against which ModelOverride was tested
 	MaxSteps                 int    `json:"max_steps"`                  // total tool calls per investigation
 	MaxTurnTokens            int    `json:"max_turn_tokens"`            // per-turn output cap; Codex is interrupted at its next usage update
 	MaxWallClockSecs         int    `json:"max_wall_clock_secs"`        // active wall-clock budget
@@ -104,10 +111,9 @@ func legacyAutonomyMode(autonomy string) (string, bool) {
 	}
 }
 
-// Defaults returns the built-in remediation settings. The compatibility fields
-// Provider and Model are empty because the agent follows the configured included
-// profile; every mutation is admin-approved (mode "supervised"); the feature
-// ships OFF.
+// Defaults returns the built-in remediation settings. With no model override,
+// the agent follows the configured included profile in full. Every mutation is
+// admin-approved (mode "supervised"); the feature ships OFF.
 func Defaults() Settings {
 	return Settings{
 		Enabled:                  false,
@@ -117,6 +123,8 @@ func Defaults() Settings {
 		Mode:                     ModeSupervised,
 		Provider:                 "",
 		Model:                    "",
+		ModelOverride:            "",
+		ModelOverrideProvider:    "",
 		MaxSteps:                 12,
 		MaxTurnTokens:            4096,
 		MaxWallClockSecs:         300,
@@ -143,13 +151,18 @@ func validMode(mode string) bool {
 // request settings' defensive validSeasonScope fallback.
 func (g *Settings) normalize() {
 	d := Defaults()
-	// Provider and Model used to select a separate remediation profile. Server-
-	// owned work now always follows both values from the live included profile,
-	// including shared Codex OAuth, so discard stored legacy values and writes
-	// from older clients. This also prevents a stale provider-specific model from
-	// being sent after the admin changes the shared provider.
+	// Provider and Model used to select a separate remediation profile. Discard
+	// those legacy fields and accept only the new provider-bound ModelOverride,
+	// which can change the model without changing the shared credential source.
 	g.Provider = ""
 	g.Model = ""
+	g.ModelOverride = strings.TrimSpace(g.ModelOverride)
+	g.ModelOverrideProvider = strings.TrimSpace(g.ModelOverrideProvider)
+	if g.ModelOverride == "" || len(g.ModelOverride) > maxModelOverrideLength ||
+		!credentials.IsValidAIProvider(g.ModelOverrideProvider) {
+		g.ModelOverride = ""
+		g.ModelOverrideProvider = ""
+	}
 	if !validMode(g.Mode) {
 		g.Mode = d.Mode
 	}

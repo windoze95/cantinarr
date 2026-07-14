@@ -3,6 +3,8 @@ import 'package:dio/dio.dart';
 import 'agent_action_models.dart';
 import 'issue_models.dart';
 
+const _aiValidationReceiveTimeout = Duration(seconds: 75);
+
 /// REST client for the issue-reporting / AI-remediation feature.
 ///
 /// Talks to the Wave-1 contract (snake_case). The server may not be merged
@@ -121,6 +123,7 @@ class IssuesService {
     final resp = await _dio.put(
       '/api/admin/remediation-settings',
       data: settings.toJson(),
+      options: Options(receiveTimeout: _aiValidationReceiveTimeout),
     );
     return RemediationSettings.fromJson(resp.data as Map<String, dynamic>);
   }

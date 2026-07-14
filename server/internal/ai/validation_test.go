@@ -45,6 +45,29 @@ func TestValidateSharedAISettingsUsesSharedAccount(t *testing.T) {
 	}
 }
 
+func TestValidateSharedAIModelOverrideKeepsSharedProviderAndCredential(t *testing.T) {
+	h, registry, _, _ := newResolverTestHandler(t)
+	if err := registry.SetCredential(credentials.KeyOpenAIKey, "shared-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetAIConfig(credentials.AIProviderOpenAI, "assistant-model"); err != nil {
+		t.Fatal(err)
+	}
+	h.validationProbe = func(_ context.Context, profile credentials.AIProfile, account codexapp.AccountRef) error {
+		if profile.Config.Provider != credentials.AIProviderOpenAI || profile.Config.Model != "remediation-model" {
+			t.Fatalf("override profile=%#v", profile)
+		}
+		if profile.APIKey != "shared-secret" || account != codexapp.SharedAccount() {
+			t.Fatalf("override credential/account profile=%#v account=%#v", profile, account)
+		}
+		return nil
+	}
+	provider, err := h.ValidateSharedAIModelOverride(context.Background(), " remediation-model ")
+	if err != nil || provider != credentials.AIProviderOpenAI {
+		t.Fatalf("ValidateSharedAIModelOverride provider=%q err=%v", provider, err)
+	}
+}
+
 func TestSharedAIHealthCheckSkipsUntilConfiguredEnabledAndDue(t *testing.T) {
 	t.Setenv("CANTINARR_AI_PROVIDER", "")
 	t.Setenv("CANTINARR_AI_MODEL", "")

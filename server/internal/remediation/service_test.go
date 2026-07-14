@@ -400,13 +400,16 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if d.Provider != "" || d.Model != "" {
 		t.Fatalf("default provider/model = %q/%q, want empty compatibility fields", d.Provider, d.Model)
 	}
+	if d.ModelOverride != "" || d.ModelOverrideProvider != "" {
+		t.Fatalf("default model override = %q/%q, want empty", d.ModelOverrideProvider, d.ModelOverride)
+	}
 	if d.MaxUserWaitHours != 72 {
 		t.Fatalf("default max_user_wait_hours = %d, want 72", d.MaxUserWaitHours)
 	}
 
 	// Round-trip a populated settings value. Provider and Model remain on the wire
-	// for older clients but are normalized away: remediation always follows the
-	// live admin-owned shared profile.
+	// for older clients but are normalized away; the provider-bound model override
+	// is the only supported remediation-specific AI selection.
 	in := Settings{
 		Enabled:                  true,
 		AutoDispatch:             true,
@@ -415,6 +418,8 @@ func TestSettingsRoundTrip(t *testing.T) {
 		Mode:                     ModeInvestigateOnly,
 		Provider:                 "openai",
 		Model:                    "gpt-x",
+		ModelOverride:            "gpt-remediation",
+		ModelOverrideProvider:    "openai",
 		MaxSteps:                 20,
 		MaxTurnTokens:            8000,
 		MaxWallClockSecs:         600,
@@ -455,6 +460,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if norm.Provider != "" || norm.Model != "" {
 		t.Fatalf("normalized provider/model = %q/%q, want empty compatibility fields", norm.Provider, norm.Model)
+	}
+	if norm.ModelOverride != "" || norm.ModelOverrideProvider != "" {
+		t.Fatalf("normalized model override = %q/%q, want empty", norm.ModelOverrideProvider, norm.ModelOverride)
 	}
 
 	high, err := svc.SetSettings(Settings{

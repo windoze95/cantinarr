@@ -1,13 +1,17 @@
 package remediation
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 )
 
@@ -16,11 +20,18 @@ const maxRemediationRequestBytes = 64 << 10
 // Handler exposes the Wave-1 issue-reporting REST surface. It clones the shape
 // of request.Handler (claims gate, JSON helpers, decodeOptional).
 type Handler struct {
-	service *Service
+	service                     *Service
+	validateSharedModelOverride func(context.Context, string) (string, error)
 }
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+// SetSharedModelOverrideValidator wires the real shared-provider response test
+// used before a remediation-only model override is committed.
+func (h *Handler) SetSharedModelOverrideValidator(validate func(context.Context, string) (string, error)) {
+	h.validateSharedModelOverride = validate
 }
 
 // Create handles POST /api/issues (PermissionMediaRequest). The reporter is the
@@ -334,6 +345,32 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(w, r, &settings, false); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
+	}
+	current := h.service.Settings()
+	settings.ModelOverride = strings.TrimSpace(settings.ModelOverride)
+	// The provider binding is server-owned metadata. Ignore a client attempt to
+	// rewrite it unless a changed model is successfully tested below.
+	requestedBinding := strings.TrimSpace(settings.ModelOverrideProvider)
+	settings.ModelOverrideProvider = current.ModelOverrideProvider
+	modelChanged := settings.ModelOverride != current.ModelOverride
+	bindingChanged := settings.ModelOverride != "" && requestedBinding != current.ModelOverrideProvider
+	if settings.ModelOverride == "" {
+		settings.ModelOverrideProvider = ""
+	} else if len(settings.ModelOverride) > maxModelOverrideLength {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "remediation model override is too long"})
+		return
+	} else if modelChanged || bindingChanged {
+		if h.validateSharedModelOverride == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "AI model validation is unavailable"})
+			return
+		}
+		provider, err := h.validateSharedModelOverride(r.Context(), settings.ModelOverride)
+		if err != nil {
+			log.Printf("remediation model validation failed provider=%q: %s", provider, ai.AIValidationDiagnostic(err))
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": ai.AIValidationUserMessage(err)})
+			return
+		}
+		settings.ModelOverrideProvider = provider
 	}
 	saved, err := h.service.SetSettings(settings)
 	if err != nil {

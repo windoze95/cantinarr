@@ -216,6 +216,7 @@ func main() {
 	credHandler.SetSharedAIConfigured(aiHandler.ProviderConfigured)
 	aiHandler.SetSharedAIHealthIssueSink(remediationService)
 	credHandler.SetSharedAIValidator(aiHandler.ValidateSharedAISettings, aiHandler.SharedAISettingsValidated)
+	remediationHandler.SetSharedModelOverrideValidator(aiHandler.ValidateSharedAIModelOverride)
 	aiHandler.StartSharedAIHealthMonitor(ctx)
 
 	// Remediation read-only agent (Wave 2). The agent investigates one issue

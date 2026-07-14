@@ -130,14 +130,14 @@ func toolUse(id, name string) ai.TranscriptBlock {
 	return ai.TranscriptBlock{Type: ai.BlockToolUse, ID: id, Name: name, Input: json.RawMessage(`{}`)}
 }
 
-type autonomousTurnResolverFunc func(context.Context) (ai.AutonomousTurn, error)
+type autonomousTurnResolverFunc func(context.Context, ai.AutonomousModelOverride) (ai.AutonomousTurn, error)
 
-func (f autonomousTurnResolverFunc) ResolveSharedAutonomousTurn(ctx context.Context) (ai.AutonomousTurn, error) {
-	return f(ctx)
+func (f autonomousTurnResolverFunc) ResolveSharedAutonomousTurn(ctx context.Context, override ai.AutonomousModelOverride) (ai.AutonomousTurn, error) {
+	return f(ctx, override)
 }
 
 func scriptedTurnResolver(turn ai.TurnRunner) autonomousTurnResolver {
-	return autonomousTurnResolverFunc(func(context.Context) (ai.AutonomousTurn, error) {
+	return autonomousTurnResolverFunc(func(context.Context, ai.AutonomousModelOverride) (ai.AutonomousTurn, error) {
 		return ai.AutonomousTurn{Runner: turn, Provider: "test", Model: "test-model"}, nil
 	})
 }
