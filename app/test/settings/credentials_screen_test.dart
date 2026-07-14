@@ -55,6 +55,53 @@ void main() {
 
     expect(adapter.lastUpdate?['ai_health_check_enabled'], 'false');
   });
+
+  testWidgets('saves an OpenAI key with its selected shared model',
+      (tester) async {
+    final adapter = _CredentialsAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [backendClientProvider.overrideWithValue(dio)],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const CredentialsScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('ai-provider-codex')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OpenAI').last);
+    await tester.pumpAndSettle();
+
+    await tester.drag(
+      find.byType(Scrollable).first,
+      const Offset(0, -900),
+    );
+    await tester.pumpAndSettle();
+    final openAIKey = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'OpenAI API key',
+    );
+    await tester.ensureVisible(openAIKey);
+    await tester.enterText(openAIKey, 'synthetic-shared-key');
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, {
+      'openai_key': 'synthetic-shared-key',
+      'ai_provider': 'openai',
+      'ai_model': 'gpt-4.1-mini',
+    });
+  });
 }
 
 class _CredentialsAdapter implements HttpClientAdapter {
@@ -93,6 +140,15 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'credential_key': '',
               'models': [
                 {'id': 'gpt-5.4', 'label': 'GPT-5.4'},
+              ],
+            },
+            {
+              'id': 'openai',
+              'label': 'OpenAI',
+              'auth_type': 'api_key',
+              'credential_key': 'openai_key',
+              'models': [
+                {'id': 'gpt-4.1-mini', 'label': 'GPT-4.1 mini'},
               ],
             },
           ],

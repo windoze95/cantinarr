@@ -316,14 +316,41 @@ func TestOpenAIValidationProviderContract(t *testing.T) {
 	if got := req.body["reasoning_effort"]; got != "none" {
 		t.Fatalf("reasoning_effort=%v, want none", got)
 	}
-	if got := req.body["tool_choice"]; got != "none" {
-		t.Fatalf("tool_choice=%v, want none", got)
+	if _, found := req.body["tool_choice"]; found {
+		t.Fatalf("tool-free validation request unexpectedly included tool_choice: %#v", req.body)
 	}
 	if got := req.body["stream_options"].(map[string]any)["include_usage"]; got != true {
 		t.Fatalf("stream_options.include_usage=%v, want true", got)
 	}
 	if _, found := req.body["tools"]; found {
 		t.Fatal("validation request unexpectedly included tools")
+	}
+}
+
+func TestOpenAIInteractiveFinalIterationKeepsToolChoiceWithTools(t *testing.T) {
+	tools := toOpenAITools(mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleUser))
+	if len(tools) == 0 {
+		t.Fatal("user tool catalog is empty")
+	}
+	params := openAIInteractiveParams(
+		"gpt-5.5",
+		[]openai.ChatCompletionMessageParamUnion{openai.UserMessage("hello")},
+		tools,
+		true,
+	)
+	body, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded["tool_choice"]; got != "none" {
+		t.Fatalf("tool_choice=%v, want none", got)
+	}
+	if got, ok := decoded["tools"].([]any); !ok || len(got) == 0 {
+		t.Fatalf("final interactive request omitted tools: %#v", decoded)
 	}
 }
 

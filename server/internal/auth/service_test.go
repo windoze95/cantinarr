@@ -204,6 +204,12 @@ func TestAuthorizeInteractiveToolCallRechecksRoleDeviceAndSharedGrant(t *testing
 	if err != nil || role != RoleUser {
 		t.Fatalf("authorize after demotion = role %q, err %v", role, err)
 	}
+	if err := svc.AuthorizePermission(ctx, adminLogin.User.ID, adminLogin.DeviceID, PermissionCredentialsManage); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("credential permission after demotion = %v, want ErrPermissionDenied", err)
+	}
+	if err := svc.AuthorizePermission(ctx, adminLogin.User.ID, adminLogin.DeviceID, PermissionAIChat); err != nil {
+		t.Fatalf("user AI permission after demotion = %v", err)
+	}
 
 	if _, err := svc.AuthorizeInteractiveToolCall(ctx, userLogin.User.ID, adminLogin.DeviceID, false); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("cross-user device error = %v, want ErrInvalidCredentials", err)
@@ -216,6 +222,9 @@ func TestAuthorizeInteractiveToolCallRechecksRoleDeviceAndSharedGrant(t *testing
 	}
 	if _, err := svc.AuthorizeInteractiveToolCall(ctx, userLogin.User.ID, userLogin.DeviceID, false); !errors.Is(err, ErrDeviceRevoked) {
 		t.Fatalf("revoked device error = %v, want ErrDeviceRevoked", err)
+	}
+	if err := svc.AuthorizePermission(ctx, userLogin.User.ID, userLogin.DeviceID, PermissionAIChat); !errors.Is(err, ErrDeviceRevoked) {
+		t.Fatalf("revoked device permission error = %v, want ErrDeviceRevoked", err)
 	}
 }
 

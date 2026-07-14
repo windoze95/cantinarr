@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
@@ -31,7 +32,12 @@ func newResolverTestHandler(t *testing.T) (*Handler, *credentials.Registry, *sql
 	}
 	userID, _ := result.LastInsertId()
 	registry := credentials.NewRegistry(database, cipher)
-	handler := &Handler{creds: registry}
+	handler := &Handler{
+		creds: registry,
+		authorizePermission: func(context.Context, int64, string, auth.Permission) error {
+			return nil
+		},
+	}
 	handler.validationProbe = func(context.Context, credentials.AIProfile, codexapp.AccountRef) error { return nil }
 	return handler, registry, database, userID
 }

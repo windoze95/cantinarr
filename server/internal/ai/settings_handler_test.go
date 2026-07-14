@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -144,6 +145,39 @@ func TestPersonalAIValidationFailureLeavesSettingsAndKeyUnchanged(t *testing.T) 
 	key, found, err := registry.UserAICredential(userID, credentials.AIProviderAnthropic)
 	if err != nil || !found || key != "old-secret" {
 		t.Fatalf("stored key=%q found=%t err=%v", key, found, err)
+	}
+}
+
+func TestPersonalAIValidationLogOmitsModelAndBareProviderKey(t *testing.T) {
+	h, _, _, userID := newResolverTestHandler(t)
+	const (
+		modelSecret = "sk-proj-SyntheticPersonalModel123456789"
+		keySecret   = "sk-ant-api03-SyntheticProviderEcho123456789"
+	)
+	h.validationProbe = func(context.Context, credentials.AIProfile, codexapp.AccountRef) error {
+		return errors.New("provider rejected " + keySecret)
+	}
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	req := httptest.NewRequest(http.MethodPut, "/api/ai/settings", strings.NewReader(
+		`{"provider":"openai","model":"`+modelSecret+`","api_key":"synthetic-personal-candidate"}`,
+	))
+	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{
+		UserID: userID, Role: auth.RoleUser, DeviceID: "personal-log-test-device",
+	}))
+	rec := httptest.NewRecorder()
+	h.UpdateAISettings(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(logs.String(), modelSecret) || strings.Contains(logs.String(), keySecret) {
+		t.Fatalf("personal validation log leaked model or provider credential: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), secrets.RedactedValue) {
+		t.Fatalf("personal validation log did not retain a redaction marker: %s", logs.String())
 	}
 }
 

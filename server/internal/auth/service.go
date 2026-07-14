@@ -42,6 +42,7 @@ var (
 	ErrCannotModifyAdmin     = errors.New("cannot change sign-in methods for an admin")
 	ErrInvalidPlexEmail      = errors.New("invalid email address")
 	ErrSharedAIAccessRevoked = errors.New("shared AI access has been revoked")
+	ErrPermissionDenied      = errors.New("permission denied")
 	// ErrAuthUnavailable marks a failure to *evaluate* credentials (DB error,
 	// signing error) as opposed to a rejection of them. Handlers must map it to
 	// a 5xx, never a 401: clients treat a 401 as "this session is dead" and
@@ -1014,40 +1015,67 @@ func (s *Service) AuthorizeInteractiveToolCall(
 	deviceID string,
 	requireSharedAI bool,
 ) (string, error) {
-	if userID <= 0 || deviceID == "" {
+	snapshot, err := s.authoritativeSession(ctx, userID, deviceID)
+	if err != nil {
+		return "", err
+	}
+	if snapshot.role != RoleAdmin && snapshot.role != RoleUser {
 		return "", ErrInvalidCredentials
+	}
+	if requireSharedAI && !snapshot.sharedAIEnabled {
+		return "", ErrSharedAIAccessRevoked
+	}
+	return snapshot.role, nil
+}
+
+// AuthorizePermission re-checks the current database role and device state for
+// one already-authenticated request. It is intended for handlers that spend a
+// meaningful amount of time awaiting an external provider before committing a
+// credential or setting: middleware admission is not enough across that gap.
+func (s *Service) AuthorizePermission(ctx context.Context, userID int64, deviceID string, permission Permission) error {
+	snapshot, err := s.authoritativeSession(ctx, userID, deviceID)
+	if err != nil {
+		return err
+	}
+	if !HasPermission(snapshot.role, permission) {
+		return ErrPermissionDenied
+	}
+	return nil
+}
+
+type authoritativeSessionSnapshot struct {
+	role            string
+	sharedAIEnabled bool
+}
+
+func (s *Service) authoritativeSession(ctx context.Context, userID int64, deviceID string) (authoritativeSessionSnapshot, error) {
+	if userID <= 0 || deviceID == "" {
+		return authoritativeSessionSnapshot{}, ErrInvalidCredentials
 	}
 
 	var (
-		role            string
-		sharedAIEnabled bool
-		revokedAt       sql.NullTime
+		snapshot  authoritativeSessionSnapshot
+		revokedAt sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx, `
 		SELECT u.role, u.ai_shared_enabled, d.revoked_at
 		FROM users u
 		JOIN devices d ON d.user_id = u.id
 		WHERE u.id = ? AND d.id = ?
-	`, userID, deviceID).Scan(&role, &sharedAIEnabled, &revokedAt)
+	`, userID, deviceID).Scan(&snapshot.role, &snapshot.sharedAIEnabled, &revokedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrInvalidCredentials
+		return authoritativeSessionSnapshot{}, ErrInvalidCredentials
 	}
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
+			return authoritativeSessionSnapshot{}, ctxErr
 		}
-		return "", fmt.Errorf("%w: authorize interactive tool call: %v", ErrAuthUnavailable, err)
+		return authoritativeSessionSnapshot{}, fmt.Errorf("%w: authorize session: %v", ErrAuthUnavailable, err)
 	}
 	if revokedAt.Valid {
-		return "", ErrDeviceRevoked
+		return authoritativeSessionSnapshot{}, ErrDeviceRevoked
 	}
-	if role != RoleAdmin && role != RoleUser {
-		return "", ErrInvalidCredentials
-	}
-	if requireSharedAI && !sharedAIEnabled {
-		return "", ErrSharedAIAccessRevoked
-	}
-	return role, nil
+	return snapshot, nil
 }
 
 func hasAudience(claims *Claims, audience string) bool {

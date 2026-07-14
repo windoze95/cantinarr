@@ -306,7 +306,7 @@ func (h *Handler) runSharedAIHealthCheck(ctx context.Context, now time.Time) {
 		log.Printf("ai health: record scheduled check: %v", err)
 	}
 	if probeErr != nil {
-		log.Printf("ai health: shared provider=%q model=%q failed: %s", config.Provider, config.Model, AIValidationDiagnostic(probeErr))
+		log.Printf("ai health: shared provider=%q failed: %s", config.Provider, AIValidationDiagnostic(probeErr))
 	}
 	if h.healthIssueSink != nil {
 		if err := h.healthIssueSink.RecordSharedAIHealth(config.Provider, config.Model, probeErr == nil); err != nil {

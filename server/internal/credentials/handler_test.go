@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
@@ -27,13 +29,19 @@ func newCredentialHandlerTest(t *testing.T) (*Handler, *Registry) {
 		t.Fatal(err)
 	}
 	registry := NewRegistry(database, cipher)
-	return NewHandler(registry), registry
+	handler := NewHandler(registry)
+	handler.SetPermissionAuthorizer(func(context.Context, int64, string, auth.Permission) error { return nil })
+	return handler, registry
 }
 
 func updateCredentialSettings(t *testing.T, handler *Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	handler.Update(recorder, httptest.NewRequest(http.MethodPut, "/api/admin/credentials", strings.NewReader(body)))
+	request := httptest.NewRequest(http.MethodPut, "/api/admin/credentials", strings.NewReader(body))
+	request = request.WithContext(context.WithValue(request.Context(), auth.ClaimsKey, &auth.Claims{
+		UserID: 1, Role: auth.RoleAdmin, DeviceID: "credential-test-device",
+	}))
+	handler.Update(recorder, request)
 	return recorder
 }
 
@@ -62,6 +70,32 @@ func TestAISettingsValidationReturnsSafeActionableFailure(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), "must-not-escape") || strings.Contains(recorder.Body.String(), "candidate-secret") {
 		t.Fatalf("validation response leaked diagnostic or credential: %s", recorder.Body.String())
+	}
+}
+
+func TestAISettingsValidationLogOmitsModelAndBareProviderKey(t *testing.T) {
+	handler, _ := newCredentialHandlerTest(t)
+	const (
+		modelSecret = "sk-proj-SyntheticModelField123456789"
+		keySecret   = "sk-proj-SyntheticProviderEcho123456789"
+	)
+	handler.SetSharedAIValidator(func(context.Context, AIProfile) error {
+		return errors.New("upstream rejected " + keySecret)
+	}, nil)
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	recorder := updateCredentialSettings(t, handler, `{"openai_key":"synthetic-candidate","ai_provider":"openai","ai_model":"`+modelSecret+`"}`)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(logs.String(), modelSecret) || strings.Contains(logs.String(), keySecret) {
+		t.Fatalf("validation log leaked model or provider credential: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), secrets.RedactedValue) {
+		t.Fatalf("validation log did not retain a redaction marker: %s", logs.String())
 	}
 }
 

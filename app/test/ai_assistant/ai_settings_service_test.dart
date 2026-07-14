@@ -66,6 +66,28 @@ void main() {
       'model': 'gpt-5.4-mini',
     });
   });
+
+  test('combines a personal API key and model selection in one save', () async {
+    final adapter = _AiSettingsAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+    final service = AiSettingsService(backendDio: dio);
+
+    await service.usePersonal(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      apiKey: 'synthetic-personal-key',
+    );
+
+    expect(adapter.requests, hasLength(1));
+    expect(adapter.requests.single.$1, 'PUT');
+    expect(adapter.requests.single.$2, '/api/ai/settings');
+    expect(adapter.requests.single.$3, {
+      'provider': 'openai',
+      'model': 'gpt-4.1-mini',
+      'api_key': 'synthetic-personal-key',
+    });
+  });
 }
 
 Map<String, dynamic> _settingsJson({

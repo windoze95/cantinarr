@@ -54,15 +54,7 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 	finalHistory := cloneTranscript(history)
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
-		params := openai.ChatCompletionNewParams{
-			Model:               s.model,
-			Messages:            messages,
-			MaxCompletionTokens: openai.Int(httpProviderMaxOutputTokens),
-			Tools:               tools,
-		}
-		if iteration == maxToolIterations-1 {
-			params.ToolChoice.OfAuto = openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone))
-		}
+		params := openAIInteractiveParams(s.model, messages, tools, iteration == maxToolIterations-1)
 
 		message, finishReason, err := s.chatStream(ctx, params, cb)
 		if err != nil {
@@ -99,6 +91,24 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 	}
 
 	return finalHistory, fmt.Errorf("agent loop exceeded %d iterations", maxToolIterations)
+}
+
+func openAIInteractiveParams(
+	model openai.ChatModel,
+	messages []openai.ChatCompletionMessageParamUnion,
+	tools []openai.ChatCompletionToolUnionParam,
+	forceText bool,
+) openai.ChatCompletionNewParams {
+	params := openai.ChatCompletionNewParams{
+		Model:               model,
+		Messages:            messages,
+		MaxCompletionTokens: openai.Int(httpProviderMaxOutputTokens),
+		Tools:               tools,
+	}
+	if forceText && len(tools) > 0 {
+		params.ToolChoice.OfAuto = openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone))
+	}
+	return params
 }
 
 func (s *openAIService) chatStream(ctx context.Context, params openai.ChatCompletionNewParams, cb StreamCallbacks) (openAIMessage, string, error) {

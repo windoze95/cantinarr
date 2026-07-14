@@ -209,7 +209,7 @@ func (h *Handler) CheckSharedCodexDeviceLogin(w http.ResponseWriter, r *http.Req
 			selected = true
 		}
 		if validateErr := h.ValidateSharedAISettings(r.Context(), credentials.AIProfile{Config: config, CredentialPresent: true}); validateErr != nil {
-			log.Printf("shared OpenAI OAuth validation failed model=%q: %s", config.Model, AIValidationDiagnostic(validateErr))
+			log.Printf("shared OpenAI OAuth validation failed: %s", AIValidationDiagnostic(validateErr))
 			writeCodexError(w, http.StatusUnprocessableEntity, AIValidationUserMessage(validateErr))
 			return
 		}
