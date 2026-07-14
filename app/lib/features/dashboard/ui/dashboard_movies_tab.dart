@@ -145,7 +145,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
           // Discovery rows
           CategoryRow(
             title: 'Popular Movies',
-            items: discover.popularMovies,
+            items: discover.popularMovies.skip(1).toList(growable: false),
             isLoading: discover.isLoadingPopular,
           ),
           if (discover.topRated.isNotEmpty)

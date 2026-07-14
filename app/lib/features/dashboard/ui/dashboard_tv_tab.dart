@@ -133,7 +133,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
             ),
           CategoryRow(
             title: 'Popular TV Shows',
-            items: discover.popularTV,
+            items: discover.popularTV.skip(1).toList(growable: false),
             isLoading: discover.isLoadingPopular,
           ),
           if (discover.anticipated.isNotEmpty)
