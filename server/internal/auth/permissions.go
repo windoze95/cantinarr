@@ -1,6 +1,9 @@
 package auth
 
-import "sort"
+import (
+	"context"
+	"sort"
+)
 
 const (
 	RoleAdmin = "admin"
@@ -8,6 +11,12 @@ const (
 )
 
 type Permission string
+
+// PermissionAuthorizer re-checks one live user/device session against an
+// authoritative permission immediately before a sensitive action commits.
+// Long-running handlers receive this narrow callback instead of retaining a
+// stale role snapshot from their initial HTTP middleware pass.
+type PermissionAuthorizer func(context.Context, int64, string, Permission) error
 
 const (
 	PermissionAdmin             Permission = "admin:*"

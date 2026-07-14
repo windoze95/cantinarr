@@ -1,7 +1,9 @@
 package ai
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -17,6 +19,8 @@ const (
 	maxAIModelLength  = 256
 	maxAIAPIKeyLength = 32 << 10
 )
+
+var errAISettingsAuthorizationUnavailable = errors.New("AI settings authorization is unavailable")
 
 type updatePersonalAISettingsRequest struct {
 	Provider string `json:"provider"`
@@ -83,8 +87,11 @@ func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
 		profile.APIKey, profile.CredentialPresent = key, found
 	}
 	if err := h.ValidatePersonalAISettings(r.Context(), claims.UserID, profile); err != nil {
-		log.Printf("personal AI validation failed user_id=%d provider=%q model=%q: %s", claims.UserID, req.Provider, req.Model, AIValidationDiagnostic(err))
+		log.Printf("personal AI validation failed user_id=%d provider=%q: %s", claims.UserID, req.Provider, AIValidationDiagnostic(err))
 		writeAISettingsError(w, http.StatusUnprocessableEntity, AIValidationUserMessage(err))
+		return
+	}
+	if !h.reauthorizePersonalAIWrite(w, r, claims) {
 		return
 	}
 	if err := h.creds.SetUserAIProfile(claims.UserID, req.Provider, req.Model, req.APIKey); err != nil {
@@ -150,8 +157,11 @@ func (h *Handler) UpdatePersonalAICredential(w http.ResponseWriter, r *http.Requ
 		CredentialPresent: true,
 	}
 	if err := h.ValidatePersonalAISettings(r.Context(), claims.UserID, profile); err != nil {
-		log.Printf("personal AI credential validation failed user_id=%d provider=%q model=%q: %s", claims.UserID, provider, req.Model, AIValidationDiagnostic(err))
+		log.Printf("personal AI credential validation failed user_id=%d provider=%q: %s", claims.UserID, provider, AIValidationDiagnostic(err))
 		writeAISettingsError(w, http.StatusUnprocessableEntity, AIValidationUserMessage(err))
+		return
+	}
+	if !h.reauthorizePersonalAIWrite(w, r, claims) {
 		return
 	}
 	setAINoStore(w)
@@ -160,6 +170,27 @@ func (h *Handler) UpdatePersonalAICredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) authorizeSettingsWrite(ctx context.Context, userID int64, deviceID string, permission auth.Permission) error {
+	if h.authorizePermission == nil {
+		return errAISettingsAuthorizationUnavailable
+	}
+	return h.authorizePermission(ctx, userID, deviceID, permission)
+}
+
+func (h *Handler) reauthorizePersonalAIWrite(w http.ResponseWriter, r *http.Request, claims *auth.Claims) bool {
+	err := h.authorizeSettingsWrite(r.Context(), claims.UserID, claims.DeviceID, auth.PermissionAIChat)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, auth.ErrAuthUnavailable) || errors.Is(err, errAISettingsAuthorizationUnavailable) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		writeAISettingsError(w, http.StatusServiceUnavailable, "AI settings authorization is temporarily unavailable")
+	} else {
+		writeAISettingsError(w, http.StatusForbidden, "permission denied")
+	}
+	return false
 }
 
 func (h *Handler) DeletePersonalAICredential(w http.ResponseWriter, r *http.Request) {

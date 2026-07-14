@@ -324,14 +324,19 @@ func serveRBACRequestWithBody(router http.Handler, method, path, token, body str
 }
 
 type rbacRouterHarness struct {
-	router         http.Handler
-	database       *sql.DB
-	cipher         *secrets.Cipher
-	registry       *credentials.Registry
-	adminID        int64
-	requesterID    int64
-	adminToken     string
-	requesterToken string
+	router            http.Handler
+	database          *sql.DB
+	cipher            *secrets.Cipher
+	registry          *credentials.Registry
+	authService       *auth.Service
+	aiHandler         *ai.Handler
+	credentialHandler *credentials.Handler
+	adminID           int64
+	requesterID       int64
+	adminDeviceID     string
+	requesterDeviceID string
+	adminToken        string
+	requesterToken    string
 }
 
 func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
@@ -394,8 +399,11 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		}
 	}
 	aiHandler := ai.NewHandler(registry, toolServer, codexManager)
+	aiHandler.SetPermissionAuthorizer(authService.AuthorizePermission)
 	credentialHandler := credentials.NewHandler(registry)
+	credentialHandler.SetPermissionAuthorizer(authService.AuthorizePermission)
 	credentialHandler.SetSharedAIConfigured(aiHandler.ProviderConfigured)
+	credentialHandler.SetSharedAIValidator(aiHandler.ValidateSharedAISettings, aiHandler.SharedAISettingsValidated)
 	instanceHandler := instance.NewHandler(store, instanceRegistry, "http://cantinarr.test")
 	downloadsHandler := downloads.NewHandler(store, instanceRegistry)
 	tautulliHandler := tautulli.NewHandler(store, instanceRegistry)
@@ -441,14 +449,19 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		serversettings.NewService(database),
 	)
 	return &rbacRouterHarness{
-		router:         router,
-		database:       database,
-		cipher:         cipher,
-		registry:       registry,
-		adminID:        admin.User.ID,
-		requesterID:    requester.User.ID,
-		adminToken:     admin.AccessToken,
-		requesterToken: requester.AccessToken,
+		router:            router,
+		database:          database,
+		cipher:            cipher,
+		registry:          registry,
+		authService:       authService,
+		aiHandler:         aiHandler,
+		credentialHandler: credentialHandler,
+		adminID:           admin.User.ID,
+		requesterID:       requester.User.ID,
+		adminDeviceID:     admin.DeviceID,
+		requesterDeviceID: requester.DeviceID,
+		adminToken:        admin.AccessToken,
+		requesterToken:    requester.AccessToken,
 	}
 }
 

@@ -219,6 +219,63 @@ func TestLiveAPIKeyInteractiveChat(t *testing.T) {
 	}
 }
 
+// TestLiveOpenAIInteractiveCatalog proves that every advertised OpenAI model
+// accepts Cantinarr's production interactive request shape, including the
+// requester tool catalog. It is intentionally opt-in because it spends real
+// API quota.
+func TestLiveOpenAIInteractiveCatalog(t *testing.T) {
+	if os.Getenv("CANTINARR_LIVE_AI_TESTS") != "1" {
+		t.Skip("set CANTINARR_LIVE_AI_TESTS=1 to run hosted-provider smoke tests")
+	}
+	if filter := strings.TrimSpace(os.Getenv("CANTINARR_LIVE_AI_PROVIDER")); filter != "" && filter != credentials.AIProviderOpenAI {
+		t.Skip("OpenAI is not selected by CANTINARR_LIVE_AI_PROVIDER")
+	}
+	key := os.Getenv("OPENAI_API_KEY")
+	if key == "" {
+		t.Skip("OPENAI_API_KEY is not set")
+	}
+
+	var models []credentials.AIModelOption
+	for _, provider := range credentials.AIProviders {
+		if provider.ID == credentials.AIProviderOpenAI {
+			models = provider.Models
+			break
+		}
+	}
+	if len(models) == 0 {
+		t.Fatal("advertised OpenAI model catalog is empty")
+	}
+
+	for _, model := range models {
+		model := model
+		t.Run(model.ID, func(t *testing.T) {
+			toolServer := mcp.NewToolServer(nil, nil, nil, nil)
+			toolServer.SetCallAuthorizer(func(context.Context, mcp.CallContext) (string, error) {
+				return auth.RoleUser, nil
+			})
+			history := transcript{textTranscriptMessage(agentRoleUser, "Reply with exactly LIVE_OK. Do not call a tool.")}
+			var streamed strings.Builder
+			final, err := NewOpenAIService(key, model.ID, toolServer).SendMessage(
+				context.Background(),
+				history,
+				ChatContext{UserID: 1, Role: auth.RoleUser, DeviceID: "live-openai-catalog-device"},
+				StreamCallbacks{OnText: func(value string) { streamed.WriteString(value) }},
+			)
+			if err != nil {
+				classified := newAIValidationFailure(err)
+				var failure *AIValidationFailure
+				if errors.As(classified, &failure) && (failure.Kind == AIValidationFailureUnsupportedModel || failure.Kind == AIValidationFailureQuota) {
+					t.Skip(AIValidationUserMessage(classified))
+				}
+				t.Fatal(AIValidationUserMessage(classified))
+			}
+			if strings.TrimSpace(streamed.String()) == "" || len(final) <= len(history) {
+				t.Fatalf("interactive chat returned no assistant response: messages=%d", len(final))
+			}
+		})
+	}
+}
+
 func TestProviderNeutralTranscriptConvertersPreserveToolContext(t *testing.T) {
 	history := transcript{
 		textTranscriptMessage(agentRoleUser, "find dune"),

@@ -17,8 +17,17 @@ import (
 const RedactedValue = "[REDACTED]"
 
 var (
-	urlCandidatePattern = regexp.MustCompile(`(?i)(?:[a-z][a-z0-9+.-]*:)?//[^\s<>"']+|/[^\s<>"']*\?[^\s<>"']+`)
-	assignmentPattern   = regexp.MustCompile(`(?i)[a-z][a-z0-9_.-]{0,80}["']?[ \t]*[:=][ \t]*`)
+	urlCandidatePattern            = regexp.MustCompile(`(?i)(?:[a-z][a-z0-9+.-]*:)?//[^\s<>"']+|/[^\s<>"']*\?[^\s<>"']+`)
+	assignmentPattern              = regexp.MustCompile(`(?i)[a-z][a-z0-9_.-]{0,80}["']?[ \t]*[:=][ \t]*`)
+	bareProviderCredentialPatterns = []*regexp.Regexp{
+		// OpenAI project/legacy keys and Anthropic sk-ant-* keys share the
+		// sk- prefix. Require a non-trivial suffix to avoid scrubbing prose.
+		regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{8,}\b`),
+		// Google API keys use AIza..., while newer Gemini credentials may use
+		// the AQ. prefix.
+		regexp.MustCompile(`\bAIza[A-Za-z0-9_-]{12,}\b`),
+		regexp.MustCompile(`\bAQ\.[A-Za-z0-9_-]{12,}\b`),
+	}
 )
 
 // RedactText removes credentials from structured JSON and from free-form
@@ -124,7 +133,11 @@ func stringMapValue(value map[string]any, name string) (string, bool) {
 
 func redactFreeform(text string) string {
 	text = urlCandidatePattern.ReplaceAllStringFunc(text, redactURLCredentials)
-	return redactAssignments(text)
+	text = redactAssignments(text)
+	for _, pattern := range bareProviderCredentialPatterns {
+		text = pattern.ReplaceAllString(text, RedactedValue)
+	}
+	return text
 }
 
 // redactAssignments handles both headers and fragments embedded in a larger

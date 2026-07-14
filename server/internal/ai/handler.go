@@ -20,15 +20,16 @@ import (
 
 // Handler provides HTTP handlers for AI chat endpoints.
 type Handler struct {
-	creds           *credentials.Registry
-	toolServer      *mcp.ToolServer
-	codex           *codexapp.Manager
-	conversations   *conversationStore
-	validationProbe func(context.Context, credentials.AIProfile, codexapp.AccountRef) error
-	healthIssueSink SharedAIHealthIssueSink
-	settingsMu      sync.Mutex
-	admissionOnce   sync.Once
-	admission       *chatAdmission
+	creds               *credentials.Registry
+	toolServer          *mcp.ToolServer
+	codex               *codexapp.Manager
+	conversations       *conversationStore
+	validationProbe     func(context.Context, credentials.AIProfile, codexapp.AccountRef) error
+	healthIssueSink     SharedAIHealthIssueSink
+	authorizePermission auth.PermissionAuthorizer
+	settingsMu          sync.Mutex
+	admissionOnce       sync.Once
+	admission           *chatAdmission
 }
 
 func (h *Handler) chatAdmission() *chatAdmission {
@@ -39,6 +40,12 @@ func (h *Handler) chatAdmission() *chatAdmission {
 // NewHandler creates a new AI handler.
 func NewHandler(creds *credentials.Registry, toolServer *mcp.ToolServer, codex *codexapp.Manager) *Handler {
 	return &Handler{creds: creds, toolServer: toolServer, codex: codex, conversations: newConversationStore()}
+}
+
+// SetPermissionAuthorizer supplies the live user/device permission check used
+// after provider validation and immediately before settings persistence.
+func (h *Handler) SetPermissionAuthorizer(authorize auth.PermissionAuthorizer) {
+	h.authorizePermission = authorize
 }
 
 type chatRequest struct {

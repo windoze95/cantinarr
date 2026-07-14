@@ -54,6 +54,26 @@ func TestRedactTextScrubsPrefixedErrorBodyAndHeaders(t *testing.T) {
 	}
 }
 
+func TestRedactTextScrubsBareProviderCredentials(t *testing.T) {
+	credentials := []string{
+		"sk-proj-Synthetic_OpenAI_Key_123456789",
+		"sk-SyntheticLegacyOpenAIKey123456789",
+		"sk-ant-api03-Synthetic_Anthropic_Key_123456789",
+		"AIzaSyntheticGoogleAPIKey1234567890",
+		"AQ.Synthetic_Gemini_Key_1234567890",
+	}
+	input := "provider rejected credentials: " + strings.Join(credentials, " | ") + " (request_id=req-safe)"
+	got := RedactText(input)
+	for _, credential := range credentials {
+		if strings.Contains(got, credential) {
+			t.Fatalf("redacted output leaked bare provider credential %q: %s", credential, got)
+		}
+	}
+	if strings.Count(got, RedactedValue) != len(credentials) || !strings.Contains(got, "request_id=req-safe") {
+		t.Fatalf("bare provider redaction lost diagnostic context: %s", got)
+	}
+}
+
 func TestRedactErrorDoesNotWrapCredentialBearingBody(t *testing.T) {
 	original := errors.New(`arr request failed: {"downloadUrl":"https://idx.invalid/get?token=error-secret"}`)
 	redacted := RedactError(original)

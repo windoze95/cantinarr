@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
@@ -24,11 +25,12 @@ const (
 
 // Handler provides admin-only REST endpoints for credential management.
 type Handler struct {
-	registry           *Registry
-	sharedAIConfigured func() bool
-	validateSharedAI   func(context.Context, AIProfile) error
-	sharedAIValidated  func(AIConfig)
-	updateMu           sync.Mutex
+	registry            *Registry
+	sharedAIConfigured  func() bool
+	validateSharedAI    func(context.Context, AIProfile) error
+	sharedAIValidated   func(AIConfig)
+	authorizePermission auth.PermissionAuthorizer
+	updateMu            sync.Mutex
 }
 
 // SetSharedAIConfigured supplies the runtime-aware shared readiness check after
@@ -42,6 +44,12 @@ func (h *Handler) SetSharedAIConfigured(check func() bool) {
 func (h *Handler) SetSharedAIValidator(validate func(context.Context, AIProfile) error, validated func(AIConfig)) {
 	h.validateSharedAI = validate
 	h.sharedAIValidated = validated
+}
+
+// SetPermissionAuthorizer supplies the authoritative user/device permission
+// check repeated after a provider probe and immediately before persistence.
+func (h *Handler) SetPermissionAuthorizer(authorize auth.PermissionAuthorizer) {
+	h.authorizePermission = authorize
 }
 
 // NewHandler creates a new credentials handler.
@@ -202,10 +210,13 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, profile := range profiles {
 		if err := h.validateSharedAI(r.Context(), profile); err != nil {
-			log.Printf("credentials: shared AI validation failed provider=%q model=%q: %s", profile.Config.Provider, profile.Config.Model, credentialValidationDiagnostic(err))
+			log.Printf("credentials: shared AI validation failed provider=%q: %s", profile.Config.Provider, credentialValidationDiagnostic(err))
 			writeCredentialValidationError(w, err)
 			return
 		}
+	}
+	if len(profiles) > 0 && !h.reauthorizeSharedAIWrite(w, r) {
+		return
 	}
 
 	if err := h.applyUpdate(body, candidate, providerSet || modelSet, healthEnabled, healthSet); err != nil {
@@ -220,6 +231,27 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (h *Handler) reauthorizeSharedAIWrite(w http.ResponseWriter, r *http.Request) bool {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return false
+	}
+	if h.authorizePermission == nil {
+		http.Error(w, `{"error":"credential authorization is temporarily unavailable"}`, http.StatusServiceUnavailable)
+		return false
+	}
+	if err := h.authorizePermission(r.Context(), claims.UserID, claims.DeviceID, auth.PermissionCredentialsManage); err != nil {
+		if errors.Is(err, auth.ErrAuthUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			http.Error(w, `{"error":"credential authorization is temporarily unavailable"}`, http.StatusServiceUnavailable)
+		} else {
+			http.Error(w, `{"error":"permission denied"}`, http.StatusForbidden)
+		}
+		return false
+	}
+	return true
 }
 
 func writeCredentialValidationError(w http.ResponseWriter, err error) {

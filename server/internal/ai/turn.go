@@ -103,8 +103,9 @@ type TurnParams struct {
 	Tools []mcp.Tool
 	// History is the provider-neutral transcript to continue from.
 	History Transcript
-	// ForceNoTools omits tools / sets tool_choice:none so the model must answer
-	// in text (used to coerce a final diagnosis when bounds are nearly spent).
+	// ForceNoTools uses each provider's compatible tool-free request shape so the
+	// model must answer in text (used to coerce a final diagnosis when bounds are
+	// nearly spent).
 	ForceNoTools bool
 	// DisableReasoning requests the provider's lowest supported reasoning mode.
 	// Validation probes use this so hidden reasoning cannot consume their small
@@ -447,8 +448,6 @@ func openAINextTurnParamsForAttempt(model openai.ChatModel, p TurnParams, attemp
 	}
 	if !p.ForceNoTools && len(p.Tools) > 0 {
 		params.Tools = toOpenAITools(p.Tools)
-	} else {
-		params.ToolChoice.OfAuto = openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone))
 	}
 	if attempt.effort != "" {
 		params.ReasoningEffort = attempt.effort

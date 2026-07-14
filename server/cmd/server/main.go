@@ -211,6 +211,8 @@ func main() {
 		log.Printf("OpenAI OAuth provider unavailable: %v", codexManager.AvailabilityError())
 	}
 	aiHandler := ai.NewHandler(creds, toolServer, codexManager)
+	aiHandler.SetPermissionAuthorizer(authService.AuthorizePermission)
+	credHandler.SetPermissionAuthorizer(authService.AuthorizePermission)
 	credHandler.SetSharedAIConfigured(aiHandler.ProviderConfigured)
 	aiHandler.SetSharedAIHealthIssueSink(remediationService)
 	credHandler.SetSharedAIValidator(aiHandler.ValidateSharedAISettings, aiHandler.SharedAISettingsValidated)
