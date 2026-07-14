@@ -29,7 +29,7 @@ func TestResolveSharedAutonomousTurnIgnoresPersonalSettingsAndGrant(t *testing.T
 		t.Fatal(err)
 	}
 
-	resolved, err := h.ResolveSharedAutonomousTurn(context.Background())
+	resolved, err := h.ResolveSharedAutonomousTurn(context.Background(), AutonomousModelOverride{})
 	if err != nil {
 		t.Fatalf("resolve shared autonomous turn: %v", err)
 	}
@@ -46,6 +46,40 @@ func TestResolveSharedAutonomousTurnIgnoresPersonalSettingsAndGrant(t *testing.T
 	}
 }
 
+func TestResolveSharedAutonomousTurnUsesOnlyProviderBoundModelOverride(t *testing.T) {
+	h, registry, _, _ := newResolverTestHandler(t)
+	if err := registry.SetCredential(credentials.KeyGeminiKey, "shared-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetAIConfig(credentials.AIProviderGemini, "shared-model"); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := h.ResolveSharedAutonomousTurn(context.Background(), AutonomousModelOverride{
+		Provider: credentials.AIProviderGemini,
+		Model:    "remediation-model",
+	})
+	if err != nil || resolved.Model != "remediation-model" {
+		t.Fatalf("matching override resolved=%+v err=%v", resolved, err)
+	}
+	admitted := resolved.Runner.(*admittedAutonomousTurnRunner)
+	if delegate := admitted.delegate.(*geminiService); delegate.model != "remediation-model" {
+		t.Fatalf("matching override delegate model=%q", delegate.model)
+	}
+
+	resolved, err = h.ResolveSharedAutonomousTurn(context.Background(), AutonomousModelOverride{
+		Provider: credentials.AIProviderOpenAI,
+		Model:    "stale-openai-model",
+	})
+	if err != nil || resolved.Model != "shared-model" {
+		t.Fatalf("stale override resolved=%+v err=%v", resolved, err)
+	}
+	admitted = resolved.Runner.(*admittedAutonomousTurnRunner)
+	if delegate := admitted.delegate.(*geminiService); delegate.model != "shared-model" {
+		t.Fatalf("stale override delegate model=%q", delegate.model)
+	}
+}
+
 func TestResolveSharedAutonomousTurnNeedsNoUserIdentity(t *testing.T) {
 	h, registry, database, userID := newResolverTestHandler(t)
 	if _, err := database.Exec(`DELETE FROM users WHERE id = ?`, userID); err != nil {
@@ -58,7 +92,7 @@ func TestResolveSharedAutonomousTurnNeedsNoUserIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resolved, err := h.ResolveSharedAutonomousTurn(context.Background())
+	resolved, err := h.ResolveSharedAutonomousTurn(context.Background(), AutonomousModelOverride{})
 	if err != nil || resolved.Provider != credentials.AIProviderAnthropic || resolved.Model != "shared-model" || resolved.Runner == nil {
 		t.Fatalf("shared autonomous turn without users = %+v err=%v", resolved, err)
 	}
@@ -81,7 +115,7 @@ func TestResolveSharedAutonomousTurnFailsClosedInsteadOfUsingPersonalKey(t *test
 		t.Fatal(err)
 	}
 
-	resolved, err := h.ResolveSharedAutonomousTurn(context.Background())
+	resolved, err := h.ResolveSharedAutonomousTurn(context.Background(), AutonomousModelOverride{})
 	if err == nil || resolved.Runner != nil || resolved.Provider != credentials.AIProviderOpenAI {
 		t.Fatalf("resolved corrupt shared profile = %+v err=%v", resolved, err)
 	}

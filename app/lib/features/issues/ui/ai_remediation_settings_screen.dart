@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/layout/adaptive.dart';
+import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../settings/data/credentials_service.dart';
 import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
 
@@ -25,11 +27,23 @@ class _AiRemediationSettingsScreenState
   String? _error;
   bool _saving = false;
   int _loadEpoch = 0;
+  CredentialsStatus? _credentials;
+  String _modelSelection = _sharedModel;
+  final _customModelController = TextEditingController();
+
+  static const _sharedModel = '__shared__';
+  static const _customModel = '__custom__';
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _customModelController.dispose();
+    super.dispose();
   }
 
   String _friendlyError(Object e) {
@@ -44,10 +58,18 @@ class _AiRemediationSettingsScreenState
       _error = null;
     });
     try {
-      final settings = await ref.read(issuesServiceProvider).getSettings();
+      final results = await Future.wait<Object>([
+        ref.read(issuesServiceProvider).getSettings(),
+        CredentialsService(backendDio: ref.read(backendClientProvider))
+            .getStatus(),
+      ]);
+      final settings = results[0] as RemediationSettings;
+      final credentials = results[1] as CredentialsStatus;
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _edited = settings;
+        _credentials = credentials;
+        _syncModelSelection(settings, credentials);
         _isLoading = false;
       });
     } catch (e) {
@@ -61,20 +83,36 @@ class _AiRemediationSettingsScreenState
 
   Future<void> _save() async {
     final edited = _edited;
-    if (edited == null || _saving) return;
+    final credentials = _credentials;
+    if (edited == null || credentials == null || _saving) return;
+    final modelOverride = switch (_modelSelection) {
+      _sharedModel => '',
+      _customModel => _customModelController.text.trim(),
+      _ => _modelSelection,
+    };
+    if (_modelSelection == _customModel && modelOverride.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a custom model ID')),
+      );
+      return;
+    }
     setState(() => _saving = true);
     try {
       final toSave = edited.copyWith(
-        // Clear both legacy overrides so remediation always follows the current
-        // admin-shared provider and model.
+        // Legacy fields remain empty. The new override changes only the model;
+        // its provider binding is verified and overwritten by the server.
         provider: '',
         model: '',
+        modelOverride: modelOverride,
+        modelOverrideProvider:
+            modelOverride.isEmpty ? '' : credentials.ai.provider,
       );
       final saved =
           await ref.read(issuesServiceProvider).updateSettings(toSave);
       if (!mounted) return;
       setState(() {
         _edited = saved;
+        _syncModelSelection(saved, credentials);
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -87,6 +125,34 @@ class _AiRemediationSettingsScreenState
         SnackBar(content: Text(_friendlyError(e))),
       );
     }
+  }
+
+  AiProviderOption? _providerOption(CredentialsStatus credentials) {
+    for (final option in credentials.ai.providers) {
+      if (option.id == credentials.ai.provider) return option;
+    }
+    return null;
+  }
+
+  void _syncModelSelection(
+    RemediationSettings settings,
+    CredentialsStatus credentials,
+  ) {
+    final option = _providerOption(credentials);
+    final activeOverride =
+        settings.modelOverrideProvider == credentials.ai.provider
+            ? settings.modelOverride
+            : '';
+    if (activeOverride.isEmpty) {
+      _modelSelection = _sharedModel;
+      return;
+    }
+    if (option?.models.any((model) => model.id == activeOverride) == true) {
+      _modelSelection = activeOverride;
+      return;
+    }
+    _modelSelection = _customModel;
+    _customModelController.text = activeOverride;
   }
 
   @override
@@ -268,15 +334,76 @@ class _AiRemediationSettingsScreenState
           ),
         ),
         const _SectionLabel('Shared AI'),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: Text(
-            'Always uses the provider and model currently selected in Admin > '
-            'Providers & Credentials, including the admin-shared OpenAI '
-            '(OAuth) connection. Change the shared AI profile there.',
-            style: TextStyle(
+            'Uses the shared ${_providerOption(_credentials!)?.label ?? _credentials!.ai.provider} '
+            'provider and credential from Admin > Providers & Credentials. '
+            'The assistant model there is ${_credentials!.ai.model}. You can '
+            'choose a different model below for remediation only.',
+            style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 13,
+              height: 1.35,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: DropdownButtonFormField<String>(
+            key: ValueKey(
+              'remediation-model-${_credentials!.ai.provider}-$_modelSelection',
+            ),
+            initialValue: _modelSelection,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Remediation model',
+              isDense: true,
+            ),
+            items: [
+              DropdownMenuItem(
+                value: _sharedModel,
+                child: Text('Use shared model (${_credentials!.ai.model})'),
+              ),
+              ...?_providerOption(_credentials!)?.models.map(
+                    (model) => DropdownMenuItem(
+                      value: model.id,
+                      child: Text(model.label),
+                    ),
+                  ),
+              const DropdownMenuItem(
+                value: _customModel,
+                child: Text('Custom model ID'),
+              ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                setState(() => _modelSelection = value);
+              }
+            },
+          ),
+        ),
+        if (_modelSelection == _customModel)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: TextField(
+              controller: _customModelController,
+              decoration: const InputDecoration(
+                labelText: 'Custom model ID',
+                helperText:
+                    'Saving runs a small response test before activation.',
+                isDense: true,
+              ),
+            ),
+          ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text(
+            'If the shared provider changes later, Cantinarr falls back to its '
+            'shared model until a remediation override is tested for the new provider.',
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
               height: 1.35,
             ),
           ),

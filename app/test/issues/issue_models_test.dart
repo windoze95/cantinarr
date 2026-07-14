@@ -166,6 +166,8 @@ void main() {
         mode: RemediationMode.supervised,
         provider: 'openai',
         model: 'gpt-5',
+        modelOverride: 'gpt-5-mini',
+        modelOverrideProvider: 'openai',
         maxSteps: 12,
         maxTurnTokens: 4096,
         maxWallClockSecs: 300,
@@ -179,6 +181,8 @@ void main() {
       final back = RemediationSettings.fromJson(s.toJson());
       expect(back.provider, 'openai');
       expect(back.model, 'gpt-5');
+      expect(back.modelOverride, 'gpt-5-mini');
+      expect(back.modelOverrideProvider, 'openai');
       expect(back.mode, RemediationMode.supervised);
       expect(back.maxUserWaitHours, 48);
       expect(back.observationMinMinutes, 12);
@@ -193,6 +197,8 @@ void main() {
       final s = RemediationSettings.fromJson({});
       expect(s.provider, '');
       expect(s.model, '');
+      expect(s.modelOverride, '');
+      expect(s.modelOverrideProvider, '');
       expect(s.mode, RemediationMode.supervised); // tolerant safe default
       expect(s.maxUserWaitHours, 72);
       expect(s.observationMinMinutes, 10);

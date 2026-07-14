@@ -23,16 +23,29 @@ type AutonomousTurn struct {
 	Model    string
 }
 
+// AutonomousModelOverride is an optional remediation model that was tested
+// against Provider. The provider binding makes a later shared-provider change
+// fall back safely to the new profile's model instead of sending a stale model
+// designation to an unrelated provider.
+type AutonomousModelOverride struct {
+	Provider string
+	Model    string
+}
+
 // ResolveSharedAutonomousTurn snapshots the admin-owned provider and model and
-// builds a turn runner against that exact billing source. Autonomous work has no
-// separate provider or model selection that can drift from the shared profile.
-func (h *Handler) ResolveSharedAutonomousTurn(ctx context.Context) (AutonomousTurn, error) {
+// builds a turn runner against that exact billing source. A tested model
+// override may replace only the model; the provider, credential, and billing
+// source always come from the current shared profile.
+func (h *Handler) ResolveSharedAutonomousTurn(ctx context.Context, override AutonomousModelOverride) (AutonomousTurn, error) {
 	resolved := h.resolveSharedAI(ctx)
 	if !resolved.Available {
 		return AutonomousTurn{Provider: resolved.Provider, Model: resolved.Model},
 			fmt.Errorf("shared AI is unavailable: %s", resolved.Reason)
 	}
 	model := resolved.Model
+	if override.Provider == resolved.Provider && strings.TrimSpace(override.Model) != "" {
+		model = strings.TrimSpace(override.Model)
+	}
 
 	var runner TurnRunner
 	switch resolved.Provider {
