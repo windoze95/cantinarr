@@ -21,6 +21,70 @@ func TestHasPermission_UserAndAdmin(t *testing.T) {
 	}
 }
 
+func TestRolePermissionMatrixIsExact(t *testing.T) {
+	permissions := []Permission{
+		PermissionAdmin,
+		PermissionMediaDiscover,
+		PermissionMediaRequest,
+		PermissionAIChat,
+		PermissionMCPAccess,
+		PermissionUsersManage,
+		PermissionRequestsManage,
+		PermissionCredentialsManage,
+		PermissionAIToolsManage,
+		PermissionInstancesManage,
+		PermissionRemediationManage,
+		PermissionArrRead,
+		PermissionArrSearch,
+		PermissionArrBrowse,
+		PermissionDownloadsRead,
+		PermissionDownloadsManage,
+		PermissionMonitoringRead,
+		PermissionSystemRead,
+	}
+	registered := allPermissions()
+	if len(registered) != len(permissions) {
+		t.Fatalf("registered permission count = %d, want explicit matrix count %d", len(registered), len(permissions))
+	}
+	userAllowed := map[Permission]bool{
+		PermissionMediaDiscover: true,
+		PermissionMediaRequest:  true,
+		PermissionAIChat:        true,
+		PermissionMCPAccess:     true,
+		PermissionArrBrowse:     true,
+	}
+	for _, permission := range permissions {
+		if !registered[permission] {
+			t.Errorf("permission %q is missing from the registry", permission)
+		}
+		if !HasPermission(RoleAdmin, permission) {
+			t.Errorf("admin missing permission %q", permission)
+		}
+		if got := HasPermission(RoleUser, permission); got != userAllowed[permission] {
+			t.Errorf("user permission %q = %t, want %t", permission, got, userAllowed[permission])
+		}
+		if HasPermission("unknown", permission) {
+			t.Errorf("unknown role received permission %q", permission)
+		}
+	}
+
+	listedUser := make(map[Permission]bool)
+	for _, permission := range PermissionsForRole(RoleUser) {
+		listedUser[permission] = true
+	}
+	if len(listedUser) != len(userAllowed) {
+		t.Fatalf("listed user permission count = %d, want %d", len(listedUser), len(userAllowed))
+	}
+	for permission := range userAllowed {
+		if !listedUser[permission] {
+			t.Errorf("PermissionsForRole(user) omitted %q", permission)
+		}
+	}
+	if got := PermissionsForRole("unknown"); len(got) != 0 {
+		t.Fatalf("unknown role permission list = %v", got)
+	}
+}
+
 func TestAuthMiddleware_RehydratesCurrentUserRole(t *testing.T) {
 	svc := setupTestService(t)
 

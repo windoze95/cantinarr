@@ -604,7 +604,6 @@ func restrictedThreadConfig() map[string]any {
 		"features.computer_use":                    false,
 		"features.image_generation":                false,
 		"features.apps":                            false,
-		"apps.enabled":                             false,
 		"features.plugins":                         false,
 		"features.remote_plugin":                   false,
 		"features.plugin_sharing":                  false,
