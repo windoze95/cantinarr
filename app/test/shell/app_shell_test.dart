@@ -21,6 +21,81 @@ import 'package:go_router/go_router.dart';
 
 void main() {
   testWidgets(
+      'programmatic form scrolling keeps focus while a user drag dismisses it',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final focusNode = FocusNode();
+    final scrollController = ScrollController();
+    addTearDown(focusNode.dispose);
+    addTearDown(scrollController.dispose);
+
+    final router = GoRouter(
+      initialLocation: '/settings/form',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/settings/form',
+              builder: (_, __) => Scaffold(
+                body: ListView(
+                  controller: scrollController,
+                  children: [
+                    TextField(focusNode: focusNode),
+                    const SizedBox(height: 1200),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_authenticatedAiState),
+          ),
+          backendClientProvider.overrideWithValue(_fakeDio()),
+          realtimeEventsProvider
+              .overrideWithValue(const Stream<WsEvent>.empty()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    focusNode.requestFocus();
+    await tester.pump();
+    expect(focusNode.hasFocus, isTrue);
+
+    scrollController.animateTo(
+      100,
+      duration: const Duration(milliseconds: 100),
+      curve: Curves.linear,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      focusNode.hasFocus,
+      isTrue,
+      reason: 'automatic field reveal must not dismiss the keyboard',
+    );
+
+    await tester.drag(find.byType(ListView), const Offset(0, -100));
+    await tester.pumpAndSettle();
+    expect(focusNode.hasFocus, isFalse);
+  });
+
+  testWidgets(
       'search-bar assistant submit opens route over previous shell content',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);

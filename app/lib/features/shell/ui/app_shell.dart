@@ -314,9 +314,17 @@ class _AppShellState extends ConsumerState<AppShell>
     final atTop =
         notification.metrics.pixels <= notification.metrics.minScrollExtent + 4;
 
-    if (notification is ScrollStartNotification ||
-        notification is ScrollUpdateNotification ||
-        notification is OverscrollNotification) {
+    // EditableText programmatically scrolls its focused field into view when
+    // the keyboard changes the viewport. Those notifications have no drag
+    // details; dismissing focus for them makes the keyboard immediately close
+    // again on fields near the bottom of long forms.
+    final isUserDrag = switch (notification) {
+      ScrollStartNotification(:final dragDetails) => dragDetails != null,
+      ScrollUpdateNotification(:final dragDetails) => dragDetails != null,
+      OverscrollNotification(:final dragDetails) => dragDetails != null,
+      _ => false,
+    };
+    if (isUserDrag) {
       _dismissKeyboard();
     }
 
