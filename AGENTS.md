@@ -30,6 +30,10 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 - Site changes (`site/`, plain static HTML/CSS, no build step): merges to `main` deploy `site/` to Cloudflare Pages via `site.yml` when the `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` secrets are set; manual deploy is `npx wrangler pages deploy site --project-name=cantinarr`.
 - Mention any tests or checks that could not be run.
 
+## Master test checklist
+
+- Keep `docs/testing/` aligned with the product: whenever a change adds, removes, or changes behavior, update the relevant cases and add any missing happy-path, edge-case, permission, and failure coverage in the same change.
+
 ## Architecture conventions
 
 - **The live DB schema is code, not SQL files.** It lives in `server/internal/db/db.go` (`initSQL` plus the in-code migration/`ALTER` list). Schema changes go there.

@@ -1,0 +1,34 @@
+# Cantinarr master test checklist
+
+This folder is the master list of end-to-end Cantinarr behavior to verify. Cases are grouped by product area, shared setup is listed in [fixtures](fixtures.md), and the [run template](run-template.md) can be copied when recording a test run.
+
+## Test areas
+
+| Area | Case prefixes | Cases |
+|---|---|---:|
+| [Build, operations, usability, and release](catalog/baseline-operations-release.md) | BASE, OPS, UX, PERF, REL, EXP | 72 |
+| [Authentication, navigation, users, and security](catalog/auth-users-security.md) | AUTH, NAV, USER, SEC | 88 |
+| [Instances, realtime behavior, and push](catalog/instances-realtime-push.md) | INST, RT, PUSH | 65 |
+| [Plex linking, libraries, and invitations](catalog/plex.md) | PLEX | 87 |
+| [Discovery and requests](catalog/discovery-requests.md) | DISC, REQ | 69 |
+| [Media services and download clients](catalog/media-services.md) | RAD, SON, BOOK, DOWN, TAUT | 91 |
+| [Issues, AI, and MCP](catalog/issues-ai-mcp.md) | ISS, AI, MCP | 115 |
+| **Total** | | **587** |
+
+## Running the checklist
+
+1. Prepare the accounts, services, and data needed for the selected cases using [fixtures](fixtures.md).
+2. Choose the applicable product areas and case IDs.
+3. Copy the [run template](run-template.md) and record results, notes, and evidence there. Leave the committed checklist unchecked so it stays reusable.
+4. For third-party integrations, verify both Cantinarr's result and the resulting state in Plex, the arr service, download client, push device, or AI provider.
+5. When a case has a vector table, run every applicable row before marking the parent case complete.
+
+Use `PASS` when the expected behavior is observed, `FAIL` when it is not, `BLOCKED` when the test cannot be completed, and `N/A` when the case does not apply to the tested configuration.
+
+Priorities describe impact:
+
+- **P0**: critical behavior or a release blocker for the affected area.
+- **P1**: serious behavior that should be covered for changes in the affected area.
+- **P2**: extended, compatibility, or exploratory coverage.
+
+Tags describe the proof surface: **AUTO** machine-driven repository or CI proof, **API** direct contract check, **UI** app behavior, **LIVE** real third-party service/device, **CHAOS** controlled failure/recovery, **SEC** authorization/privacy, **RT** realtime convergence, and **GAP** expected behavior that is known not to be implemented yet.
