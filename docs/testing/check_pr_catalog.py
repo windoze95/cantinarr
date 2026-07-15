@@ -162,6 +162,7 @@ def expand_ids(value: str, errors: list[str]) -> set[str]:
 
 
 def validate(body: str, changed_ids: set[str] | None = None) -> list[str]:
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
     errors: list[str] = []
     declarations = list(DECLARATION_RE.finditer(body))
     if len(declarations) != 1:
