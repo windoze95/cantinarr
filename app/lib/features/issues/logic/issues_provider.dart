@@ -13,15 +13,32 @@ final issuesServiceProvider = Provider<IssuesService>((ref) {
   return IssuesService(backendDio: ref.watch(backendClientProvider));
 });
 
-/// Tracks the number of issues needing admin attention, for admins only.
+/// The two non-terminal issue buckets used by the navigation. Tracking stays
+/// separate because it keeps the Issues entry reachable without contributing
+/// to the attention badge.
+class IssueQueueCounts {
+  const IssueQueueCounts({
+    this.needsAttention = 0,
+    this.tracking = 0,
+    this.hasLoaded = false,
+  });
+
+  final int needsAttention;
+  final int tracking;
+  final bool hasLoaded;
+
+  int get active => needsAttention + tracking;
+}
+
+/// Tracks the number of issues needing attention or being tracked, for admins.
 ///
-/// Drives the drawer "Issues" entry badge (and could feed an app-bar dot the
-/// same way the approvals count does). It is seeded from REST, kept live by
-/// issue/action websocket events, and refreshed after a dismiss. Non-admin
-/// accounts always report 0 and never call the
-/// admin-only endpoint. Mirrors `PendingApprovalsNotifier`.
-class OpenIssuesNotifier extends StateNotifier<int> {
-  OpenIssuesNotifier(this._ref) : super(0) {
+/// [openIssuesProvider] drives the actionable badge, while
+/// [activeIssuesProvider] also includes passive arr recovery so a conditionally
+/// visible menu entry does not disappear during tracking. Both are seeded from
+/// one REST request and kept live by issue/action WebSocket events. Non-admin
+/// accounts always report zero and never call the admin-only endpoint.
+class IssueQueueCountsNotifier extends StateNotifier<IssueQueueCounts> {
+  IssueQueueCountsNotifier(this._ref) : super(const IssueQueueCounts()) {
     _bind();
     // Re-bind on login/logout/role change without rebuilding the provider.
     _ref.listen(authProvider, (_, __) => _bind(force: true));
@@ -44,7 +61,7 @@ class OpenIssuesNotifier extends StateNotifier<int> {
     _sub?.cancel();
     _sub = null;
     if (!admin) {
-      _set(0);
+      _set(const IssueQueueCounts());
       return;
     }
     refresh();
@@ -78,23 +95,40 @@ class OpenIssuesNotifier extends StateNotifier<int> {
       // would keep calling the old server.
       final issues = await _ref.read(issuesServiceProvider).listIssues();
       if (!_isAdmin || epoch != _refreshEpoch) return;
-      final open = issues.where((i) => i.status.needsAttention).length;
-      _set(open);
+      _set(IssueQueueCounts(
+        needsAttention:
+            issues.where((issue) => issue.status.needsAttention).length,
+        tracking: issues.where((issue) => issue.status.isTracking).length,
+        hasLoaded: true,
+      ));
     } catch (_) {
-      // Best-effort: keep the last known count on a transient failure (covers
-      // the pre-merge 404 too).
+      if (!_isAdmin || epoch != _refreshEpoch) return;
+      // Preserve the last badge counts, but fail open for conditional menu
+      // visibility because the queue's emptiness is no longer authoritative.
+      _set(IssueQueueCounts(
+        needsAttention: state.needsAttention,
+        tracking: state.tracking,
+      ));
     }
   }
 
-  /// Sets the count directly from a caller that already holds the authoritative
-  /// list (the issues screen), avoiding a redundant fetch.
-  void setCount(int value) {
+  /// Sets both counts from a caller that already holds the authoritative list
+  /// (the issues screen), avoiding a redundant fetch.
+  void setCounts({required int needsAttention, required int tracking}) {
     _refreshEpoch++;
-    _set(value);
+    _set(IssueQueueCounts(
+      needsAttention: needsAttention,
+      tracking: tracking,
+      hasLoaded: true,
+    ));
   }
 
-  void _set(int value) {
-    state = value < 0 ? 0 : value;
+  void _set(IssueQueueCounts value) {
+    state = IssueQueueCounts(
+      needsAttention: value.needsAttention < 0 ? 0 : value.needsAttention,
+      tracking: value.tracking < 0 ? 0 : value.tracking,
+      hasLoaded: value.hasLoaded,
+    );
   }
 
   @override
@@ -105,9 +139,33 @@ class OpenIssuesNotifier extends StateNotifier<int> {
   }
 }
 
-/// Attention-needed issue count for the signed-in admin (0 for non-admins).
-final openIssuesProvider =
-    StateNotifierProvider<OpenIssuesNotifier, int>(OpenIssuesNotifier.new);
+final issueQueueCountsProvider =
+    StateNotifierProvider<IssueQueueCountsNotifier, IssueQueueCounts>(
+  IssueQueueCountsNotifier.new,
+);
+
+/// Attention-needed issue count for badges (zero for non-admins).
+final openIssuesProvider = Provider<int>(
+  (ref) => ref.watch(
+    issueQueueCountsProvider.select((counts) => counts.needsAttention),
+  ),
+);
+
+/// Non-terminal issue count for conditional menu visibility. Unlike the badge,
+/// this includes issues in passive Tracking states.
+final activeIssuesProvider = Provider<int>(
+  (ref) => ref.watch(
+    issueQueueCountsProvider.select((counts) => counts.active),
+  ),
+);
+
+/// Whether the issue counts have an authoritative snapshot. Conditional menu
+/// visibility fails open until this is true.
+final issueQueueCountsLoadedProvider = Provider<bool>(
+  (ref) => ref.watch(
+    issueQueueCountsProvider.select((counts) => counts.hasLoaded),
+  ),
+);
 
 /// Tracks the number of agent-proposed actions awaiting an admin decision, for
 /// admins only.
@@ -133,6 +191,7 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
     if (!force && admin == _isAdmin) return;
     _refreshEpoch++;
     _isAdmin = admin;
+    _ref.read(pendingAgentActionsLoadedProvider.notifier).state = false;
     _sub?.cancel();
     _sub = null;
     if (!admin) {
@@ -159,6 +218,7 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
       _refreshDebounce?.cancel();
       _refreshEpoch++;
       _set(raw.toInt());
+      _ref.read(pendingAgentActionsLoadedProvider.notifier).state = true;
     } else {
       _refreshDebounce?.cancel();
       _refreshDebounce = Timer(const Duration(milliseconds: 300), refresh);
@@ -175,9 +235,12 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
           await _ref.read(issuesServiceProvider).listPendingActions();
       if (!_isAdmin || epoch != _refreshEpoch) return;
       _set(actions.where((a) => a.canTakeAction).length);
+      _ref.read(pendingAgentActionsLoadedProvider.notifier).state = true;
     } catch (_) {
-      // Best-effort: keep the last known count on a transient failure (covers
-      // the pre-merge 404 too).
+      if (!_isAdmin || epoch != _refreshEpoch) return;
+      // Preserve the last badge count while making a conditionally hidden row
+      // visible again until an authoritative refresh succeeds.
+      _ref.read(pendingAgentActionsLoadedProvider.notifier).state = false;
     }
   }
 
@@ -186,6 +249,7 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
   void setCount(int value) {
     _refreshEpoch++;
     _set(value);
+    _ref.read(pendingAgentActionsLoadedProvider.notifier).state = true;
   }
 
   void _set(int value) {
@@ -205,3 +269,6 @@ final pendingAgentActionsProvider =
     StateNotifierProvider<PendingAgentActionsNotifier, int>(
   PendingAgentActionsNotifier.new,
 );
+
+/// Whether the agent-action count has been read successfully at least once.
+final pendingAgentActionsLoadedProvider = StateProvider<bool>((ref) => false);

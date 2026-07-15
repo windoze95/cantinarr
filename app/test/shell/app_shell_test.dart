@@ -18,8 +18,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets(
       'programmatic form scrolling keeps focus while a user drag dismisses it',
       (tester) async {
@@ -284,6 +289,133 @@ void main() {
     );
     expect(find.text('Radarr library'), findsOneWidget);
   });
+
+  testWidgets('admin drawer keeps all attention entries visible by default',
+      (tester) async {
+    await _pumpAdminDrawer(tester);
+
+    expect(find.text('NEEDS ATTENTION'), findsOneWidget);
+    expect(find.text('Approvals'), findsOneWidget);
+    expect(find.text('Issues'), findsOneWidget);
+    expect(find.text('Agent fixes'), findsOneWidget);
+  });
+
+  testWidgets(
+      'conditional attention entries and empty section hide after empty loads',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'approvals_menu_only_when_pending': true,
+      'issues_menu_only_when_active': true,
+      'agent_fixes_menu_only_when_awaiting_review': true,
+    });
+
+    await _pumpAdminDrawer(tester);
+
+    expect(find.text('Approvals'), findsNothing);
+    expect(find.text('Issues'), findsNothing);
+    expect(find.text('Agent fixes'), findsNothing);
+    expect(find.text('NEEDS ATTENTION'), findsNothing);
+  });
+
+  testWidgets('conditional attention entries fail open when queues are unknown',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'approvals_menu_only_when_pending': true,
+      'issues_menu_only_when_active': true,
+      'agent_fixes_menu_only_when_awaiting_review': true,
+    });
+
+    await _pumpAdminDrawer(tester, failAttentionQueues: true);
+
+    expect(find.text('NEEDS ATTENTION'), findsOneWidget);
+    expect(find.text('Approvals'), findsOneWidget);
+    expect(find.text('Issues'), findsOneWidget);
+    expect(find.text('Agent fixes'), findsOneWidget);
+  });
+
+  testWidgets('tracking-only issue restores Issues without an attention badge',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'approvals_menu_only_when_pending': true,
+      'issues_menu_only_when_active': true,
+      'agent_fixes_menu_only_when_awaiting_review': true,
+    });
+
+    await _pumpAdminDrawer(
+      tester,
+      issues: const [
+        {
+          'id': 1,
+          'status': 'observing',
+          'media_type': 'movie',
+          'tmdb_id': 1,
+          'title': 'Tracked movie',
+        },
+      ],
+    );
+
+    expect(find.text('NEEDS ATTENTION'), findsOneWidget);
+    expect(find.text('Approvals'), findsNothing);
+    expect(find.text('Agent fixes'), findsNothing);
+    expect(find.text('Issues'), findsOneWidget);
+
+    final issuesTile = tester.widget<ListTile>(
+      find.ancestor(
+        of: find.text('Issues'),
+        matching: find.byType(ListTile),
+      ),
+    );
+    expect(issuesTile.trailing, isNull);
+  });
+}
+
+Future<void> _pumpAdminDrawer(
+  WidgetTester tester, {
+  List<Map<String, dynamic>> issues = const [],
+  bool failAttentionQueues = false,
+}) async {
+  tester.view.physicalSize = const Size(390, 844);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(() {
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+
+  final router = GoRouter(
+    initialLocation: '/dashboard/movies',
+    routes: [
+      ShellRoute(
+        builder: (context, state, child) =>
+            AppShell(currentPath: state.uri.path, child: child),
+        routes: [
+          GoRoute(
+            path: '/dashboard/movies',
+            builder: (_, __) => const Scaffold(body: Text('Dashboard home')),
+          ),
+        ],
+      ),
+    ],
+  );
+
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        authProvider.overrideWith(
+          () => _FakeAuthNotifier(_authenticatedAiState),
+        ),
+        backendClientProvider.overrideWithValue(_fakeDio(
+          issues: issues,
+          failAttentionQueues: failAttentionQueues,
+        )),
+        realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+      ],
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  await tester.pumpAndSettle();
+
+  await tester.tap(find.byIcon(Icons.menu));
+  await tester.pumpAndSettle();
 }
 
 const _authenticatedAiState = AuthState(
@@ -344,13 +476,27 @@ class _FakeAiChatNotifier extends AiChatNotifier {
   }
 }
 
-Dio _fakeDio() {
+Dio _fakeDio({
+  List<Map<String, dynamic>> issues = const [],
+  bool failAttentionQueues = false,
+}) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
-  dio.httpClientAdapter = _JsonAdapter();
+  dio.httpClientAdapter = _JsonAdapter(
+    issues: issues,
+    failAttentionQueues: failAttentionQueues,
+  );
   return dio;
 }
 
 class _JsonAdapter implements HttpClientAdapter {
+  const _JsonAdapter({
+    this.issues = const [],
+    this.failAttentionQueues = false,
+  });
+
+  final List<Map<String, dynamic>> issues;
+  final bool failAttentionQueues;
+
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
@@ -358,11 +504,23 @@ class _JsonAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final path = options.path;
+    if (failAttentionQueues &&
+        (path == '/api/admin/requests' ||
+            path == '/api/admin/issues' ||
+            path == '/api/admin/agent-actions')) {
+      return ResponseBody.fromString(
+        '{"error":"temporarily unavailable"}',
+        503,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+    }
     final Object body;
     if (path.endsWith('/movie') || path.endsWith('/series')) {
       body = [];
     } else if (path == '/api/admin/issues') {
-      body = {'issues': []};
+      body = {'issues': issues};
     } else if (path == '/api/admin/agent-actions') {
       body = {'actions': []};
     } else {

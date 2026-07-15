@@ -7,6 +7,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
+import '../../../core/widgets/attention_menu_visibility_switch.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../logic/setup_status_provider.dart';
@@ -320,6 +321,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 context,
                 updateStatus?.managementUrl ?? '',
               ),
+            ),
+          ],
+
+          if (user?.isAdmin == true) ...[
+            const SizedBox(height: 16),
+            const _SectionHeader(title: 'Needs attention menu'),
+            const AttentionMenuVisibilitySwitch(
+              item: AttentionMenuItem.approvals,
+            ),
+            const AttentionMenuVisibilitySwitch(
+              item: AttentionMenuItem.issues,
+            ),
+            const AttentionMenuVisibilitySwitch(
+              item: AttentionMenuItem.agentFixes,
             ),
           ],
 

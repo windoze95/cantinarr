@@ -229,7 +229,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       await ref.read(issuesServiceProvider).dismiss(widget.issueId);
       await _load();
       if (!mounted) return;
-      ref.read(openIssuesProvider.notifier).refresh();
+      ref.read(issueQueueCountsProvider.notifier).refresh();
       ref.read(pendingAgentActionsProvider.notifier).refresh();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Issue dismissed.')),
@@ -271,7 +271,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
           );
       await _load();
       if (!mounted) return;
-      ref.read(openIssuesProvider.notifier).refresh();
+      ref.read(issueQueueCountsProvider.notifier).refresh();
       ref.read(pendingAgentActionsProvider.notifier).refresh();
       _showSnack(
         disposition == AdminIssueDisposition.resolved
