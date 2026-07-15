@@ -220,7 +220,7 @@ Full API documentation is in [`server/README.md`](server/README.md#api-reference
 
 ## Contributing
 
-Contributions are welcome! Please open an issue to discuss your idea before submitting a PR. `AGENTS.md` is the operating manual for contributors and AI agents -- branch protocol, verification commands, and the documentation standard live there.
+Contributions are welcome! Please open an issue to discuss your idea before submitting a PR. [`AGENTS.md`](AGENTS.md) is the operating manual for contributors and AI agents, and the [master regression catalog](docs/testing/README.md) is the behavioral contract every change must reconcile.
 
 ## License
 
