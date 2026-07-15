@@ -126,18 +126,6 @@ class MediaHeader extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              'NOW IN FOCUS',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .labelSmall
-                                  ?.copyWith(
-                                    color: AppTheme.signal,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 1.4,
-                                  ),
-                            ),
-                            const SizedBox(height: 7),
-                            Text(
                               title,
                               style: Theme.of(context)
                                   .textTheme
