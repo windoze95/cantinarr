@@ -57,7 +57,8 @@ Future<void> _waitFor(bool Function() condition) async {
 }
 
 void main() {
-  test('issue_updated refetch counts only actionable issues', () async {
+  test('issue_updated separates actionable badges from active menu issues',
+      () async {
     final events = StreamController<WsEvent>.broadcast();
     final service = _FakeIssuesService([
       _issue(1, 'open'),
@@ -85,6 +86,8 @@ void main() {
 
     await _waitFor(() => service.listCalls == 1);
     expect(container.read(openIssuesProvider), 2);
+    expect(container.read(activeIssuesProvider), 2);
+    expect(container.read(issueQueueCountsLoadedProvider), isTrue);
 
     service.issues = [
       _issue(1, 'observing'),
@@ -103,5 +106,22 @@ void main() {
     await _waitFor(() => container.read(openIssuesProvider) == 1);
     expect(service.listCalls, greaterThanOrEqualTo(2));
     expect(container.read(openIssuesProvider), 1);
+    expect(
+      container.read(activeIssuesProvider),
+      3,
+      reason: 'tracking keeps Issues eligible without inflating its badge',
+    );
+
+    service.issues = [
+      _issue(1, 'resolved'),
+      _issue(2, 'dismissed'),
+    ];
+    events.add(const WsEvent(
+      type: 'issue_updated',
+      data: {'issue_id': 2, 'open_count': 99},
+    ));
+
+    await _waitFor(() => container.read(activeIssuesProvider) == 0);
+    expect(container.read(openIssuesProvider), 0);
   });
 }

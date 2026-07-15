@@ -18,24 +18,24 @@ import '../../settings/data/request_settings_service.dart';
 /// always report 0 and never call the admin-only endpoint.
 class PendingApprovalsNotifier extends StateNotifier<int> {
   PendingApprovalsNotifier(this._ref) : super(0) {
-    _service =
-        RequestSettingsService(backendDio: _ref.read(backendClientProvider));
     _bind();
     // Re-bind on login/logout/role change without rebuilding the provider.
-    _ref.listen(authProvider, (_, __) => _bind());
+    _ref.listen(authProvider, (_, __) => _bind(force: true));
   }
 
   final Ref _ref;
-  late final RequestSettingsService _service;
   StreamSubscription<WsEvent>? _sub;
   bool _isAdmin = false;
+  int _refreshEpoch = 0;
 
   /// (Re)attaches to the live event stream when the admin status changes.
-  void _bind() {
-    final admin =
-        _ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
-    if (admin == _isAdmin) return; // no change
+  void _bind({bool force = false}) {
+    final admin = _ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    // Auth changes can replace the backend client while the role stays admin.
+    if (!force && admin == _isAdmin) return;
+    _refreshEpoch++;
     _isAdmin = admin;
+    _ref.read(pendingApprovalsLoadedProvider.notifier).state = false;
     _sub?.cancel();
     _sub = null;
     if (!admin) {
@@ -52,29 +52,44 @@ class PendingApprovalsNotifier extends StateNotifier<int> {
   /// Applies the authoritative count carried by a `request_pending` event,
   /// falling back to an optimistic +1 if the server didn't include it.
   void _onPending(WsEvent event) {
+    _refreshEpoch++;
     final raw = event.data['pending_count'];
     if (raw is num) {
       _set(raw.toInt());
     } else {
       _set(state + 1);
     }
+    _ref.read(pendingApprovalsLoadedProvider.notifier).state = true;
   }
 
   /// Re-reads the queue depth from the backend. Call after an approve/deny so
   /// the badges reflect the resolved queue immediately.
   Future<void> refresh() async {
     if (!_isAdmin) return;
+    final epoch = ++_refreshEpoch;
     try {
-      final pending = await _service.listPending();
+      final service = RequestSettingsService(
+        backendDio: _ref.read(backendClientProvider),
+      );
+      final pending = await service.listPending();
+      if (!_isAdmin || epoch != _refreshEpoch) return;
       _set(pending.length);
+      _ref.read(pendingApprovalsLoadedProvider.notifier).state = true;
     } catch (_) {
-      // Best-effort: keep the last known count on a transient failure.
+      if (!_isAdmin || epoch != _refreshEpoch) return;
+      // Preserve the last badge count, but fail open for conditional menu
+      // visibility because the queue's emptiness is no longer authoritative.
+      _ref.read(pendingApprovalsLoadedProvider.notifier).state = false;
     }
   }
 
   /// Sets the count directly from a caller that already holds the authoritative
   /// queue (the approvals screen), avoiding a redundant fetch.
-  void setCount(int value) => _set(value);
+  void setCount(int value) {
+    _refreshEpoch++;
+    _set(value);
+    _ref.read(pendingApprovalsLoadedProvider.notifier).state = true;
+  }
 
   void _set(int value) {
     final next = value < 0 ? 0 : value;
@@ -95,3 +110,6 @@ final pendingApprovalsProvider =
     StateNotifierProvider<PendingApprovalsNotifier, int>(
   PendingApprovalsNotifier.new,
 );
+
+/// Whether the approvals count has been read successfully at least once.
+final pendingApprovalsLoadedProvider = StateProvider<bool>((ref) => false);

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/attention_menu_visibility_switch.dart';
 import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
 import 'issue_refresh_banner.dart';
@@ -81,9 +82,13 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
         _isLoading = false;
         _error = null;
       });
-      // Keep the drawer badge in sync with the list we just loaded.
-      final open = issues.where((i) => i.status.needsAttention).length;
-      ref.read(openIssuesProvider.notifier).setCount(open);
+      // Keep both the actionable badge and tracking-aware menu visibility in
+      // sync with the authoritative list we just loaded.
+      ref.read(issueQueueCountsProvider.notifier).setCounts(
+            needsAttention:
+                issues.where((issue) => issue.status.needsAttention).length,
+            tracking: issues.where((issue) => issue.status.isTracking).length,
+          );
     } catch (e) {
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
@@ -208,6 +213,13 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
                                   },
                                 ),
                         ),
+            ),
+            const Divider(color: AppTheme.border, height: 1),
+            const SafeArea(
+              top: false,
+              child: AttentionMenuVisibilitySwitch(
+                item: AttentionMenuItem.issues,
+              ),
             ),
           ],
         ),

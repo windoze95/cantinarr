@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/attention_menu_visibility_switch.dart';
 import '../data/agent_action_models.dart';
 import '../logic/issues_provider.dart';
 import 'issue_refresh_banner.dart';
@@ -177,6 +178,13 @@ class _PendingAgentActionsScreenState
                                 )
                               : _buildGroupedList(_visibleActions),
                         ),
+            ),
+            const Divider(color: AppTheme.border, height: 1),
+            const SafeArea(
+              top: false,
+              child: AttentionMenuVisibilitySwitch(
+                item: AttentionMenuItem.agentFixes,
+              ),
             ),
           ],
         ),

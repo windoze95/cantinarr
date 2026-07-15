@@ -52,8 +52,8 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       // Re-sync the approvals badges in case the queue changed (or another
       // admin acted) while we were backgrounded. No-op for non-admins.
       ref.read(pendingApprovalsProvider.notifier).refresh();
-      // Same for the open-issues badge.
-      ref.read(openIssuesProvider.notifier).refresh();
+      // Same for the actionable + tracking issue navigation state.
+      ref.read(issueQueueCountsProvider.notifier).refresh();
       // Proposals may have executed, failed, or been superseded while the app
       // was backgrounded. Reconcile the review badge on every foreground.
       ref.read(pendingAgentActionsProvider.notifier).refresh();

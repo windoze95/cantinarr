@@ -2,6 +2,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
+import 'package:cantinarr/core/storage/preferences.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/issues/data/agent_action_models.dart';
@@ -16,6 +17,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const _adminState = AuthState(
   connection: BackendConnection(
@@ -208,24 +210,29 @@ class _FakeIssuesService extends IssuesService {
   }
 }
 
-Future<void> _pumpScreen(
+Future<ProviderContainer> _pumpScreen(
   WidgetTester tester, {
   required _FakeIssuesService service,
   required Widget screen,
 }) async {
+  final container = ProviderContainer(
+    overrides: [
+      authProvider.overrideWith(_FakeAuthNotifier.new),
+      issuesServiceProvider.overrideWithValue(service),
+      realtimeEventsProvider.overrideWithValue(
+        const Stream<WsEvent>.empty(),
+      ),
+    ],
+  );
+  addTearDown(container.dispose);
   await tester.pumpWidget(
-    ProviderScope(
-      overrides: [
-        authProvider.overrideWith(_FakeAuthNotifier.new),
-        issuesServiceProvider.overrideWithValue(service),
-        realtimeEventsProvider.overrideWithValue(
-          const Stream<WsEvent>.empty(),
-        ),
-      ],
+    UncontrolledProviderScope(
+      container: container,
       child: MaterialApp(home: screen),
     ),
   );
   await tester.pumpAndSettle();
+  return container;
 }
 
 Future<void> _resumeApp(WidgetTester tester) async {
@@ -238,7 +245,18 @@ Future<void> _resumeApp(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+void _usePhoneSize(WidgetTester tester) {
+  tester.view.physicalSize = const Size(390, 844);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(() {
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+}
+
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets('needs_admin shows its instruction and activity failure',
       (tester) async {
     const instruction =
@@ -446,6 +464,10 @@ void main() {
       find.text("Couldn't refresh issues. Showing the last update."),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey('issues-conditional-menu-visibility')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('tracking filter separates passive arr recovery from attention',
@@ -503,6 +525,35 @@ void main() {
       ),
       findsNWidgets(2),
     );
+  });
+
+  testWidgets('empty issues list keeps its menu visibility control available',
+      (tester) async {
+    _usePhoneSize(tester);
+    final service = _FakeIssuesService(
+      thread: IssueThread.fromJson({
+        'issue': _issueJson(),
+        'thread': const [],
+      }),
+    );
+    final container = await _pumpScreen(
+      tester,
+      service: service,
+      screen: const IssuesListScreen(),
+    );
+
+    expect(find.text('No issues need attention.'), findsOneWidget);
+    final toggle = find.byKey(
+      const ValueKey('issues-conditional-menu-visibility'),
+    );
+    expect(toggle, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(container.read(issuesMenuOnlyWhenActiveProvider), isTrue);
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
   });
 
   testWidgets('tracking thread is passive while arr recovery is in flight',
@@ -575,6 +626,43 @@ void main() {
       find.text("Couldn't refresh agent fixes. Showing the last update."),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey('agentFixes-conditional-menu-visibility')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+      'empty agent fixes list keeps its menu visibility control available',
+      (tester) async {
+    _usePhoneSize(tester);
+    final service = _FakeIssuesService(
+      thread: IssueThread.fromJson({
+        'issue': _issueJson(),
+        'thread': const [],
+      }),
+    );
+    final container = await _pumpScreen(
+      tester,
+      service: service,
+      screen: const PendingAgentActionsScreen(),
+    );
+
+    expect(find.text('No fixes awaiting review.'), findsOneWidget);
+    final toggle = find.byKey(
+      const ValueKey('agentFixes-conditional-menu-visibility'),
+    );
+    expect(toggle, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(
+      container.read(agentFixesMenuOnlyWhenAwaitingReviewProvider),
+      isTrue,
+    );
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
   });
 
   testWidgets('live agent activity polls and labels a retained stale snapshot',

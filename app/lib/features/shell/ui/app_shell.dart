@@ -745,14 +745,33 @@ class _AppShellState extends ConsumerState<AppShell>
         ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
             false;
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
+    final approvalsLoaded = ref.watch(pendingApprovalsLoadedProvider);
     final openIssues = ref.watch(openIssuesProvider);
+    final activeIssues = ref.watch(activeIssuesProvider);
+    final issuesLoaded = ref.watch(issueQueueCountsLoadedProvider);
     final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
+    final agentActionsLoaded = ref.watch(pendingAgentActionsLoadedProvider);
     final plexInvitesWaiting = ref.watch(plexInvitesWaitingProvider);
     // Setup reminder: unconfigured-feature count, shown while the admin
     // hasn't muted it from the checklist screen.
     final setupRemaining = ref.watch(setupStatusProvider)?.remaining ?? 0;
     final showSetupReminder =
         setupRemaining > 0 && ref.watch(setupReminderEnabledProvider);
+    final showApprovals = !ref.watch(approvalsMenuOnlyWhenPendingProvider) ||
+        !approvalsLoaded ||
+        pendingApprovals > 0;
+    final showIssues = !ref.watch(issuesMenuOnlyWhenActiveProvider) ||
+        !issuesLoaded ||
+        activeIssues > 0;
+    final showAgentFixes =
+        !ref.watch(agentFixesMenuOnlyWhenAwaitingReviewProvider) ||
+            !agentActionsLoaded ||
+            pendingAgentActions > 0;
+    final showNeedsAttentionSection = showApprovals ||
+        showIssues ||
+        showAgentFixes ||
+        plexInvitesWaiting > 0 ||
+        showSetupReminder;
 
     // AI Assistant is a tool, not a library, so it sits with the footer actions
     // instead of under the "Libraries" header. It's always last in
@@ -907,35 +926,38 @@ class _AppShellState extends ConsumerState<AppShell>
 
           // Admin action queues — kept above the modules so a waiting count is
           // the first thing an admin sees when the drawer opens.
-          if (isAdmin) ...[
+          if (isAdmin && showNeedsAttentionSection) ...[
             const _DrawerSectionHeader('Needs attention'),
-            _DrawerItem(
-              icon: Icons.fact_check_outlined,
-              title: 'Approvals',
-              badgeCount: pendingApprovals,
-              onTap: () {
-                if (isOverlay) Navigator.pop(context);
-                context.push('/approvals');
-              },
-            ),
-            _DrawerItem(
-              icon: Icons.flag_outlined,
-              title: 'Issues',
-              badgeCount: openIssues,
-              onTap: () {
-                if (isOverlay) Navigator.pop(context);
-                context.push('/issues');
-              },
-            ),
-            _DrawerItem(
-              icon: Icons.build_circle_outlined,
-              title: 'Agent fixes',
-              badgeCount: pendingAgentActions,
-              onTap: () {
-                if (isOverlay) Navigator.pop(context);
-                context.push('/agent-actions');
-              },
-            ),
+            if (showApprovals)
+              _DrawerItem(
+                icon: Icons.fact_check_outlined,
+                title: 'Approvals',
+                badgeCount: pendingApprovals,
+                onTap: () {
+                  if (isOverlay) Navigator.pop(context);
+                  context.push('/approvals');
+                },
+              ),
+            if (showIssues)
+              _DrawerItem(
+                icon: Icons.flag_outlined,
+                title: 'Issues',
+                badgeCount: openIssues,
+                onTap: () {
+                  if (isOverlay) Navigator.pop(context);
+                  context.push('/issues');
+                },
+              ),
+            if (showAgentFixes)
+              _DrawerItem(
+                icon: Icons.build_circle_outlined,
+                title: 'Agent fixes',
+                badgeCount: pendingAgentActions,
+                onTap: () {
+                  if (isOverlay) Navigator.pop(context);
+                  context.push('/agent-actions');
+                },
+              ),
             // Appears only while someone is waiting on a Plex invite (e.g.
             // the push was missed or an auto-invite failed); lands on the
             // Users screen where the invite is one tap.
