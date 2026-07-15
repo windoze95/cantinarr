@@ -2,7 +2,7 @@
 
 Discovery, search, detail views, availability, requester policy, approval, and request lifecycle behavior.
 
-These are canonical, run-neutral definitions. Keep every active case unchecked; record executions only in a copy assembled with the [run template](../run-template.md).
+Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Discovery, search, media detail, and release timeline
 

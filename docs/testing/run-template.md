@@ -1,6 +1,6 @@
-# Regression run-copy template
+# Test run template
 
-Copy the entire `docs/testing/` tree outside the worktree, or preserve its directory layout in a release/issue artifact. Fill metadata, case checkboxes, vector results, and evidence only in that execution copy. Never overwrite a failure during a retest; append the retest and resolution so the original result remains auditable. The committed catalog must remain blank and run-neutral.
+Use this template with the catalog files to record a test run. Copy it into a release or issue artifact, then fill in the scope, results, notes, and evidence. Keep credentials and other secrets out of evidence.
 
 ## Run record
 
@@ -23,10 +23,8 @@ Copy the entire `docs/testing/` tree outside the worktree, or preserve its direc
 
 ## Execution evidence log
 
-Append one row for every failure, block, accepted N/A, and any P0/P1 result that needs external proof. Keep evidence free of secrets.
+Add rows for the cases in scope, especially failures, blocked tests, accepted N/A results, and cases that need external proof.
 
 | Case ID | Result | Version / environment | Evidence | Defect / note | Tester / date |
 |---|---|---|---|---|---|
 | | | | | | |
-
-Apply the release exit criteria from the canonical master-catalog index before declaring the run complete.

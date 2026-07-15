@@ -2,7 +2,7 @@
 
 Plex ownership, server selection, explicit and all-library scopes, current and future libraries, invites, lifecycle truth, errors, and races.
 
-These are canonical, run-neutral definitions. Keep every active case unchecked; record executions only in a copy assembled with the [run template](../run-template.md).
+Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Plex onboarding, linking, library sharing, and invitations
 
@@ -83,15 +83,15 @@ These are real Plex end-to-end tests. “Invite sent” is not proven by Cantina
 - [ ] `PLEX-073` · P1 · CHAOS/UI — Poll an expired PIN and a Plex response slower than the 3-second timer; verify polling terminates/does not overlap, link success renders once, and no duplicate load/snackbar occurs.
 - [ ] `PLEX-074` · P1 · CHAOS/UI — Rapidly switch owned servers while library requests complete out of order; verify only the currently selected server's libraries render and can be saved.
 - [ ] `PLEX-075` · P1 · API/SEC — Submit duplicate/zero/negative/stale/foreign-server section IDs and a machine/name mismatch directly; verify unowned/invalid access scopes are rejected rather than trusted from the client.
-- [ ] `PLEX-076` · P1 · GAP/UI/API — After a successful manual fallback, use the required explicit truthful reconciliation/marking flow; verify it clears waiting state without claiming acceptance or changing Plex permissions. Retain as a product-gap failure until such a flow exists.
+- [ ] `PLEX-076` · P1 · GAP/UI/API — After a successful manual fallback, use the required explicit truthful reconciliation/marking flow; verify it clears waiting state without claiming acceptance or changing Plex permissions.
 - [ ] `PLEX-077` · P0 · CHAOS/API — Configure owner A/server/subset/auto-invite, corrupt/delete only the token, then relink owner B without Unlink; verify old machine/library/auto settings are cleared or revalidated and no stale-owner invite can be sent.
 - [ ] `PLEX-078` · P0 · CHAOS/LIVE — Let Plex commit a share but drop the response until Cantinarr times out; prove external access exists while local stamp/push do not, then retry and verify duplicate handling reconciles state without claiming a fresh email.
 - [ ] `PLEX-079` · P0 · CHAOS/LIVE — Pause a manual invite after Cantinarr reads email A, change the user to email B, then release A's response; verify A's invite cannot stamp B as invited.
-- [ ] `PLEX-080` · P0 · GAP/UI/RT — Admin A sends a one-tap invite while Admin B stays elsewhere; verify Admin B's waiter count converges without reopening Users/manual refresh. Retain as a realtime-gap failure until an admin event exists.
-- [ ] `PLEX-081` · P1 · GAP/UI/RT — Keep the recipient guide open while an admin sends the invite; verify it changes to check-inbox without route reopen/arbitrary delay. Retain as a realtime-gap failure until the profile consumes the event.
+- [ ] `PLEX-080` · P0 · GAP/UI/RT — Admin A sends a one-tap invite while Admin B stays elsewhere; verify Admin B's waiter count converges without reopening Users/manual refresh.
+- [ ] `PLEX-081` · P1 · GAP/UI/RT — Keep the recipient guide open while an admin sends the invite; verify it changes to check-inbox without route reopen/arbitrary delay.
 - [ ] `PLEX-082` · P1 · LIVE — Invite an unregistered email, record Plex's exact response/pending state, then create/accept that account; verify Cantinarr stamps only when Plex accepted the share request and never infers acceptance.
 - [ ] `PLEX-083` · P0 · API/SEC — Omit `library_section_ids` and send it as explicit `null`; verify neither silently authorizes empty/all-library access unless the request explicitly selected that documented mode.
-- [ ] `PLEX-084` · P1 · GAP/UI/API — As a waiting (unstamped) user, withdraw the shared email; verify email/stamp clear, waiting/admin counts converge, no invite runs, and later auto-invite has no stale target. Retain as a product-gap failure until withdrawal is supported.
+- [ ] `PLEX-084` · P1 · GAP/UI/API — As a waiting (unstamped) user, withdraw the shared email; verify email/stamp clear, waiting/admin counts converge, no invite runs, and later auto-invite has no stale target.
 - [ ] `PLEX-085` · P0 · CHAOS/UI/API — Revoke the Plex token externally, then inspect status, setup checklist, Users actions, server list, and invite; verify no misleading operational/configured state, no stamp, and a clear relink path.
 - [ ] `PLEX-086` · P1 · CHAOS — Delay auto-invite before Plex commits, let the email POST return, then restart; verify no stamp/sent copy, user remains a waiter after restart, and one manual retry sends/stamps exactly once.
 - [ ] `PLEX-087` · P1 · UI/LIVE — Resend after the recipient accepted access; verify `already_shared` copy is now truthful, no new-email push is sent, and existing libraries are neither removed nor silently broadened.

@@ -2,7 +2,7 @@
 
 Build gates, install and upgrade behavior, product-wide usability, performance, release pipelines, and exploratory coverage.
 
-These are canonical, run-neutral definitions. Keep every active case unchecked; record executions only in a copy assembled with the [run template](../run-template.md).
+Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Release gate and build baseline
 

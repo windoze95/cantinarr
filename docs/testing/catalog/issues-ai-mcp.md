@@ -2,7 +2,7 @@
 
 Issue reporting and remediation, AI accounts and chat, tool settings, and all user/admin MCP contracts.
 
-These are canonical, run-neutral definitions. Keep every active case unchecked; record executions only in a copy assembled with the [run template](../run-template.md).
+Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Issues, passive recovery, and AI remediation
 

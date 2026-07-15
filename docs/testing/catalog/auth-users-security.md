@@ -2,7 +2,7 @@
 
 Identity, device sessions, authorization, navigation, user administration, privacy, and failure containment.
 
-These are canonical, run-neutral definitions. Keep every active case unchecked; record executions only in a copy assembled with the [run template](../run-template.md).
+Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Authentication, accounts, devices, and authorization
 
