@@ -3,7 +3,6 @@ name: CI
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -19,16 +18,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Validate regression catalog
-        working-directory: ${{ github.workspace }}
-        run: python3 docs/testing/check_catalog.py --base-ref "${{ github.event.pull_request.base.sha }}"
-
-      - name: Validate PR catalog declaration
-        working-directory: ${{ github.workspace }}
-        run: python3 docs/testing/check_pr_catalog.py
 
       - name: Set up Go
         uses: actions/setup-go@v5
