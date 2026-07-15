@@ -12,7 +12,8 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 - Branch names follow `feat/…`, `fix/…`, `docs/…`, `chore/…`.
 - Do not open PRs directly from `main`. If work accidentally happens on `main`, verify `main` is still even with `origin/main`, then move the work to a feature branch before committing.
 - Preserve user work. Do not revert or delete unrelated local changes or untracked files.
-- When the change is ready: commit on the feature branch, push it right away, and open a PR with `gh pr create` unless the user explicitly asks not to.
+- When the change is ready: commit on the feature branch, push it right away, and open a ready-for-review PR (never a draft) with `gh pr create` unless the user explicitly asks not to.
+- After opening a PR, monitor every required CI check to completion and merge only after they are all green. If a check fails, diagnose and fix it on the same branch, push the fix, and wait for the rerun to pass before merging; never merge with pending or failing required checks.
 - After a PR merges, do not reuse its branch — start the next change from a fresh `main`.
 
 ## Verification
