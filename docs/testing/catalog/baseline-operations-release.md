@@ -76,9 +76,6 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `REL-009` · P1 · LIVE — Run TestFlight workflow for an iOS-relevant change; verify signed build installs, entitlements/passkeys/push/deep links work, and excluded paths do not trigger unintended builds.
 - [ ] `REL-010` · P1 · LIVE — Run Play beta workflow for Android-relevant changes; verify signed AAB, package/version, passkeys/deep links, build-only PR behavior, and no upload without service-account secret.
 - [ ] `REL-011` · P1 · API — Verify store-listing-only changes use the listing workflow, copy/assets land in intended storefronts, and do not trigger irrelevant native builds.
-- [ ] `REL-012` · P1 · UI — Validate marketing site homepage/404/header policy at phone/desktop sizes; verify navigation, screenshots, self-host snippet, demo, store badges, privacy, and canonical links.
-- [ ] `REL-013` · P1 · LIVE — Deploy `site/` through Cloudflare workflow/manual Wrangler path; verify correct project, cache/security headers, assets/fonts, and live smoke without a build step.
-- [ ] `REL-014` · P1 · SEC/UI — Run link checker, HTML validation, accessibility audit, image-alt/contrast/keyboard checks, and verify no secret/env data is emitted into the static site.
 - [ ] `REL-015` · P0 · API — Compare shipped behavior with `README.md`, `server/README.md`, `app/README.md`, update/store docs, privacy policy, site copy, route/tool/env/table counts, and version floors; record any drift as a release defect.
 - [ ] `REL-016` · P0 · API — Verify `CLAUDE.md` remains only a thin import/pointer to `AGENTS.md` and contributor/test/release instructions do not conflict.
 - [ ] `REL-017` · P1 · UI/AUTO — Build `app/test/preview/screenshot_main.dart`, run `app/tool/screenshots/shoot.js`, and verify every required store image has deterministic populated data, documented dimensions/fastlane placement, no live credentials, and no clipped UI.

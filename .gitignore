@@ -44,6 +44,3 @@ app/pubspec.lock
 # Demo deployment material (TLS origin certs/keys live here — never commit)
 demo/
 *.pem
-
-# Wrangler local state (created by manual `wrangler pages deploy`)
-.wrangler/
