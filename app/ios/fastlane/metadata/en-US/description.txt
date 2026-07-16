@@ -9,7 +9,7 @@ Everyone you share the server with gets a clean way to find and request things:
 • Browse trending and popular movies and shows, powered by TMDB and Trakt
 • Search everything from one bar, with plain availability labels: Available, Requested, Downloading
 • Request in one tap, or pick exactly which seasons (or book formats) you want
-• Watch download progress live, and get a push notification when your request is approved and when it's ready
+• Watch download progress live and get push notifications
 • Something wrong with a file? Report a problem right on the title and the server's AI agent can investigate
 • Ask the built-in AI assistant what to watch tonight; bring your own AI key or ChatGPT link, or use an admin-provided AI provider when granted
 

@@ -4,7 +4,7 @@
 
 **[cantinarr.com](https://cantinarr.com)** · **[Live demo](https://demo.cantinarr.com)**
 
-Discover and request movies, TV shows, and books. Manage Radarr, Sonarr, Chaptarr, and four download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. Every consequential agent fix remains behind your approval. Your household gets the simple experience; you keep control of access, approvals, and quality.
+Discover and request movies, TV shows, and books. Get push notifications. Manage Radarr, Sonarr, Chaptarr, and four download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. You set the agent's operating boundaries. Your household gets the simple experience; you keep control of access, approvals, and quality.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -169,7 +169,7 @@ By default, users are passwordless and passkeyless: a connect link starts a perm
 2. Open the link on your device -- it creates your account and connects automatically
 3. Browse movies, TV shows, and books powered by TMDB, Trakt, and Chaptarr
 4. Tap "Request" on anything you want -- pick seasons or book formats if you like
-5. Watch download progress live; get a push when your request is approved and when it's ready
+5. Watch download progress live and get push notifications
 6. Something wrong with a file? Tap "Report a problem"; Cantinarr quietly watches for an in-flight Radarr/Sonarr recovery, then investigates only if the problem persists
 7. Ask the AI assistant for recommendations or to make requests for you. Use the included server provider when granted, or choose your own provider under **Settings > AI Access**
 
