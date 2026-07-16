@@ -1,4 +1,4 @@
-Cantinarr is the intelligent control app for your self-hosted media server — discovery and requests for your household, control of Radarr, Sonarr, and Chaptarr for you, unified management of four download clients, plus diagnosis and admin-approved fixes when downloads get stuck.
+Cantinarr is the intelligent control app for your self-hosted media server — discovery and requests for your household, control of Radarr, Sonarr, and Chaptarr for you, unified management of your download clients, plus diagnosis and admin-approved fixes when downloads get stuck.
 
 You need a Cantinarr server to use this app. The server is open source and runs as a single Docker container; setup instructions are on GitHub.
 

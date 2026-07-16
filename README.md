@@ -4,7 +4,7 @@
 
 **[cantinarr.com](https://cantinarr.com)** · **[Live demo](https://demo.cantinarr.com)**
 
-Discover and request movies, TV shows, and books. Get push notifications. Manage Radarr, Sonarr, Chaptarr, and four download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. You set the agent's operating boundaries. Your household gets the simple experience; you keep control of access, approvals, and quality.
+Discover and request movies, TV shows, and books. Get push notifications. Manage Radarr, Sonarr, Chaptarr, and your download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. You set the agent's operating boundaries. Your household gets the simple experience; you keep control of access, approvals, and quality.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
