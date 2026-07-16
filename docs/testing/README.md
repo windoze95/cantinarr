@@ -6,14 +6,14 @@ This folder is the master list of end-to-end Cantinarr behavior to verify. Cases
 
 | Area | Case prefixes | Cases |
 |---|---|---:|
-| [Build, operations, usability, and release](catalog/baseline-operations-release.md) | BASE, OPS, UX, PERF, REL, EXP | 72 |
+| [Build, operations, usability, and release](catalog/baseline-operations-release.md) | BASE, OPS, UX, PERF, REL, EXP | 69 |
 | [Authentication, navigation, users, and security](catalog/auth-users-security.md) | AUTH, NAV, USER, SEC | 88 |
 | [Instances, realtime behavior, and push](catalog/instances-realtime-push.md) | INST, RT, PUSH | 65 |
 | [Plex linking, libraries, and invitations](catalog/plex.md) | PLEX | 87 |
 | [Discovery and requests](catalog/discovery-requests.md) | DISC, REQ | 69 |
 | [Media services and download clients](catalog/media-services.md) | RAD, SON, BOOK, DOWN, TAUT | 91 |
 | [Issues, AI, and MCP](catalog/issues-ai-mcp.md) | ISS, AI, MCP | 115 |
-| **Total** | | **587** |
+| **Total** | | **584** |
 
 ## Running the checklist
 
