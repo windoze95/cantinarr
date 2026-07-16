@@ -1,1 +1,1 @@
-Discover and request movies, shows, and books. Manage Radarr, Sonarr, Chaptarr, and four download clients. Diagnose stuck downloads; agent fixes need your approval.
+Discover and request movies, shows, and books. Get push notifications. Manage your media stack and diagnose stuck downloads. Set the agent's operating boundaries.
