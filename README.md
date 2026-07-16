@@ -1,10 +1,10 @@
 # Cantinarr
 
-A seamless media request and *arr management server + app.
+**Your media server just learned to run itself.**
 
 **[cantinarr.com](https://cantinarr.com)** · **[Live demo](https://demo.cantinarr.com)**
 
-Cantinarr makes it dead simple for your family and friends to discover and request movies, TV shows, and books. They browse a beautiful interface powered by TMDB and Trakt, tap "Request," and the server handles everything behind the scenes -- adding to Radarr, Sonarr, or Chaptarr with the right IDs, the right quality profile, the right root folder. No configuration, no confusion, no TVDB headaches.
+Discover and request movies, TV shows, and books. Manage Radarr, Sonarr, Chaptarr, and four download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. Every consequential agent fix remains behind your approval. Your household gets the simple experience; you keep control of access, approvals, and quality.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐

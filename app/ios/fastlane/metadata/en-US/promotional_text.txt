@@ -1,1 +1,1 @@
-Let your household browse and request movies, shows, and books while you control access and approvals.
+Discover and request movies, shows, and books. Manage Radarr, Sonarr, Chaptarr, and four download clients. Diagnose stuck downloads; agent fixes need your approval.

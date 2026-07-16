@@ -181,10 +181,31 @@ h1 em {
 .lede { font-size: 1.13rem; color: var(--muted); max-width: 34em; }
 .lede.center { margin: 0 auto; }
 
+.hero-loop {
+  display: flex;
+  align-items: center;
+  list-style: none;
+  margin-top: 26px;
+  color: var(--gold-bright);
+  font-family: var(--mono);
+  font-size: clamp(.63rem, 2.3vw, .72rem);
+  font-weight: 600;
+  letter-spacing: .08em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.hero-loop li { display: flex; align-items: center; }
+.hero-loop li:not(:last-child)::after {
+  content: '·';
+  margin: 0 clamp(.55em, 1.4vw, .9em);
+  color: var(--signal);
+}
+
 .hero-note { margin-top: 20px; font-size: .95rem; color: var(--muted); }
 
 /* store badges */
-.stores { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 34px; }
+.stores { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 28px; }
 .store {
   position: relative;
   display: inline-flex;
@@ -297,6 +318,7 @@ h1 em {
 .d2 { animation-delay: .18s; }
 .d3 { animation-delay: .3s; }
 .d4 { animation-delay: .42s; }
+.d5 { animation-delay: .54s; }
 @keyframes rise { to { opacity: 1; transform: none; } }
 
 .reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s cubic-bezier(.2, .7, .2, 1), transform .7s cubic-bezier(.2, .7, .2, 1); }

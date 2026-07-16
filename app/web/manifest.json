@@ -5,7 +5,7 @@
     "display": "standalone",
     "background_color": "#0C0805",
     "theme_color": "#0C0805",
-    "description": "Requests and management for your Cantinarr media server.",
+    "description": "Discover, request, manage, and fix stuck downloads on your media server.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

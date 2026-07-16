@@ -1,8 +1,8 @@
 # Cantinarr Flutter App
 
-The client for [Cantinarr](https://github.com/windoze95/cantinarr) -- a frictionless media request app for Plex and Jellyfin households.
+The client for [Cantinarr](https://github.com/windoze95/cantinarr) -- an intelligent self-hosted media manager for Plex and Jellyfin households.
 
-Built with Flutter; iOS, Android, and web are the shipping targets (web is embedded in the server binary). One dark, warm cinematic theme, TMDB/Trakt-powered discovery, one-tap requests with approvals, deep *arr control, books, an AI assistant, and push notifications -- all app API traffic goes through the Cantinarr backend, while a ChatGPT account link explicitly hands authorization off to the external browser.
+Built with Flutter; iOS, Android, and web are the shipping targets (web is embedded in the server binary). One dark, warm cinematic theme, TMDB/Trakt-powered discovery, one-tap requests with approvals, deep *arr control, books, download-client management, stuck-download diagnosis and supervised fixes, an AI assistant, and push notifications -- all app API traffic goes through the Cantinarr backend, while a ChatGPT account link explicitly hands authorization off to the external browser.
 
 ```
 ┌──────────────────────────────────────────────────────┐
