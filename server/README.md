@@ -1,6 +1,6 @@
 # Cantinarr Server
 
-The backend brain for [Cantinarr](https://github.com/windoze95/cantinarr) -- a self-hosted media request app for Plex and Jellyfin households.
+The backend brain for [Cantinarr](https://github.com/windoze95/cantinarr) -- the self-hosted server behind its discovery, request, management, and repair loop.
 
 A single Go binary that bridges your arr stack, serves the web UI, and keeps API keys off user devices. Drop it on your NAS, point it at Radarr/Sonarr (and Chaptarr for books), and generate connect links for family and friends.
 

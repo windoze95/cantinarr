@@ -1,5 +1,5 @@
 name: cantinarr
-description: A frictionless media request app for Plex/Jellyfin servers.
+description: An intelligent self-hosted media manager for Plex and Jellyfin.
 publish_to: 'none'
 version: 0.1.0+1
 
