@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:passkeys_platform_interface/passkeys_platform_interface.dart';
 import 'package:passkeys_platform_interface/types/types.dart';
@@ -32,19 +33,19 @@ Future<bool> isAvailableAsync() async {
 Future<Map<String, dynamic>> create(Map<String, dynamic> options) async {
   try {
     await _platform.cancelCurrentAuthenticatorOperation();
-    final publicKey = _normalizeCreationOptions(_publicKeyOptions(options));
+    final publicKey = normalizeCreationOptions(_publicKeyOptions(options));
     final request = RegisterRequestType.fromJson(publicKey);
     final response = await _platform.register(request);
     return response.toJson();
   } on PlatformException catch (e) {
-    throw Exception(_messageForPlatformException(e, isLogin: false));
+    throw Exception(messageForPlatformException(e, isLogin: false));
   }
 }
 
 Future<Map<String, dynamic>> get(Map<String, dynamic> options) async {
   try {
     await _platform.cancelCurrentAuthenticatorOperation();
-    final publicKey = _normalizeRequestOptions(_publicKeyOptions(options));
+    final publicKey = normalizeRequestOptions(_publicKeyOptions(options));
     final request = AuthenticateRequestType.fromJson(
       publicKey,
       mediation: MediationType.Required,
@@ -53,7 +54,7 @@ Future<Map<String, dynamic>> get(Map<String, dynamic> options) async {
     final response = await _platform.authenticate(request);
     return response.toJson();
   } on PlatformException catch (e) {
-    throw Exception(_messageForPlatformException(e, isLogin: true));
+    throw Exception(messageForPlatformException(e, isLogin: true));
   }
 }
 
@@ -68,10 +69,14 @@ Map<String, dynamic> _publicKeyOptions(Map<String, dynamic> options) {
   throw const FormatException('Missing passkey options');
 }
 
-Map<String, dynamic> _normalizeCreationOptions(Map<String, dynamic> options) {
+/// Fills in the optional WebAuthn creation fields the native authenticator
+/// libraries require (exposed for tests; behavior-identical to the previous
+/// private helper).
+@visibleForTesting
+Map<String, dynamic> normalizeCreationOptions(Map<String, dynamic> options) {
   final normalized = Map<String, dynamic>.from(options);
   normalized['excludeCredentials'] =
-      _credentialDescriptors(normalized['excludeCredentials']);
+      credentialDescriptors(normalized['excludeCredentials']);
 
   final authenticatorSelection = normalized['authenticatorSelection'];
   if (authenticatorSelection is Map) {
@@ -87,9 +92,13 @@ Map<String, dynamic> _normalizeCreationOptions(Map<String, dynamic> options) {
   return normalized;
 }
 
-Map<String, dynamic> _normalizeRequestOptions(Map<String, dynamic> options) {
+/// Normalizes WebAuthn request (login) options: defaults credential
+/// transports and drops an empty allowCredentials list entirely (exposed for
+/// tests; behavior-identical to the previous private helper).
+@visibleForTesting
+Map<String, dynamic> normalizeRequestOptions(Map<String, dynamic> options) {
   final normalized = Map<String, dynamic>.from(options);
-  final allowCredentials = _credentialDescriptors(
+  final allowCredentials = credentialDescriptors(
     normalized['allowCredentials'],
   );
   if (allowCredentials.isEmpty) {
@@ -100,7 +109,11 @@ Map<String, dynamic> _normalizeRequestOptions(Map<String, dynamic> options) {
   return normalized;
 }
 
-List<Map<String, dynamic>> _credentialDescriptors(Object? value) {
+/// Coerces a raw excludeCredentials/allowCredentials value into descriptor
+/// maps with `transports` always present (exposed for tests;
+/// behavior-identical to the previous private helper).
+@visibleForTesting
+List<Map<String, dynamic>> credentialDescriptors(Object? value) {
   if (value is! List) {
     return const [];
   }
@@ -111,7 +124,10 @@ List<Map<String, dynamic>> _credentialDescriptors(Object? value) {
   }).toList();
 }
 
-String _messageForPlatformException(
+/// Maps a passkeys plugin [PlatformException] code to a user-facing message
+/// (exposed for tests; behavior-identical to the previous private helper).
+@visibleForTesting
+String messageForPlatformException(
   PlatformException error, {
   required bool isLogin,
 }) {

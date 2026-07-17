@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'core/network/websocket_client.dart';
 import 'core/providers/realtime_provider.dart';
@@ -17,6 +16,62 @@ import 'features/request/logic/pending_approvals_provider.dart';
 import 'features/settings/logic/update_status_provider.dart';
 import 'navigation/app_router.dart';
 
+/// Source of platform deep links: the link that launched the app (if any)
+/// plus the stream of links delivered while it runs. The default
+/// implementation wraps [AppLinks]; tests override [deepLinkSourceProvider]
+/// to inject links without the platform channel.
+abstract class DeepLinkSource {
+  Future<Uri?> getInitialLink();
+  Stream<Uri> get uriLinkStream;
+}
+
+class _AppLinksSource implements DeepLinkSource {
+  final AppLinks _appLinks = AppLinks();
+
+  @override
+  Future<Uri?> getInitialLink() => _appLinks.getInitialLink();
+
+  @override
+  Stream<Uri> get uriLinkStream => _appLinks.uriLinkStream;
+}
+
+/// App-wide [DeepLinkSource].
+final deepLinkSourceProvider =
+    Provider<DeepLinkSource>((_) => _AppLinksSource());
+
+/// True when two user-entered server URLs point at the same server, ignoring
+/// cosmetic differences (case, trailing slashes, an omitted scheme, a default
+/// port).
+@visibleForTesting
+bool sameServer(String left, String right) =>
+    normalizeServer(left) == normalizeServer(right);
+
+/// Canonicalizes a user-entered server URL for comparison: trims whitespace,
+/// assumes https:// when no scheme is given, strips trailing slashes, and
+/// lowercases the scheme and host. Never throws — unparseable input falls
+/// back to a lowercased string compare.
+@visibleForTesting
+String normalizeServer(String value) {
+  var normalized = value.trim();
+  if (!normalized.startsWith('http://') &&
+      !normalized.startsWith('https://')) {
+    normalized = 'https://$normalized';
+  }
+  while (normalized.endsWith('/')) {
+    normalized = normalized.substring(0, normalized.length - 1);
+  }
+  final parsed = Uri.tryParse(normalized);
+  if (parsed == null || parsed.host.isEmpty) {
+    return normalized.toLowerCase();
+  }
+  return parsed
+      .replace(
+        scheme: parsed.scheme.toLowerCase(),
+        host: parsed.host.toLowerCase(),
+      )
+      .toString();
+}
+
 class CantinarrApp extends ConsumerStatefulWidget {
   const CantinarrApp({super.key});
 
@@ -26,7 +81,6 @@ class CantinarrApp extends ConsumerStatefulWidget {
 
 class _CantinarrAppState extends ConsumerState<CantinarrApp>
     with WidgetsBindingObserver {
-  late final AppLinks _appLinks;
   StreamSubscription<Uri>? _linkSubscription;
   final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
@@ -34,7 +88,6 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _appLinks = AppLinks();
     _initDeepLinks();
     // Reading the push service wires its native tap handler (for warm taps);
     // once the first frame is up (router exists) route any cold-start tap.
@@ -63,16 +116,17 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
   }
 
   Future<void> _initDeepLinks() async {
+    final links = ref.read(deepLinkSourceProvider);
     // Handle initial link (app opened via link)
     try {
-      final initialLink = await _appLinks.getInitialLink();
+      final initialLink = await links.getInitialLink();
       if (initialLink != null) {
         _handleLink(initialLink);
       }
     } catch (_) {}
 
     // Handle links while app is running
-    _linkSubscription = _appLinks.uriLinkStream.listen(_handleLink);
+    _linkSubscription = links.uriLinkStream.listen(_handleLink);
   }
 
   void _handleLink(Uri uri) {
@@ -93,39 +147,18 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     final currentServer = auth.connection?.serverUrl;
     final matchesServer = targetServer == null ||
         currentServer == null ||
-        _sameServer(targetServer, currentServer);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (auth.isAuthenticated && matchesServer) {
-        context.go('/settings/passkeys/new');
-      } else {
-        context.go('/login');
-      }
-    });
-  }
-
-  bool _sameServer(String left, String right) =>
-      _normalizeServer(left) == _normalizeServer(right);
-
-  String _normalizeServer(String value) {
-    var normalized = value.trim();
-    if (!normalized.startsWith('http://') &&
-        !normalized.startsWith('https://')) {
-      normalized = 'https://$normalized';
+        sameServer(targetServer, currentServer);
+    // Navigate through the router instance (the same pattern as
+    // _showAutodispatchDisabledSnack below): this state sits ABOVE
+    // MaterialApp.router, so `context.go` cannot see the router — GoRouter.of
+    // walks up the tree and asserts. And a post-frame deferral would wait on a
+    // frame nothing schedules when the app is idle; router.go needs neither.
+    final router = ref.read(appRouterProvider);
+    if (auth.isAuthenticated && matchesServer) {
+      router.go('/settings/passkeys/new');
+    } else {
+      router.go('/login');
     }
-    while (normalized.endsWith('/')) {
-      normalized = normalized.substring(0, normalized.length - 1);
-    }
-    final parsed = Uri.tryParse(normalized);
-    if (parsed == null || parsed.host.isEmpty) {
-      return normalized.toLowerCase();
-    }
-    return parsed
-        .replace(
-          scheme: parsed.scheme.toLowerCase(),
-          host: parsed.host.toLowerCase(),
-        )
-        .toString();
   }
 
   @override

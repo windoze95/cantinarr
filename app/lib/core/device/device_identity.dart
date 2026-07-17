@@ -44,26 +44,33 @@ class DeviceIdentityService {
 
     DeviceIdentity raw;
     try {
-      raw = await _read();
+      raw = await readDeviceInfo();
     } catch (e) {
       debugPrint('DeviceIdentity: read failed: $e');
       raw = DeviceIdentity(displayName: _fallbackName(), hardwareId: '');
     }
 
     final hardwareId =
-        raw.hardwareId.isNotEmpty ? raw.hardwareId : await _persistedId();
+        raw.hardwareId.isNotEmpty ? raw.hardwareId : await persistedId();
     final identity =
         DeviceIdentity(displayName: raw.displayName, hardwareId: hardwareId);
     _cached = identity;
     return identity;
   }
 
-  Future<DeviceIdentity> _read() async {
+  /// Reads the raw platform identity via `device_info_plus`. Overridable in
+  /// tests (the platform branch taken depends on the host OS, so unit tests
+  /// stub this seam instead of the plugin); behavior-identical to the previous
+  /// private helper.
+  @protected
+  @visibleForTesting
+  Future<DeviceIdentity> readDeviceInfo() async {
     if (kIsWeb) {
       final info = await _plugin.webBrowserInfo;
-      final browser = _capitalize(info.browserName.name);
-      final os = _webOs(info.platform ?? info.userAgent ?? '');
-      final label = os.isEmpty ? browser : '$browser on $os';
+      final label = webDisplayName(
+        info.browserName.name,
+        info.platform ?? info.userAgent ?? '',
+      );
       // Browsers expose no stable hardware id; the persisted UUID fallback
       // makes web dedup best-effort (per browser profile).
       return DeviceIdentity(displayName: label, hardwareId: '');
@@ -71,7 +78,7 @@ class DeviceIdentityService {
     if (Platform.isIOS) {
       final info = await _plugin.iosInfo;
       return DeviceIdentity(
-        displayName: _appleModelName(info.utsname.machine),
+        displayName: appleModelName(info.utsname.machine),
         hardwareId: info.identifierForVendor ?? '',
       );
     }
@@ -104,7 +111,12 @@ class DeviceIdentityService {
     return DeviceIdentity(displayName: _fallbackName(), hardwareId: '');
   }
 
-  Future<String> _persistedId() async {
+  /// Reads (or mints and persists) the fallback UUID used as [hardwareId] on
+  /// platforms without a native device identifier (web, Android). Stored under
+  /// [StorageKeys.hardwareId], which the logout purge deliberately skips, so
+  /// the same physical device dedupes across sessions.
+  @visibleForTesting
+  Future<String> persistedId() async {
     final existing = await _storage.read(key: StorageKeys.hardwareId);
     if (existing != null && existing.isNotEmpty) return existing;
     final generated = const Uuid().v4();
@@ -122,6 +134,16 @@ class DeviceIdentityService {
       if (Platform.isLinux) return 'Linux';
     } catch (_) {}
     return 'Unknown Device';
+  }
+
+  /// Builds the web display label ("Chrome on macOS") from the reported
+  /// browser name and a platform/user-agent hint. Exposed for tests; the OS
+  /// part is omitted when the hint matches nothing.
+  @visibleForTesting
+  String webDisplayName(String browserName, String platformHint) {
+    final browser = _capitalize(browserName);
+    final os = _webOs(platformHint);
+    return os.isEmpty ? browser : '$browser on $os';
   }
 
   String _webOs(String raw) {
@@ -142,7 +164,8 @@ class DeviceIdentityService {
   /// Maps an iOS hardware identifier (`utsname.machine`, e.g. "iPhone17,2") to a
   /// marketing name ("Apple iPhone 16 Pro Max"). Unmapped models fall back to
   /// the device class; extend this table as new devices ship.
-  String _appleModelName(String machine) {
+  @visibleForTesting
+  String appleModelName(String machine) {
     const models = <String, String>{
       'iPhone12,1': 'iPhone 11',
       'iPhone12,3': 'iPhone 11 Pro',
