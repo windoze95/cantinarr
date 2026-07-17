@@ -11,16 +11,18 @@ import (
 	"time"
 )
 
-const baseURL = "https://api.themoviedb.org/3"
-
+// Client talks to the TMDB v3 API. baseURL is a field so tests can point it
+// at a fake TMDB server.
 type Client struct {
 	accessToken string
+	baseURL     string
 	httpClient  *http.Client
 }
 
 func NewClient(accessToken string) *Client {
 	return &Client{
 		accessToken: accessToken,
+		baseURL:     "https://api.themoviedb.org/3",
 		httpClient: &http.Client{
 			Timeout:       10 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
@@ -67,7 +69,7 @@ type TVDetails struct {
 // DoGetRaw fetches a TMDB API path and returns the raw JSON bytes.
 // Used by the discover handler for passthrough caching.
 func (c *Client) DoGetRaw(path string, params url.Values) ([]byte, error) {
-	u := fmt.Sprintf("%s%s?language=en-US", baseURL, path)
+	u := fmt.Sprintf("%s%s?language=en-US", c.baseURL, path)
 	if params != nil {
 		u += "&" + params.Encode()
 	}
@@ -83,7 +85,7 @@ func (c *Client) DoGetRaw(path string, params url.Values) ([]byte, error) {
 }
 
 func (c *Client) GetTVExternalIDs(tmdbID int) (*ExternalIDs, error) {
-	u := fmt.Sprintf("%s/tv/%d/external_ids", baseURL, tmdbID)
+	u := fmt.Sprintf("%s/tv/%d/external_ids", c.baseURL, tmdbID)
 	resp, err := c.doGet(u)
 	if err != nil {
 		return nil, fmt.Errorf("request external IDs: %w", err)
@@ -102,7 +104,7 @@ func (c *Client) GetTVExternalIDs(tmdbID int) (*ExternalIDs, error) {
 }
 
 func (c *Client) GetMovieDetails(tmdbID int) (*MovieDetails, error) {
-	u := fmt.Sprintf("%s/movie/%d", baseURL, tmdbID)
+	u := fmt.Sprintf("%s/movie/%d", c.baseURL, tmdbID)
 	resp, err := c.doGet(u)
 	if err != nil {
 		return nil, fmt.Errorf("request movie details: %w", err)
@@ -121,7 +123,7 @@ func (c *Client) GetMovieDetails(tmdbID int) (*MovieDetails, error) {
 }
 
 func (c *Client) GetTVDetails(tmdbID int) (*TVDetails, error) {
-	u := fmt.Sprintf("%s/tv/%d", baseURL, tmdbID)
+	u := fmt.Sprintf("%s/tv/%d", c.baseURL, tmdbID)
 	resp, err := c.doGet(u)
 	if err != nil {
 		return nil, fmt.Errorf("request TV details: %w", err)
@@ -178,7 +180,7 @@ type collectionSearchResponse struct {
 }
 
 func (c *Client) SearchMovies(query string) ([]SearchResult, error) {
-	u := fmt.Sprintf("%s/search/movie?query=%s", baseURL, url.QueryEscape(query))
+	u := fmt.Sprintf("%s/search/movie?query=%s", c.baseURL, url.QueryEscape(query))
 	resp, err := c.doGet(u)
 	if err != nil {
 		return nil, fmt.Errorf("search movies: %w", err)
@@ -198,7 +200,7 @@ func (c *Client) SearchMovies(query string) ([]SearchResult, error) {
 }
 
 func (c *Client) SearchMovieCollections(query string) ([]CollectionSearchResult, error) {
-	u := fmt.Sprintf("%s/search/collection?query=%s", baseURL, url.QueryEscape(query))
+	u := fmt.Sprintf("%s/search/collection?query=%s", c.baseURL, url.QueryEscape(query))
 	resp, err := c.doGet(u)
 	if err != nil {
 		return nil, fmt.Errorf("search movie collections: %w", err)
@@ -217,7 +219,7 @@ func (c *Client) SearchMovieCollections(query string) ([]CollectionSearchResult,
 }
 
 func (c *Client) GetMovieCollection(collectionID int) (*MovieCollection, error) {
-	u := fmt.Sprintf("%s/collection/%d", baseURL, collectionID)
+	u := fmt.Sprintf("%s/collection/%d", c.baseURL, collectionID)
 	resp, err := c.doGet(u)
 	if err != nil {
 		return nil, fmt.Errorf("get movie collection: %w", err)
@@ -248,7 +250,7 @@ func (c *Client) GetMovieCollection(collectionID int) (*MovieCollection, error) 
 }
 
 func (c *Client) SearchTV(query string) ([]SearchResult, error) {
-	u := fmt.Sprintf("%s/search/tv?query=%s", baseURL, url.QueryEscape(query))
+	u := fmt.Sprintf("%s/search/tv?query=%s", c.baseURL, url.QueryEscape(query))
 	resp, err := c.doGet(u)
 	if err != nil {
 		return nil, fmt.Errorf("search TV: %w", err)
@@ -285,7 +287,7 @@ func (c *Client) GetTrending(mediaType, timeWindow string) ([]SearchResult, erro
 }
 
 func (c *Client) getTrendingByType(mediaType, timeWindow string) ([]SearchResult, error) {
-	u := fmt.Sprintf("%s/trending/%s/%s", baseURL, mediaType, timeWindow)
+	u := fmt.Sprintf("%s/trending/%s/%s", c.baseURL, mediaType, timeWindow)
 	resp, err := c.doGet(u)
 	if err != nil {
 		return nil, fmt.Errorf("get trending: %w", err)
@@ -358,7 +360,7 @@ func balancedTrendingResults(movies, tv []SearchResult, limit int) []SearchResul
 }
 
 func (c *Client) GetRecommendations(tmdbID int, mediaType string) ([]SearchResult, error) {
-	u := fmt.Sprintf("%s/%s/%d/recommendations", baseURL, mediaType, tmdbID)
+	u := fmt.Sprintf("%s/%s/%d/recommendations", c.baseURL, mediaType, tmdbID)
 	resp, err := c.doGet(u)
 	if err != nil {
 		return nil, fmt.Errorf("get recommendations: %w", err)
