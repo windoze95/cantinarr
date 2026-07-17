@@ -59,6 +59,7 @@ ALLOWED_FLOW_COMMANDS = {
     "runFlow",
     "scrollUntilVisible",
     "swipe",
+    "takeScreenshot",
     "tapOn",
 }
 FLOW_COMMAND_RE = re.compile(
@@ -75,6 +76,7 @@ ALLOWED_BODY_VARIABLES = {
 }
 FLOW_URL_HEADER = "url: ${MAESTRO_SERVER_URL}"
 FLOW_TAG_RE = re.compile(r"  - [a-z0-9-]+")
+EVIDENCE_SCREENSHOT_RE = re.compile(r"evidence-[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 class ValidationError(Exception):
@@ -197,6 +199,8 @@ def validate_maestro_commands(
     validated_helpers: set[Path] | None = None,
     visiting_helpers: set[Path] | None = None,
     first_line_number: int = 1,
+    allow_evidence: bool = False,
+    evidence_names: list[str] | None = None,
 ) -> None:
     relative = path.relative_to(ROOT).as_posix()
     if re.search(r"https?://", body):
@@ -247,6 +251,22 @@ def validate_maestro_commands(
                 raise ValidationError(
                     f"{relative}:{line_number} must launch only the configured lab URL"
                 )
+            if command == "takeScreenshot":
+                value = suffix[1:].strip() if suffix.startswith(":") else suffix
+                if (
+                    not allow_evidence
+                    or not value
+                    or value != unquoted_scalar(value)
+                    or not EVIDENCE_SCREENSHOT_RE.fullmatch(value)
+                ):
+                    raise ValidationError(
+                        f"{relative}:{line_number} may capture only a literal evidence-* screenshot"
+                    )
+                if evidence_names is None:
+                    raise ValidationError(
+                        f"{relative}:{line_number} cannot capture report evidence here"
+                    )
+                evidence_names.append(value)
             if command == "runFlow":
                 reference = suffix[1:].strip() if suffix.startswith(":") else suffix
                 if reference:
@@ -295,7 +315,7 @@ def validate_maestro_commands(
                 )
 
 
-def validate_flow(path: Path, validated_helpers: set[Path] | None = None) -> None:
+def validate_flow(path: Path, validated_helpers: set[Path] | None = None) -> tuple[str, str]:
     relative = path.relative_to(ROOT).as_posix()
     if path.is_symlink():
         raise ValidationError(f"{relative} must not be a symlink")
@@ -331,12 +351,24 @@ def validate_flow(path: Path, validated_helpers: set[Path] | None = None) -> Non
     ]
     if header_interpolations != ["MAESTRO_SERVER_URL"]:
         raise ValidationError(f"{relative} has an unsafe Maestro header interpolation")
+    evidence_names: list[str] = []
     validate_maestro_commands(
         path,
         body,
         validated_helpers=validated_helpers,
         first_line_number=len(header.splitlines()) + 2,
+        allow_evidence=True,
+        evidence_names=evidence_names,
     )
+    if len(evidence_names) != 1:
+        raise ValidationError(
+            f"{relative} must contain exactly one reviewed evidence screenshot"
+        )
+    if body.rstrip().splitlines()[-1] != f"- takeScreenshot: {evidence_names[0]}":
+        raise ValidationError(
+            f"{relative} must capture its reviewed evidence as the final top-level command"
+        )
+    return header_lines[1].removeprefix("name: ").strip(), evidence_names[0]
 
 
 def validate_manifest(cases: dict[str, dict[str, object]]) -> tuple[int, int, set[Path]]:
@@ -376,7 +408,9 @@ def validate_manifest(cases: dict[str, dict[str, object]]) -> tuple[int, int, se
         for value in specs:
             path = normalized_repo_path(value, f"proof {case_id} spec")
             normalized_specs.append(path.relative_to(ROOT).as_posix())
-            if path.suffix in {".yaml", ".yml"} and FLOWS_DIR in path.parents:
+            if FLOWS_DIR in path.parents and path.suffix != ".yaml":
+                raise ValidationError(f"Maestro flow specs must use the .yaml extension: {value}")
+            if path.suffix == ".yaml" and FLOWS_DIR in path.parents:
                 validate_flow(path)
                 if case_id not in path.read_text():
                     raise ValidationError(f"{path.relative_to(ROOT)} does not name mapped case {case_id}")
@@ -404,6 +438,9 @@ def validate_suites(mapped_flows: set[Path]) -> None:
     for suite_name, entries in suites.items():
         if not re.fullmatch(r"[a-z0-9-]+", suite_name) or not isinstance(entries, list) or not entries:
             raise ValidationError(f"invalid or empty Maestro suite {suite_name}")
+        suite_slugs: set[str] = set()
+        suite_evidence: set[str] = set()
+        suite_flow_names: set[str] = set()
         for entry in entries:
             if not isinstance(entry, dict) or set(entry) != {"flow", "user"}:
                 raise ValidationError(f"suite {suite_name} entries need exactly flow and user")
@@ -412,12 +449,33 @@ def validate_suites(mapped_flows: set[Path]) -> None:
             flow = normalized_repo_path(entry["flow"], f"suite {suite_name} flow")
             if FLOWS_DIR not in flow.parents:
                 raise ValidationError(f"suite {suite_name} flow is outside e2e/maestro/flows")
-            validate_flow(flow, validated_helpers)
+            if flow.suffix != ".yaml":
+                raise ValidationError(f"suite {suite_name} flows must use the .yaml extension")
+            flow_name, evidence_name = validate_flow(flow, validated_helpers)
+            relative_flow = flow.relative_to(FLOWS_DIR).with_suffix("")
+            slug = "-".join(relative_flow.parts)
+            if slug in suite_slugs:
+                raise ValidationError(f"suite {suite_name} has a colliding flow slug: {slug}")
+            if evidence_name in suite_evidence:
+                raise ValidationError(
+                    f"suite {suite_name} has a duplicate evidence name: {evidence_name}"
+                )
+            if flow_name in suite_flow_names:
+                raise ValidationError(
+                    f"suite {suite_name} has a duplicate flow name: {flow_name}"
+                )
+            suite_slugs.add(slug)
+            suite_evidence.add(evidence_name)
+            suite_flow_names.add(flow_name)
             if flow in suite_flows:
                 raise ValidationError(f"flow appears more than once across suites: {flow.relative_to(ROOT)}")
             suite_flows.add(flow)
 
-    repository_flows = set(FLOWS_DIR.rglob("*.yaml")) | set(FLOWS_DIR.rglob("*.yml"))
+    legacy_flows = set(FLOWS_DIR.rglob("*.yml"))
+    if legacy_flows:
+        paths = sorted(path.relative_to(ROOT).as_posix() for path in legacy_flows)
+        raise ValidationError(f"Maestro flows must use the .yaml extension: {paths}")
+    repository_flows = set(FLOWS_DIR.rglob("*.yaml"))
     if repository_flows != suite_flows:
         missing = sorted(path.relative_to(ROOT).as_posix() for path in repository_flows - suite_flows)
         extra = sorted(path.relative_to(ROOT).as_posix() for path in suite_flows - repository_flows)

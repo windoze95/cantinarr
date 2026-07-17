@@ -42,3 +42,4 @@ tags:
 - assertVisible: "Navigate to Tautulli"
 - assertVisible: "Navigate to Settings"
 - assertNotVisible: "Navigate to AI Assistant"
+- takeScreenshot: evidence-nav-001-admin-modules

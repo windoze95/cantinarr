@@ -31,7 +31,10 @@ from catalog IDs to current proof.
 Run `make check-test-automation` after adding or changing catalog cases,
 Maestro flows, suites, or automation mappings. Run the current private-lab UI
 smoke suite with `make maestro-lab-smoke`; it never targets a public server or
-a household setup.
+a household setup. Each live suite prints a private, self-contained Markdown
+report path with catalog traceability, normalized results, and fixture-checkpoint
+screenshots. Reports are labeled unreviewed and exclude console logs; inspect
+every image before sharing the bundle.
 
 Use `PASS` when the expected behavior is observed, `FAIL` when it is not, `BLOCKED` when the test cannot be completed, and `N/A` when the case does not apply to the tested configuration.
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import stat
 import sys
 
 
@@ -31,18 +32,27 @@ def stream(secrets: list[str]) -> int:
 
 
 def sanitize_tree(root: Path, secrets: list[str]) -> int:
+    if root.is_symlink():
+        raise RuntimeError("artifact root must be a real directory")
     if not root.exists():
         return 0
+    if not root.is_dir():
+        raise RuntimeError("artifact root must be a real directory")
 
     replacements = [(secret.encode(), REDACTION.encode()) for secret in secrets]
     for path in sorted(root.rglob("*")):
         if path.is_symlink():
-            raise RuntimeError(f"artifact tree contains a symlink: {path}")
-        if not path.is_file():
-            continue
+            raise RuntimeError("artifact tree contains a symlink")
         relative = path.relative_to(root).as_posix()
         if any(secret in relative for secret in secrets):
-            raise RuntimeError(f"artifact filename contains a secret: {path}")
+            raise RuntimeError("artifact filename contains a secret")
+        metadata = path.lstat()
+        if stat.S_ISDIR(metadata.st_mode):
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeError("artifact tree contains an unsupported filesystem node")
+        if metadata.st_nlink != 1:
+            raise RuntimeError("artifact tree contains a hardlinked file")
         data = path.read_bytes()
         sanitized = data
         for secret, replacement in replacements:
@@ -51,7 +61,7 @@ def sanitize_tree(root: Path, secrets: list[str]) -> int:
             path.write_bytes(sanitized)
         for secret, _ in replacements:
             if secret in path.read_bytes():
-                raise RuntimeError(f"secret redaction failed for {path}")
+                raise RuntimeError("secret redaction failed")
     return 0
 
 
@@ -75,6 +85,10 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, RuntimeError) as exc:
-        print(f"maestro redaction failed: {exc}", file=sys.stderr)
+    except OSError:
+        print("maestro redaction failed: artifact I/O error", file=sys.stderr)
+        raise SystemExit(1)
+    except RuntimeError as exc:
+        message = redact_text(str(exc), secrets_from_environment())
+        print(f"maestro redaction failed: {message}", file=sys.stderr)
         raise SystemExit(1)

@@ -83,9 +83,45 @@ E2E_ARGS="--deploy --reset" make maestro-lab-smoke
 Docker volume. It does not destroy or broaden the Droplet. `make destroy` in
 the private lab repo remains the billable-resource teardown.
 
-Maestro writes JUnit, logs, and failure screenshots under the ignored
-`e2e/maestro/.artifacts/` tree. The runner uses a restrictive umask and
-redacts the selected password before reporting the artifact path.
+Every suite run with structurally valid evidence prints the path to a portable
+Markdown evidence bundle. Malformed or unsafe input aborts atomically without
+publishing a partial report:
+
+```text
+e2e/maestro/.artifacts/suites/smoke/<run-id>/report/
+├── REPORT.md
+├── manifest.json
+├── screenshots/
+└── junit/
+```
+
+`REPORT.md` contains the overall result, harness revision and dirty state,
+exact harness content hash, candidate deployment/reset provenance,
+Maestro/platform metadata, timings, role labels, complete-versus-partial
+catalog mappings and scopes, relative links to normalized JUnit, and one
+embedded success screenshot per passing flow.
+`manifest.json` carries the same results plus PNG dimensions and SHA-256 hashes
+for machine consumers.
+
+The portable report directory is a private evidence candidate rather than a
+recursive copy of Maestro output. It is labeled `SCREENSHOTS UNREVIEWED` until
+a person inspects every image. Each flow must end with exactly one literal `evidence-*`
+`takeScreenshot` command after its assertions. The validator rejects arbitrary
+paths, interpolation, duplicate captures, nested captures, and evidence that is
+not the final top-level command. Only that named PNG is copied; it is decoded
+and canonically re-encoded as RGBA so source chunks and ancillary metadata are
+discarded, then its checksum and dimensions are recorded. Console logs,
+automatic failure screenshots, command JSON, stack traces, tunnel ports, and
+absolute workstation paths remain in the sibling private raw tree. They are
+not embedded because arbitrary output may contain sensitive values or pixels.
+
+All raw and report artifacts remain below the ignored
+`e2e/maestro/.artifacts/` tree with private permissions. The runner streams the
+console through password redaction, sanitizes the complete raw tree, and writes
+a completion marker before report generation will trust it. An interrupted or
+unsanitized artifact directory fails closed. Human screenshot review is still
+required before moving a report outside the private repository; byte redaction
+cannot remove a value rendered into image pixels.
 
 ## Traceability and conversion workflow
 
@@ -101,8 +137,9 @@ When converting a case:
 1. Split its assertions by proof surface; do not force API or chaos assertions through UI taps.
 2. Add the lower-level proof first where applicable, then one Maestro journey only if visible integration behavior remains.
 3. Put every catalog ID in the test/flow name or comment and add a scoped mapping in `automation.json`.
-4. Use `partial` until every clause and required vector has proof; add `AUTO` only when the parent is complete.
-5. Run `make check-test-automation`, the relevant normal tests, and the live lab suite when its environment is required.
+4. End each Maestro flow with one reviewed `evidence-*` screenshot on a deterministic fixture screen that cannot show credentials or external content.
+5. Use `partial` until every clause and required vector has proof; add `AUTO` only when the parent is complete.
+6. Run `make check-test-automation`, the relevant normal tests, and the live lab suite when its environment is required; visually inspect the generated Markdown evidence.
 
 PR CI validates the catalog, manifest, and flow wiring but does not receive
 DigitalOcean, SSH, or lab credentials. Live lab execution belongs on the
