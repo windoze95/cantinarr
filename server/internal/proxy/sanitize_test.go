@@ -212,6 +212,7 @@ func TestSensitiveNameClassification(t *testing.T) {
 	}
 }
 
+// INST-018: Recursive proxy scrubbing covers nested credentials and signed URLs.
 func TestSanitizeJSONExpandedCredentialCoverage(t *testing.T) {
 	const (
 		accessSecret = "synthetic-access-secret"
@@ -253,6 +254,7 @@ func TestSanitizeJSONExpandedCredentialCoverage(t *testing.T) {
 	}
 }
 
+// INST-018: Secret-bearing response URL headers are scrubbed without losing routing.
 func TestSanitizeResponseURLHeaders(t *testing.T) {
 	const (
 		username = "header-user-secret"
@@ -290,6 +292,7 @@ func TestSanitizeResponseURLHeaders(t *testing.T) {
 	}
 }
 
+// INST-018: Malformed secret-bearing URL headers fail closed.
 func TestSanitizeResponseDropsMalformedURLHeaders(t *testing.T) {
 	header := make(http.Header)
 	header.Set("Link", `<https://user:password@arr.invalid/page`)

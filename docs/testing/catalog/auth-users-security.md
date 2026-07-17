@@ -32,7 +32,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `AUTH-024` · P0 · SEC — As an issue reporter, open their own issue and another user's issue; verify only their own thread is visible/repliable while admins can access both.
 - [ ] `AUTH-025` · P1 · UI — Show the Devices screen with current and other devices; verify model, last-seen, user, and “This device” are accurate and revoke confirmation targets the right ID.
 - [ ] `AUTH-026` · P1 · CHAOS — Revoke a device while that device is offline, then reconnect; verify it cannot refresh or silently recreate its session.
-- [ ] `AUTH-027` · P1 · API — Change the user role/grants while a long AI/tool turn is running; verify interactive dispatch reauthorizes and stops a now-unauthorized actor.
+- [ ] `AUTH-027` · P1 · API/AUTO — Change the user role/grants while a long AI/tool turn is running; verify interactive dispatch reauthorizes and stops a now-unauthorized actor.
 - [ ] `AUTH-028` · P1 · UI — Verify there is no ordinary logout affordance and that the documented device-revocation recovery path is usable.
 - [ ] `AUTH-029` · P1 · SEC — Confirm AASA and Digital Asset Links responses contain only configured app/package identities, correct content types, and no secrets.
 - [ ] `AUTH-030` · P1 · UI — On plain HTTP, verify passkey limitations are explained and an enabled password can authorize MCP login.

@@ -24,6 +24,7 @@ func (m mockAccess) UserHasInstanceAccess(userID int64, instanceID string) (bool
 	return m.granted, nil
 }
 
+// AUTH-023: Requester arr proxy access is limited to the read allowlist.
 func TestIsArrReadPath(t *testing.T) {
 	tests := []struct {
 		path string
@@ -93,6 +94,7 @@ func withRouteContext(req *http.Request, instanceID string) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
+// AUTH-023: Requester writes and privileged arr reads are denied.
 func TestRequireArrProxyAccess(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -143,6 +145,7 @@ func TestRequireArrProxyAccess(t *testing.T) {
 // chaptarr, which has no global default: a non-admin needs an explicit grant to
 // touch the instance at all, admins bypass the grant, and even a granted
 // non-admin still cannot perform writes (those require instances:manage).
+// AUTH-023: Per-instance grants never broaden requester proxy access to writes.
 func TestRequireArrProxyAccess_ChaptarrGate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -182,6 +185,7 @@ func TestRequireArrProxyAccess_ChaptarrGate(t *testing.T) {
 	}
 }
 
+// AUTH-023: Anonymous proxy access fails closed.
 func TestRequireArrProxyAccess_RequiresClaims(t *testing.T) {
 	h := RequireArrProxyAccess(mockAccess{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not run without claims")

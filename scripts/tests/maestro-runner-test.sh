@@ -138,7 +138,6 @@ if [[ "${1:-}" == "--version" ]]; then
 fi
 output=''
 debug=''
-flow="${!#}"
 for argument in "$@"; do
   case "${argument}" in
     --output=*) output="${argument#--output=}" ;;
@@ -147,19 +146,18 @@ for argument in "$@"; do
 done
 [[ -n "${output}" && -n "${debug}" ]]
 mkdir -p "$(dirname "${output}")" "${debug}"
-if [[ "${FAKE_JUNIT_ERROR:-0}" -eq 1 ]]; then
-  printf '<testsuites><testsuite tests="1" failures="1" time="1.0"><testcase name="Fake" status="ERROR" time="1.0"><failure>failed</failure></testcase></testsuite></testsuites>\n' >"${output}"
-else
-  printf '<testsuites><testsuite tests="1" failures="0" time="1.0"><testcase name="Fake" status="SUCCESS" time="1.0"><system-out>%s</system-out></testcase></testsuite></testsuites>\n' \
-    "${MAESTRO_PASSWORD}" >"${output}"
+if [[ "${FAKE_MISSING_JUNIT:-0}" -ne 1 ]]; then
+  if [[ "${FAKE_MALFORMED_JUNIT:-0}" -eq 1 ]]; then
+    printf '<testsuites>' >"${output}"
+  elif [[ "${FAKE_JUNIT_ERROR:-0}" -eq 1 ]]; then
+    printf '<testsuites><testsuite tests="1" failures="1" time="1.0"><testcase name="Fake" status="ERROR" time="1.0"><failure>failed</failure></testcase></testsuite></testsuites>\n' >"${output}"
+  else
+    printf '<testsuites><testsuite tests="1" failures="0" time="1.0"><testcase name="Fake" status="SUCCESS" time="1.0"><system-out>%s</system-out></testcase></testsuite></testsuites>\n' \
+      "${MAESTRO_PASSWORD}" >"${output}"
+  fi
 fi
 printf '{"password":"%s"}\n' "${MAESTRO_PASSWORD}" >"${debug}/commands.json"
 printf 'fake Maestro output contains %s\n' "${MAESTRO_PASSWORD}"
-if [[ -n "${FAKE_SCREENSHOT:-}" ]]; then
-  evidence="$(sed -nE 's/^- takeScreenshot: (evidence-[a-z0-9-]+)$/\1/p' "${flow}")"
-  [[ -n "${evidence}" ]]
-  cp "${FAKE_SCREENSHOT}" "${debug}/${evidence}.png"
-fi
 if [[ "${FAKE_MAESTRO_SECRET_FILENAME:-0}" -eq 1 ]]; then
   printf 'unsafe filename\n' >"${debug}/${MAESTRO_PASSWORD}.txt"
 fi
@@ -170,8 +168,23 @@ if [[ "${FAKE_MAESTRO_INTERRUPT:-0}" -eq 1 ]]; then
   kill -TERM "${PPID}"
   sleep 1
 fi
+if [[ "${FAKE_JUNIT_ERROR:-0}" -eq 1 && "${FAKE_JUNIT_ZERO_EXIT:-0}" -ne 1 ]]; then
+  exit 1
+fi
 EOF
-chmod 0700 "${fake_bin}/java" "${fake_bin}/maestro"
+cat >"${fake_bin}/rm" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${FAKE_RM_DEBUG_FAILURE:-0}" -eq 1 ]]; then
+  for argument in "$@"; do
+    if [[ "${argument}" == */debug ]]; then
+      exit 1
+    fi
+  done
+fi
+exec /bin/rm "$@"
+EOF
+chmod 0700 "${fake_bin}/java" "${fake_bin}/maestro" "${fake_bin}/rm"
 
 fake_lab="${sandbox}/fake-lab"
 mkdir -p "${fake_lab}/scripts"
@@ -197,53 +210,43 @@ MAESTRO_PASSWORD=fake-suite-secret \
 exec "$@"
 EOF
 chmod 0700 "${fake_lab}/scripts/lab"
-fake_screenshot="${sandbox}/evidence.png"
-python3 - "${fake_screenshot}" <<'PY'
-import base64
-import pathlib
-import sys
-
-pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-))
-PY
 
 suite_output="$(
   PATH="${fake_bin}:${PATH}" \
-    FAKE_SCREENSHOT="${fake_screenshot}" \
     CANTINARR_LAB_DIR="${fake_lab}" \
     /bin/bash "${ROOT_DIR}/scripts/run-maestro-lab.sh"
 )"
-report_path="$(sed -n 's/^Private Markdown report: //p' <<<"${suite_output}")"
-suite_run="${report_path%/report/REPORT.md}"
-[[ -f "${report_path}" ]] || fail "suite did not produce a Markdown report"
-[[ "$(find "$(dirname "${report_path}")/screenshots" -type f -name '*.png' | wc -l | tr -d ' ')" == 3 ]] ||
-  fail "suite report did not contain three reviewed screenshots"
-grep -F -q -- '> **PASS**' "${report_path}" || fail "suite report did not pass"
-if grep -R -F -q -- 'fake-suite-secret' "$(dirname "${report_path}")"; then
-  fail "suite report retained the raw password"
+artifacts_path="$(sed -n 's/^Private Maestro JUnit tree: //p' <<<"${suite_output}")"
+suite_run="${artifacts_path%/raw}"
+[[ -d "${artifacts_path}" ]] || fail "suite did not retain its JUnit tree"
+[[ "$(find "${artifacts_path}" -type f -name 'report.xml' | wc -l | tr -d ' ')" == 3 ]] ||
+  fail "suite did not retain three JUnit reports"
+[[ "$(find "${artifacts_path}" -type f -name '.sanitized' | wc -l | tr -d ' ')" == 3 ]] ||
+  fail "suite artifacts were not marked sanitized"
+[[ -z "$(find "${artifacts_path}" -type d -name debug -print -quit)" ]] ||
+  fail "suite retained native debug"
+[[ -z "$(find "${artifacts_path}" -type f -name console.log -print -quit)" ]] ||
+  fail "suite retained console logs"
+if grep -R -F -q -- 'fake-suite-secret' "${artifacts_path}"; then
+  fail "suite artifacts retained the raw password"
 fi
-[[ ! -d "$(dirname "${report_path}")/logs" ]] ||
-  fail "suite report copied unrestricted console logs"
 
 set +e
-mismatch_output="$(
+failure_output="$(
   PATH="${fake_bin}:${PATH}" \
     FAKE_JUNIT_ERROR=1 \
-    FAKE_SCREENSHOT="${fake_screenshot}" \
     CANTINARR_LAB_DIR="${fake_lab}" \
     /bin/bash "${ROOT_DIR}/scripts/run-maestro-lab.sh" 2>&1
 )"
-mismatch_status=$?
+failure_status=$?
 set -e
-[[ "${mismatch_status}" -ne 0 ]] || fail "JUnit/exit disagreement returned success"
-[[ "${mismatch_output}" != *"suite passed against"* ]] ||
-  fail "JUnit/exit disagreement announced a passing suite"
-mismatch_report="$(sed -n 's/^Private Markdown report: //p' <<<"${mismatch_output}")"
-mismatch_suite_run="${mismatch_report%/report/REPORT.md}"
-[[ -f "${mismatch_report}" ]] || fail "JUnit/exit disagreement did not write its failure report"
-grep -F -q -- '> **FAIL**' "${mismatch_report}" ||
-  fail "JUnit/exit disagreement report did not fail"
+[[ "${failure_status}" -ne 0 ]] || fail "failing Maestro suite returned success"
+[[ "${failure_output}" != *"suite passed against"* ]] ||
+  fail "failing Maestro suite announced a pass"
+failure_artifacts="$(sed -n 's/^Private Maestro JUnit tree: //p' <<<"${failure_output}")"
+mismatch_suite_run="${failure_artifacts%/raw}"
+[[ -f "${failure_artifacts}/auth-password-login/report.xml" ]] ||
+  fail "failing suite did not retain its JUnit report"
 
 unsupported_bin="${sandbox}/unsupported-bin"
 fallback_jdk="${sandbox}/openjdk@21"
@@ -281,6 +284,9 @@ PATH="${fake_bin}:${PATH}" \
 if grep -R -F -q -- "${secret}" "${fixture}/e2e/maestro/.artifacts"; then
   fail "normal completion retained the raw password"
 fi
+if find "${fixture}/e2e/maestro/.artifacts" -type d -name debug -print -quit | grep -q .; then
+  fail "normal completion retained native debug"
+fi
 
 set +e
 PATH="${fake_bin}:${PATH}" \
@@ -295,6 +301,75 @@ set -e
 if grep -R -F -q -- "${secret}" "${fixture}/e2e/maestro/.artifacts"; then
   fail "interrupted completion retained the raw password"
 fi
+if find "${fixture}/e2e/maestro/.artifacts" -type d -name debug -print -quit | grep -q .; then
+  fail "interrupted completion retained native debug"
+fi
+if find "${fixture}/e2e/maestro/.artifacts" -type f -name console.log -print -quit | grep -q .; then
+  fail "interrupted completion retained a console log"
+fi
+
+set +e
+PATH="${fake_bin}:${PATH}" \
+  FAKE_RM_DEBUG_FAILURE=1 \
+  MAESTRO_SERVER_URL=http://127.0.0.1:18585 \
+  MAESTRO_USERNAME=lab-admin-b \
+  MAESTRO_PASSWORD="${secret}" \
+  /bin/bash "${fixture}/scripts/run-maestro-flow.sh" "${fixture_flow}" >/dev/null 2>&1
+cleanup_failure_status=$?
+set -e
+[[ "${cleanup_failure_status}" -ne 0 ]] || fail "native debug cleanup failure returned success"
+if find "${fixture}/e2e/maestro/.artifacts" -type d -name debug -print -quit | grep -q .; then
+  fail "native debug cleanup failure bypassed artifact-tree removal"
+fi
+
+set +e
+missing_junit_output="$(
+  PATH="${fake_bin}:${PATH}" \
+    FAKE_MISSING_JUNIT=1 \
+    MAESTRO_SERVER_URL=http://127.0.0.1:18585 \
+    MAESTRO_USERNAME=lab-admin-b \
+    MAESTRO_PASSWORD="${secret}" \
+    /bin/bash "${fixture}/scripts/run-maestro-flow.sh" "${fixture_flow}" 2>&1
+)"
+missing_junit_status=$?
+set -e
+[[ "${missing_junit_status}" -ne 0 ]] || fail "missing JUnit returned success"
+[[ "${missing_junit_output}" == *"did not produce a valid JUnit result"* ]] ||
+  fail "missing JUnit did not fail at result validation"
+if find "${fixture}/e2e/maestro/.artifacts" -type d -name debug -print -quit | grep -q .; then
+  fail "missing JUnit failure retained native debug"
+fi
+
+set +e
+malformed_junit_output="$(
+  PATH="${fake_bin}:${PATH}" \
+    FAKE_MALFORMED_JUNIT=1 \
+    MAESTRO_SERVER_URL=http://127.0.0.1:18585 \
+    MAESTRO_USERNAME=lab-admin-b \
+    MAESTRO_PASSWORD="${secret}" \
+    /bin/bash "${fixture}/scripts/run-maestro-flow.sh" "${fixture_flow}" 2>&1
+)"
+malformed_junit_status=$?
+set -e
+[[ "${malformed_junit_status}" -ne 0 ]] || fail "malformed JUnit returned success"
+[[ "${malformed_junit_output}" == *"did not produce a valid JUnit result"* ]] ||
+  fail "malformed JUnit did not fail at result validation"
+
+set +e
+contradictory_junit_output="$(
+  PATH="${fake_bin}:${PATH}" \
+    FAKE_JUNIT_ERROR=1 \
+    FAKE_JUNIT_ZERO_EXIT=1 \
+    MAESTRO_SERVER_URL=http://127.0.0.1:18585 \
+    MAESTRO_USERNAME=lab-admin-b \
+    MAESTRO_PASSWORD="${secret}" \
+    /bin/bash "${fixture}/scripts/run-maestro-flow.sh" "${fixture_flow}" 2>&1
+)"
+contradictory_junit_status=$?
+set -e
+[[ "${contradictory_junit_status}" -ne 0 ]] || fail "contradictory JUnit returned success"
+[[ "${contradictory_junit_output}" == *"did not produce a valid JUnit result"* ]] ||
+  fail "contradictory JUnit did not fail at result validation"
 
 set +e
 filename_output="$(

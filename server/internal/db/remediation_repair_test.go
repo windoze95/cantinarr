@@ -8,6 +8,7 @@ import (
 	"testing"
 )
 
+// ISS-028: Restart converts in-flight mutations to unknown outcomes without replay.
 func TestOpenRepairsUnsafeRemediationStates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cantinarr.db")
 	database, err := Open(path)

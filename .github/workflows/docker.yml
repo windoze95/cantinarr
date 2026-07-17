@@ -63,7 +63,7 @@ jobs:
             type=sha
             type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
 
-      - name: Build published image for smoke test
+      - name: Build published image for smoke test (BASE-007 partial)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -76,7 +76,7 @@ jobs:
           cache-from: type=gha,scope=published
           cache-to: type=gha,mode=max,scope=published
 
-      - name: Verify published-image Codex runtime and notices
+      - name: Verify published-image Codex runtime and notices (BASE-007/BASE-009 partial)
         run: |
           docker run --rm cantinarr-root-smoke:${{ github.sha }} sh -ec '
             test -x /usr/local/bin/codex-app-server
@@ -85,7 +85,7 @@ jobs:
             /usr/local/bin/codex-app-server --help | grep -q -- --listen
           '
 
-      - name: Build arm64 published image for smoke test
+      - name: Build arm64 published image for smoke test (BASE-009 partial)
         if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
         uses: docker/build-push-action@v6
         with:
@@ -99,7 +99,7 @@ jobs:
           cache-from: type=gha,scope=published
           cache-to: type=gha,mode=max,scope=published
 
-      - name: Verify arm64 Codex runtime and notices
+      - name: Verify arm64 Codex runtime and notices (BASE-009 partial)
         if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
         run: |
           docker run --rm --platform linux/arm64 cantinarr-root-arm64-smoke:${{ github.sha }} sh -ec '
@@ -109,7 +109,7 @@ jobs:
             /usr/local/bin/codex-app-server --help | grep -q -- --listen
           '
 
-      - name: Build server-only image for smoke test
+      - name: Build server-only image for smoke test (BASE-008 partial)
         uses: docker/build-push-action@v6
         with:
           context: server
@@ -121,7 +121,7 @@ jobs:
           cache-from: type=gha,scope=server-only
           cache-to: type=gha,mode=max,scope=server-only
 
-      - name: Verify server-only Codex runtime and notices
+      - name: Verify server-only Codex runtime and notices (BASE-008/BASE-009 partial)
         run: |
           docker run --rm cantinarr-server-smoke:${{ github.sha }} sh -ec '
             test -x /usr/local/bin/codex-app-server

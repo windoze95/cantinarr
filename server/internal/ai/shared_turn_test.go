@@ -11,6 +11,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
+// ISS-037: Remediation ignores the reporter's personal AI profile and grant.
 func TestResolveSharedAutonomousTurnIgnoresPersonalSettingsAndGrant(t *testing.T) {
 	h, registry, database, userID := newResolverTestHandler(t)
 	if _, err := database.Exec(`UPDATE users SET ai_shared_enabled = 0 WHERE id = ?`, userID); err != nil {
@@ -80,6 +81,7 @@ func TestResolveSharedAutonomousTurnUsesOnlyProviderBoundModelOverride(t *testin
 	}
 }
 
+// ISS-037: Remediation resolves through the server-owned shared identity.
 func TestResolveSharedAutonomousTurnNeedsNoUserIdentity(t *testing.T) {
 	h, registry, database, userID := newResolverTestHandler(t)
 	if _, err := database.Exec(`DELETE FROM users WHERE id = ?`, userID); err != nil {
@@ -98,6 +100,7 @@ func TestResolveSharedAutonomousTurnNeedsNoUserIdentity(t *testing.T) {
 	}
 }
 
+// ISS-037: Shared-provider failure never falls back to a personal credential.
 func TestResolveSharedAutonomousTurnFailsClosedInsteadOfUsingPersonalKey(t *testing.T) {
 	h, registry, database, userID := newResolverTestHandler(t)
 	if err := registry.SetUserAIConfig(userID, credentials.AIProviderOpenAI, "personal-model"); err != nil {

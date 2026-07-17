@@ -81,6 +81,7 @@ func seedUser(t *testing.T, database *sql.DB, username string) int64 {
 // TestUserIssueLifecycle walks the Wave-1 contract end to end: create a user
 // issue (admins notified), dedupe a duplicate report (occurrences bumps, no
 // second row), thread a reply, then list + dismiss.
+// ISS-005: Repeated reports dedupe only within the same exact incident scope.
 func TestUserIssueLifecycle(t *testing.T) {
 	svc, notif, reporterID := setupTestService(t)
 
@@ -340,6 +341,7 @@ func TestCreateUserIssueValidation(t *testing.T) {
 
 // TestUserIssueDedupeIncludesInstance proves identical media/category reports
 // against two Radarr installations remain distinct incidents.
+// ISS-005: The same title on distinct instances remains distinct incidents.
 func TestUserIssueDedupeIncludesInstance(t *testing.T) {
 	svc, _, reporterID := setupTestService(t)
 	first, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{

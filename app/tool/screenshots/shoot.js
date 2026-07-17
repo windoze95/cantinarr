@@ -1,5 +1,6 @@
-// Store-screenshot runner: drives the Flutter web screenshot harness at exact
-// store pixel sizes using system Chrome. Usage: node shoot.js <baseUrl> <outDir>
+// REL-017 partial: Store-screenshot runner.
+// Drives the Flutter web harness at exact store pixel sizes using system
+// Chrome. Usage: node shoot.js <baseUrl> <outDir>
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');

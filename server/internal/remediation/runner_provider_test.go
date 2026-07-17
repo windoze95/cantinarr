@@ -8,6 +8,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/ai"
 )
 
+// ISS-037: The remediation runner uses only the server-owned shared resolver.
 func TestResolveTurnUsesOnlyServerOwnedSharedResolver(t *testing.T) {
 	wantTurn := &scriptedTurn{}
 	wantOverride := ai.AutonomousModelOverride{Provider: "codex", Model: "gpt-remediation"}
@@ -35,6 +36,7 @@ func TestResolveTurnUsesOnlyServerOwnedSharedResolver(t *testing.T) {
 	}
 }
 
+// ISS-037: Shared resolver failure stops remediation without credential fallback.
 func TestResolveTurnFailsClosedWhenSharedResolverFails(t *testing.T) {
 	wantErr := errors.New("shared account disconnected")
 	runner := &Runner{

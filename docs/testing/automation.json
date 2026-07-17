@@ -1,42 +1,500 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "proofs": [
     {
       "case_id": "AUTH-007",
       "status": "automated",
-      "runner": "maestro-web",
-      "specs": [
-        "e2e/maestro/flows/auth/password-login.yaml"
-      ],
-      "scope": "Known-user failure, unknown-user failure, identical non-enumerating copy, and successful password login against the disposable lab."
+      "scope": "Known-user failure, unknown-user failure, identical non-enumerating copy, and successful password login against the disposable lab.",
+      "evidence": [
+        {
+          "kind": "maestro-flow",
+          "path": "e2e/maestro/flows/auth/password-login.yaml",
+          "selector": "AUTH-007 password login"
+        }
+      ]
     },
     {
       "case_id": "AUTH-022",
       "status": "partial",
-      "runner": "maestro-web",
-      "specs": [
-        "e2e/maestro/flows/authorization/requester-navigation.yaml"
-      ],
-      "scope": "Proves admin module and attention entries are absent for the no-grants requester; direct-route and API authorization remain separate proofs."
+      "scope": "Proves admin module and attention entries are absent for the no-grants requester; direct-route and API authorization remain separate proofs.",
+      "evidence": [
+        {
+          "kind": "maestro-flow",
+          "path": "e2e/maestro/flows/authorization/requester-navigation.yaml",
+          "selector": "Requester navigation boundary smoke"
+        }
+      ]
+    },
+    {
+      "case_id": "AUTH-023",
+      "status": "partial",
+      "scope": "Proves the requester path/method allowlist, privileged Chaptarr denial, and anonymous denial; explicit non-arr instance and instance-lookup failure handling remain unproved.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/auth/arr_proxy_test.go",
+          "selector": "TestIsArrReadPath"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/auth/arr_proxy_test.go",
+          "selector": "TestRequireArrProxyAccess"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/auth/arr_proxy_test.go",
+          "selector": "TestRequireArrProxyAccess_ChaptarrGate"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/auth/arr_proxy_test.go",
+          "selector": "TestRequireArrProxyAccess_RequiresClaims"
+        }
+      ]
+    },
+    {
+      "case_id": "AUTH-027",
+      "status": "automated",
+      "scope": "Interactive provider and MCP tool dispatch rechecks current role, device, and shared grant state and fails closed after revocation.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/auth/service_test.go",
+          "selector": "TestAuthorizeInteractiveToolCallRechecksRoleDeviceAndSharedGrant"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/ai/provider_contract_test.go",
+          "selector": "TestInteractiveAuthorizationRevocationStopsProviderLoops"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/codexapp/manager_test.go",
+          "selector": "TestInteractiveAuthorizationRevocationTerminatesCodexTurn"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/mcp/tools_test.go",
+          "selector": "TestExecuteToolReauthorizesAgainstCurrentRole"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/mcp/tools_test.go",
+          "selector": "TestExecuteToolReauthorizationFailsClosed"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-001",
+      "status": "automated",
+      "scope": "Pull-request CI runs go vet over every server package and fails on any diagnostic.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/ci.yml",
+          "selector": "Vet (BASE-001)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-002",
+      "status": "automated",
+      "scope": "Pull-request CI runs the complete Go test suite once without retry wrappers and fails when any package fails.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/ci.yml",
+          "selector": "Test (BASE-002)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-003",
+      "status": "automated",
+      "scope": "Pull-request CI produces the server command with CGO disabled and fails if the build does not complete.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/ci.yml",
+          "selector": "Build (BASE-003)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-004",
+      "status": "automated",
+      "scope": "Pull-request CI runs the project's required Flutter analyzer command and enforces its exit status.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/ci.yml",
+          "selector": "Analyze (BASE-004)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-005",
+      "status": "automated",
+      "scope": "Pull-request CI runs the complete Flutter unit and widget suite and fails when any test fails.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/ci.yml",
+          "selector": "Test (BASE-005)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-006",
+      "status": "partial",
+      "scope": "CI proves the release web build succeeds; serving the output and checking the initial route and browser console/runtime remain unproved.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/ci.yml",
+          "selector": "Build web (BASE-006 partial)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-007",
+      "status": "partial",
+      "scope": "Docker CI builds the root image and inspects its bundled Codex runtime; starting Cantinarr with an empty volume and checking health and the web app remain unproved.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/docker.yml",
+          "selector": "Build published image for smoke test (BASE-007 partial)"
+        },
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/docker.yml",
+          "selector": "Verify published-image Codex runtime and notices (BASE-007/BASE-009 partial)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-008",
+      "status": "partial",
+      "scope": "Docker CI builds the server-only image and inspects its bundled Codex runtime; starting Cantinarr and checking its healthy API state remain unproved.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/docker.yml",
+          "selector": "Build server-only image for smoke test (BASE-008 partial)"
+        },
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/docker.yml",
+          "selector": "Verify server-only Codex runtime and notices (BASE-008/BASE-009 partial)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-009",
+      "status": "partial",
+      "scope": "Docker CI verifies the pinned Codex runtime and notices in the root image on amd64 and optionally arm64, and in the server-only image on amd64; server-only arm64 remains unproved on ordinary runs.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/docker.yml",
+          "selector": "Verify published-image Codex runtime and notices (BASE-007/BASE-009 partial)"
+        },
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/docker.yml",
+          "selector": "Verify arm64 Codex runtime and notices (BASE-009 partial)"
+        },
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/docker.yml",
+          "selector": "Verify server-only Codex runtime and notices (BASE-008/BASE-009 partial)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-010",
+      "status": "partial",
+      "scope": "CI checksum-verifies the pinned app-server and enables the real command-surface smoke test; a model turn and explicit clean-shutdown assertion remain unproved.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/ci.yml",
+          "selector": "Verify and enable real Codex protocol smoke (BASE-010 partial)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-011",
+      "status": "partial",
+      "scope": "The release workflow builds a signed IPA; the local swiftc fallback and launch on a physical iOS device remain unproved.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/testflight.yml",
+          "selector": "Build IPA (BASE-011 partial)"
+        }
+      ]
+    },
+    {
+      "case_id": "BASE-012",
+      "status": "partial",
+      "scope": "The release workflow builds the signed Android AAB; physical installation, launch, networking, deep links, and passkey registration remain unproved.",
+      "evidence": [
+        {
+          "kind": "workflow-step",
+          "path": ".github/workflows/playstore.yml",
+          "selector": "Build AAB (BASE-012 partial)"
+        }
+      ]
+    },
+    {
+      "case_id": "INST-018",
+      "status": "partial",
+      "scope": "Proves recursive scrubbing for nested credential keys, URL userinfo and secret queries, plus malformed secret-bearing URL headers; explicit nested Authorization and Cookie fields remain unproved.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/handler_test.go",
+          "selector": "TestInstanceProxyRedactsNestedSecretsAndURLQueries"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/sanitize_test.go",
+          "selector": "TestSanitizeJSONExpandedCredentialCoverage"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/sanitize_test.go",
+          "selector": "TestSanitizeResponseURLHeaders"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/sanitize_test.go",
+          "selector": "TestSanitizeResponseDropsMalformedURLHeaders"
+        }
+      ]
+    },
+    {
+      "case_id": "ISS-005",
+      "status": "automated",
+      "scope": "Issue creation deduplicates the same incident scope while retaining same-title incidents on distinct instances.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/remediation/service_test.go",
+          "selector": "TestUserIssueLifecycle"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/remediation/service_test.go",
+          "selector": "TestUserIssueDedupeIncludesInstance"
+        }
+      ]
+    },
+    {
+      "case_id": "ISS-028",
+      "status": "partial",
+      "scope": "Proves database repair and handoff recovery preserve an unknown outcome requiring admin review; full startup recovery against the repaired state and no-second-proposal behavior remain unproved.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/db/remediation_repair_test.go",
+          "selector": "TestOpenRepairsUnsafeRemediationStates"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/remediation/approvals_test.go",
+          "selector": "TestRecoverUnknownOutcomeStopsInsteadOfResuming"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/remediation/approvals_test.go",
+          "selector": "TestApproveExecutionFailureMarksOutcomeUnknown"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/remediation/approvals_test.go",
+          "selector": "TestClearedAutoSignalDoesNotCloseUnknownOutcome"
+        }
+      ]
+    },
+    {
+      "case_id": "ISS-029",
+      "status": "automated",
+      "scope": "A partial executor result is retained as an ambiguous outcome requiring admin review and is never reported as a clean failure or resolution.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/remediation/approvals_test.go",
+          "selector": "TestPartialMutationIsNotReportedAsCleanFailure"
+        }
+      ]
+    },
+    {
+      "case_id": "ISS-037",
+      "status": "automated",
+      "scope": "Autonomous remediation ignores the reporter's personal AI settings and grants, uses only the server-owned shared resolver, and fails closed without credential fallback.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/ai/shared_turn_test.go",
+          "selector": "TestResolveSharedAutonomousTurnIgnoresPersonalSettingsAndGrant"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/ai/shared_turn_test.go",
+          "selector": "TestResolveSharedAutonomousTurnNeedsNoUserIdentity"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/ai/shared_turn_test.go",
+          "selector": "TestResolveSharedAutonomousTurnFailsClosedInsteadOfUsingPersonalKey"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/remediation/runner_provider_test.go",
+          "selector": "TestResolveTurnUsesOnlyServerOwnedSharedResolver"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/remediation/runner_provider_test.go",
+          "selector": "TestResolveTurnFailsClosedWhenSharedResolverFails"
+        }
+      ]
+    },
+    {
+      "case_id": "ISS-041",
+      "status": "partial",
+      "scope": "Proves title-level book mutations fail closed and a durable queue identity is accepted; manual-import and mismatched-identity vectors remain unproved.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/remediation/action_scope_test.go",
+          "selector": "TestBookIssueRejectsActionsWithoutDurableBookIdentity"
+        }
+      ]
+    },
+    {
+      "case_id": "MCP-013",
+      "status": "automated",
+      "scope": "The complete tool definition matrix is role-classified, requester enumeration excludes admin tools, and direct execution of a known admin tool is denied before dispatch.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/mcp/tools_test.go",
+          "selector": "TestToolRBACMatrixCoversEveryDefinition"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/mcp/tools_test.go",
+          "selector": "TestGetToolsForRoleFiltersOperationalTools"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/mcp/tools_test.go",
+          "selector": "TestExecuteToolDeniesRoleBeforeRunningTool"
+        }
+      ]
     },
     {
       "case_id": "NAV-001",
       "status": "partial",
-      "runner": "maestro-web",
-      "specs": [
-        "e2e/maestro/flows/navigation/admin-modules.yaml"
-      ],
-      "scope": "Proves the fixed admin sees the complete configured module inventory; route entry, page navigation, breakpoints, back behavior, and preserved-stack coverage remain."
+      "scope": "Proves the fixed admin sees the complete configured module inventory; route entry, page navigation, breakpoints, back behavior, and preserved stacks remain unproved.",
+      "evidence": [
+        {
+          "kind": "maestro-flow",
+          "path": "e2e/maestro/flows/navigation/admin-modules.yaml",
+          "selector": "Admin module navigation smoke"
+        }
+      ]
     },
     {
       "case_id": "NAV-003",
       "status": "partial",
-      "runner": "maestro-web",
-      "specs": [
-        "e2e/maestro/flows/navigation/admin-modules.yaml",
-        "e2e/maestro/flows/authorization/requester-navigation.yaml"
-      ],
-      "scope": "Compares fixed lab admin and requester navigation for configured services; conditional attention-state permutations remain."
+      "scope": "Compares fixed lab admin and requester navigation for configured services; conditional service and attention-state permutations remain unproved.",
+      "evidence": [
+        {
+          "kind": "maestro-flow",
+          "path": "e2e/maestro/flows/navigation/admin-modules.yaml",
+          "selector": "Admin module navigation smoke"
+        },
+        {
+          "kind": "maestro-flow",
+          "path": "e2e/maestro/flows/authorization/requester-navigation.yaml",
+          "selector": "Requester navigation boundary smoke"
+        }
+      ]
+    },
+    {
+      "case_id": "PUSH-010",
+      "status": "partial",
+      "scope": "Proves request-pending recipient selection remains admin-scoped despite requester opt-in; issue, agent-action, and Plex-access categories remain unproved.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/push/notifier_test.go",
+          "selector": "TestNotifyAdminsHonorsOptOutAndRole"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/push/prefs_test.go",
+          "selector": "TestUsersOptedIntoDefaultBehavior"
+        }
+      ]
+    },
+    {
+      "case_id": "RAD-009",
+      "status": "partial",
+      "scope": "Proves the current list has no Dismissible, uses an explicitly labeled confirmation path, and leaves delete-files unchecked; active swipe, long-press, and other unlabeled-gesture vectors remain unproved.",
+      "evidence": [
+        {
+          "kind": "flutter-test",
+          "path": "app/test/radarr/movie_menu_delete_test.dart",
+          "selector": "menu shows a confirmation with delete-files unchecked"
+        }
+      ]
+    },
+    {
+      "case_id": "REL-017",
+      "status": "partial",
+      "scope": "The repository has a deterministic multi-device screenshot runner; build integration, required-image completeness, fastlane placement, credential review, and clipping review remain unproved.",
+      "evidence": [
+        {
+          "kind": "script-check",
+          "path": "app/tool/screenshots/shoot.js",
+          "selector": "REL-017 partial: Store-screenshot runner."
+        }
+      ]
+    },
+    {
+      "case_id": "SEC-004",
+      "status": "partial",
+      "scope": "Proves incoming authorization, cookie, session-token, and proxy-authorization headers are removed before upstream authentication; Forwarded and X-Forwarded-* handling remains unproved.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/handler_test.go",
+          "selector": "TestInstanceProxyStripsCantinarrCredentialsBeforeUpstream"
+        }
+      ]
+    },
+    {
+      "case_id": "SEC-007",
+      "status": "partial",
+      "scope": "Proves safe SSE on the event route, rejection of structured JSON streams, and unchanged legitimate non-JSON streams; wrong-route SSE and scrubber-bypass vectors remain unproved.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/handler_test.go",
+          "selector": "TestInstanceProxyPreservesSSEAndRejectsStructuredJSONStreams"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/handler_test.go",
+          "selector": "TestInstanceProxyPassesNonJSONStreamUnchanged"
+        }
+      ]
     }
   ]
 }

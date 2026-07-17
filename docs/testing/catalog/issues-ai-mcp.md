@@ -10,7 +10,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `ISS-002` · P0 · UI/API — Report movie, whole-series, season, exact episode, and exact S00 special problems; verify immutable media type, instance ID, arr ID, season/episode scope, and reporter are exact.
 - [ ] `ISS-003` · P0 · SEC — Forge movie-on-Sonarr, TV-on-Radarr, another user's/inaccessible instance, nonexistent media, unsupported media type, or unavailable title; verify 4xx and no issue/agent side effect.
 - [ ] `ISS-004` · P1 · UI/API — Exercise every category; require bounded explanation for “Something else,” preserve safe Unicode text, and reject empty/oversized/malformed input.
-- [ ] `ISS-005` · P0 · API — Report the same media/scope/instance twice and the same title on two instances; verify true duplicate handling without merging distinct incidents.
+- [ ] `ISS-005` · P0 · API/AUTO — Report the same media/scope/instance twice and the same title on two instances; verify true duplicate handling without merging distinct incidents.
 - [ ] `ISS-006` · P0 · UI — Verify a new issue starts in Watching/Recovery state with requester-safe copy, no reply/typing/completion controls, no admin attention badge, no push, and no agent run.
 - [ ] `ISS-007` · P0 · LIVE — During minimum watch/quiet windows, replace/progress the queue item; verify one incident tracks the new attempt, resets quiet timing, and remains passive.
 - [ ] `ISS-008` · P0 · LIVE — Complete an exact successful import during observation; verify the issue resolves silently only after matching file/import proof and configured settle time.
@@ -34,7 +34,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `ISS-026` · P0 · CHAOS — Have two admins decide concurrently; verify one CAS winner, loser receives conflict/reloads winner, and executor runs at most once.
 - [ ] `ISS-027` · P0 · LIVE/CHAOS — Start arr recovery immediately before and immediately after action claim; verify proposal becomes superseded, run aborts to passive recovery, and executor is not called.
 - [ ] `ISS-028` · P0 · CHAOS — Kill the server after dispatch but before result persistence; on restart verify Outcome unknown/Needs Admin, no replay, and no second proposal until human verification.
-- [ ] `ISS-029` · P0 · CHAOS — Produce partial/ambiguous executor result; verify it stops at Needs Admin and never claims resolution.
+- [ ] `ISS-029` · P0 · CHAOS/AUTO — Produce partial/ambiguous executor result; verify it stops at Needs Admin and never claims resolution.
 - [ ] `ISS-030` · P0 · UI/API — Mark resolved and Close without fix with required bounded notes; verify actor, disposition, note, proposal supersession, run abort, and aggregate closure commit atomically.
 - [ ] `ISS-031` · P0 · UI/API — Dismiss an issue and compare with reviewed completion; verify distinct provenance/copy/audit and no implication that a fix was verified.
 - [ ] `ISS-032` · P0 · CHAOS — Race admin completion against another decision/recovery; verify 409 and winner reload without overwriting audit.
@@ -42,7 +42,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `ISS-034` · P1 · CHAOS — Fail refresh while cached issue/action/run data is visible; verify persistent stale warning/retry, retained useful data, and unsafe action controls disabled.
 - [ ] `ISS-035` · P0 · API — Hit per-run tool-step, turn, token, active wall-clock, concurrency, daily-run, and reporter-reply budgets at boundaries; verify the documented safe terminal/paused state.
 - [ ] `ISS-036` · P0 · CHAOS — Trigger repeated agent give-ups; verify circuit breaker disables auto-dispatch at threshold, sends one admin warning, preserves manual/supervised control, and requires deliberate re-enable.
-- [ ] `ISS-037` · P0 · SEC — Configure personal AI for the reporter and remove their included grant; verify remediation still uses only the admin's current shared provider/credential.
+- [ ] `ISS-037` · P0 · SEC/AUTO — Configure personal AI for the reporter and remove their included grant; verify remediation still uses only the admin's current shared provider/credential.
 - [ ] `ISS-038` · P0 · LIVE — Save a valid remediation model override, change shared provider, and run; verify stale provider-bound override is ignored until a new real validation succeeds.
 - [ ] `ISS-039` · P0 · SEC — Put credentials/URLs/tokens in report text, model output, tool results/errors, resume results, and audit text; verify model-facing/persisted derived data is scrubbed while authorized UI retains the original reporter message.
 - [ ] `ISS-040` · P1 · API — Exercise AI health system issue creation/dedup/recovery; verify it is admin-only, never enters remediation queue, and closes with `ai_health_restored`.
@@ -98,7 +98,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `MCP-010` · P0 · SEC — Revoke the device/user/change role; verify active MCP calls and access/refresh tokens promptly lose authorization.
 - [ ] `MCP-011` · P0 · API — Exercise Streamable HTTP initialize, GET/POST/DELETE, `Mcp-Session-Id`, reconnect, concurrent sessions, cleanup, malformed JSON-RPC, and expired/unknown session behavior.
 - [ ] `MCP-012` · P1 · API — Discover prompt templates and `guide://cantinarr/agent-guide.md`; verify contents are readable, role-safe, current, and survive restart.
-- [ ] `MCP-013` · P0 · SEC — Verify requester tool enumeration excludes/denies admin tools server-side even if the client supplies a known admin tool name.
+- [ ] `MCP-013` · P0 · SEC/AUTO — Verify requester tool enumeration excludes/denies admin tools server-side even if the client supplies a known admin tool name.
 - [ ] `MCP-014` · P0 · SEC — For every tool below, repeat enabled happy path, disabled, unauthorized role, invalid input, upstream failure, and secret-redaction checks—not only the happy row.
 
 - [ ] `MCP-015` · P1 · UI — Verify inbound MCP login copy/URLs cannot be confused with outbound OpenAI/ChatGPT device authorization.

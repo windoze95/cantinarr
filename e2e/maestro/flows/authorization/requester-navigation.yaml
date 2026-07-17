@@ -43,4 +43,3 @@ tags:
 - assertNotVisible: "Navigate to AI Assistant"
 - assertNotVisible: "Navigate to Approvals"
 - assertNotVisible: "Navigate to Agent fixes"
-- takeScreenshot: evidence-auth-022-requester-boundary

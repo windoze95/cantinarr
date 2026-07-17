@@ -4,8 +4,11 @@ This folder is the master list of end-to-end Cantinarr behavior to verify. Cases
 
 Machine-driven coverage is tracked separately from the reusable checklist. See
 [automation](automation.md) for the layer boundaries, private-lab runner, and
-coverage workflow; [automation.json](automation.json) is the validated mapping
-from catalog IDs to current proof.
+coverage workflow. [coverage-plan.json](coverage-plan.json) assigns all 584
+parent cases to proof owners for planning only; [automation.json](automation.json)
+is the separate validated mapping from catalog IDs to evidence that actually
+exists. The current manifest records 11 automated and 19 partial parent cases;
+it does not claim that the remaining classified cases have been executed.
 
 ## Test areas
 
@@ -31,10 +34,11 @@ from catalog IDs to current proof.
 Run `make check-test-automation` after adding or changing catalog cases,
 Maestro flows, suites, or automation mappings. Run the current private-lab UI
 smoke suite with `make maestro-lab-smoke`; it never targets a public server or
-a household setup. Each live suite prints a private, self-contained Markdown
-report path with catalog traceability, normalized results, and fixture-checkpoint
-screenshots. Reports are labeled unreviewed and exclude console logs; inspect
-every image before sharing the bundle.
+a household setup. The local runner retains lab-password-scrubbed Maestro JUnit
+XML under the ignored private artifacts tree and deletes native debug, console,
+and screenshot output after normal, failed, and catchable interrupted runs. A
+host crash or `SIGKILL` can prevent cleanup, so never publish raw UI artifacts.
+Record reviewed live results with the [run template](run-template.md).
 
 Use `PASS` when the expected behavior is observed, `FAIL` when it is not, `BLOCKED` when the test cannot be completed, and `N/A` when the case does not apply to the tested configuration.
 
