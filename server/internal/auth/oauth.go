@@ -192,12 +192,13 @@ func (s *Service) ExchangeOAuthAuthorizationCode(clientID, code, redirectURI, co
 		return nil, ErrOAuthInvalidRedirectURI
 	}
 
-	stored, err := s.consumeOAuthAuthorizationCode(code)
+	// Claim the code atomically, matched to this client and redirect URI. A
+	// wrong-client or replayed attempt matches zero rows and never deletes a
+	// still-valid code, so it can neither burn a victim's pending grant nor
+	// mint a second token set from one code.
+	stored, err := s.consumeOAuthAuthorizationCode(code, clientID, redirectURI)
 	if err != nil {
 		return nil, err
-	}
-	if stored.ClientID != clientID || stored.RedirectURI != redirectURI {
-		return nil, ErrOAuthInvalidCode
 	}
 	if time.Now().After(stored.ExpiresAt) {
 		return nil, ErrOAuthInvalidCode
@@ -254,7 +255,17 @@ func (s *Service) RefreshOAuthToken(clientID, refreshToken, resource string) (*O
 		return nil, err
 	}
 
-	_, _ = s.db.Exec("DELETE FROM oauth_refresh_tokens WHERE token_hash = ?", tokenHash)
+	// Rotate atomically: only the caller whose DELETE actually removes the row
+	// may mint a successor. A concurrent refresh of the same token deletes zero
+	// rows and is rejected here instead of minting a second valid successor and
+	// silently defeating refresh-token reuse detection.
+	result, err := s.db.Exec("DELETE FROM oauth_refresh_tokens WHERE token_hash = ?", tokenHash)
+	if err != nil {
+		return nil, fmt.Errorf("rotate refresh token: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+		return nil, ErrOAuthInvalidRefreshToken
+	}
 	nextRefreshToken, err := s.createOAuthRefreshToken(stored.ClientID, stored.UserID, stored.DeviceID, stored.Resource, stored.Scope)
 	if err != nil {
 		return nil, err
@@ -272,18 +283,23 @@ func (s *Service) RefreshOAuthToken(clientID, refreshToken, resource string) (*O
 	}, nil
 }
 
-func (s *Service) consumeOAuthAuthorizationCode(code string) (*oauthAuthorizationCode, error) {
+// consumeOAuthAuthorizationCode deletes and returns the authorization code in a
+// single statement, matched to the presenting client and redirect URI. Doing
+// the match in the DELETE (rather than selecting, then checking, then deleting)
+// makes redemption a single-use atomic claim: only one concurrent caller wins
+// the row, and a caller with the wrong client_id/redirect_uri deletes nothing.
+func (s *Service) consumeOAuthAuthorizationCode(code, clientID, redirectURI string) (*oauthAuthorizationCode, error) {
 	codeHash := hashToken(code)
 	var stored oauthAuthorizationCode
 	err := s.db.QueryRow(
-		`SELECT code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at
-		 FROM oauth_authorization_codes WHERE code_hash = ?`,
-		codeHash,
+		`DELETE FROM oauth_authorization_codes
+		 WHERE code_hash = ? AND client_id = ? AND redirect_uri = ?
+		 RETURNING code_hash, client_id, user_id, redirect_uri, code_challenge, resource, scope, expires_at`,
+		codeHash, clientID, redirectURI,
 	).Scan(&stored.CodeHash, &stored.ClientID, &stored.UserID, &stored.RedirectURI, &stored.CodeChallenge, &stored.Resource, &stored.Scope, &stored.ExpiresAt)
 	if err != nil {
 		return nil, ErrOAuthInvalidCode
 	}
-	_, _ = s.db.Exec("DELETE FROM oauth_authorization_codes WHERE code_hash = ?", codeHash)
 	return &stored, nil
 }
 
