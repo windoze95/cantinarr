@@ -523,22 +523,24 @@ func (s *Service) GetUser(userID int64) (*User, error) {
 }
 
 func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*CreateConnectTokenResponse, error) {
-	// Find or create user
-	var userID int64
+	// Find or create the passwordless user this invite links to. Two admins
+	// (or one admin double-submitting) creating the first invite for the same
+	// new username must converge on one user row rather than racing the
+	// username UNIQUE constraint and failing one caller with a 500.
 	user, err := s.getUserByUsername(name)
 	if err != nil {
-		// Create new user with empty password hash (no password login)
-		result, err := s.db.Exec(
-			"INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+		if _, err := s.db.Exec(
+			"INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?) ON CONFLICT(username) DO NOTHING",
 			name, "", "user",
-		)
-		if err != nil {
+		); err != nil {
 			return nil, fmt.Errorf("create user: %w", err)
 		}
-		userID, _ = result.LastInsertId()
-	} else {
-		userID = user.ID
+		user, err = s.getUserByUsername(name)
+		if err != nil {
+			return nil, fmt.Errorf("load connect user: %w", err)
+		}
 	}
+	userID := user.ID
 
 	// Generate 32-byte random token (64 hex chars)
 	tokenBytes := make([]byte, 32)
@@ -617,11 +619,19 @@ func (s *Service) RedeemConnectToken(token, deviceName, hardwareID string) (*Tok
 		return nil, ErrTokenExpired
 	}
 
-	// Mark as redeemed
+	// Claim the single-use token atomically. The redeemed_at IS NULL guard means
+	// only the first of two concurrent redemptions of the same leaked link marks
+	// the row; the loser affects zero rows and is rejected before it can mint a
+	// second authenticated device session.
 	now := time.Now()
-	_, err = s.db.Exec("UPDATE connect_tokens SET redeemed_at = ? WHERE token = ?", now, token)
+	result, err := s.db.Exec(
+		"UPDATE connect_tokens SET redeemed_at = ? WHERE token = ? AND redeemed_at IS NULL", now, token,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("mark token redeemed: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+		return nil, ErrTokenRedeemed
 	}
 
 	deviceID, err := s.upsertDevice(ct.UserID, deviceName, hardwareID)
