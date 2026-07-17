@@ -8,6 +8,7 @@ readonly SCRIPT_DIR
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 readonly ROOT_DIR
 DEFAULT_LAB_DIR="$(cd "${ROOT_DIR}/../.." && pwd)/cantinarr-lab"
+readonly TESTED_MAESTRO_VERSION="2.6.1"
 
 suite="smoke"
 reset=0
@@ -22,12 +23,26 @@ Runs the selected Maestro web suite against the private disposable lab. The
 lab repo defaults to ../../cantinarr-lab and can be overridden with
 CANTINARR_LAB_DIR. --deploy first builds/deploys this checkout as the lab
 candidate. --reset performs the lab's full volume reset once before the suite.
+Every execution writes a private Markdown evidence bundle beneath
+e2e/maestro/.artifacts/suites/.
 EOF
 }
 
 die() {
   printf 'maestro lab suite failed: %s\n' "$*" >&2
   exit 1
+}
+
+assert_no_symlink_components() {
+  local path="$1"
+  local current="${path}"
+  while [[ "${current}" != "${ROOT_DIR}" ]]; do
+    [[ "${current}" == "${ROOT_DIR}/"* ]] ||
+      die "artifact path is outside the source checkout"
+    [[ ! -L "${current}" ]] ||
+      die "artifact path contains a symlink"
+    current="$(dirname "${current}")"
+  done
 }
 
 while [[ $# -gt 0 ]]; do
@@ -56,6 +71,9 @@ while [[ $# -gt 0 ]]; do
     *) die "unknown option: $1" ;;
   esac
 done
+
+[[ "${suite}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] ||
+  die "suite name contains unsupported characters"
 
 lab_dir="${CANTINARR_LAB_DIR:-${DEFAULT_LAB_DIR}}"
 suite_file="${ROOT_DIR}/e2e/maestro/suites.json"
@@ -91,6 +109,33 @@ fi
 python3 "${SCRIPT_DIR}/check_test_automation.py" >/dev/null ||
   die "Maestro suite failed the local safety validator"
 
+artifact_root="${ROOT_DIR}/e2e/maestro/.artifacts"
+suite_root="${artifact_root}/suites/${suite}"
+assert_no_symlink_components "${suite_root}"
+mkdir -p "${suite_root}"
+assert_no_symlink_components "${suite_root}"
+chmod 0700 "${ROOT_DIR}/e2e/maestro/.artifacts" \
+  "${ROOT_DIR}/e2e/maestro/.artifacts/suites" "${suite_root}"
+suite_run="$(mktemp -d "${suite_root}/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")" ||
+  die "could not create the private suite artifact directory"
+mkdir -p "${suite_run}/raw" "${suite_run}/statuses"
+chmod 0700 "${suite_run}" "${suite_run}/raw" "${suite_run}/statuses"
+
+harness_revision="$(git -C "${ROOT_DIR}" rev-parse --verify HEAD 2>/dev/null)" ||
+  die "could not determine the harness revision"
+harness_status="$(git -C "${ROOT_DIR}" status --porcelain)" ||
+  die "could not determine the harness dirty state"
+harness_dirty=false
+if [[ -n "${harness_status}" ]]; then
+  harness_dirty=true
+fi
+harness_sha256="$(python3 "${SCRIPT_DIR}/render_maestro_report.py" --print-harness-sha256)" ||
+  die "could not determine the harness content hash"
+deployed_this_run=false
+[[ "${deploy}" -eq 1 ]] && deployed_this_run=true
+reset_requested=false
+[[ "${reset}" -eq 1 ]] && reset_requested=true
+
 # A fresh loopback origin keeps Chromium from reusing a Flutter service worker
 # or cached bundle from an earlier candidate deployed on the same Droplet.
 e2e_port="$(python3 - <<'PY'
@@ -120,18 +165,58 @@ if [[ "${deploy}" -eq 1 ]]; then
 fi
 
 first=1
+suite_status=0
 while IFS=$'\t' read -r user flow; do
   [[ -f "${ROOT_DIR}/${flow}" ]] || die "suite flow is missing: ${flow}"
+  slug="${flow#e2e/maestro/flows/}"
+  slug="${slug%.yaml}"
+  slug="${slug//\//-}"
   args=(e2e-run --user "${user}" --platform web --port "${e2e_port}")
   if [[ "${reset}" -eq 1 && "${first}" -eq 1 ]]; then
     args+=(--reset)
   fi
-  args+=(-- "${SCRIPT_DIR}/run-maestro-flow.sh" "${ROOT_DIR}/${flow}")
+  args+=(-- "${SCRIPT_DIR}/run-maestro-flow.sh" \
+    --artifacts-root "${suite_run}/raw" "${ROOT_DIR}/${flow}")
+  set +e
   (
     cd "${lab_dir}"
     scripts/lab "${args[@]}"
   )
+  flow_status=$?
+  set -e
+  printf '%s\n' "${flow_status}" >"${suite_run}/statuses/${slug}.exit"
+  chmod 0600 "${suite_run}/statuses/${slug}.exit"
   first=0
+  if [[ "${flow_status}" -ne 0 ]]; then
+    suite_status="${flow_status}"
+    break
+  fi
 done <"${mapfile_cmd}"
 
+set +e
+report_path="$(
+  python3 "${SCRIPT_DIR}/render_maestro_report.py" \
+    --suite "${suite}" \
+    --run-dir "${suite_run}" \
+    --harness-revision "${harness_revision}" \
+    --harness-dirty "${harness_dirty}" \
+    --harness-sha256 "${harness_sha256}" \
+    --deployed-this-run "${deployed_this_run}" \
+    --reset-requested "${reset_requested}" \
+    --maestro-version "${TESTED_MAESTRO_VERSION}" \
+    --platform web
+)"
+report_status=$?
+set -e
+if [[ -n "${report_path}" ]]; then
+  printf 'Private Markdown report: %s\n' "${report_path}"
+fi
+if [[ "${report_status}" -ne 0 ]]; then
+  printf 'Maestro %s suite report generation failed.\n' "${suite}" >&2
+  [[ "${suite_status}" -ne 0 ]] || suite_status="${report_status}"
+fi
+if [[ "${suite_status}" -ne 0 ]]; then
+  printf 'Maestro %s suite failed against the private disposable lab.\n' "${suite}" >&2
+  exit "${suite_status}"
+fi
 printf 'Maestro %s suite passed against the private disposable lab.\n' "${suite}"
