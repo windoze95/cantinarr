@@ -35,7 +35,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 - **Import Doctor** -- Plain-English diagnosis of stuck downloads with one-click fixes (manual/force import, remove+blocklist+re-search, category hand-off, rescan), shared by the app, the AI assistant, and MCP.
 - **Push notifications** -- APNs delivery through a self-hosted push gateway with zero-config auto-enrollment, per-user preference categories, and admin-scoped alerts.
 - **Real-time updates** -- WebSocket hub polls arr queues (30s) and download clients (15s) and pushes progress, queue snapshots, and change pings; arr webhooks make external changes (manual imports, deletes) land instantly.
-- **Arr proxy** -- Read-only Radarr/Sonarr browsing for users, full passthrough for admins, without exposing API keys.
+- **Arr proxy** -- Read-only Radarr/Sonarr browsing for users, ordinary-method passthrough for admins (tunnel/reflection methods blocked for everyone), without exposing API keys.
 - **Secrets encrypted at rest** -- Instance API keys/passwords, personal and shared AI credentials, OpenAI OAuth authorization, webhook tokens, and the JWT secret are AES-256-GCM encrypted in SQLite.
 - **Flutter web embed** -- The web build ships inside the binary via `go:embed`. One container, one port, API + UI.
 - **Single Alpine image** -- A static, no-CGO Go server plus the pinned Codex app-server helper, with one exposed port.
@@ -277,7 +277,9 @@ GET|PUT /api/instances/{instanceID}/users    # admin: which users are pinned/ass
 POST   /api/instances/{instanceID}/webhook   # admin: rotate credentials and upsert a managed arr webhook
 ANY    /api/instances/{instanceID}/*         # proxy to the instance's own API; JSON secrets are redacted
 ```
-The proxy allows read-only Radarr/Sonarr browsing (library, queue, history, wanted, calendar) for regular users; writes, commands, interactive search, config, and all non-arr services require admin. JSON responses are bounded and recursively scrubbed for credential fields and secret-bearing URL query parameters before they reach any client. An encoded, malformed, or oversized JSON response fails closed rather than bypassing that scrubber.
+The proxy allows read-only Radarr/Sonarr browsing (library, queue, history, wanted, calendar) for regular users; writes, commands, interactive search, config, and all non-arr services require admin. Requesters are bound to their own effective instance -- their pin, or the deterministic global default/fallback -- exactly as `/api/config` reports it; a sibling instance the admin has hidden cannot be reached by guessing its ID, and instance authorization is classified from stored metadata so an undecryptable secret can never widen access. JSON responses are bounded and recursively scrubbed for credential fields and secret-bearing URL query parameters before they reach any client. An encoded, malformed, streaming, or oversized JSON response fails closed rather than bypassing that scrubber.
+
+The proxy is also a transport trust boundary. `CONNECT`, `TRACE`, and `TRACK` are rejected before instance resolution or any upstream contact, and an upstream protocol upgrade (`101`) is refused, so the HTTP proxy can never become an opaque tunnel or reflect the injected `X-Api-Key`. Inbound Cantinarr session cookies and every forwarded credential, client-identity assertion (reverse-proxy `X-Auth-*`/`Remote-*`/mTLS headers), routing/method-override, and request-trailer header terminate here; only the instance's own `X-Api-Key` is added outbound. Upstream responses are marked private and non-cacheable, and nginx/lighttpd internal-redirect controls (`X-Accel-*`, `X-Sendfile`, `X-Reproxy-URL`) plus response trailers are stripped so a fronting web server cannot be steered by an upstream header.
 
 ### Downloads & monitoring (admin)
 ```
