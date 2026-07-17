@@ -29,10 +29,12 @@ func testCipher(t *testing.T) *secrets.Cipher {
 // mockGateway records enroll calls and device registrations. enrollFails, when
 // set, makes /v1/enroll return 503 so the background-retry path can be driven.
 type mockGateway struct {
-	mu          sync.Mutex
-	enrollCalls int
-	registered  []string // device ids seen at /v1/devices
-	enrollFails bool
+	mu                sync.Mutex
+	enrollCalls       int
+	registered        []string // device ids seen at /v1/devices
+	enrollFails       bool
+	notificationCalls int
+	notificationAuth  string
 }
 
 func (g *mockGateway) setEnrollFails(v bool) {
@@ -53,6 +55,12 @@ func (g *mockGateway) registeredIDs() []string {
 	out := make([]string, len(g.registered))
 	copy(out, g.registered)
 	return out
+}
+
+func (g *mockGateway) notificationResult() (calls int, auth string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.notificationCalls, g.notificationAuth
 }
 
 // newMockGatewayServer stands up the mock and returns it plus its base URL.
@@ -83,6 +91,13 @@ func newMockGatewayServer(t *testing.T) (*mockGateway, string) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{"id":"d","created":true}`)
+		case "/v1/notifications":
+			g.mu.Lock()
+			g.notificationCalls++
+			g.notificationAuth = r.Header.Get("Authorization")
+			g.mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"sent":1,"failed":0,"results":[]}`)
 		default:
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{}`)
@@ -106,7 +121,8 @@ func storedPushKey(t *testing.T, database *sql.DB, cipher *secrets.Cipher) strin
 	return got
 }
 
-func TestManagerEnsureExplicitKeyWins(t *testing.T) {
+// PUSH-001: an explicit gateway key skips enrollment, authenticates a successful send, and is never persisted.
+func TestManagerExplicitKeySkipsEnrollmentAndAuthenticatesSend(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -122,12 +138,26 @@ func TestManagerEnsureExplicitKeyWins(t *testing.T) {
 	if client.apiKey != "pgk_explicit" {
 		t.Errorf("client key = %q, want pgk_explicit", client.apiKey)
 	}
+	resp, err := client.Send(context.Background(), []int64{42}, "Test", "Body", map[string]any{"type": "test"})
+	if err != nil {
+		t.Fatalf("send with explicit key: %v", err)
+	}
+	if resp == nil || resp.Sent != 1 || resp.Failed != 0 {
+		t.Fatalf("send response = %#v, want sent=1 failed=0", resp)
+	}
 	if g.enrollCount() != 0 {
 		t.Errorf("enroll calls = %d, want 0 (explicit key must not enroll)", g.enrollCount())
 	}
-	// An explicit key is never persisted.
-	if k := storedPushKey(t, database, cipher); k != "" {
-		t.Errorf("stored push key = %q, want empty (explicit key not persisted)", k)
+	calls, auth := g.notificationResult()
+	if calls != 1 || auth != "Bearer pgk_explicit" {
+		t.Errorf("notification calls/auth = %d, %q; want 1, %q", calls, auth, "Bearer pgk_explicit")
+	}
+	var persisted int
+	if err := database.QueryRow("SELECT COUNT(*) FROM settings WHERE key = 'push_api_key'").Scan(&persisted); err != nil {
+		t.Fatalf("count persisted push key: %v", err)
+	}
+	if persisted != 0 {
+		t.Errorf("persisted push key rows = %d, want 0", persisted)
 	}
 }
 

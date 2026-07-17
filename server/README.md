@@ -35,7 +35,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 - **Import Doctor** -- Plain-English diagnosis of stuck downloads with one-click fixes (manual/force import, remove+blocklist+re-search, category hand-off, rescan), shared by the app, the AI assistant, and MCP.
 - **Push notifications** -- APNs delivery through a self-hosted push gateway with zero-config auto-enrollment, per-user preference categories, and admin-scoped alerts.
 - **Real-time updates** -- WebSocket hub polls arr queues (30s) and download clients (15s) and pushes progress, queue snapshots, and change pings; arr webhooks make external changes (manual imports, deletes) land instantly.
-- **Arr proxy** -- Read-only Radarr/Sonarr browsing for users, full passthrough for admins, without exposing API keys.
+- **Arr proxy** -- Read-only browsing of each user's effective Radarr/Sonarr and explicitly granted Chaptarr instance, plus full HTTP method/resource access for admins, without exposing API keys or permitting opaque protocol tunnels.
 - **Secrets encrypted at rest** -- Instance API keys/passwords, personal and shared AI credentials, OpenAI OAuth authorization, webhook tokens, and the JWT secret are AES-256-GCM encrypted in SQLite.
 - **Flutter web embed** -- The web build ships inside the binary via `go:embed`. One container, one port, API + UI.
 - **Single Alpine image** -- A static, no-CGO Go server plus the pinned Codex app-server helper, with one exposed port.
@@ -101,7 +101,7 @@ Optional env vars for deployment tuning (a `.env` file next to the binary is aut
 
 OpenAI OAuth source deployments use Codex app-server and are supported only on Linux; non-Linux hosts report this provider unavailable even when a Codex binary is installed. The runtime directory's parent must exist, and the directory must be on tmpfs or ramfs—not persistent storage. Give each concurrently running Cantinarr process its own runtime directory; startup removes stale `session-*` entries from that dedicated root. The official container uses its private Docker `/dev/shm` tmpfs. Use the tested Codex 0.144.3 release or a protocol-compatible build.
 
-The database lives at `/config/cantinarr.db` (SQLite, WAL mode). Keep the `/config` volume -- it holds the DB and the auto-generated encryption key, and encrypted secrets are unrecoverable without that key.
+The database lives at `/config/cantinarr.db` (SQLite, WAL mode). Keep the `/config` volume -- it holds the DB and the auto-generated encryption key, and encrypted secrets are unrecoverable without that key. An authenticated encrypted canary rejects a wrong key, tampering, or plaintext substitution at startup without rewriting the stored value.
 
 Native app passkeys require a public HTTPS domain associated with the app: Apple devices verify the AASA file, Android credential providers verify `assetlinks.json`. Browser passkey setup remains available when native association isn't possible.
 
@@ -277,7 +277,7 @@ GET|PUT /api/instances/{instanceID}/users    # admin: which users are pinned/ass
 POST   /api/instances/{instanceID}/webhook   # admin: rotate credentials and upsert a managed arr webhook
 ANY    /api/instances/{instanceID}/*         # proxy to the instance's own API; JSON secrets are redacted
 ```
-The proxy allows read-only Radarr/Sonarr browsing (library, queue, history, wanted, calendar) for regular users; writes, commands, interactive search, config, and all non-arr services require admin. JSON responses are bounded and recursively scrubbed for credential fields and secret-bearing URL query parameters before they reach any client. An encoded, malformed, or oversized JSON response fails closed rather than bypassing that scrubber.
+The proxy allows complete service/API-version-bound read routes only on the regular user's one effective Radarr/Sonarr instance or exact Chaptarr grant (including the exact Chaptarr book lookup and owned-book cover shape). Hidden sibling instances, broader subroutes, writes, commands, release search, profiles/root folders, config, unknown instances, failed classification, and all non-arr services fail closed. Admins retain full HTTP method/resource access, while the same credential boundary applies to every caller. Client authorization, cookie/Cookie2, zero-trust identity assertions, forwarding, IP-chain, origin/referrer, routing/method-override and protocol-upgrade headers, and request trailers terminate at this boundary; only the configured upstream API key is injected. CONNECT is rejected before instance resolution, and upstream `101 Switching Protocols` responses are rejected. Every proxied response is private/no-store; upstream CDN-cache and internal-redirect/file-offload control headers are removed. JSON is input/output bounded and recursively scrubbed for nested credential fields, authorization/cookie values, browser-compatible or decorated URL userinfo, and repeated, nested, encoded query/fragment secrets; malformed structured `Link` and `Refresh` headers are dropped. Encoded, malformed, or oversized JSON fails closed. On the exact case-insensitive, path-canonicalized versioned arr event endpoints, SSE is bounded and scrubbed event-by-event while remaining unbuffered; wrong-route or mislabeled SSE, unsafe first events, and structured JSON streams fail closed rather than bypassing the scrubber. Intended opaque text and binary streams remain byte-identical and unbuffered, while object/array-shaped JSON errors on those routes are still scrubbed.
 
 ### Downloads & monitoring (admin)
 ```
@@ -390,7 +390,7 @@ One shared classifier (`internal/arr/doctor.go`) explains stuck queue items in p
 
 ### Push notifications
 
-Cantinarr never holds APNs credentials; it talks to a self-hosted push gateway. Setting `CANTINARR_PUSH_GATEWAY_URL` enables push -- with no API key the server **auto-enrolls** on first start and persists its issued key encrypted in the DB (delete the `push_api_key` settings row to force re-enrollment). Enrollment self-heals: a gateway that's down at boot is retried every 60s, and stored device tokens are re-registered once it comes up.
+Cantinarr never holds APNs credentials; it talks to a self-hosted push gateway. Setting `CANTINARR_PUSH_GATEWAY_URL` enables push. With an explicit `CANTINARR_PUSH_API_KEY`, the server authenticates sends directly, skips enrollment, and never persists that supplied key. With no API key it **auto-enrolls** on first start and persists its issued key encrypted in the DB (delete the `push_api_key` settings row to force re-enrollment). Enrollment self-heals: a gateway that's down at boot is retried every 60s, and stored device tokens are re-registered once it comes up.
 
 Notification categories (per-user preferences; admin-scoped ones are enforced in SQL, not just defaults):
 

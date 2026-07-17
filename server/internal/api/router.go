@@ -452,7 +452,12 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 	}
 }
 
-func configHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service) http.HandlerFunc {
+type configInstanceStore interface {
+	ListAll() ([]instance.Instance, error)
+	ListUserDefaults(userID int64) (map[string]string, error)
+}
+
+func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		// Build instances list
@@ -476,8 +481,11 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 		}
 		overrides := map[string]string{}
 		if userID != 0 {
-			if ov, err := store.ListUserDefaults(userID); err == nil {
-				overrides = ov
+			var err error
+			overrides, err = store.ListUserDefaults(userID)
+			if err != nil {
+				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+				return
 			}
 		}
 
@@ -492,10 +500,14 @@ func configHandler(cfg *config.Config, store *instance.Store, creds *credentials
 				if !isAdmin && visibleDefaults[inst.ServiceType] != inst.ID {
 					continue
 				}
-				// Effective default: a per-user override wins over the global
-				// is_default flag for its service type.
+				// A requester's filtered entry is always its effective default,
+				// including the deterministic first-instance fallback when no row
+				// carries the global is_default flag. Admins retain the configured
+				// global flag unless their own per-user override selects a sibling.
 				isDefault := inst.IsDefault
-				if pinned, ok := overrides[inst.ServiceType]; ok {
+				if !isAdmin {
+					isDefault = visibleDefaults[inst.ServiceType] == inst.ID
+				} else if pinned, ok := overrides[inst.ServiceType]; ok {
 					isDefault = pinned == inst.ID
 				}
 				instances = append(instances, instanceInfo{

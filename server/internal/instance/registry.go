@@ -390,17 +390,17 @@ func (r *Registry) InvalidateClient(instanceID string) {
 }
 
 // LookupServiceType returns an instance's service type and whether the
-// instance exists. It lets leaf service packages (e.g. tautulli, whose client
-// type this package caches) resolve instances without importing this package.
+// instance exists. It uses the metadata-only lookup so authorization never
+// needs to read or decrypt the instance's stored credentials.
 func (s *Store) LookupServiceType(instanceID string) (string, bool, error) {
-	inst, err := s.Get(instanceID)
+	serviceType, err := s.ServiceTypeOf(instanceID)
 	if err != nil {
 		return "", false, err
 	}
-	if inst == nil {
+	if serviceType == "" {
 		return "", false, nil
 	}
-	return inst.ServiceType, true, nil
+	return serviceType, true, nil
 }
 
 // getInstanceOfType loads an instance and verifies its service type.

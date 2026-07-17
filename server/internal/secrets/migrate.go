@@ -32,6 +32,12 @@ func VerifyKeyIdentity(db *sql.DB, c *Cipher) error {
 	if err != nil {
 		return fmt.Errorf("read canary: %w", err)
 	}
+	// The canary has never had a legacy plaintext representation: it is created
+	// by VerifyKeyIdentity itself. Requiring the authenticated envelope prevents
+	// a known plaintext replacement from bypassing the wrong-key guard.
+	if !IsEncrypted(stored) {
+		return fmt.Errorf("encryption key does not match existing encrypted data — restore /config/encryption.key (or the original CANTINARR_ENCRYPTION_KEY); generating a new key would orphan all stored secrets")
+	}
 	plain, err := c.Decrypt(stored)
 	if err != nil || plain != canaryValue {
 		return fmt.Errorf("encryption key does not match existing encrypted data — restore /config/encryption.key (or the original CANTINARR_ENCRYPTION_KEY); generating a new key would orphan all stored secrets")

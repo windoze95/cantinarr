@@ -29,12 +29,12 @@ human-review obligations even when deterministic automation covers part of
 the behavior.
 
 [automation.json](automation.json) is the separate execution-proof manifest.
-Its current 30 mappings are deliberately conservative:
+Its current 33 mappings are deliberately conservative:
 
 | Status | Parent cases | Current sources |
 |---|---:|---|
-| Automated | 11 | 5 Go cases, 5 CI baseline cases, 1 Maestro case |
-| Partial | 19 | 7 Go cases, 1 Flutter widget case, 3 Maestro cases, 7 CI/release cases, 1 store-listing capture-tool case |
+| Automated | 18 | 12 Go cases, 5 CI baseline cases, 1 Maestro case |
+| Partial | 15 | 3 Go cases, 1 Flutter widget case, 3 Maestro cases, 7 CI/release cases, 1 store-listing capture-tool case |
 
 An `automated` mapping means the listed evidence covers every catalog clause
 and applicable vector for that parent. A `partial` mapping names exactly what

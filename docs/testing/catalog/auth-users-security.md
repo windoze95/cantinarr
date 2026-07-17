@@ -28,7 +28,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `AUTH-020` · P0 · SEC — Attempt self-deletion, self-demotion when it would violate invariants, and deletion of protected/current admin states; verify guardrails match the UI and API.
 - [ ] `AUTH-021` · P0 · UI — Promote a user to admin and demote them again; verify routes/menu/permissions update without stale privileged access.
 - [ ] `AUTH-022` · P0 · SEC — As a requester, directly navigate/call every admin root (`/radarr`, `/sonarr`, `/chaptarr`, `/downloads`, `/tautulli`, `/approvals`, admin issues/actions/runs, setup, privileged settings); verify UI redirects and APIs return 403.
-- [ ] `AUTH-023` · P0 · SEC — As a requester, read allowed Radarr/Sonarr proxy resources but attempt writes, commands, interactive searches, config endpoints, and non-arr proxies; verify only the read-only allowlist succeeds.
+- [ ] `AUTH-023` · P0 · SEC/AUTO — As a requester, read the allowed routes on the one effective Radarr/Sonarr instance and exact Chaptarr grant (including book lookup/owned covers), then try hidden sibling IDs, broader subroutes, writes, commands, release searches, config endpoints, and non-arr proxies; verify only the complete service/version-bound read allowlist succeeds and missing/unavailable classification fails closed.
 - [ ] `AUTH-024` · P0 · SEC — As an issue reporter, open their own issue and another user's issue; verify only their own thread is visible/repliable while admins can access both.
 - [ ] `AUTH-025` · P1 · UI — Show the Devices screen with current and other devices; verify model, last-seen, user, and “This device” are accurate and revoke confirmation targets the right ID.
 - [ ] `AUTH-026` · P1 · CHAOS — Revoke a device while that device is offline, then reconnect; verify it cannot refresh or silently recreate its session.
@@ -82,12 +82,12 @@ Use the [run template](../run-template.md) to record executions of these cases.
 ## Security, privacy, and failure containment
 
 - [ ] `SEC-001` · P0 · SEC — Inventory every DB/settings secret and verify AES-256-GCM ciphertext for arr/download/Tautulli/Plex/AI/API/OAuth/push/webhook credentials, with no plaintext duplicate columns/files.
-- [ ] `SEC-002` · P0 · SEC — Tamper with ciphertext/tag and use the wrong key; verify authenticated decryption fails closed and never overwrites the stored value with empty/default data.
+- [ ] `SEC-002` · P0 · SEC/AUTO — Tamper with ciphertext/tag and use the wrong key; verify authenticated decryption fails closed and never overwrites the stored value with empty/default data.
 - [ ] `SEC-003` · P0 · SEC — Inspect every credential/instance/status/config/user API; verify only safe metadata/configured booleans, never secret values or encrypted blobs.
-- [ ] `SEC-004` · P0 · SEC — Verify incoming Cantinarr Authorization/Cookie/forwarding headers are stripped before upstream proxy calls and only the intended upstream auth is applied.
+- [ ] `SEC-004` · P0 · SEC/AUTO — Verify incoming Cantinarr authorization, cookie/Cookie2, identity assertions, forwarding, client-routing/method-override and protocol-upgrade headers plus request trailers are stripped before upstream proxy calls, only intended upstream auth is applied, and neither CONNECT nor an upstream 101 can create an opaque tunnel.
 - [ ] `SEC-005` · P0 · SEC — Scrub nested/case-varied secret keys, arrays, headers, URL userinfo, percent-encoded and repeated query secrets across proxy, MCP, chat, and remediation.
 - [ ] `SEC-006` · P0 · SEC — Feed misleading content types, malformed/encoded/deeply nested/oversized JSON and compressed bombs; verify bounded fail-closed handling without forwarding raw bodies.
-- [ ] `SEC-007` · P1 · SEC — Verify legitimate non-JSON/streaming/SSE responses remain usable only on intended routes and cannot bypass the structured scrubber.
+- [ ] `SEC-007` · P1 · SEC/AUTO — Verify legitimate opaque text/binary streams and bounded, sanitized SSE remain usable and unbuffered only on intended endpoints, while wrong-route or mislabeled SSE, unsafe first events, and structured JSON streams fail closed rather than bypassing the scrubber.
 - [ ] `SEC-008` · P0 · SEC — Review request logs under success/error attacks; verify no query string, auth/cookie header, request body, dynamic secret path, user email, or upstream error body is logged.
 - [ ] `SEC-009` · P0 · SEC — Make each upstream redirect to another host; verify clients carrying credentials do not follow or leak headers.
 - [ ] `SEC-010` · P0 · SEC — Run the route inventory as anonymous/requester/admin with direct HTTP, not UI; verify every permission boundary and no method/path variant bypass.
@@ -98,7 +98,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `SEC-015` · P1 · SEC — Verify public auth/device-flow rate limits cannot be bypassed with route variants and authenticated device-flow churn does not starve household login.
 - [ ] `SEC-016` · P0 · SEC — Attempt SSRF through instance URLs, webhook public URL, AI verification URL, management portal, images, and MCP redirects; verify supported schemes/hosts/redirect rules and no cloud metadata access.
 - [ ] `SEC-017` · P1 · SEC — Attempt SQL/JSON/path/command injection in IDs, filters, instance names, emails, download item IDs, release refs, and filenames; verify parameterization/escaping and no unintended mutation.
-- [ ] `SEC-018` · P0 · SEC — Confirm regular-user `/api/config` reveals only effective services/grants; admin config may list instances but never credentials or webhook secrets.
+- [ ] `SEC-018` · P0 · SEC/AUTO — Confirm regular-user `/api/config` reveals only effective services/grants; admin config may list instances but never credentials or webhook secrets.
 - [ ] `SEC-019` · P1 · SEC — Verify backups/support bundles/crash reports and app local storage contain only expected tokens/state and documented protection; no provider/Plex/upstream secrets on device.
 - [ ] `SEC-020` · P1 · SEC — Compare actual network destinations/storage with privacy policy; verify no undocumented telemetry or client-side third-party API keys.
 - [ ] `SEC-021` · P1 · CHAOS — Trigger panics/errors in background Plex, push, WebSocket, cache, and remediation work; verify recovery contains the fault, preserves server health, and logs redacted context.

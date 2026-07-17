@@ -23,7 +23,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `INST-015` · P0 · SEC — Call a webhook with missing/wrong Basic auth, query-string credentials, wrong instance, and encoded/malformed paths; verify rejection and no event mutation.
 - [ ] `INST-016` · P1 · LIVE — Reconfigure the same webhook repeatedly; verify one managed webhook is updated, credentials rotate safely, and the previous credential stops working.
 - [ ] `INST-017` · P1 · CHAOS — Make arr accept webhook creation but lose the response; retry and verify no duplicate unmanaged hooks or secret disclosure.
-- [ ] `INST-018` · P0 · SEC — Proxy JSON containing nested API keys, authorization/cookie fields, URL userinfo, and secret query parameters; verify all are recursively scrubbed.
+- [ ] `INST-018` · P0 · SEC/AUTO — Proxy JSON containing nested/case-varied credential fields plus browser-compatible, decorated, nested-encoded, userinfo, query, fragment, and response-header URLs; verify credentials are recursively scrubbed without losing ordinary routing/data.
 - [ ] `INST-019` · P0 · SEC — Return malformed, encoded, and oversized JSON from an arr proxy; verify it fails closed rather than forwarding unsanitized content.
 - [ ] `INST-020` · P1 · LIVE — Verify TMDB, Trakt, and AI shared credentials save only after their connection/validation contract succeeds; failed replacement leaves the previously working value active.
 - [ ] `INST-021` · P1 · UI — Delete each shared credential; verify its feature becomes unavailable with actionable UI while unrelated providers remain configured.
@@ -54,7 +54,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Push gateway, preferences, delivery, and deep links
 
-- [ ] `PUSH-001` · P0 · API — Start with explicit gateway key; verify no enrollment call and successful authenticated send.
+- [ ] `PUSH-001` · P0 · API/AUTO — Start with explicit gateway key; verify no enrollment call and successful authenticated send.
 - [ ] `PUSH-002` · P0 · API/SEC — Start with gateway URL and no key; verify one auto-enrollment, encrypted persisted key, restart reuse, and no key in logs/responses.
 - [ ] `PUSH-003` · P1 · CHAOS — Keep gateway down at boot then restore it; verify periodic self-healing enrollment and stored device-token reconciliation without restart.
 - [ ] `PUSH-004` · P0 · LIVE — Register, rotate, and delete APNs tokens for one/multiple devices; verify tokens bind to authenticated device/user and another user cannot alter them.

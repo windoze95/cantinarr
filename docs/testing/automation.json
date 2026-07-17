@@ -27,8 +27,8 @@
     },
     {
       "case_id": "AUTH-023",
-      "status": "partial",
-      "scope": "Proves the requester path/method allowlist, privileged Chaptarr denial, and anonymous denial; explicit non-arr instance and instance-lookup failure handling remain unproved.",
+      "status": "automated",
+      "scope": "Requester proxy authorization resolves metadata without decrypting secrets and binds every read to the same deterministic effective Radarr/Sonarr instance or exact Chaptarr grant exposed in config. Only complete service- and version-bound read routes pass, including the narrow owned-book MediaCover path and exact Chaptarr book lookup; hidden siblings, broader subroutes, writes, commands, release search, config, non-arr or unknown targets, traversal, missing instances, and unavailable lookups fail closed. Admins bypass requester classification.",
       "evidence": [
         {
           "kind": "go-test",
@@ -48,7 +48,32 @@
         {
           "kind": "go-test",
           "path": "server/internal/auth/arr_proxy_test.go",
+          "selector": "TestRequireArrProxyAccess_ServiceBoundary"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/auth/arr_proxy_test.go",
+          "selector": "TestRequireArrProxyAccess_EffectiveInstanceBoundary"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/auth/arr_proxy_test.go",
+          "selector": "TestRequireArrProxyAccess_RejectsEncodedTraversal"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/auth/arr_proxy_test.go",
           "selector": "TestRequireArrProxyAccess_RequiresClaims"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/instance/store_test.go",
+          "selector": "TestLookupServiceTypeUsesServiceMetadata"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/instance/store_test.go",
+          "selector": "TestUserCanAccessInstanceUsesEffectiveDefaults"
         }
       ]
     },
@@ -250,8 +275,8 @@
     },
     {
       "case_id": "INST-018",
-      "status": "partial",
-      "scope": "Proves recursive scrubbing for nested credential keys, URL userinfo and secret queries, plus malformed secret-bearing URL headers; explicit nested Authorization and Cookie fields remain unproved.",
+      "status": "automated",
+      "scope": "Nested and case-varied API keys, authorization/cookie fields, dynamic credential value/header shapes, URL userinfo, WHATWG whitespace/backslash variants, decorated URLs, nested encoded redirect URLs, repeated/encoded secret query and fragment parameters, and strict secret-bearing response URL headers are recursively scrubbed while ordinary data and routing remain intact.",
       "evidence": [
         {
           "kind": "go-test",
@@ -262,6 +287,11 @@
           "kind": "go-test",
           "path": "server/internal/proxy/sanitize_test.go",
           "selector": "TestSanitizeJSONExpandedCredentialCoverage"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/sanitize_test.go",
+          "selector": "TestSanitizeURLCredentialsAdversarialVariants"
         },
         {
           "kind": "go-test",
@@ -427,6 +457,18 @@
       ]
     },
     {
+      "case_id": "PUSH-001",
+      "status": "automated",
+      "scope": "An explicit push-gateway key suppresses enrollment, authenticates a successful notification send, and is never persisted to the settings table.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/push/manager_test.go",
+          "selector": "TestManagerExplicitKeySkipsEnrollmentAndAuthenticatesSend"
+        }
+      ]
+    },
+    {
       "case_id": "PUSH-010",
       "status": "partial",
       "scope": "Proves request-pending recipient selection remains admin-scoped despite requester opt-in; issue, agent-action, and Plex-access categories remain unproved.",
@@ -468,31 +510,110 @@
       ]
     },
     {
+      "case_id": "SEC-002",
+      "status": "automated",
+      "scope": "The matching authenticated encryption canary is accepted; tampered ciphertext or authentication tags, a wrong key, an authenticated wrong value, and a plaintext replacement fail closed and leave the exact stored bytes unchanged. A credential-registry consumer likewise returns no plaintext, logs no credential material, and preserves the exact persisted encrypted value after tampering or a wrong-key read.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/secrets/migrate_test.go",
+          "selector": "TestVerifyKeyIdentityRejectsTamperAndWrongKeyWithoutMutation"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/credentials/registry_test.go",
+          "selector": "TestGetCredentialDecryptionFailurePreservesStoredCiphertext"
+        }
+      ]
+    },
+    {
       "case_id": "SEC-004",
-      "status": "partial",
-      "scope": "Proves incoming authorization, cookie, session-token, and proxy-authorization headers are removed before upstream authentication; Forwarded and X-Forwarded-* handling remains unproved.",
+      "status": "automated",
+      "scope": "Incoming authorization, cookie (including legacy Cookie2), session-token, proxy-authorization, API-key, identity-assertion, forwarding, proxy-chain, client-IP, origin/referrer, routing/method-override, and protocol-upgrade metadata plus request trailers are stripped after hop-by-hop processing. Only the stored upstream API key and identity encoding are injected, the configured upstream host is applied, safe paths/queries/ordinary headers survive, CONNECT is rejected before instance resolution, and an upstream 101 is rejected before opaque tunnel bytes can reach a client.",
       "evidence": [
         {
           "kind": "go-test",
           "path": "server/internal/proxy/handler_test.go",
           "selector": "TestInstanceProxyStripsCantinarrCredentialsBeforeUpstream"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/transport_boundary_test.go",
+          "selector": "TestInstanceProxyDropsClientRoutingMetadataAndRequestTrailers"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/transport_boundary_test.go",
+          "selector": "TestInstanceProxyDropsProtocolUpgradeRequest"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/transport_boundary_test.go",
+          "selector": "TestInstanceProxyRejectsConnectBeforeInstanceLookupOrUpstreamContact"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/transport_boundary_test.go",
+          "selector": "TestInstanceProxyRejectsUpstreamProtocolUpgrade"
         }
       ]
     },
     {
       "case_id": "SEC-007",
-      "status": "partial",
-      "scope": "Proves safe SSE on the event route, rejection of structured JSON streams, and unchanged legitimate non-JSON streams; wrong-route SSE and scrubber-bypass vectors remain unproved.",
+      "status": "automated",
+      "scope": "SSE on the intended exact arr event route is bounded, scrubbed event-by-event, and remains usable and unbuffered. Wrong-route, mislabeled, malformed, mixed-type, or unsafe-first-event SSE and structured JSON streams fail closed without reflecting upstream secrets, while intended opaque text and binary responses remain byte-identical and unbuffered.",
       "evidence": [
         {
           "kind": "go-test",
           "path": "server/internal/proxy/handler_test.go",
-          "selector": "TestInstanceProxyPreservesSSEAndRejectsStructuredJSONStreams"
+          "selector": "TestInstanceProxyRejectsUnsanitizableStreamsWithoutReflectingThem"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/handler_test.go",
+          "selector": "TestInstanceProxySanitizesIntendedSSEStream"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/sanitize_test.go",
+          "selector": "TestProxyResponseSanitizationModeSelectsOnlyExactArrEventRoutes"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/handler_test.go",
+          "selector": "TestInstanceProxyRejectsAmbiguousArrAPIStreams"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/proxy/handler_test.go",
+          "selector": "TestInstanceProxyRejectsUnsafeIntendedSSEBeforeCommitting"
         },
         {
           "kind": "go-test",
           "path": "server/internal/proxy/handler_test.go",
           "selector": "TestInstanceProxyPassesNonJSONStreamUnchanged"
+        }
+      ]
+    },
+    {
+      "case_id": "SEC-018",
+      "status": "automated",
+      "scope": "Raw requester and admin config responses are constrained to exact safe top-level and per-instance shapes; requesters receive only effective defaults and grants, including a stable unflagged Radarr/Sonarr fallback marked as effective. A defaults/grants lookup failure returns an opaque no-store 503 before any global or hidden-instance listing. Admins receive all instance metadata, and neither successful response can contain instance, credential-registry, webhook, or server-config secret sentinels.",
+      "evidence": [
+        {
+          "kind": "go-test",
+          "path": "server/internal/api/router_test.go",
+          "selector": "TestConfigHandlerMarksDeterministicFallbackAsEffectiveDefault"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/api/router_test.go",
+          "selector": "TestConfigHandlerFailsClosedWhenUserDefaultsUnavailable"
+        },
+        {
+          "kind": "go-test",
+          "path": "server/internal/api/router_test.go",
+          "selector": "TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes"
         }
       ]
     }

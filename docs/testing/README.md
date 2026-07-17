@@ -7,7 +7,7 @@ Machine-driven coverage is tracked separately from the reusable checklist. See
 coverage workflow. [coverage-plan.json](coverage-plan.json) assigns all 584
 parent cases to proof owners for planning only; [automation.json](automation.json)
 is the separate validated mapping from catalog IDs to evidence that actually
-exists. The current manifest records 11 automated and 19 partial parent cases;
+exists. The current manifest records 18 automated and 15 partial parent cases;
 it does not claim that the remaining classified cases have been executed.
 
 ## Test areas
