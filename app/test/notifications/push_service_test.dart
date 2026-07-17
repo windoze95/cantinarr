@@ -185,9 +185,38 @@ void main() {
       await _emitNativeCall('onNotificationTap', {
         'type': 'new_movie',
         'tmdb_id': 10,
-        'media_type': 'book',
+        'media_type': 'comic',
       });
       expect(h.router.pushed, ['/detail/movie/9', '/detail/movie/10']);
+    });
+
+    // A book decision's custom payload is {type, tmdb_id: 0, media_type} —
+    // the server's passthrough forwards no decision/reason, and a book row
+    // stores tmdb_id 0 (books key on the Chaptarr foreignBookId, which isn't
+    // in the payload). With no id-addressable book detail route, approved and
+    // denied both land on the requester-facing Books tab.
+    for (final decision in const ['approved', 'denied']) {
+      test('book request_decision ($decision) opens the Books tab', () async {
+        final h = _Harness();
+        await _emitNativeCall('onNotificationTap', {
+          'type': 'request_decision',
+          'tmdb_id': 0,
+          'media_type': 'book',
+          // Not part of the real push payload; routing must not depend on it.
+          'decision': decision,
+        });
+        expect(h.router.pushed, ['/dashboard/books']);
+      });
+    }
+
+    test('media_type book wins over a stray positive tmdb_id', () async {
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'request_decision',
+        'tmdb_id': 10,
+        'media_type': 'book',
+      });
+      expect(h.router.pushed, ['/dashboard/books']);
     });
 
     test('tmdb_id survives string and double payload encodings', () async {

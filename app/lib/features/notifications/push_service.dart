@@ -122,9 +122,11 @@ class PushService {
 
   /// Routes a tapped notification to the right screen from its custom payload:
   /// the approvals queue for `request_pending`; the media detail page for an
-  /// approval decision or a new-content alert; the agent approval queue for a
-  /// pending fix; the issue thread for an issue/decision update; and the
-  /// remediation settings for the auto-dispatch circuit-breaker notice.
+  /// approval decision or a new-content alert (book decisions open the Books
+  /// tab instead — books have no TMDB id and no id-addressable detail route);
+  /// the agent approval queue for a pending fix; the issue thread for an
+  /// issue/decision update; and the remediation settings for the auto-dispatch
+  /// circuit-breaker notice.
   void _routeNotification(Object? arguments) {
     final data = _asStringMap(arguments);
     final type = data['type'] as String?;
@@ -150,6 +152,15 @@ class PushService {
       case 'request_decision':
       case 'new_movie':
       case 'new_episode':
+        // Books never carry a TMDB id (the server sends tmdb_id 0; a book is
+        // keyed on its Chaptarr foreignBookId, which isn't in the payload) and
+        // the app has no id-addressable book detail route, so a book decision
+        // lands on the requester-facing Books tab. Movie/TV open media detail;
+        // an unknown media_type keeps the movie fallback.
+        if (data['media_type'] == 'book') {
+          router.push('/dashboard/books');
+          return;
+        }
         final tmdbId = _asInt(data['tmdb_id']);
         if (tmdbId == null || tmdbId <= 0) return;
         final mediaType = data['media_type'] == 'tv' ? 'tv' : 'movie';
