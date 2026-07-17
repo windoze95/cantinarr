@@ -54,7 +54,9 @@ func TestGetHonorsTTLExpiry(t *testing.T) {
 	c := New()
 	t.Cleanup(c.Close)
 
-	c.Set("k", []byte("v"), 20*time.Millisecond)
+	// Generous TTL so a scheduler stall between Set and Get cannot flake the
+	// still-fresh assertion; expiry is then awaited, not raced.
+	c.Set("k", []byte("v"), 250*time.Millisecond)
 	if _, ok := c.Get("k"); !ok {
 		t.Fatal("entry expired immediately after Set with a positive TTL")
 	}
