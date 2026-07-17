@@ -9,6 +9,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test-catalog:
+    name: Test catalog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate automation traceability
+        run: make check-test-automation
+
   go:
     name: Go
     runs-on: ubuntu-latest

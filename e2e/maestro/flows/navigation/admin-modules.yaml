@@ -1,0 +1,44 @@
+url: ${MAESTRO_SERVER_URL}
+name: Admin module navigation smoke
+tags:
+  - smoke
+  - lab
+  - navigation
+  - admin
+---
+# NAV-001 (partial), NAV-003 (partial)
+- launchApp
+- extendedWaitUntil:
+    visible: "Sign in to your server"
+    timeout: 15000
+- tapOn:
+    id: "Username"
+- inputText: ${MAESTRO_USERNAME}
+- tapOn:
+    id: "Password"
+- inputText:
+    text: ${MAESTRO_PASSWORD}
+    label: Enter the selected lab user's password
+- pressKey: enter
+- extendedWaitUntil:
+    visible: "(Secure your account|View Cantinarr Fixture Moon details)"
+    timeout: 20000
+- runFlow:
+    when:
+      visible: "Secure your account"
+    commands:
+      - tapOn: "Skip for now"
+- extendedWaitUntil:
+    visible: "View Cantinarr Fixture Moon details"
+    timeout: 20000
+
+- tapOn:
+    point: "7%,4%"
+- assertVisible: "Navigate to Discover"
+- assertVisible: "Navigate to Radarr"
+- assertVisible: "Navigate to Sonarr"
+- assertVisible: "Navigate to Chaptarr"
+- assertVisible: "Navigate to Downloads"
+- assertVisible: "Navigate to Tautulli"
+- assertVisible: "Navigate to Settings"
+- assertNotVisible: "Navigate to AI Assistant"
