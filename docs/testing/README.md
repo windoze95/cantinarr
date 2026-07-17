@@ -2,13 +2,12 @@
 
 This folder is the master list of end-to-end Cantinarr behavior to verify. Cases are grouped by product area, shared setup is listed in [fixtures](fixtures.md), and the [run template](run-template.md) can be copied when recording a test run.
 
-Machine-driven coverage is tracked separately from the reusable checklist. See
-[automation](automation.md) for the layer boundaries, private-lab runner, and
-coverage workflow. [coverage-plan.json](coverage-plan.json) assigns all 584
-parent cases to proof owners for planning only; [automation.json](automation.json)
-is the separate validated mapping from catalog IDs to evidence that actually
-exists. The current manifest records 11 automated and 19 partial parent cases;
-it does not claim that the remaining classified cases have been executed.
+Machine-driven coverage lives in the ordinary test suites — `go test` under
+`server/`, `flutter test` under `app/`, and the private-lab Maestro smoke
+suite — not in a per-case coverage ledger. See [automation](automation.md)
+for the layer boundaries and the private-lab runner. The checklist stays a
+lightweight human document: tags such as **AUTO** are informational hints,
+not machine-enforced claims.
 
 ## Test areas
 
@@ -32,7 +31,8 @@ it does not claim that the remaining classified cases have been executed.
 5. When a case has a vector table, run every applicable row before marking the parent case complete.
 
 Run `make check-test-automation` after adding or changing catalog cases,
-Maestro flows, suites, or automation mappings. Run the current private-lab UI
+Maestro flows, or suites; it validates the catalog line format, the area
+counts above, and Maestro flow safety. Run the current private-lab UI
 smoke suite with `make maestro-lab-smoke`; it never targets a public server or
 a household setup. The local runner retains lab-password-scrubbed Maestro JUnit
 XML under the ignored private artifacts tree and deletes native debug, console,
