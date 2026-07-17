@@ -47,6 +47,134 @@ func mkInstance(t *testing.T, s *Store, serviceType, name string) string {
 	return inst.ID
 }
 
+// AUTH-023: Proxy authorization classifies instances without decrypting secrets.
+func TestLookupServiceTypeUsesServiceMetadata(t *testing.T) {
+	s := newTestStore(t)
+	serviceTypes := []string{
+		"radarr",
+		"sonarr",
+		"chaptarr",
+		"sabnzbd",
+		"qbittorrent",
+		"nzbget",
+		"transmission",
+		"tautulli",
+	}
+
+	for _, serviceType := range serviceTypes {
+		instanceID := mkInstance(t, s, serviceType, "Lookup "+serviceType)
+		got, exists, err := s.LookupServiceType(instanceID)
+		if err != nil {
+			t.Fatalf("LookupServiceType(%s): %v", serviceType, err)
+		}
+		if !exists || got != serviceType {
+			t.Fatalf("LookupServiceType(%s) = (%q, %v), want (%q, true)", serviceType, got, exists, serviceType)
+		}
+	}
+
+	if got, exists, err := s.LookupServiceType("missing-instance"); err != nil || exists || got != "" {
+		t.Fatalf("LookupServiceType(missing) = (%q, %v, %v), want (\"\", false, nil)", got, exists, err)
+	}
+
+	corruptID := mkInstance(t, s, "sonarr", "Undecryptable secrets")
+	if _, err := s.db.Exec(
+		"UPDATE service_instances SET api_key = 'enc:v1:not-valid-base64!' WHERE id = ?",
+		corruptID,
+	); err != nil {
+		t.Fatalf("corrupt encrypted API key: %v", err)
+	}
+	if _, err := s.Get(corruptID); err == nil {
+		t.Fatal("Get with corrupt encrypted API key unexpectedly succeeded")
+	}
+	if got, exists, err := s.LookupServiceType(corruptID); err != nil || !exists || got != "sonarr" {
+		t.Fatalf("metadata lookup with corrupt secret = (%q, %v, %v), want (sonarr, true, nil)", got, exists, err)
+	}
+
+	if err := s.db.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+	if _, _, err := s.LookupServiceType(corruptID); err == nil {
+		t.Fatal("LookupServiceType on closed database unexpectedly succeeded")
+	}
+}
+
+// AUTH-023: requester proxy access follows the same deterministic effective instance shown in config.
+func TestUserCanAccessInstanceUsesEffectiveDefaults(t *testing.T) {
+	s := newTestStore(t)
+	alice := createUser(t, s, "effective-alice")
+	bob := createUser(t, s, "effective-bob")
+
+	// Insert the lexically later name first with tied sort order. The fallback
+	// must still select Alpha, matching ListAll/effectiveUserInstanceIDs rather
+	// than SQLite insertion order.
+	zulu := &Instance{
+		ServiceType: "radarr", Name: "Zulu", URL: "http://zulu.invalid",
+		APIKey: "zulu-key", SortOrder: 0,
+	}
+	alpha := &Instance{
+		ServiceType: "radarr", Name: "Alpha", URL: "http://alpha.invalid",
+		APIKey: "alpha-key", SortOrder: 0,
+	}
+	for _, inst := range []*Instance{zulu, alpha} {
+		if err := s.Create(inst); err != nil {
+			t.Fatalf("create %s: %v", inst.Name, err)
+		}
+	}
+
+	assertAccess := func(userID int64, instanceID, serviceType string, want bool) {
+		t.Helper()
+		got, err := s.UserCanAccessInstance(userID, instanceID, serviceType)
+		if err != nil {
+			t.Fatalf("UserCanAccessInstance(%d, %s, %s): %v", userID, instanceID, serviceType, err)
+		}
+		if got != want {
+			t.Fatalf("UserCanAccessInstance(%d, %s, %s) = %v, want %v", userID, instanceID, serviceType, got, want)
+		}
+	}
+
+	assertAccess(alice, alpha.ID, "radarr", true)
+	assertAccess(alice, zulu.ID, "radarr", false)
+	assertAccess(bob, alpha.ID, "radarr", true)
+	assertAccess(bob, zulu.ID, "radarr", false)
+
+	if err := s.SetUserDefault(alice, "radarr", zulu.ID); err != nil {
+		t.Fatalf("pin Alice to Zulu: %v", err)
+	}
+	assertAccess(alice, alpha.ID, "radarr", false)
+	assertAccess(alice, zulu.ID, "radarr", true)
+	assertAccess(bob, alpha.ID, "radarr", true)
+
+	// A global-default change affects unpinned users immediately but never
+	// broadens them to both siblings.
+	zulu.IsDefault = true
+	if err := s.Update(zulu); err != nil {
+		t.Fatalf("make Zulu global default: %v", err)
+	}
+	assertAccess(bob, alpha.ID, "radarr", false)
+	assertAccess(bob, zulu.ID, "radarr", true)
+	if err := s.ClearUserDefault(alice, "radarr"); err != nil {
+		t.Fatalf("clear Alice override: %v", err)
+	}
+	assertAccess(alice, zulu.ID, "radarr", true)
+	assertAccess(alice, alpha.ID, "radarr", false)
+
+	booksA := mkInstance(t, s, "chaptarr", "Books A")
+	booksB := mkInstance(t, s, "chaptarr", "Books B")
+	assertAccess(alice, booksA, "chaptarr", false)
+	assertAccess(alice, booksB, "chaptarr", false)
+	if err := s.SetUserDefault(alice, "chaptarr", booksB); err != nil {
+		t.Fatalf("grant Alice Books B: %v", err)
+	}
+	assertAccess(alice, booksA, "chaptarr", false)
+	assertAccess(alice, booksB, "chaptarr", true)
+
+	assertAccess(alice, zulu.ID, "sabnzbd", false)
+	if _, err := s.db.Exec("UPDATE service_instances SET api_key = 'enc:v1:corrupt' WHERE id = ?", zulu.ID); err != nil {
+		t.Fatalf("corrupt default secret: %v", err)
+	}
+	assertAccess(alice, zulu.ID, "radarr", true)
+}
+
 func TestUserDefaultInstances(t *testing.T) {
 	s := newTestStore(t)
 	user := createUser(t, s, "alice")

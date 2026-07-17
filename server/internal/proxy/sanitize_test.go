@@ -96,10 +96,11 @@ func TestShouldSanitizeJSONContentTypeAndSniffing(t *testing.T) {
 			body:         "2026-07-10 ordinary log output\n",
 		},
 		{
-			name:         "event stream remains streaming",
+			name:         "event stream fails closed",
 			path:         "/api/v3/events",
 			contentTypes: []string{"text/event-stream"},
 			body:         "data: {\"id\":1}\n\n",
+			wantErr:      errStreamingJSONResponse,
 		},
 		{
 			name:         "ndjson fails closed",

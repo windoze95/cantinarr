@@ -2,7 +2,10 @@ package credentials
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,6 +163,125 @@ func TestIsAIConfiguredExcludesUserOAuth(t *testing.T) {
 	}
 	if !registry.IsAIConfigured() {
 		t.Fatal("shared AI did not report configured for selected API-key provider")
+	}
+}
+
+// SEC-002: persisted credential reads fail closed without rewriting tampered or wrong-key ciphertext.
+func TestGetCredentialDecryptionFailurePreservesStoredCiphertext(t *testing.T) {
+	const (
+		credentialValue = "synthetic-persisted-credential-secret"
+		envelopePrefix  = "enc:v1:"
+		gcmNonceSize    = 12
+	)
+
+	mutateEnvelope := func(t *testing.T, stored []byte, index func([]byte) int) []byte {
+		t.Helper()
+		if !bytes.HasPrefix(stored, []byte(envelopePrefix)) {
+			t.Fatalf("stored credential is not an encrypted envelope: %q", stored)
+		}
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(string(stored), envelopePrefix))
+		if err != nil {
+			t.Fatalf("decode stored credential: %v", err)
+		}
+		position := index(raw)
+		if position < 0 || position >= len(raw) {
+			t.Fatalf("mutation index %d outside envelope of %d bytes", position, len(raw))
+		}
+		raw[position] ^= 0x01
+		return []byte(envelopePrefix + base64.StdEncoding.EncodeToString(raw))
+	}
+
+	tests := []struct {
+		name      string
+		mutate    func(t *testing.T, stored []byte) []byte
+		readerKey byte
+	}{
+		{
+			name: "tampered ciphertext",
+			mutate: func(t *testing.T, stored []byte) []byte {
+				return mutateEnvelope(t, stored, func(raw []byte) int {
+					if len(raw) <= gcmNonceSize {
+						t.Fatalf("encrypted envelope has no ciphertext: %d bytes", len(raw))
+					}
+					return gcmNonceSize
+				})
+			},
+			readerKey: 0x42,
+		},
+		{
+			name: "tampered authentication tag",
+			mutate: func(t *testing.T, stored []byte) []byte {
+				return mutateEnvelope(t, stored, func(raw []byte) int { return len(raw) - 1 })
+			},
+			readerKey: 0x42,
+		},
+		{
+			name:      "wrong key",
+			mutate:    func(_ *testing.T, stored []byte) []byte { return stored },
+			readerKey: 0x07,
+		},
+	}
+
+	previousLogWriter := log.Writer()
+	var capturedLog bytes.Buffer
+	log.SetOutput(&capturedLog)
+	t.Cleanup(func() { log.SetOutput(previousLogWriter) })
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, err := db.Open(":memory:")
+			if err != nil {
+				t.Fatalf("open database: %v", err)
+			}
+			t.Cleanup(func() { _ = database.Close() })
+
+			writerCipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x42}, 32))
+			if err != nil {
+				t.Fatalf("create writer cipher: %v", err)
+			}
+			writer := NewRegistry(database, writerCipher)
+			if err := writer.SetCredential(KeyOpenAIKey, credentialValue); err != nil {
+				t.Fatalf("seed encrypted credential: %v", err)
+			}
+
+			var encrypted []byte
+			if err := database.QueryRow(
+				"SELECT CAST(value AS BLOB) FROM settings WHERE key = ?", KeyOpenAIKey,
+			).Scan(&encrypted); err != nil {
+				t.Fatalf("read encrypted credential: %v", err)
+			}
+			before := tt.mutate(t, append([]byte(nil), encrypted...))
+			if _, err := database.Exec(
+				"UPDATE settings SET value = ? WHERE key = ?", string(before), KeyOpenAIKey,
+			); err != nil {
+				t.Fatalf("replace stored credential: %v", err)
+			}
+
+			readerCipher, err := secrets.NewCipher(bytes.Repeat([]byte{tt.readerKey}, 32))
+			if err != nil {
+				t.Fatalf("create reader cipher: %v", err)
+			}
+			capturedLog.Reset()
+			if got := NewRegistry(database, readerCipher).GetCredential(KeyOpenAIKey); got != "" {
+				t.Fatalf("GetCredential returned %q, want fail-closed empty value", got)
+			}
+			if output := capturedLog.String(); strings.Contains(output, credentialValue) || strings.Contains(output, string(before)) {
+				t.Fatalf("decryption log exposed stored credential material: %s", output)
+			}
+
+			var after []byte
+			if err := database.QueryRow(
+				"SELECT CAST(value AS BLOB) FROM settings WHERE key = ?", KeyOpenAIKey,
+			).Scan(&after); err != nil {
+				t.Fatalf("read rejected credential: %v", err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatalf("rejected credential was rewritten: before=%q after=%q", before, after)
+			}
+			if len(after) == 0 {
+				t.Fatal("rejected credential was overwritten with an empty/default value")
+			}
+		})
 	}
 }
 

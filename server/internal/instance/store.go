@@ -72,7 +72,7 @@ func (s *Store) encryptSecrets(inst *Instance) (apiKey, password string, err err
 // List returns all instances of the given service type, ordered by sort_order.
 func (s *Store) List(serviceType string) ([]Instance, error) {
 	rows, err := s.db.Query(
-		"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? ORDER BY sort_order, name",
+		"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? ORDER BY sort_order, name, id",
 		serviceType,
 	)
 	if err != nil {
@@ -85,7 +85,7 @@ func (s *Store) List(serviceType string) ([]Instance, error) {
 // ListAll returns all instances across all service types.
 func (s *Store) ListAll() ([]Instance, error) {
 	rows, err := s.db.Query(
-		"SELECT " + instanceColumns + " FROM service_instances ORDER BY service_type, sort_order, name",
+		"SELECT " + instanceColumns + " FROM service_instances ORDER BY service_type, sort_order, name, id",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list all instances: %w", err)
@@ -400,13 +400,13 @@ func (s *Store) Delete(id string) error {
 func (s *Store) GetDefault(serviceType string) (*Instance, error) {
 	var inst Instance
 	err := s.db.QueryRow(
-		"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? AND is_default = 1 ORDER BY sort_order LIMIT 1",
+		"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? AND is_default = 1 ORDER BY sort_order, name, id LIMIT 1",
 		serviceType,
 	).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
 	if err == sql.ErrNoRows {
 		// Fall back to first instance
 		err = s.db.QueryRow(
-			"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? ORDER BY sort_order LIMIT 1",
+			"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? ORDER BY sort_order, name, id LIMIT 1",
 			serviceType,
 		).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
 	}
@@ -596,6 +596,56 @@ func (s *Store) UserHasInstanceAccess(userID int64, instanceID string) (bool, er
 		return false, fmt.Errorf("check user instance access: %w", err)
 	}
 	return true, nil
+}
+
+// UserCanAccessInstance reports whether instanceID is the service instance
+// exposed to a requester: their per-user pin when present, otherwise the global
+// Radarr/Sonarr default. Chaptarr deliberately has no global fallback, so its
+// per-user row is an explicit grant. All lookups are metadata-only and never
+// decrypt the instance's credentials.
+func (s *Store) UserCanAccessInstance(userID int64, instanceID, serviceType string) (bool, error) {
+	pinnedID, pinned, err := s.GetUserDefault(userID, serviceType)
+	if err != nil {
+		return false, err
+	}
+	if pinned {
+		return pinnedID == instanceID, nil
+	}
+	if serviceType == "chaptarr" {
+		return false, nil
+	}
+	if serviceType != "radarr" && serviceType != "sonarr" {
+		return false, nil
+	}
+
+	defaultID, err := s.defaultInstanceID(serviceType)
+	if err != nil {
+		return false, err
+	}
+	return defaultID != "" && defaultID == instanceID, nil
+}
+
+// defaultInstanceID mirrors GetDefault's explicit-default-then-first fallback
+// without selecting or decrypting any credential columns.
+func (s *Store) defaultInstanceID(serviceType string) (string, error) {
+	var instanceID string
+	err := s.db.QueryRow(
+		"SELECT id FROM service_instances WHERE service_type = ? AND is_default = 1 ORDER BY sort_order, name, id LIMIT 1",
+		serviceType,
+	).Scan(&instanceID)
+	if err == sql.ErrNoRows {
+		err = s.db.QueryRow(
+			"SELECT id FROM service_instances WHERE service_type = ? ORDER BY sort_order, name, id LIMIT 1",
+			serviceType,
+		).Scan(&instanceID)
+	}
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get default instance id: %w", err)
+	}
+	return instanceID, nil
 }
 
 // Count returns the number of instances for a service type.

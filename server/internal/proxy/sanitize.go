@@ -30,6 +30,7 @@ var (
 	errMalformedJSONMediaType  = errors.New("malformed JSON media type")
 	errStreamingJSONResponse   = errors.New("streaming JSON response cannot be sanitized")
 	errJSONResponseSniffFailed = errors.New("could not classify upstream response")
+	errUnsanitizableUpgrade    = errors.New("protocol upgrade cannot be sanitized")
 )
 
 // sanitizeProxyResponse removes credentials that an arr (or one of its
@@ -38,6 +39,12 @@ var (
 // that indexer's API key.
 func sanitizeProxyResponse(resp *http.Response) error {
 	sanitizeResponseHeaders(resp.Header)
+	// An arr sits behind Cantinarr's authenticated boundary; its responses are
+	// per-user and must never be stored by a shared cache. Strip upstream
+	// cache negotiation and the nginx/lighttpd internal-redirect controls that
+	// would otherwise let a fronting reverse proxy re-serve or re-route the body.
+	sanitizeUpstreamControlHeaders(resp.Header)
+	enforcePrivateProxyCachePolicy(resp.Header)
 
 	if responseHasNoBody(resp) {
 		return nil
@@ -85,9 +92,37 @@ func sanitizeProxyResponse(resp *http.Response) error {
 	resp.Header.Del("Content-MD5")
 	resp.Header.Del("Digest")
 	resp.Header.Del("ETag")
+	resp.Header.Del("Last-Modified")
 	resp.Header.Del("Trailer")
 	resp.Trailer = nil
 	return nil
+}
+
+// sanitizeUpstreamControlHeaders removes reverse-proxy control headers that an
+// arr (or something it proxies) may emit. X-Accel-*/X-Sendfile/X-Lighttpd-* and
+// their siblings ask a fronting web server to serve a file or perform an
+// internal redirect, so forwarding them from an untrusted upstream is an
+// internal-redirect vector rather than a benign header.
+func sanitizeUpstreamControlHeaders(header http.Header) {
+	for name := range header {
+		if isUpstreamControlHeader(name) {
+			header.Del(name)
+		}
+	}
+}
+
+func isUpstreamControlHeader(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if strings.HasPrefix(name, "x-accel-") || strings.HasPrefix(name, "x-sendfile") ||
+		strings.HasPrefix(name, "x-lighttpd-send") {
+		return true
+	}
+	switch name {
+	case "x-reproxy-url":
+		return true
+	default:
+		return false
+	}
 }
 
 func responseHasNoBody(resp *http.Response) bool {
@@ -103,21 +138,22 @@ func responseHasNoBody(resp *http.Response) bool {
 // shouldSanitizeJSON classifies every Content-Type value. Explicit JSON is
 // always sanitized and malformed JSON-like types fail closed. For an arr API
 // response carrying an absent or misleading non-streaming type, it peeks at a
-// small prefix and restores those bytes before deciding. Server-sent events
-// remain streaming, while structured JSON stream formats fail closed because
-// forwarding them would bypass the recursive credential scrubber.
+// small prefix and restores those bytes before deciding. Server-sent event and
+// structured JSON stream formats fail closed because forwarding them unbuffered
+// would bypass the recursive credential scrubber; no arr API Cantinarr proxies
+// serves them, and the Flutter client never consumes a proxied stream.
 func shouldSanitizeJSON(resp *http.Response) (bool, error) {
 	isJSON, isEventStream, isJSONStream, malformedJSON := classifyContentTypes(resp.Header.Values("Content-Type"))
 	if malformedJSON {
 		return false, errMalformedJSONMediaType
 	}
-	if isJSONStream {
+	if isEventStream || isJSONStream {
 		return false, errStreamingJSONResponse
 	}
 	if isJSON {
 		return true, nil
 	}
-	if isEventStream || !isArrAPIResponse(resp) || isKnownOpaqueArrAPIResponse(resp) {
+	if !isArrAPIResponse(resp) || isKnownOpaqueArrAPIResponse(resp) {
 		return false, nil
 	}
 	// The proxy requested identity encoding. An encoded, ambiguously typed arr
@@ -141,8 +177,14 @@ func classifyContentTypes(values []string) (isJSON, isEventStream, isJSONStream,
 		for _, contentType := range splitContentTypeValues(headerValue) {
 			mediaType, _, err := mime.ParseMediaType(contentType)
 			if err != nil {
-				if strings.Contains(strings.ToLower(contentType), "json") {
+				lowered := strings.ToLower(contentType)
+				if strings.Contains(lowered, "json") {
 					malformedJSON = true
+				}
+				// A malformed streaming type cannot be classified, so treat it as
+				// a stream and fail closed rather than passing it through opaque.
+				if strings.Contains(lowered, "event-stream") {
+					isEventStream = true
 				}
 				continue
 			}
@@ -510,6 +552,32 @@ func redactURLQuery(raw string) string {
 		return raw
 	}
 	return raw[:question+1] + strings.Join(parts, "&") + raw[queryEnd:]
+}
+
+// enforcePrivateProxyCachePolicy marks a proxy-generated error response as
+// uncacheable and strips upstream shared-cache directives so an intermediary
+// cannot serve it to another client.
+func enforcePrivateProxyCachePolicy(header http.Header) {
+	for name := range header {
+		if isUpstreamSharedCacheDirective(name) {
+			header.Del(name)
+		}
+	}
+	header.Set("Cache-Control", "private, no-store")
+	header.Set("Pragma", "no-cache")
+}
+
+func isUpstreamSharedCacheDirective(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "cdn-cache-control" || strings.HasSuffix(name, "-cdn-cache-control") {
+		return true
+	}
+	switch name {
+	case "age", "akamai-cache-control", "cache-control", "edge-control", "expires", "pragma", "surrogate-control", "x-cache-control", "x-edge-control":
+		return true
+	default:
+		return false
+	}
 }
 
 func sanitizeResponseHeaders(header http.Header) {
