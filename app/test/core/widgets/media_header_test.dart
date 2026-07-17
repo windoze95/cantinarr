@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   testWidgets('media header shows the title without generic eyebrow copy',
       (tester) async {
+    final semantics = tester.ensureSemantics();
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
@@ -14,6 +15,8 @@ void main() {
     );
 
     expect(find.text('Project Hail Mary'), findsOneWidget);
+    expect(find.bySemanticsIdentifier('media-detail-title'), findsOneWidget);
     expect(find.text('NOW IN FOCUS'), findsNothing);
+    semantics.dispose();
   });
 }

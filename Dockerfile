@@ -1,10 +1,12 @@
 # Stage 1: Build Flutter web
 FROM --platform=$BUILDPLATFORM ghcr.io/cirruslabs/flutter:stable AS flutter-builder
+ARG CANTINARR_E2E_WEB_SEMANTICS=false
 WORKDIR /app
 COPY app/pubspec.yaml ./
 RUN flutter pub get
 COPY app/ .
-RUN flutter build web --release
+RUN flutter build web --release \
+    --dart-define=CANTINARR_E2E_WEB_SEMANTICS=${CANTINARR_E2E_WEB_SEMANTICS}
 
 # Codex app-server is the supported boundary for ChatGPT subscription auth.
 # Pin and verify the standalone musl binary for reproducible multi-arch images.

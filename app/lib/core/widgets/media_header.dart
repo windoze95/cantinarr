@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import '../automation/web_semantics.dart';
 import '../config/app_config.dart';
 import '../layout/adaptive.dart';
 import '../network/app_image_cache.dart';
@@ -125,26 +126,32 @@ class MediaHeader extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(
-                              title,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .displaySmall
-                                  ?.copyWith(
-                                color: AppTheme.textPrimary,
-                                fontSize: expanded ? 42 : 25,
-                                height: 1.05,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: expanded ? -1.1 : -0.5,
-                                shadows: const [
-                                  Shadow(
-                                    color: Colors.black,
-                                    blurRadius: 16,
-                                  ),
-                                ],
+                            Semantics(
+                              identifier: 'media-detail-title',
+                              label: e2eWebSemanticsEnabled ? title : null,
+                              header: true,
+                              excludeSemantics: e2eWebSemanticsEnabled,
+                              child: Text(
+                                title,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .displaySmall
+                                    ?.copyWith(
+                                  color: AppTheme.textPrimary,
+                                  fontSize: expanded ? 42 : 25,
+                                  height: 1.05,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: expanded ? -1.1 : -0.5,
+                                  shadows: const [
+                                    Shadow(
+                                      color: Colors.black,
+                                      blurRadius: 16,
+                                    ),
+                                  ],
+                                ),
+                                maxLines: expanded ? 3 : 4,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: expanded ? 3 : 4,
-                              overflow: TextOverflow.ellipsis,
                             ),
                             if (statusText != null) ...[
                               const SizedBox(height: 10),

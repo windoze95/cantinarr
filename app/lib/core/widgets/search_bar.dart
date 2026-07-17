@@ -91,39 +91,42 @@ class CantinarrSearchBar extends StatelessWidget {
                 ),
             ],
           ),
-          child: TextField(
-            controller: controller,
-            focusNode: focusNode,
-            keyboardType: TextInputType.text,
-            onChanged: onChanged,
-            onSubmitted: submitAction == null ? null : (_) => submitAction(),
-            onTapOutside: (_) => focusNode.unfocus(),
-            textInputAction: multiline
-                ? (onSend == null
-                    ? TextInputAction.newline
-                    : TextInputAction.send)
-                : TextInputAction.search,
-            maxLines: maxLines ?? (multiline ? 3 : 1),
-            minLines: multiline ? 2 : 1,
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: AppTheme.textPrimary,
-                  fontWeight: FontWeight.w500,
-                ),
-            decoration: InputDecoration(
-              hintText: hintText,
-              hintStyle: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: AppTheme.textMuted,
-                    fontWeight: FontWeight.w400,
+          child: Semantics(
+            identifier: 'global-search',
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              keyboardType: TextInputType.text,
+              onChanged: onChanged,
+              onSubmitted: submitAction == null ? null : (_) => submitAction(),
+              onTapOutside: (_) => focusNode.unfocus(),
+              textInputAction: multiline
+                  ? (onSend == null
+                      ? TextInputAction.newline
+                      : TextInputAction.send)
+                  : TextInputAction.search,
+              maxLines: maxLines ?? (multiline ? 3 : 1),
+              minLines: multiline ? 2 : 1,
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: AppTheme.textPrimary,
+                    fontWeight: FontWeight.w500,
                   ),
-              prefixIcon: _buildPrefixIcon(focused),
-              suffixIcon: _buildSuffixIcon(),
-              filled: false,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: multiline ? 15 : 16,
+              decoration: InputDecoration(
+                hintText: hintText,
+                hintStyle: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      color: AppTheme.textMuted,
+                      fontWeight: FontWeight.w400,
+                    ),
+                prefixIcon: _buildPrefixIcon(focused),
+                suffixIcon: _buildSuffixIcon(),
+                filled: false,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: multiline ? 15 : 16,
+                ),
               ),
             ),
           ),

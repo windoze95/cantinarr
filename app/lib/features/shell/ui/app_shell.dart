@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+import '../../../core/automation/web_semantics.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
 import '../../../core/models/backend_connection.dart';
@@ -799,6 +801,7 @@ class _AppShellState extends ConsumerState<AppShell>
       final item = _DrawerItem(
         icon: module.icon,
         title: module.label,
+        semanticsIdentifier: 'nav-module-${module.type.name}',
         selected: isActive,
         trailing: selectorInstances.length > 1
             ? _InstanceSelector(
@@ -932,6 +935,7 @@ class _AppShellState extends ConsumerState<AppShell>
               _DrawerItem(
                 icon: Icons.fact_check_outlined,
                 title: 'Approvals',
+                semanticsIdentifier: 'nav-action-approvals',
                 badgeCount: pendingApprovals,
                 onTap: () {
                   if (isOverlay) Navigator.pop(context);
@@ -942,6 +946,7 @@ class _AppShellState extends ConsumerState<AppShell>
               _DrawerItem(
                 icon: Icons.flag_outlined,
                 title: 'Issues',
+                semanticsIdentifier: 'nav-action-issues',
                 badgeCount: openIssues,
                 onTap: () {
                   if (isOverlay) Navigator.pop(context);
@@ -952,6 +957,7 @@ class _AppShellState extends ConsumerState<AppShell>
               _DrawerItem(
                 icon: Icons.build_circle_outlined,
                 title: 'Agent fixes',
+                semanticsIdentifier: 'nav-action-agent-fixes',
                 badgeCount: pendingAgentActions,
                 onTap: () {
                   if (isOverlay) Navigator.pop(context);
@@ -965,6 +971,7 @@ class _AppShellState extends ConsumerState<AppShell>
               _DrawerItem(
                 icon: Icons.play_circle_outline,
                 title: 'Plex invites',
+                semanticsIdentifier: 'nav-action-plex-invites',
                 badgeCount: plexInvitesWaiting,
                 onTap: () {
                   if (isOverlay) Navigator.pop(context);
@@ -977,6 +984,7 @@ class _AppShellState extends ConsumerState<AppShell>
               _DrawerItem(
                 icon: Icons.checklist_outlined,
                 title: 'Setup checklist',
+                semanticsIdentifier: 'nav-action-setup-checklist',
                 badgeCount: setupRemaining,
                 onTap: () {
                   if (isOverlay) Navigator.pop(context);
@@ -1012,6 +1020,7 @@ class _AppShellState extends ConsumerState<AppShell>
             _DrawerItem(
               icon: assistantModule.icon,
               title: assistantModule.label,
+              semanticsIdentifier: 'nav-action-ai-assistant',
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
                 context.push('/assistant');
@@ -1021,6 +1030,7 @@ class _AppShellState extends ConsumerState<AppShell>
             _DrawerItem(
               icon: Icons.play_circle_outline,
               title: 'Watch on Plex',
+              semanticsIdentifier: 'nav-action-watch-on-plex',
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
                 context.push('/plex-guide');
@@ -1029,6 +1039,7 @@ class _AppShellState extends ConsumerState<AppShell>
           _DrawerItem(
             icon: Icons.settings,
             title: 'Settings',
+            semanticsIdentifier: 'nav-action-settings',
             onTap: () {
               if (isOverlay) Navigator.pop(context);
               context.push('/settings');
@@ -1136,6 +1147,7 @@ class _AppShellState extends ConsumerState<AppShell>
 class _DrawerItem extends StatelessWidget {
   final IconData icon;
   final String title;
+  final String semanticsIdentifier;
   final bool selected;
   final VoidCallback onTap;
   final Widget? trailing;
@@ -1146,6 +1158,7 @@ class _DrawerItem extends StatelessWidget {
   const _DrawerItem({
     required this.icon,
     required this.title,
+    required this.semanticsIdentifier,
     this.selected = false,
     required this.onTap,
     this.trailing,
@@ -1174,38 +1187,46 @@ class _DrawerItem extends StatelessWidget {
                 : Colors.transparent,
           ),
         ),
-        child: ListTile(
-          leading: AnimatedContainer(
-            duration: AppTheme.motionFast,
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: selected
-                  ? AppTheme.accent.withValues(alpha: 0.14)
-                  : AppTheme.surfaceVariant.withValues(alpha: 0.7),
-              borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        child: Semantics(
+          identifier: semanticsIdentifier,
+          label: e2eWebSemanticsEnabled ? 'Navigate to $title' : null,
+          button: e2eWebSemanticsEnabled,
+          selected: e2eWebSemanticsEnabled ? selected : null,
+          excludeSemantics: e2eWebSemanticsEnabled,
+          onTap: e2eWebSemanticsEnabled ? onTap : null,
+          child: ListTile(
+            leading: AnimatedContainer(
+              duration: AppTheme.motionFast,
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: selected
+                    ? AppTheme.accent.withValues(alpha: 0.14)
+                    : AppTheme.surfaceVariant.withValues(alpha: 0.7),
+                borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+              ),
+              child: Icon(
+                icon,
+                size: 20,
+                color: selected ? AppTheme.accent : AppTheme.textSecondary,
+              ),
             ),
-            child: Icon(
-              icon,
-              size: 20,
-              color: selected ? AppTheme.accent : AppTheme.textSecondary,
+            title: Text(
+              title,
+              style: TextStyle(
+                color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                letterSpacing: selected ? 0.05 : 0,
+              ),
             ),
-          ),
-          title: Text(
-            title,
-            style: TextStyle(
-              color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              letterSpacing: selected ? 0.05 : 0,
+            trailing: badgeCount > 0 ? _CountPill(count: badgeCount) : trailing,
+            selected: selected,
+            selectedTileColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
             ),
+            onTap: onTap,
           ),
-          trailing: badgeCount > 0 ? _CountPill(count: badgeCount) : trailing,
-          selected: selected,
-          selectedTileColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-          ),
-          onTap: onTap,
         ),
       ),
     );
@@ -1253,30 +1274,38 @@ class _DrawerSubItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(left: 20, top: 1, bottom: 1),
-      child: ListTile(
-        dense: true,
-        contentPadding: const EdgeInsets.only(left: 13, right: 12),
-        minLeadingWidth: 0,
-        horizontalTitleGap: 11,
-        leading: Icon(
-          selected ? page.activeIcon : page.icon,
-          size: 18,
-          color: selected ? AppTheme.signal : AppTheme.textMuted,
-        ),
-        title: Text(
-          page.label,
-          style: TextStyle(
-            fontSize: 13,
-            color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+      child: Semantics(
+        identifier: 'nav-page-${page.route.substring(1).replaceAll('/', '-')}',
+        label: e2eWebSemanticsEnabled ? 'Navigate to ${page.route}' : null,
+        button: e2eWebSemanticsEnabled,
+        selected: e2eWebSemanticsEnabled ? selected : null,
+        excludeSemantics: e2eWebSemanticsEnabled,
+        onTap: e2eWebSemanticsEnabled ? onTap : null,
+        child: ListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.only(left: 13, right: 12),
+          minLeadingWidth: 0,
+          horizontalTitleGap: 11,
+          leading: Icon(
+            selected ? page.activeIcon : page.icon,
+            size: 18,
+            color: selected ? AppTheme.signal : AppTheme.textMuted,
           ),
+          title: Text(
+            page.label,
+            style: TextStyle(
+              fontSize: 13,
+              color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            ),
+          ),
+          selected: selected,
+          selectedTileColor: AppTheme.signal.withValues(alpha: 0.075),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+          ),
+          onTap: onTap,
         ),
-        selected: selected,
-        selectedTileColor: AppTheme.signal.withValues(alpha: 0.075),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
-        ),
-        onTap: onTap,
       ),
     );
   }

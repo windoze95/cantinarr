@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "proofs": [
+    {
+      "case_id": "AUTH-007",
+      "status": "automated",
+      "runner": "maestro-web",
+      "specs": [
+        "e2e/maestro/flows/auth/password-login.yaml"
+      ],
+      "scope": "Known-user failure, unknown-user failure, identical non-enumerating copy, and successful password login against the disposable lab."
+    },
+    {
+      "case_id": "AUTH-022",
+      "status": "partial",
+      "runner": "maestro-web",
+      "specs": [
+        "e2e/maestro/flows/authorization/requester-navigation.yaml"
+      ],
+      "scope": "Proves admin module and attention entries are absent for the no-grants requester; direct-route and API authorization remain separate proofs."
+    },
+    {
+      "case_id": "NAV-001",
+      "status": "partial",
+      "runner": "maestro-web",
+      "specs": [
+        "e2e/maestro/flows/navigation/admin-modules.yaml"
+      ],
+      "scope": "Proves the fixed admin sees the complete configured module inventory; route entry, page navigation, breakpoints, back behavior, and preserved-stack coverage remain."
+    },
+    {
+      "case_id": "NAV-003",
+      "status": "partial",
+      "runner": "maestro-web",
+      "specs": [
+        "e2e/maestro/flows/navigation/admin-modules.yaml",
+        "e2e/maestro/flows/authorization/requester-navigation.yaml"
+      ],
+      "scope": "Compares fixed lab admin and requester navigation for configured services; conditional attention-state permutations remain."
+    }
+  ]
+}

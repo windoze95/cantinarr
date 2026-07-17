@@ -177,6 +177,7 @@ void main() {
   });
 
   testWidgets('non-admin drawer hides instance app modules', (tester) async {
+    final semantics = tester.ensureSemantics();
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
@@ -217,10 +218,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Discover'), findsOneWidget);
+    expect(find.bySemanticsIdentifier('nav-module-dashboard'), findsOneWidget);
+    expect(find.bySemanticsIdentifier('nav-action-settings'), findsOneWidget);
     expect(find.text('Radarr'), findsNothing);
+    expect(find.bySemanticsIdentifier('nav-module-radarr'), findsNothing);
     expect(find.text('Main Radarr'), findsNothing);
     expect(find.text('4K Radarr'), findsNothing);
     expect(find.byTooltip('Choose Radarr instance'), findsNothing);
+    semantics.dispose();
   });
 
   testWidgets('admin drawer selector switches the active app instance',

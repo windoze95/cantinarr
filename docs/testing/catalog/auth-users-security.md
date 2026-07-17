@@ -12,7 +12,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `AUTH-004` · P0 · UI — Issue another connect/device link for an existing username; verify it attaches a new device to the same user rather than creating a duplicate.
 - [ ] `AUTH-005` · P0 · UI — Let a connect link expire, then issue a fresh one; verify the expired link fails clearly and the new link succeeds.
 - [ ] `AUTH-006` · P0 · SEC — Try an external, scheme-relative, and malformed return target through login/connect; verify navigation only returns to an app-internal path.
-- [ ] `AUTH-007` · P0 · UI — Log in with an enabled password using correct and incorrect credentials; verify only the correct password creates a session and errors do not reveal whether another username exists.
+- [ ] `AUTH-007` · P0 · AUTO/UI — Log in with an enabled password using correct and incorrect credentials; verify only the correct password creates a session and errors do not reveal whether another username exists.
 - [ ] `AUTH-008` · P0 · API — Exceed the public login/setup/connect/passkey rate limit from one IP; verify throttling after the documented allowance and recovery after the window.
 - [ ] `AUTH-009` · P0 · UI — Enable password for a user, let them set it, then disable password; verify subsequent password login fails and existing device sessions follow the documented device policy.
 - [ ] `AUTH-010` · P0 · SEC — Attempt to set a password for a user whose admin toggle is off; verify both UI and direct API reject it.

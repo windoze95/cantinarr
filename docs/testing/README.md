@@ -2,6 +2,11 @@
 
 This folder is the master list of end-to-end Cantinarr behavior to verify. Cases are grouped by product area, shared setup is listed in [fixtures](fixtures.md), and the [run template](run-template.md) can be copied when recording a test run.
 
+Machine-driven coverage is tracked separately from the reusable checklist. See
+[automation](automation.md) for the layer boundaries, private-lab runner, and
+coverage workflow; [automation.json](automation.json) is the validated mapping
+from catalog IDs to current proof.
+
 ## Test areas
 
 | Area | Case prefixes | Cases |
@@ -22,6 +27,11 @@ This folder is the master list of end-to-end Cantinarr behavior to verify. Cases
 3. Copy the [run template](run-template.md) and record results, notes, and evidence there. Leave the committed checklist unchecked so it stays reusable.
 4. For third-party integrations, verify both Cantinarr's result and the resulting state in Plex, the arr service, download client, push device, or AI provider.
 5. When a case has a vector table, run every applicable row before marking the parent case complete.
+
+Run `make check-test-automation` after adding or changing catalog cases,
+Maestro flows, suites, or automation mappings. Run the current private-lab UI
+smoke suite with `make maestro-lab-smoke`; it never targets a public server or
+a household setup.
 
 Use `PASS` when the expected behavior is observed, `FAIL` when it is not, `BLOCKED` when the test cannot be completed, and `N/A` when the case does not apply to the tested configuration.
 

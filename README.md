@@ -156,6 +156,12 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Additional WebAuthn origins to trust |
 | `CANTINARR_DISABLE_UPDATE_CHECK` | unset | Set to `1` to disable the periodic GitHub release check behind the admin "update available" banner |
 
+Source image builds also accept the Docker build argument
+`CANTINARR_E2E_WEB_SEMANTICS` (default `false`). It exists only for the
+disposable private lab: setting it to `true` compiles deterministic Maestro
+labels into the Flutter web bundle. Official production images keep the
+default and preserve normal browser accessibility semantics.
+
 OpenAI (OAuth) source deployments use Codex app-server and are supported only on Linux; non-Linux hosts report this provider unavailable even when a Codex binary is installed. The runtime directory's parent must exist, and the directory must be on tmpfs or ramfs—not persistent storage. Give each concurrently running Cantinarr process its own runtime directory; startup removes stale `session-*` entries from that dedicated root. The official container uses its private Docker `/dev/shm` tmpfs. Use the tested Codex 0.144.3 release or a protocol-compatible build.
 
 Native app passkeys require a public HTTPS server domain associated with the app (AASA for Apple, Digital Asset Links for Android). Browser passkey setup remains available when native association isn't possible. See [`server/README.md`](server/README.md#configuration) for details.

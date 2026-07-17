@@ -3,6 +3,29 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('exposes a stable semantics identifier', (tester) async {
+    final semantics = tester.ensureSemantics();
+    final controller = TextEditingController();
+    final focusNode = FocusNode();
+
+    addTearDown(controller.dispose);
+    addTearDown(focusNode.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CantinarrSearchBar(
+            controller: controller,
+            focusNode: focusNode,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.bySemanticsIdentifier('global-search'), findsOneWidget);
+    semantics.dispose();
+  });
+
   testWidgets('multiline search bar submits on keyboard send action',
       (tester) async {
     final controller = TextEditingController(text: 'Find something good');
