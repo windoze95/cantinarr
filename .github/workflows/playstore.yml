@@ -120,7 +120,7 @@ jobs:
           storeFile=../upload-keystore.jks
           EOF
 
-      - name: Build AAB
+      - name: Build AAB (BASE-012 partial)
         run: |
           flutter build appbundle \
             --build-number=${{ steps.build_number.outputs.build_number }} \

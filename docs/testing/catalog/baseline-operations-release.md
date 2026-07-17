@@ -11,13 +11,13 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `BASE-003` · P0 · AUTO — From `server/`, run `CGO_ENABLED=0 go build ./cmd/server`; verify a working non-CGO server binary is produced.
 - [ ] `BASE-004` · P0 · AUTO — From `app/`, run `flutter analyze --no-fatal-infos`; verify no errors or warnings that CI treats as fatal.
 - [ ] `BASE-005` · P0 · AUTO — From `app/`, run `flutter test`; verify all unit and widget tests pass.
-- [ ] `BASE-006` · P0 · AUTO — From `app/`, run `flutter build web --release`; serve the output and verify the initial route renders without console/runtime errors.
-- [ ] `BASE-007` · P0 · AUTO — Build the root Dockerfile for the target architecture; start it with an empty config volume and verify `/api/health` and the embedded web app.
-- [ ] `BASE-008` · P0 · AUTO — Build `server/Dockerfile`; start it and verify the API-only image reaches healthy state.
-- [ ] `BASE-009` · P1 · AUTO — Verify both Docker images contain the pinned checksum-verified Codex app-server binary and bundled `LICENSE`/`NOTICE` files on amd64 and arm64.
-- [ ] `BASE-010` · P1 · AUTO — Run the CI-equivalent pinned Codex integration smoke test; verify protocol compatibility, startup, one turn, and clean shutdown.
-- [ ] `BASE-011` · P1 · AUTO — Parse iOS Swift sources with `swiftc -parse` when a local iOS toolchain is unavailable; otherwise build and launch the release candidate on a physical device.
-- [ ] `BASE-012` · P1 · AUTO — Build the signed Android AAB in CI and install an equivalent release build on a physical device; verify launch, networking, deep links, and passkey provider registration.
+- [ ] `BASE-006` · P0 · UI — From `app/`, run `flutter build web --release`; serve the output and verify the initial route renders without console/runtime errors.
+- [ ] `BASE-007` · P0 · API/UI — Build the root Dockerfile for the target architecture; start it with an empty config volume and verify `/api/health` and the embedded web app.
+- [ ] `BASE-008` · P0 · API — Build `server/Dockerfile`; start it and verify the API-only image reaches healthy state.
+- [ ] `BASE-009` · P1 · API — Verify both Docker images contain the pinned checksum-verified Codex app-server binary and bundled `LICENSE`/`NOTICE` files on amd64 and arm64.
+- [ ] `BASE-010` · P1 · API — Run the CI-equivalent pinned Codex integration smoke test; verify protocol compatibility, startup, one turn, and clean shutdown.
+- [ ] `BASE-011` · P1 · LIVE/UI — Parse iOS Swift sources with `swiftc -parse` when a local iOS toolchain is unavailable; otherwise build and launch the release candidate on a physical device.
+- [ ] `BASE-012` · P1 · LIVE/UI — Build the signed Android AAB in CI and install an equivalent release build on a physical device; verify launch, networking, deep links, and passkey provider registration.
 - [ ] `BASE-013` · P0 · API — Call representative public, user, and admin endpoints; verify JSON content types, stable error envelopes, and no panic/HTML error bodies.
 - [ ] `BASE-014` · P1 · CHAOS — Run server and app tests three times with shuffled package/test order where supported; verify no shared-state, clock, port, or race flake.
 
@@ -78,7 +78,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `REL-011` · P1 · API — Verify store-listing-only changes use the listing workflow, copy/assets land in intended storefronts, and do not trigger irrelevant native builds.
 - [ ] `REL-015` · P0 · API — Compare shipped behavior with `README.md`, `server/README.md`, `app/README.md`, update/store docs, privacy policy, site copy, route/tool/env/table counts, and version floors; record any drift as a release defect.
 - [ ] `REL-016` · P0 · API — Verify `CLAUDE.md` remains only a thin import/pointer to `AGENTS.md` and contributor/test/release instructions do not conflict.
-- [ ] `REL-017` · P1 · UI/AUTO — Build `app/test/preview/screenshot_main.dart`, run `app/tool/screenshots/shoot.js`, and verify every required store image has deterministic populated data, documented dimensions/fastlane placement, no live credentials, and no clipped UI.
+- [ ] `REL-017` · P1 · UI — Build `app/test/preview/screenshot_main.dart`, run `app/tool/screenshots/shoot.js`, and verify every required store image has deterministic populated data, documented dimensions/fastlane placement, no live credentials, and no clipped UI.
 
 ## Exploratory and compatibility pass
 

@@ -58,6 +58,7 @@ func TestPrefsSetThenGet(t *testing.T) {
 	}
 }
 
+// PUSH-010: Admin-category recipient queries remain role-scoped.
 func TestUsersOptedIntoDefaultBehavior(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {

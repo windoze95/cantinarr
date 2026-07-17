@@ -305,6 +305,7 @@ func TestNotifyAdminsUsesSharedAIHealthIssueCopy(t *testing.T) {
 	}
 }
 
+// PUSH-010: Requester opt-in cannot bypass admin-only recipient selection.
 func TestNotifyAdminsHonorsOptOutAndRole(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {

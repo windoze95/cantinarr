@@ -80,6 +80,70 @@ readonly artifacts_physical
 
 artifacts_sanitized=0
 
+remove_native_debug() {
+  local current_physical
+  [[ -d "${artifacts}" && ! -L "${artifacts}" ]] || return 1
+  current_physical="$(cd "${artifacts}" && pwd -P)" || return 1
+  [[ "${current_physical}" == "${artifacts_physical}" ]] || return 1
+  rm -rf -- "${artifacts}/debug" || return 1
+  rm -f -- "${artifacts}/console.log" || return 1
+  [[ ! -e "${artifacts}/debug" && ! -L "${artifacts}/debug" ]] || return 1
+  [[ ! -e "${artifacts}/console.log" && ! -L "${artifacts}/console.log" ]] || return 1
+}
+
+remove_artifact_tree() {
+  local current_physical
+  [[ -d "${artifacts}" && ! -L "${artifacts}" ]] || return 1
+  current_physical="$(cd "${artifacts}" && pwd -P)" || return 1
+  [[ "${current_physical}" == "${artifacts_physical}" ]] || return 1
+  rm -rf -- "${artifacts}"
+}
+
+validate_junit() {
+  python3 - "${artifacts}/report.xml" "$1" <<'PY'
+import pathlib
+import stat
+import sys
+import xml.etree.ElementTree as ET
+
+path = pathlib.Path(sys.argv[1])
+expected_success = sys.argv[2] == "0"
+try:
+    metadata = path.lstat()
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("result is not a regular file")
+    if metadata.st_size <= 0 or metadata.st_size > 10 * 1024 * 1024:
+        raise ValueError("result has an invalid size")
+    payload = path.read_bytes()
+    if b"<!DOCTYPE" in payload.upper() or b"<!ENTITY" in payload.upper():
+        raise ValueError("DTD and entity declarations are forbidden")
+    root = ET.fromstring(payload)
+    local_name = lambda element: element.tag.rsplit("}", 1)[-1]
+    if local_name(root) not in {"testsuite", "testsuites"}:
+        raise ValueError("root is not testsuite/testsuites")
+    testcases = [element for element in root.iter() if local_name(element) == "testcase"]
+    if not testcases:
+        raise ValueError("result has no test cases")
+    if expected_success:
+        for suite in (element for element in root.iter() if local_name(element) == "testsuite"):
+            for field in ("failures", "errors", "skipped"):
+                if int(suite.attrib.get(field, "0")) != 0:
+                    raise ValueError(f"passing result declares {field}")
+        for testcase in testcases:
+            status_name = testcase.attrib.get("status", "").upper()
+            if status_name in {"ERROR", "FAIL", "FAILED", "SKIP", "SKIPPED"}:
+                raise ValueError("passing result contains a non-passing test case")
+            if any(
+                local_name(child) in {"error", "failure", "skipped"}
+                for child in testcase
+            ):
+                raise ValueError("passing result contains failure/skip details")
+except (OSError, ET.ParseError, ValueError) as exc:
+    print(f"invalid Maestro JUnit: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 sanitize_or_remove_artifacts() {
   local current_physical
   [[ -d "${artifacts}" && ! -L "${artifacts}" ]] || return 1
@@ -109,6 +173,10 @@ cleanup_artifacts() {
     if ! sanitize_or_remove_artifacts; then
       printf 'maestro flow warning: interrupted artifacts could not be redacted and were removed\n' >&2
     fi
+  fi
+  if [[ "${artifacts_sanitized}" -eq 1 && -e "${artifacts}" ]] && ! remove_native_debug; then
+    remove_artifact_tree || true
+    printf 'maestro flow warning: native debug cleanup failed; artifact-tree removal attempted\n' >&2
   fi
   exit "${status}"
 }
@@ -188,5 +256,13 @@ sanitize_or_remove_artifacts || {
 
 [[ "${statuses[1]}" -eq 0 ]] || die "console redaction failed"
 [[ "${statuses[2]}" -eq 0 ]] || die "redacted console log could not be written"
-[[ "${statuses[0]}" -eq 0 ]] || die "${relative} failed; redacted artifacts: ${artifacts}"
-printf 'Passed %s; redacted JUnit/artifacts: %s\n' "${relative}" "${artifacts}"
+remove_native_debug || {
+  remove_artifact_tree || true
+  die "native debug output could not be removed; artifact-tree removal attempted"
+}
+validate_junit "${statuses[0]}" || {
+  remove_artifact_tree || true
+  die "Maestro did not produce a valid JUnit result"
+}
+[[ "${statuses[0]}" -eq 0 ]] || die "${relative} failed; JUnit result: ${artifacts}/report.xml"
+printf 'Passed %s; JUnit result: %s\n' "${relative}" "${artifacts}/report.xml"

@@ -189,6 +189,7 @@ func TestDoubleApproveExecutesExactlyOnce(t *testing.T) {
 	}
 }
 
+// ISS-029: Partial executor results require admin review and never claim failure.
 func TestPartialMutationIsNotReportedAsCleanFailure(t *testing.T) {
 	svc, fx, issueID, actionID := approvalFixture(t)
 	fx.err = partialTestError{}
@@ -242,6 +243,7 @@ func TestRecoverDurableDecisionRebuildsResumeHandoff(t *testing.T) {
 	assertWellFormedResume(t, loadTranscript(t, svc, issueID), "toolu_propose_1", "Approved and executed: replacement queued")
 }
 
+// ISS-028: Unknown outcomes stop at Needs Admin instead of resuming or replaying.
 func TestRecoverUnknownOutcomeStopsInsteadOfResuming(t *testing.T) {
 	svc, _, issueID, actionID := approvalFixture(t)
 	if _, err := svc.db.Exec(
@@ -254,6 +256,7 @@ func TestRecoverUnknownOutcomeStopsInsteadOfResuming(t *testing.T) {
 	assertUnknownOutcomeNeedsAdmin(t, svc, issueID)
 }
 
+// ISS-028: Later recovery evidence cannot silently close an unknown mutation outcome.
 func TestClearedAutoSignalDoesNotCloseUnknownOutcome(t *testing.T) {
 	svc, fx, issueID, actionID := approvalFixture(t)
 	if _, err := svc.db.Exec(
@@ -676,6 +679,7 @@ func TestDenyConflictReturnsHTTP409(t *testing.T) {
 
 // A transport failure after dispatch cannot prove whether the arr accepted the
 // mutation, so it is outcome_unknown and is never silently re-executed.
+// ISS-028: A lost dispatch response is recorded once and is never retried.
 func TestApproveExecutionFailureMarksOutcomeUnknown(t *testing.T) {
 	svc, fx, issueID, actionID := approvalFixture(t)
 	fx.err = context.DeadlineExceeded

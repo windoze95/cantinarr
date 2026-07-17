@@ -141,6 +141,7 @@ func TestSharedAIAccessDefaultsAndAdminToggle(t *testing.T) {
 	}
 }
 
+// AUTH-027: Interactive dispatch rechecks the current role, device, and grant.
 func TestAuthorizeInteractiveToolCallRechecksRoleDeviceAndSharedGrant(t *testing.T) {
 	svc := setupTestService(t)
 	ctx := context.Background()

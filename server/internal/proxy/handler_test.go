@@ -118,6 +118,7 @@ func startTestProxyWithBasePath(t *testing.T, upstream http.Handler, basePath st
 	return proxyServer.URL, inst.ID
 }
 
+// SEC-004: Cantinarr credentials are stripped before upstream auth is applied.
 func TestInstanceProxyStripsCantinarrCredentialsBeforeUpstream(t *testing.T) {
 	proxyURL, instanceID := startTestProxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, name := range []string{"Authorization", "Cookie", "X-Session-Token", "Proxy-Authorization"} {
@@ -155,6 +156,7 @@ func TestJoinURLPathPreservesInstanceBasePath(t *testing.T) {
 	}
 }
 
+// INST-018: Nested proxy JSON and secret-bearing URLs are recursively scrubbed.
 func TestInstanceProxyRedactsNestedSecretsAndURLQueries(t *testing.T) {
 	const (
 		objectSecret = "object-secret-value"
@@ -298,6 +300,7 @@ func TestInstanceProxySanitizesMislabelledJSONBehindInstanceBasePath(t *testing.
 	}
 }
 
+// SEC-007: SSE stays usable while structured JSON streams fail closed.
 func TestInstanceProxyPreservesSSEAndRejectsStructuredJSONStreams(t *testing.T) {
 	t.Run("server-sent events remain streaming", func(t *testing.T) {
 		const want = "event: update\ndata: {\"safe\":true}\n\n"
@@ -346,6 +349,7 @@ func TestInstanceProxyPreservesSSEAndRejectsStructuredJSONStreams(t *testing.T) 
 	}
 }
 
+// SEC-007: Intended non-JSON streams pass through unchanged.
 func TestInstanceProxyPassesNonJSONStreamUnchanged(t *testing.T) {
 	want := []byte{0x00, 0x01, 0xfe, 0xff, 'x'}
 	proxyURL, instanceID := startTestProxy(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

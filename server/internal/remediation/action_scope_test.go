@@ -8,6 +8,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/db"
 )
 
+// ISS-041: Book remediation rejects title-level actions without durable identity.
 func TestBookIssueRejectsActionsWithoutDurableBookIdentity(t *testing.T) {
 	database, err := db.Open(":memory:")
 	if err != nil {

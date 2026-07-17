@@ -1,0 +1,5282 @@
+{
+  "schema_version": 1,
+  "methodology": {
+    "purpose": "Planning classification only; an entry does not claim that proof exists or currently passes.",
+    "dominant_layer": "One coordinating lane per parent case for workload planning. A case may require additional layers listed in recommended_layers.",
+    "dispositions": {
+      "automatable": "All catalog obligations are expected to be machine-provable with deterministic fixtures.",
+      "hybrid": "Deterministic automation should be paired with external-service, platform, artifact, privacy, or human-observation evidence.",
+      "manual": "Exploratory or physical-hardware evidence is the primary proof and automation can only assist.",
+      "blocked": "The catalog marks product behavior as a known gap; implementation is required before passing proof can exist."
+    },
+    "live_policy": "Every test environment uses synthetic assets explicitly released as CC0 or verified public-domain content. LIVE behavior adds deterministic fake-upstream or API proof plus a separately recorded disposable-account or real-device canary; household libraries and unlicensed media are prohibited.",
+    "completion_rule": "A parent is complete only when every clause and applicable vector has proof; dominant_layer alone never establishes completion."
+  },
+  "counts": {
+    "total": 584,
+    "dominant_layer": {
+      "flutter-widget": 166,
+      "go-api": 181,
+      "maestro-web": 13,
+      "manual-external": 209,
+      "patrol-native": 15
+    },
+    "disposition": {
+      "automatable": 364,
+      "blocked": 4,
+      "hybrid": 210,
+      "manual": 6
+    }
+  },
+  "cases": [
+    {
+      "case_id": "AI-001",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AI-002",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-003",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-004",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-005",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AI-006",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-008",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-009",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-010",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-011",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-012",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-013",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-014",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-015",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-016",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AI-017",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-018",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-019",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AI-020",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-021",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-022",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AI-023",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-024",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-025",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AI-026",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-027",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-028",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-029",
+      "dominant_layer": "patrol-native",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "patrol-native",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AI-030",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AI-031",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AI-032",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-001",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "go-api",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-002",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-004",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-005",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-006",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-007",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-008",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-009",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-010",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-011",
+      "dominant_layer": "patrol-native",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "patrol-native",
+        "go-api",
+        "manual-external",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AUTH-012",
+      "dominant_layer": "patrol-native",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "patrol-native",
+        "go-api",
+        "manual-external",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AUTH-013",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "AUTH-014",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-015",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-016",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-017",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-018",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-019",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-020",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-021",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-022",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "go-api",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-023",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-024",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-025",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-026",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-027",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-028",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-029",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-030",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-031",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-032",
+      "dominant_layer": "patrol-native",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "patrol-native",
+        "go-api",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-033",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-034",
+      "dominant_layer": "patrol-native",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "patrol-native",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "AUTH-035",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "AUTH-036",
+      "dominant_layer": "patrol-native",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "patrol-native",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "BASE-001",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-002",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-004",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-005",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-006",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-007",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api",
+        "maestro-web",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-008",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-009",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-010",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BASE-011",
+      "dominant_layer": "patrol-native",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "patrol-native",
+        "manual-external",
+        "flutter-widget",
+        "repository-ci"
+      ],
+      "classification_note": "The case combines automatable checks with platform, artifact, privacy, or human-observation evidence."
+    },
+    {
+      "case_id": "BASE-012",
+      "dominant_layer": "patrol-native",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "patrol-native",
+        "manual-external",
+        "flutter-widget",
+        "repository-ci"
+      ],
+      "classification_note": "The case combines automatable checks with platform, artifact, privacy, or human-observation evidence."
+    },
+    {
+      "case_id": "BASE-013",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "BASE-014",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api",
+        "flutter-widget",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "BOOK-001",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-002",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-003",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-004",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-005",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-006",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "BOOK-007",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "BOOK-008",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-009",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "BOOK-010",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-011",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-012",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-013",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-014",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-015",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-016",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "BOOK-017",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "BOOK-018",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-019",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-020",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "BOOK-021",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-022",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "BOOK-023",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DISC-001",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DISC-002",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-004",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-005",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-006",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DISC-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DISC-008",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-009",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-010",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-011",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-012",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-013",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-014",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-015",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DISC-016",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-017",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DISC-018",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-019",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-020",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-021",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-022",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-023",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DISC-024",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-025",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-026",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DISC-027",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DISC-028",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DISC-029",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DOWN-001",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DOWN-002",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DOWN-003",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DOWN-004",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DOWN-005",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DOWN-006",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DOWN-007",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DOWN-008",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DOWN-009",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DOWN-010",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "DOWN-011",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DOWN-012",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DOWN-013",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DOWN-014",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "DOWN-015",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "DOWN-016",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "EXP-001",
+      "dominant_layer": "manual-external",
+      "disposition": "manual",
+      "recommended_layers": [
+        "manual-external",
+        "flutter-widget"
+      ],
+      "classification_note": "The catalog requires exploratory, physical-hardware, or human-observation evidence; automation may assist but cannot be the sole proof."
+    },
+    {
+      "case_id": "EXP-002",
+      "dominant_layer": "manual-external",
+      "disposition": "manual",
+      "recommended_layers": [
+        "manual-external",
+        "flutter-widget"
+      ],
+      "classification_note": "The catalog requires exploratory, physical-hardware, or human-observation evidence; automation may assist but cannot be the sole proof."
+    },
+    {
+      "case_id": "EXP-003",
+      "dominant_layer": "manual-external",
+      "disposition": "manual",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "EXP-004",
+      "dominant_layer": "manual-external",
+      "disposition": "manual",
+      "recommended_layers": [
+        "manual-external",
+        "flutter-widget"
+      ],
+      "classification_note": "The catalog requires exploratory, physical-hardware, or human-observation evidence; automation may assist but cannot be the sole proof."
+    },
+    {
+      "case_id": "EXP-005",
+      "dominant_layer": "manual-external",
+      "disposition": "manual",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "The catalog requires exploratory, physical-hardware, or human-observation evidence; automation may assist but cannot be the sole proof."
+    },
+    {
+      "case_id": "INST-001",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "INST-002",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "INST-003",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-004",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "INST-005",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-006",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "INST-007",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-008",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-009",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-010",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-011",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-012",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-013",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "INST-014",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "INST-015",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "INST-016",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "INST-017",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "INST-018",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "INST-019",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "INST-020",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "INST-021",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-022",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "INST-023",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "INST-024",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "ISS-001",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-002",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-004",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-005",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-006",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "ISS-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-008",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-009",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-010",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-011",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-012",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "ISS-013",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "ISS-014",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "ISS-015",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-016",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-017",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-018",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-019",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-020",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-021",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-022",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-023",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-024",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-025",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-026",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-027",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-028",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-029",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-030",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-031",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-032",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-033",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "ISS-034",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-035",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-036",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-037",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-038",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "ISS-039",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-040",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-041",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "ISS-042",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "MCP-001",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-002",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-004",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-005",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-006",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-008",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-009",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-010",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-011",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-012",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-013",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-014",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-015",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "MCP-016",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-017",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-018",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-019",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-020",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-021",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-022",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-023",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-024",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-025",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-026",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "MCP-027",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-028",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-029",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-030",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-031",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-032",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-033",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-034",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-035",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-036",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-037",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-038",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-039",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-040",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "MCP-041",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "NAV-001",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-002",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-003",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-004",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-005",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-006",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-007",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-008",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-009",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "NAV-010",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-011",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-012",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-013",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-014",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-015",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-016",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-017",
+      "dominant_layer": "patrol-native",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "patrol-native",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "NAV-018",
+      "dominant_layer": "patrol-native",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "patrol-native",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "OPS-001",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "go-api",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "OPS-002",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-004",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "OPS-005",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-006",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-007",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-008",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-009",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-010",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-011",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-012",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-013",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "OPS-014",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-015",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "OPS-016",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "OPS-017",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PERF-001",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PERF-002",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PERF-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PERF-004",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PERF-005",
+      "dominant_layer": "manual-external",
+      "disposition": "manual",
+      "recommended_layers": [
+        "manual-external",
+        "flutter-widget"
+      ],
+      "classification_note": "The catalog requires exploratory, physical-hardware, or human-observation evidence; automation may assist but cannot be the sole proof."
+    },
+    {
+      "case_id": "PLEX-001",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-002",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-003",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-004",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-005",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-006",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-008",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-009",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-010",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-011",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PLEX-012",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-013",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PLEX-014",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-015",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-016",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-017",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-018",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-019",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-020",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-021",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-022",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-023",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-024",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-025",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-026",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PLEX-027",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PLEX-028",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-029",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-030",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-031",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-032",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-033",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-034",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-035",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-036",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-037",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-038",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-039",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-040",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-041",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-042",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-043",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-044",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-045",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PLEX-046",
+      "dominant_layer": "patrol-native",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "patrol-native",
+        "go-api",
+        "flutter-widget",
+        "manual-external"
+      ],
+      "classification_note": "The case combines automatable checks with platform, artifact, privacy, or human-observation evidence."
+    },
+    {
+      "case_id": "PLEX-047",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PLEX-048",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PLEX-049",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-050",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-051",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-052",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-053",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PLEX-054",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PLEX-055",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-056",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-057",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-058",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-059",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-060",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-061",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-062",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-063",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-064",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-065",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-066",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-067",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-068",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-069",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-070",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-071",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-072",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-073",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-074",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-075",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-076",
+      "dominant_layer": "flutter-widget",
+      "disposition": "blocked",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ],
+      "classification_note": "Product behavior is cataloged as a known gap; implementation and an issue reference are prerequisites to a passing proof."
+    },
+    {
+      "case_id": "PLEX-077",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-078",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-079",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-080",
+      "dominant_layer": "flutter-widget",
+      "disposition": "blocked",
+      "recommended_layers": [
+        "flutter-widget"
+      ],
+      "classification_note": "Product behavior is cataloged as a known gap; implementation and an issue reference are prerequisites to a passing proof."
+    },
+    {
+      "case_id": "PLEX-081",
+      "dominant_layer": "flutter-widget",
+      "disposition": "blocked",
+      "recommended_layers": [
+        "flutter-widget"
+      ],
+      "classification_note": "Product behavior is cataloged as a known gap; implementation and an issue reference are prerequisites to a passing proof."
+    },
+    {
+      "case_id": "PLEX-082",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PLEX-083",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-084",
+      "dominant_layer": "flutter-widget",
+      "disposition": "blocked",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ],
+      "classification_note": "Product behavior is cataloged as a known gap; implementation and an issue reference are prerequisites to a passing proof."
+    },
+    {
+      "case_id": "PLEX-085",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-086",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PLEX-087",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-001",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PUSH-002",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PUSH-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PUSH-004",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-005",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-006",
+      "dominant_layer": "patrol-native",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "patrol-native",
+        "go-api",
+        "manual-external",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-007",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PUSH-008",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PUSH-009",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PUSH-010",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PUSH-011",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-012",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-013",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-014",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-015",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-016",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-017",
+      "dominant_layer": "patrol-native",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "patrol-native",
+        "go-api",
+        "manual-external",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-018",
+      "dominant_layer": "patrol-native",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "patrol-native",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "PUSH-019",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PUSH-020",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "PUSH-021",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PUSH-022",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "PUSH-023",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-001",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-002",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "RAD-003",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "RAD-004",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-005",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-006",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RAD-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-008",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-009",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "RAD-010",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-011",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "RAD-012",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-013",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-014",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-015",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RAD-016",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RAD-017",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RAD-018",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "RAD-019",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REL-001",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REL-002",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REL-003",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REL-004",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REL-005",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REL-006",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REL-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REL-008",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REL-009",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REL-010",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REL-011",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REL-015",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REL-016",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REL-017",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "repository-ci"
+      ]
+    },
+    {
+      "case_id": "REQ-001",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-002",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-003",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-004",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-005",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-006",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-008",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-009",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-010",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-011",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-012",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-013",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-014",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-015",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-016",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-017",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-018",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-019",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-020",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-021",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-022",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-023",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-024",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-025",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-026",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-027",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-028",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-029",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-030",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-031",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-032",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-033",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-034",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-035",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "REQ-036",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-037",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-038",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "REQ-039",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "REQ-040",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-001",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RT-002",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RT-003",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RT-004",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-005",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-006",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RT-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RT-008",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-009",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-010",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-011",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-012",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-013",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-014",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-015",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "RT-016",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "RT-017",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "RT-018",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-001",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-002",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-004",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-005",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-006",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-007",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-008",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-009",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-010",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-011",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-012",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-013",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-014",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-015",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-016",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-017",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-018",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-019",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "The case combines automatable checks with platform, artifact, privacy, or human-observation evidence."
+    },
+    {
+      "case_id": "SEC-020",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "The case combines automatable checks with platform, artifact, privacy, or human-observation evidence."
+    },
+    {
+      "case_id": "SEC-021",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SEC-022",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SON-001",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-002",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "SON-003",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "SON-004",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "SON-005",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-006",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-007",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-008",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-009",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-010",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-011",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-012",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SON-013",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-014",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "SON-015",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-016",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-017",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-018",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-019",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-020",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SON-021",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "SON-022",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "SON-023",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "SON-024",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "TAUT-001",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "TAUT-002",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "TAUT-003",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "TAUT-004",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "TAUT-005",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "TAUT-006",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "TAUT-007",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "TAUT-008",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "TAUT-009",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api",
+        "flutter-widget"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "USER-001",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "USER-002",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "USER-003",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "USER-004",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "USER-005",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "USER-006",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "USER-007",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "USER-008",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "USER-009",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "go-api"
+      ],
+      "classification_note": "Use deterministic fake-upstream/API proof plus a separately recorded disposable-account or real-device canary; automation does not eliminate the external obligation."
+    },
+    {
+      "case_id": "USER-010",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "USER-011",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "USER-012",
+      "dominant_layer": "go-api",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "UX-001",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-002",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-003",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-004",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-005",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-006",
+      "dominant_layer": "manual-external",
+      "disposition": "hybrid",
+      "recommended_layers": [
+        "manual-external",
+        "flutter-widget"
+      ],
+      "classification_note": "The case combines automatable checks with platform, artifact, privacy, or human-observation evidence."
+    },
+    {
+      "case_id": "UX-007",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-008",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-009",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "UX-010",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-011",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget",
+        "go-api"
+      ]
+    },
+    {
+      "case_id": "UX-012",
+      "dominant_layer": "flutter-widget",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-013",
+      "dominant_layer": "maestro-web",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "maestro-web",
+        "flutter-widget"
+      ]
+    },
+    {
+      "case_id": "UX-014",
+      "dominant_layer": "patrol-native",
+      "disposition": "automatable",
+      "recommended_layers": [
+        "patrol-native",
+        "flutter-widget"
+      ]
+    }
+  ]
+}

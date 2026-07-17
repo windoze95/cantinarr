@@ -35,7 +35,7 @@ jobs:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
 
-      - name: Vet
+      - name: Vet (BASE-001)
         run: go vet ./...
 
       - name: Cache pinned Codex app-server
@@ -53,7 +53,7 @@ jobs:
             https://github.com/openai/codex/releases/download/rust-v0.144.3/codex-app-server-x86_64-unknown-linux-musl.tar.gz \
             --output "$archive"
 
-      - name: Verify and enable real Codex protocol smoke
+      - name: Verify and enable real Codex protocol smoke (BASE-010 partial)
         run: |
           archive="$RUNNER_TEMP/codex-app-server-x86_64-unknown-linux-musl.tar.gz"
           echo "6fa4467489ac5a0ae5bf0057d39f6d14a7f50f5fa70b8a10933888d92d1b75ab  $archive" | sha256sum -c -
@@ -61,10 +61,10 @@ jobs:
           install -m 0755 "$RUNNER_TEMP/codex-app-server-x86_64-unknown-linux-musl" "$RUNNER_TEMP/codex-app-server"
           echo "CANTINARR_CODEX_APP_SERVER_SMOKE_BINARY=$RUNNER_TEMP/codex-app-server" >> "$GITHUB_ENV"
 
-      - name: Test
+      - name: Test (BASE-002)
         run: go test ./...
 
-      - name: Build
+      - name: Build (BASE-003)
         run: CGO_ENABLED=0 go build -o cantinarr ./cmd/server
 
   flutter:
@@ -86,11 +86,11 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Analyze
+      - name: Analyze (BASE-004)
         run: flutter analyze --no-fatal-infos
 
-      - name: Test
+      - name: Test (BASE-005)
         run: flutter test
 
-      - name: Build web
+      - name: Build web (BASE-006 partial)
         run: flutter build web --release

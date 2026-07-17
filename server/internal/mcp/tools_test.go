@@ -132,6 +132,7 @@ func TestToolDefinitionsDeclarePermissions(t *testing.T) {
 	}
 }
 
+// MCP-013: Requesters neither enumerate nor execute admin-only tools.
 func TestToolRBACMatrixCoversEveryDefinition(t *testing.T) {
 	server := NewToolServer(nil, nil, nil, nil)
 	listedByRole := map[string]map[string]bool{}
@@ -193,6 +194,7 @@ func TestToolRBACMatrixCoversEveryDefinition(t *testing.T) {
 	}
 }
 
+// MCP-013: Requester tool enumeration excludes operational admin tools.
 func TestGetToolsForRoleFiltersOperationalTools(t *testing.T) {
 	server := NewToolServer(nil, nil, nil, nil)
 	userTools := server.GetToolsForRole(auth.RoleUser)
@@ -213,6 +215,7 @@ func TestGetToolsForRoleFiltersOperationalTools(t *testing.T) {
 	}
 }
 
+// MCP-013: A known admin tool name remains denied server-side to requesters.
 func TestExecuteToolDeniesRoleBeforeRunningTool(t *testing.T) {
 	server := NewToolServer(nil, nil, nil, nil)
 
@@ -230,6 +233,7 @@ func TestExecuteToolDeniesRoleBeforeRunningTool(t *testing.T) {
 	}
 }
 
+// AUTH-027: Tool execution uses the actor's current role, not a stale snapshot.
 func TestExecuteToolReauthorizesAgainstCurrentRole(t *testing.T) {
 	server := NewToolServer(nil, nil, nil, nil)
 	var observed CallContext
@@ -261,6 +265,7 @@ func TestExecuteToolReauthorizesAgainstCurrentRole(t *testing.T) {
 	}
 }
 
+// AUTH-027: Missing or revoked dispatch authorization fails closed.
 func TestExecuteToolReauthorizationFailsClosed(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import io
 import json
 import os
@@ -17,7 +16,6 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import check_test_automation as automation  # noqa: E402
 import maestro_safety  # noqa: E402
 import redact_maestro  # noqa: E402
-import render_maestro_report as reports  # noqa: E402
 
 
 class LoopbackURLTests(unittest.TestCase):
@@ -82,8 +80,7 @@ class FlowSafetyTests(unittest.TestCase):
         self.root_patch.stop()
         self.temporary.cleanup()
 
-    def write_flow(self, body: str, evidence: str | None = "evidence-test") -> None:
-        evidence_command = f"- takeScreenshot: {evidence}\n" if evidence is not None else ""
+    def write_flow(self, body: str) -> None:
         self.flow.write_text(
             "url: ${MAESTRO_SERVER_URL}\n"
             "name: Safety fixture\n"
@@ -93,7 +90,6 @@ class FlowSafetyTests(unittest.TestCase):
             "- inputText: ${MAESTRO_USERNAME}\n"
             "- inputText: ${MAESTRO_PASSWORD}\n"
             f"{body}"
-            f"{evidence_command}"
         )
 
     def assert_rejected(self, body: str) -> None:
@@ -219,39 +215,347 @@ class FlowSafetyTests(unittest.TestCase):
         with self.assertRaises(automation.ValidationError):
             automation.validate_flow(self.flow)
 
-    def test_accepts_one_literal_final_evidence_screenshot(self) -> None:
-        self.write_flow("- launchApp\n", evidence="evidence-auth-signed-in")
-        automation.validate_flow(self.flow)
+    def test_rejects_screenshot_capture(self) -> None:
+        self.write_flow("- launchApp\n- takeScreenshot: evidence-auth-signed-in\n")
+        with self.assertRaises(automation.ValidationError):
+            automation.validate_flow(self.flow)
 
-    def test_rejects_unsafe_or_ambiguous_evidence_screenshots(self) -> None:
-        values = (
-            "screenshot",
-            "evidence-../outside",
-            "/tmp/evidence-outside",
-            "evidence-folder/file",
-            "${MAESTRO_PASSWORD}",
-            '"evidence-quoted"',
+
+class TraceabilityValidatorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        self.manifest_path = self.root / "docs" / "testing" / "automation.json"
+        self.coverage_plan_path = self.root / "docs" / "testing" / "coverage-plan.json"
+        self.flows = self.root / "e2e" / "maestro" / "flows"
+        self.helpers = self.root / "e2e" / "maestro" / "helpers"
+        self.manifest_path.parent.mkdir(parents=True)
+        self.flows.mkdir(parents=True)
+        self.helpers.mkdir(parents=True)
+        self.patch = mock.patch.multiple(
+            automation,
+            ROOT=self.root,
+            MANIFEST=self.manifest_path,
+            COVERAGE_PLAN=self.coverage_plan_path,
+            FLOWS_DIR=self.flows,
+            HELPERS_DIR=self.helpers,
         )
-        for value in values:
-            with self.subTest(value=value):
-                self.write_flow("- launchApp\n", evidence=value)
+        self.patch.start()
+
+        self.evidence = [
+            (
+                "AUTH-001",
+                "maestro-flow",
+                "e2e/maestro/flows/login.yaml",
+                "Login flow",
+                "maestro-web",
+                ["maestro-web"],
+                "url: ${MAESTRO_SERVER_URL}\n"
+                "name: Login flow\n"
+                "tags:\n"
+                "  - lab\n"
+                "---\n"
+                "# AUTH-001\n"
+                "- inputText: ${MAESTRO_USERNAME}\n"
+                "- inputText: ${MAESTRO_PASSWORD}\n"
+                "- launchApp\n",
+            ),
+            (
+                "AUTH-002",
+                "go-test",
+                "server/internal/api/example_test.go",
+                "TestServerThing",
+                "go-api",
+                ["go-api"],
+                "package api\n\n// AUTH-002\nfunc TestServerThing(t *testing.T) {}\n",
+            ),
+            (
+                "AUTH-003",
+                "flutter-test",
+                "app/test/example_test.dart",
+                "shows the thing",
+                "flutter-widget",
+                ["flutter-widget"],
+                "// AUTH-003\ntestWidgets('shows the thing', (tester) async {});\n",
+            ),
+            (
+                "AUTH-004",
+                "workflow-step",
+                ".github/workflows/ci.yml",
+                "CI step (AUTH-004)",
+                "go-api",
+                ["go-api", "repository-ci"],
+                "jobs:\n  test:\n    steps:\n      - name: CI step (AUTH-004)\n",
+            ),
+            (
+                "AUTH-005",
+                "script-check",
+                "scripts/check_fixture.sh",
+                "AUTH-005 repository-check",
+                "go-api",
+                ["go-api", "repository-ci"],
+                "CHECK_NAME='AUTH-005 repository-check'\n",
+            ),
+            (
+                "AUTH-006",
+                "patrol-test",
+                "app/integration_test/native_test.dart",
+                "launches the native app",
+                "patrol-native",
+                ["patrol-native"],
+                "// AUTH-006\npatrolTest('launches the native app', ($) async {});\n",
+            ),
+        ]
+        for _, _, relative, _, _, _, body in self.evidence:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
+
+        self.cases = {
+            case_id: {"tags": {"AUTO"}, "priority": "P0", "file": "fixture", "line": 1}
+            for case_id, *_ in self.evidence
+        }
+        self.plan = self.make_plan()
+        self.manifest = self.make_manifest()
+        self.write_plan(self.plan)
+        self.write_manifest(self.manifest)
+
+    def tearDown(self) -> None:
+        self.patch.stop()
+        self.temporary.cleanup()
+
+    def make_plan(self) -> dict[str, object]:
+        entries = [
+            {
+                "case_id": case_id,
+                "dominant_layer": dominant,
+                "disposition": "automatable",
+                "recommended_layers": recommended,
+            }
+            for case_id, _, _, _, dominant, recommended, _ in self.evidence
+        ]
+        dominant_counts: dict[str, int] = {}
+        for entry in entries:
+            layer = entry["dominant_layer"]
+            dominant_counts[layer] = dominant_counts.get(layer, 0) + 1
+        return {
+            "schema_version": 1,
+            "methodology": {
+                "purpose": "Plan fixture.",
+                "dominant_layer": "One dominant layer.",
+                "dispositions": {
+                    "automatable": "Deterministic proof.",
+                    "hybrid": "Automation plus external proof.",
+                    "manual": "Human proof.",
+                    "blocked": "Product gap.",
+                },
+                "live_policy": "Use disposable fixtures.",
+                "completion_rule": "Prove every clause.",
+            },
+            "counts": {
+                "total": len(entries),
+                "dominant_layer": dominant_counts,
+                "disposition": {"automatable": len(entries)},
+            },
+            "cases": entries,
+        }
+
+    def make_manifest(self) -> dict[str, object]:
+        return {
+            "schema_version": 2,
+            "proofs": [
+                {
+                    "case_id": case_id,
+                    "status": "automated",
+                    "scope": f"Exact fixture proof for {case_id}.",
+                    "evidence": [{"kind": kind, "path": path, "selector": selector}],
+                }
+                for case_id, kind, path, selector, *_ in self.evidence
+            ],
+        }
+
+    def copy(self, value: object) -> object:
+        return json.loads(json.dumps(value))
+
+    def write_plan(self, value: object) -> None:
+        self.coverage_plan_path.write_text(json.dumps(value))
+
+    def write_manifest(self, value: object) -> None:
+        self.manifest_path.write_text(json.dumps(value))
+
+    def validated_plan(self) -> dict[str, dict[str, object]]:
+        return automation.validate_coverage_plan(self.cases)
+
+    def test_accepts_schema_v2_and_every_exact_evidence_kind(self) -> None:
+        plan = self.validated_plan()
+        automated, partial, flows = automation.validate_manifest(self.cases, plan)
+
+        self.assertEqual((automated, partial), (6, 0))
+        self.assertEqual(flows, {(self.root / self.evidence[0][2]).resolve()})
+
+    def test_rejects_manifest_schema_fields_and_duplicate_case_proofs(self) -> None:
+        for mutation in ("schema", "old-fields", "duplicate"):
+            with self.subTest(mutation=mutation):
+                manifest = self.copy(self.manifest)
+                if mutation == "schema":
+                    manifest["schema_version"] = 1
+                elif mutation == "old-fields":
+                    manifest["proofs"][0]["runner"] = "maestro-web"
+                else:
+                    manifest["proofs"].append(self.copy(manifest["proofs"][0]))
+                self.write_manifest(manifest)
                 with self.assertRaises(automation.ValidationError):
-                    automation.validate_flow(self.flow)
+                    automation.validate_manifest(self.cases, self.validated_plan())
 
-        self.write_flow(
-            "- launchApp\n- takeScreenshot: evidence-first\n",
-            evidence="evidence-second",
-        )
-        with self.assertRaises(automation.ValidationError):
-            automation.validate_flow(self.flow)
+    def test_rejects_non_exact_selectors_for_every_evidence_kind(self) -> None:
+        for index, (_, kind, *_rest) in enumerate(self.evidence):
+            with self.subTest(kind=kind):
+                manifest = self.copy(self.manifest)
+                manifest["proofs"][index]["evidence"][0]["selector"] = "not the selector"
+                self.write_manifest(manifest)
+                with self.assertRaises(automation.ValidationError):
+                    automation.validate_manifest(self.cases, self.validated_plan())
 
-    def test_requires_evidence_to_be_the_final_top_level_command(self) -> None:
-        self.write_flow(
-            "- launchApp\n- takeScreenshot: evidence-too-early\n- tapOn: Safe\n",
-            evidence=None,
-        )
+    def test_rejects_unsafe_or_kind_incompatible_evidence_paths(self) -> None:
+        mutations = ("../outside.go", "scripts/check_fixture.sh")
+        for path in mutations:
+            with self.subTest(path=path):
+                manifest = self.copy(self.manifest)
+                manifest["proofs"][1]["evidence"][0]["path"] = path
+                self.write_manifest(manifest)
+                with self.assertRaises(automation.ValidationError):
+                    automation.validate_manifest(self.cases, self.validated_plan())
+
+    def test_rejects_evidence_without_its_catalog_id(self) -> None:
+        path = self.root / self.evidence[1][2]
+        path.write_text(path.read_text().replace("// AUTH-002\n", ""))
         with self.assertRaises(automation.ValidationError):
-            automation.validate_flow(self.flow)
+            automation.validate_manifest(self.cases, self.validated_plan())
+
+    def test_rejects_catalog_id_attached_to_an_unrelated_test(self) -> None:
+        path = self.root / self.evidence[1][2]
+        path.write_text(
+            "package api\n\n"
+            "func TestServerThing(t *testing.T) {}\n\n"
+            "// AUTH-002\n"
+            "func TestUnrelated(t *testing.T) {}\n"
+        )
+        with self.assertRaisesRegex(automation.ValidationError, "annotation"):
+            automation.validate_manifest(self.cases, self.validated_plan())
+
+    def test_rejects_build_tagged_or_skipped_go_tests(self) -> None:
+        path = self.root / self.evidence[1][2]
+        bodies = (
+            "//go:build special\n\npackage api\n\n"
+            "// AUTH-002\nfunc TestServerThing(t *testing.T) {}\n",
+            "package api\n\n// AUTH-002\n"
+            "func TestServerThing(t *testing.T) { t.Skip(\"disabled\") }\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                path.write_text(body)
+                with self.assertRaises(automation.ValidationError):
+                    automation.validate_manifest(self.cases, self.validated_plan())
+
+    def test_rejects_commented_or_skipped_dart_tests(self) -> None:
+        path = self.root / self.evidence[2][2]
+        bodies = (
+            "/*\n// AUTH-003\ntestWidgets('shows the thing', (tester) async {});\n*/\n",
+            "// AUTH-003\ntestWidgets('shows the thing', (tester) async {}, skip: true);\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                path.write_text(body)
+                with self.assertRaises(automation.ValidationError):
+                    automation.validate_manifest(self.cases, self.validated_plan())
+
+    def test_rejects_evidence_outside_the_recommended_layers(self) -> None:
+        plan = self.copy(self.plan)
+        plan["cases"][3]["recommended_layers"] = ["go-api"]
+        self.write_plan(plan)
+        with self.assertRaises(automation.ValidationError):
+            automation.validate_manifest(self.cases, self.validated_plan())
+
+    def test_requires_auto_cases_to_have_automated_proofs(self) -> None:
+        manifest = self.copy(self.manifest)
+        manifest["proofs"][0]["status"] = "partial"
+        self.write_manifest(manifest)
+        with self.assertRaisesRegex(automation.ValidationError, "AUTO catalog cases"):
+            automation.validate_manifest(self.cases, self.validated_plan())
+
+        self.write_manifest(self.manifest)
+        cases = {
+            case_id: {**data, "tags": set(data["tags"])}
+            for case_id, data in self.cases.items()
+        }
+        cases["AUTH-001"]["tags"] = set()
+        with self.assertRaisesRegex(automation.ValidationError, "must carry the AUTO"):
+            automation.validate_manifest(cases, automation.validate_coverage_plan(cases))
+
+    def test_rejects_empty_scope_or_evidence(self) -> None:
+        for field in ("scope", "evidence"):
+            with self.subTest(field=field):
+                manifest = self.copy(self.manifest)
+                manifest["proofs"][0][field] = "" if field == "scope" else []
+                self.write_manifest(manifest)
+                with self.assertRaises(automation.ValidationError):
+                    automation.validate_manifest(self.cases, self.validated_plan())
+
+    def test_rejects_coverage_plan_schema_catalog_and_count_drift(self) -> None:
+        for mutation in ("schema", "missing-case", "duplicate-case", "count"):
+            with self.subTest(mutation=mutation):
+                plan = self.copy(self.plan)
+                if mutation == "schema":
+                    plan["schema_version"] = 2
+                elif mutation == "missing-case":
+                    plan["cases"].pop()
+                elif mutation == "duplicate-case":
+                    plan["cases"].append(self.copy(plan["cases"][0]))
+                else:
+                    plan["counts"]["total"] -= 1
+                self.write_plan(plan)
+                with self.assertRaises(automation.ValidationError):
+                    self.validated_plan()
+
+    def test_rejects_invalid_plan_layers_dispositions_and_missing_dominant(self) -> None:
+        for mutation in ("dominant", "disposition", "recommended", "missing-dominant"):
+            with self.subTest(mutation=mutation):
+                plan = self.copy(self.plan)
+                entry = plan["cases"][0]
+                if mutation == "dominant":
+                    entry["dominant_layer"] = "unknown"
+                elif mutation == "disposition":
+                    entry["disposition"] = "unknown"
+                elif mutation == "recommended":
+                    entry["recommended_layers"] = ["unknown"]
+                else:
+                    entry["recommended_layers"] = ["go-api"]
+                self.write_plan(plan)
+                with self.assertRaises(automation.ValidationError):
+                    self.validated_plan()
+
+    def test_requires_gap_and_blocked_classification_to_match(self) -> None:
+        plan = self.copy(self.plan)
+        plan["cases"][0]["disposition"] = "blocked"
+        plan["counts"]["disposition"] = {
+            "automatable": len(self.evidence) - 1,
+            "blocked": 1,
+        }
+        self.write_plan(plan)
+        with self.assertRaisesRegex(automation.ValidationError, "catalog carries GAP"):
+            self.validated_plan()
+
+    def test_rejects_automated_proof_for_hybrid_case(self) -> None:
+        plan = self.copy(self.plan)
+        plan["cases"][0]["disposition"] = "hybrid"
+        plan["counts"]["disposition"] = {
+            "automatable": len(self.evidence) - 1,
+            "hybrid": 1,
+        }
+        self.write_plan(plan)
+        validated = self.validated_plan()
+        with self.assertRaisesRegex(automation.ValidationError, "automatable disposition"):
+            automation.validate_manifest(self.cases, validated)
 
 
 class RedactionTests(unittest.TestCase):
@@ -343,457 +647,6 @@ class RedactionTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 redact_maestro.sanitize_tree(root, [secret])
             self.assertEqual(target.read_text(), secret)
-
-
-class ReportTests(unittest.TestCase):
-    PNG = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-    )
-
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name).resolve()
-        self.flows = self.root / "e2e" / "maestro" / "flows"
-        self.run_dir = (
-            self.root
-            / "e2e"
-            / "maestro"
-            / ".artifacts"
-            / "suites"
-            / "smoke"
-            / "20260717T010203Z.abcdef"
-        )
-        (self.root / "docs" / "testing").mkdir(parents=True)
-        (self.run_dir / "raw").mkdir(parents=True)
-        (self.run_dir / "statuses").mkdir()
-
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    def configure(self, entries: list[tuple[str, str, str]]) -> None:
-        suite = []
-        proofs = []
-        for index, (flow, user, evidence) in enumerate(entries, 1):
-            path = self.root / flow
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                "url: ${MAESTRO_SERVER_URL}\n"
-                f"name: Report flow {index}\n"
-                "tags:\n"
-                "  - smoke\n"
-                "  - lab\n"
-                "---\n"
-                "- launchApp\n"
-                f"- takeScreenshot: {evidence}\n"
-            )
-            suite.append({"flow": flow, "user": user})
-            proofs.append(
-                {
-                    "case_id": f"AUTH-{index:03d}",
-                    "status": "automated" if index == 1 else "partial",
-                    "runner": "maestro-web",
-                    "specs": [flow],
-                    "scope": f"Safe report scope {index}.",
-                }
-            )
-        (self.root / "e2e" / "maestro" / "suites.json").write_text(
-            json.dumps({"schema_version": 1, "suites": {"smoke": suite}})
-        )
-        (self.root / "docs" / "testing" / "automation.json").write_text(
-            json.dumps({"schema_version": 1, "proofs": proofs})
-        )
-
-    def png_with_text_metadata(self) -> bytes:
-        iend = self.PNG.rfind(b"\x00\x00\x00\x00IEND")
-        self.assertGreater(iend, 0)
-        data = b"Comment\x00private metadata"
-        chunk = reports.png_chunk(b"tEXt", data)
-        return self.PNG[:iend] + chunk + self.PNG[iend:]
-
-    def png_with_chunk(self, kind: bytes, data: bytes) -> bytes:
-        iend = self.PNG.rfind(b"\x00\x00\x00\x00IEND")
-        self.assertGreater(iend, 0)
-        return self.PNG[:iend] + reports.png_chunk(kind, data) + self.PNG[iend:]
-
-    def add_result(
-        self,
-        flow: str,
-        evidence: str,
-        *,
-        exit_code: int,
-        junit_status: str,
-        include_marker: bool = True,
-        include_evidence: bool = True,
-    ) -> Path:
-        slug = reports.flow_slug(flow)
-        raw = self.run_dir / "raw" / slug
-        debug = raw / "debug"
-        debug.mkdir(parents=True)
-        if include_marker:
-            (raw / ".sanitized").write_text("sanitized\n")
-        failure = "<failure>failed</failure>" if junit_status != "SUCCESS" else ""
-        (raw / "report.xml").write_text(
-            "<testsuites><testsuite tests=\"1\" failures=\"0\" time=\"2.5\">"
-            f"<testcase name=\"Report\" status=\"{junit_status}\" time=\"2.5\">"
-            f"{failure}</testcase></testsuite></testsuites>"
-        )
-        (raw / "console.log").write_text(
-            f"root={self.root} target=http://127.0.0.1:43210 result={junit_status}\n"
-        )
-        if include_evidence:
-            (debug / f"{evidence}.png").write_bytes(self.png_with_text_metadata())
-        status = self.run_dir / "statuses" / f"{slug}.exit"
-        status.write_text(f"{exit_code}\n")
-        return raw
-
-    def render(self) -> tuple[Path, bool]:
-        return reports.render_report(
-            root=self.root,
-            suite_name="smoke",
-            run_dir=self.run_dir,
-            harness_revision="abc123def456",
-            harness_dirty=False,
-            harness_sha256=reports.harness_content_sha256(self.root),
-            deployed_this_run=False,
-            reset_requested=False,
-            maestro_version="2.6.1",
-            platform="web",
-            generated_at="2026-07-17T01:02:03Z",
-        )
-
-    def test_renders_portable_passing_report_and_strips_png_metadata(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        self.add_result(flow, evidence, exit_code=0, junit_status="SUCCESS")
-
-        report, valid = self.render()
-
-        self.assertTrue(valid)
-        body = report.read_text()
-        self.assertIn("**PASS**", body)
-        self.assertIn("`AUTH-001` (automated)", body)
-        self.assertIn(f"screenshots/{evidence}.png", body)
-        self.assertNotIn(str(self.root), body)
-        self.assertNotIn("43210", body)
-        copied = report.parent / "screenshots" / f"{evidence}.png"
-        self.assertTrue(copied.is_file())
-        self.assertNotIn(b"tEXt", copied.read_bytes())
-        self.assertNotIn(b"private metadata", copied.read_bytes())
-        self.assertEqual(copied.stat().st_mode & 0o777, 0o600)
-        manifest = json.loads((report.parent / "manifest.json").read_text())
-        self.assertEqual(manifest["summary"]["passed"], 1)
-        self.assertEqual(manifest["harness_revision"], "abc123def456")
-        self.assertFalse(manifest["deployed_this_run"])
-        self.assertEqual(manifest["screenshot_review_status"], "UNREVIEWED")
-        self.assertIn("source revision was not attested", body)
-        self.assertFalse((report.parent / "logs").exists())
-        self.assertNotIn("fake Maestro output", body)
-
-    def test_failure_omits_unreviewed_png_and_marks_later_flow_not_run(self) -> None:
-        first = "e2e/maestro/flows/auth/password-login.yaml"
-        second = "e2e/maestro/flows/navigation/admin-modules.yaml"
-        self.configure(
-            [
-                (first, "lab-admin-b", "evidence-auth-signed-in"),
-                (second, "lab-admin-b", "evidence-admin-modules"),
-            ]
-        )
-        raw = self.add_result(
-            first,
-            "evidence-auth-signed-in",
-            exit_code=1,
-            junit_status="ERROR",
-            include_evidence=False,
-        )
-        (raw / "debug" / "screenshot-failure.png").write_bytes(self.PNG)
-
-        report, valid = self.render()
-
-        self.assertFalse(valid)
-        body = report.read_text()
-        self.assertIn("> **FAIL**", body)
-        self.assertIn("❌ FAIL", body)
-        self.assertIn("⏭️ NOT RUN", body)
-        self.assertIn("automatic failure captures are private", body)
-        self.assertEqual(list((report.parent / "screenshots").iterdir()), [])
-
-    def test_invalid_sanitized_marker_fails_closed(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        raw = self.add_result(flow, evidence, exit_code=0, junit_status="SUCCESS")
-        (raw / ".sanitized").write_text("not-sanitized\n")
-
-        report, valid = self.render()
-
-        self.assertFalse(valid)
-        self.assertIn("⚠️ ERROR", report.read_text())
-        self.assertEqual(list((report.parent / "screenshots").iterdir()), [])
-
-    def test_missing_sanitized_marker_fails_closed_but_writes_report(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        self.add_result(
-            flow,
-            evidence,
-            exit_code=0,
-            junit_status="SUCCESS",
-            include_marker=False,
-        )
-
-        report, valid = self.render()
-
-        self.assertFalse(valid)
-        self.assertIn("⚠️ ERROR", report.read_text())
-        self.assertEqual(list((report.parent / "screenshots").iterdir()), [])
-
-    def test_missing_passing_evidence_writes_failing_normalized_junit(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        self.add_result(
-            flow,
-            evidence,
-            exit_code=0,
-            junit_status="SUCCESS",
-            include_evidence=False,
-        )
-
-        report, passed = self.render()
-
-        self.assertFalse(passed)
-        junit = report.parent / "junit" / "auth-password-login.xml"
-        body = junit.read_text()
-        self.assertIn('failures="1"', body)
-        self.assertIn('status="ERROR"', body)
-
-    def test_rejects_symlink_in_trusted_artifact_tree(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        raw = self.add_result(flow, evidence, exit_code=0, junit_status="SUCCESS")
-        outside = self.root / "outside.txt"
-        outside.write_text("outside")
-        (raw / "linked.txt").symlink_to(outside)
-
-        with self.assertRaises(reports.ReportError):
-            self.render()
-
-        self.assertEqual(list(self.run_dir.glob(".report-staging-*")), [])
-
-    def test_rejects_nonfinite_junit_duration_and_cleans_staging(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        raw = self.add_result(flow, evidence, exit_code=0, junit_status="SUCCESS")
-        (raw / "report.xml").write_text(
-            '<testsuites><testsuite><testcase status="SUCCESS" time="NaN"/>'
-            "</testsuite></testsuites>"
-        )
-
-        with self.assertRaises(reports.ReportError):
-            self.render()
-
-        self.assertEqual(list(self.run_dir.glob(".report-staging-*")), [])
-        self.assertFalse((self.run_dir / "report").exists())
-
-    def test_rejects_non_utf8_junit_declarations(self) -> None:
-        path = self.run_dir / "utf16.xml"
-        xml = (
-            '<?xml version="1.0" encoding="UTF-16"?>'
-            '<!DOCTYPE testsuites [<!ENTITY ok "SUCCESS">]>'
-            '<testsuites><testsuite><testcase status="&ok;" time="1.0"/>'
-            "</testsuite></testsuites>"
-        )
-        path.write_bytes(xml.encode("utf-16"))
-
-        with self.assertRaises(reports.ReportError):
-            reports.parse_junit(path)
-
-    def test_treats_skipped_or_contradictory_junit_as_failure(self) -> None:
-        skipped = self.run_dir / "skipped.xml"
-        skipped.write_text(
-            '<testsuites><testsuite tests="1" failures="0">'
-            '<testcase status="SUCCESS" time="0.1"><skipped/></testcase>'
-            "</testsuite></testsuites>"
-        )
-        contradictory = self.run_dir / "contradictory.xml"
-        contradictory.write_text(
-            '<testsuites><testsuite tests="1" failures="1">'
-            '<testcase status="SUCCESS" time="0.1"/>'
-            "</testsuite></testsuites>"
-        )
-
-        self.assertEqual(reports.parse_junit(skipped), ("FAIL", 0.1))
-        self.assertEqual(reports.parse_junit(contradictory), ("FAIL", 0.1))
-
-    def test_rejects_unknown_critical_png_chunk_and_cleans_staging(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        raw = self.add_result(flow, evidence, exit_code=0, junit_status="SUCCESS")
-        secret = b"SHOULD-NOT-SURVIVE-REPORT"
-        (raw / "debug" / f"{evidence}.png").write_bytes(
-            self.png_with_chunk(b"SECR", secret)
-        )
-
-        with self.assertRaises(reports.ReportError):
-            self.render()
-
-        self.assertEqual(list(self.run_dir.glob(".report-staging-*")), [])
-        self.assertFalse((self.run_dir / "report").exists())
-
-    def test_rejects_duplicate_evidence_names(self) -> None:
-        shared = "evidence-shared"
-        self.configure(
-            [
-                ("e2e/maestro/flows/auth/one.yaml", "lab-admin-b", shared),
-                ("e2e/maestro/flows/navigation/two.yaml", "lab-admin-b", shared),
-            ]
-        )
-
-        with self.assertRaises(reports.ReportError):
-            self.render()
-
-        self.assertEqual(list(self.run_dir.glob(".report-staging-*")), [])
-
-    def test_rejects_duplicate_flow_names(self) -> None:
-        entries = [
-            (
-                "e2e/maestro/flows/auth/one.yaml",
-                "lab-admin-b",
-                "evidence-first",
-            ),
-            (
-                "e2e/maestro/flows/navigation/two.yaml",
-                "lab-admin-b",
-                "evidence-second",
-            ),
-        ]
-        self.configure(entries)
-        second = self.root / entries[1][0]
-        second.write_text(second.read_text().replace("Report flow 2", "Report flow 1"))
-
-        with self.assertRaises(reports.ReportError):
-            self.render()
-
-    def test_rejects_colliding_flattened_flow_slugs(self) -> None:
-        self.configure(
-            [
-                (
-                    "e2e/maestro/flows/foo/bar-baz.yaml",
-                    "lab-admin-b",
-                    "evidence-first",
-                ),
-                (
-                    "e2e/maestro/flows/foo-bar/baz.yaml",
-                    "lab-admin-b",
-                    "evidence-second",
-                ),
-            ]
-        )
-
-        with self.assertRaises(reports.ReportError):
-            self.render()
-
-    def test_escapes_markdown_from_flow_metadata(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        path = self.root / flow
-        path.write_text(
-            path.read_text().replace(
-                "name: Report flow 1",
-                "name: Screenshot ![tracking](https://attacker.invalid/pixel)",
-            )
-        )
-        self.add_result(flow, evidence, exit_code=0, junit_status="SUCCESS")
-
-        report, passed = self.render()
-
-        self.assertTrue(passed)
-        body = report.read_text()
-        self.assertNotIn("![tracking](https://attacker.invalid/pixel)", body)
-        self.assertIn(r"!\[tracking\]", body)
-
-    def test_rejects_harness_changes_during_suite(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        self.add_result(flow, evidence, exit_code=0, junit_status="SUCCESS")
-        original_hash = reports.harness_content_sha256(self.root)
-        (self.root / flow).write_text((self.root / flow).read_text() + "# changed\n")
-
-        with self.assertRaises(reports.ReportError):
-            reports.render_report(
-                root=self.root,
-                suite_name="smoke",
-                run_dir=self.run_dir,
-                harness_revision="abc123def456",
-                harness_dirty=True,
-                harness_sha256=original_hash,
-                deployed_this_run=False,
-                reset_requested=False,
-                maestro_version="2.6.1",
-                platform="web",
-            )
-
-        self.assertEqual(list(self.run_dir.glob(".report-staging-*")), [])
-
-    def test_rechecks_harness_immediately_before_publish(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        self.add_result(flow, evidence, exit_code=0, junit_status="SUCCESS")
-        digest = reports.harness_content_sha256(self.root)
-
-        with mock.patch.object(
-            reports,
-            "harness_content_sha256",
-            side_effect=[digest, "0" * 64],
-        ), self.assertRaises(reports.ReportError):
-            reports.render_report(
-                root=self.root,
-                suite_name="smoke",
-                run_dir=self.run_dir,
-                harness_revision="abc123def456",
-                harness_dirty=False,
-                harness_sha256=digest,
-                deployed_this_run=False,
-                reset_requested=False,
-                maestro_version="2.6.1",
-                platform="web",
-            )
-
-        self.assertEqual(list(self.run_dir.glob(".report-staging-*")), [])
-        self.assertFalse((self.run_dir / "report").exists())
-
-    def test_rejects_unsafe_proof_metadata(self) -> None:
-        flow = "e2e/maestro/flows/auth/password-login.yaml"
-        evidence = "evidence-auth-signed-in"
-        self.configure([(flow, "lab-admin-b", evidence)])
-        automation_path = self.root / "docs" / "testing" / "automation.json"
-        data = json.loads(automation_path.read_text())
-        data["proofs"][0]["case_id"] = "AUTH-001` ![remote](https://attacker.invalid/pixel) `"
-        automation_path.write_text(json.dumps(data))
-
-        with self.assertRaises(reports.ReportError):
-            self.render()
-
-        self.assertEqual(list(self.run_dir.glob(".report-staging-*")), [])
-
-    def test_rejects_symlink_in_artifact_anchor(self) -> None:
-        anchor = self.root / "trusted"
-        outside = self.root / "outside"
-        anchor.mkdir()
-        outside.mkdir()
-        linked = anchor / "linked"
-        linked.symlink_to(outside, target_is_directory=True)
-
-        with self.assertRaises(reports.ReportError):
-            reports.assert_real_path_chain(linked / "child", self.root)
 
 
 if __name__ == "__main__":

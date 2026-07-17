@@ -74,6 +74,8 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+    // RAD-009 (partial): the current list has no Dismissible, labels deletion,
+    // and keeps delete-files unselected by default; gesture vectors are separate.
     testWidgets('menu shows a confirmation with delete-files unchecked',
         (tester) async {
       await pumpList(tester);

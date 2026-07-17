@@ -349,6 +349,7 @@ func TestSharedAccountIsIndependentAndToolsUseRequestingActor(t *testing.T) {
 	assertRuntimeEmpty(t, runtimeDir)
 }
 
+// AUTH-027: The Codex app-server loop terminates on live authorization loss.
 func TestInteractiveAuthorizationRevocationTerminatesCodexTurn(t *testing.T) {
 	manager, _, _, runtimeDir, logPath := fakeManager(t)
 	if err := manager.saveAccount(

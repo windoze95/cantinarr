@@ -145,6 +145,7 @@ func assertNoRevocationToolResult(t *testing.T, history transcript) {
 	}
 }
 
+// AUTH-027: Provider loops stop immediately when dispatch authorization is revoked.
 func TestInteractiveAuthorizationRevocationStopsProviderLoops(t *testing.T) {
 	history := transcript{textTranscriptMessage(agentRoleUser, "find Dune")}
 	chatCtx := ChatContext{UserID: 7, Role: auth.RoleUser, DeviceID: "device-7", RequireSharedAI: true}
