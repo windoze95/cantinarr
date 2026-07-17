@@ -9,16 +9,18 @@ import (
 	"time"
 )
 
-const baseURL = "https://api.trakt.tv"
-
+// Client talks to the Trakt API. baseURL is a field so tests can point it at
+// a fake Trakt server.
 type Client struct {
 	clientID   string
+	baseURL    string
 	httpClient *http.Client
 }
 
 func NewClient(clientID string) *Client {
 	return &Client{
 		clientID: clientID,
+		baseURL:  "https://api.trakt.tv",
 		httpClient: &http.Client{
 			Timeout:       10 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
@@ -43,7 +45,7 @@ type searchResult struct {
 // DoGetRaw fetches a Trakt API path and returns the raw JSON bytes.
 // Used by the discover handler for passthrough caching.
 func (c *Client) DoGetRaw(path string, params url.Values) ([]byte, error) {
-	u := baseURL + path
+	u := c.baseURL + path
 	if len(params) > 0 {
 		u += "?" + params.Encode()
 	}
@@ -67,7 +69,7 @@ func (c *Client) DoGetRaw(path string, params url.Values) ([]byte, error) {
 }
 
 func (c *Client) SearchByTMDB(tmdbID int, mediaType string) (*IDResult, error) {
-	url := fmt.Sprintf("%s/search/tmdb/%d?type=%s", baseURL, tmdbID, mediaType)
+	url := fmt.Sprintf("%s/search/tmdb/%d?type=%s", c.baseURL, tmdbID, mediaType)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

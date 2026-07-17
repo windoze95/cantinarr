@@ -44,6 +44,9 @@ type Checker struct {
 	current  string
 	disabled bool
 	client   *http.Client
+	// apiBase is the GitHub API root; a field so tests can point the checker
+	// at a fake GitHub.
+	apiBase string
 
 	mu        sync.Mutex
 	cached    Status
@@ -60,6 +63,7 @@ func NewChecker(current string, disable bool) *Checker {
 		current:  current,
 		disabled: disable || !ok,
 		client:   &http.Client{Timeout: 15 * time.Second},
+		apiBase:  "https://api.github.com",
 		cached:   Status{Current: current},
 	}
 }
@@ -110,7 +114,7 @@ func (c *Checker) fetchLatest() (tag, url string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	endpoint := "https://api.github.com/repos/" + repoSlug + "/releases/latest"
+	endpoint := c.apiBase + "/repos/" + repoSlug + "/releases/latest"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", "", err
