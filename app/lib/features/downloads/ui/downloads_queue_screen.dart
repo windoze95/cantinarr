@@ -143,9 +143,12 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
   }
 
   Future<void> _removeItem(DownloadQueueItem item) async {
+    final serviceType =
+        ref.read(instanceProvider).activeDownloadInstance?.serviceType ?? '';
     final deleteData = await showDialog<bool>(
       context: context,
-      builder: (_) => _RemoveDownloadDialog(name: item.name),
+      builder: (_) =>
+          _RemoveDownloadDialog(name: item.name, serviceType: serviceType),
     );
     if (deleteData == null || !mounted) return;
 
@@ -314,10 +317,15 @@ class _GlobalQueueHeader extends StatelessWidget {
 
 /// Confirmation dialog for removing a download, with an optional checkbox to
 /// also delete downloaded data (default OFF).
+///
+/// NZBGet has no way to remove downloaded files together with the queue item,
+/// so for NZBGet instances the checkbox is replaced by a factual hint and the
+/// dialog always resolves to `false`.
 class _RemoveDownloadDialog extends StatefulWidget {
   final String name;
+  final String serviceType;
 
-  const _RemoveDownloadDialog({required this.name});
+  const _RemoveDownloadDialog({required this.name, required this.serviceType});
 
   @override
   State<_RemoveDownloadDialog> createState() => _RemoveDownloadDialogState();
@@ -325,6 +333,8 @@ class _RemoveDownloadDialog extends StatefulWidget {
 
 class _RemoveDownloadDialogState extends State<_RemoveDownloadDialog> {
   bool _deleteData = false;
+
+  bool get _supportsDeleteData => widget.serviceType != 'nzbget';
 
   @override
   Widget build(BuildContext context) {
@@ -342,15 +352,23 @@ class _RemoveDownloadDialogState extends State<_RemoveDownloadDialog> {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 12),
-          CheckboxListTile(
-            value: _deleteData,
-            onChanged: (v) => setState(() => _deleteData = v ?? false),
-            title: const Text('Also delete downloaded data',
-                style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
-            controlAffinity: ListTileControlAffinity.leading,
-            contentPadding: EdgeInsets.zero,
-            activeColor: AppTheme.accent,
-          ),
+          if (_supportsDeleteData)
+            CheckboxListTile(
+              value: _deleteData,
+              onChanged: (v) => setState(() => _deleteData = v ?? false),
+              title: const Text('Also delete downloaded data',
+                  style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
+              activeColor: AppTheme.accent,
+            )
+          else
+            const Text(
+              'NZBGet removes the queue item only; '
+              'downloaded files stay on disk.',
+              style:
+                  TextStyle(color: AppTheme.textSecondary, fontSize: 12.5),
+            ),
         ],
       ),
       actions: [
@@ -358,7 +376,8 @@ class _RemoveDownloadDialogState extends State<_RemoveDownloadDialog> {
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel')),
         TextButton(
-          onPressed: () => Navigator.pop(context, _deleteData),
+          onPressed: () =>
+              Navigator.pop(context, _supportsDeleteData && _deleteData),
           style: TextButton.styleFrom(foregroundColor: AppTheme.error),
           child: const Text('Remove'),
         ),
