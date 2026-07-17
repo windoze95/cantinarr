@@ -173,6 +173,12 @@ func (h *Hub) Run(ctx context.Context) {
 			}
 			h.mu.Unlock()
 		case msg := <-h.broadcast:
+			// Deliver under the read lock, but only collect clients whose
+			// send buffer is full — evicting them in place would mutate the
+			// client map (and close a channel) while other readers may hold
+			// the same read lock, which is exactly the concurrency RLock
+			// promises to allow.
+			var stalled []*Client
 			h.mu.RLock()
 			for client := range h.clients {
 				if msg.adminOnly && !client.isAdmin {
@@ -184,11 +190,23 @@ func (h *Hub) Run(ctx context.Context) {
 				select {
 				case client.send <- msg.data:
 				default:
-					close(client.send)
-					delete(h.clients, client)
+					stalled = append(stalled, client)
 				}
 			}
 			h.mu.RUnlock()
+			if len(stalled) > 0 {
+				// Evict under the write lock. The presence check mirrors the
+				// unregister case so a client can never be double-closed no
+				// matter which path removes it first.
+				h.mu.Lock()
+				for _, client := range stalled {
+					if _, ok := h.clients[client]; ok {
+						delete(h.clients, client)
+						close(client.send)
+					}
+				}
+				h.mu.Unlock()
+			}
 		}
 	}
 }
@@ -259,8 +277,16 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Upgrade with the Bearer subprotocol so the client knows auth succeeded
+	// Upgrade echoing the Bearer subprotocol so the client knows auth
+	// succeeded. Echoing one of the offered subprotocols is required for the
+	// web build: browsers fail a WebSocket connection outright when the
+	// client offered subprotocols but the server selected none. Native
+	// clients (dart:io) accept any echoed value they offered. "Bearer" is the
+	// static member of the client's ["Bearer", <token>] offer — never echo
+	// the token, which would copy a credential into a response header.
+	// (http.Header.Set canonicalizes the key to the form gorilla reads.)
 	header := http.Header{}
+	header.Set("Sec-WebSocket-Protocol", "Bearer")
 	conn, err := h.upgrader.Upgrade(w, r, header)
 	if err != nil {
 		log.Printf("websocket: upgrade: %v", err)

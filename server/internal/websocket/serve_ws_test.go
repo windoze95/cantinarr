@@ -202,11 +202,15 @@ func TestServeWSHandshakeRegistersAuthenticatedClients(t *testing.T) {
 			clients[0].userID, clients[0].isAdmin, alice.User.ID)
 	}
 
-	// Pin current behavior: ServeWS upgrades with an empty response header, so
-	// no subprotocol is echoed back despite the client offering ["Bearer",
-	// token]. If a future change starts echoing one, that should be deliberate.
-	if got := userResp.Header.Get("Sec-WebSocket-Protocol"); got != "" {
-		t.Fatalf("negotiated subprotocol = %q, want none (current behavior)", got)
+	// The upgrade must echo the static "Bearer" subprotocol from the client's
+	// ["Bearer", token] offer: browsers (the web build) fail the connection
+	// when the server selects none of the offered subprotocols, and the token
+	// must never be copied into a response header.
+	if got := userResp.Header.Get("Sec-WebSocket-Protocol"); got != "Bearer" {
+		t.Fatalf("negotiated subprotocol = %q, want %q", got, "Bearer")
+	}
+	if got := userConn.Subprotocol(); got != "Bearer" {
+		t.Fatalf("client-side negotiated subprotocol = %q, want %q", got, "Bearer")
 	}
 
 	adminConn := env.mustDial(t, env.adminToken(t))
@@ -353,6 +357,101 @@ func TestDisconnectUnregistersClient(t *testing.T) {
 	remaining := env.clientsSnapshot()
 	if len(remaining) != 1 || remaining[0].userID != bob.User.ID {
 		t.Fatalf("remaining clients = %+v, want only bob's", remaining)
+	}
+}
+
+// TestBroadcastEvictsStalledClient proves a client whose send buffer is full
+// is evicted by the next broadcast: removed from the hub, its send channel
+// closed exactly once (buffered messages stay readable), other clients
+// unaffected, and the hub still routing afterwards — even when a late
+// unregister races the eviction.
+//
+// The stalled client is constructed directly (same package) with a 1-slot
+// send buffer and no running writePump, so "buffer full" is a deterministic
+// state rather than a timing accident. A background reader continuously
+// iterates the client set under RLock for the duration, exactly as the read
+// lock permits: under the old code, which deleted from the map while holding
+// only RLock, that overlap is a data race the -race detector reports; the fix
+// re-acquires the write lock to evict, so `go test -race` stays clean.
+func TestBroadcastEvictsStalledClient(t *testing.T) {
+	env := newWSTestEnv(t)
+	alice := env.userToken(t, "alice", "hw-alice")
+
+	healthyConn := env.mustDial(t, alice.AccessToken)
+	defer healthyConn.Close()
+	env.waitForClients(t, 1)
+
+	// A stalled client: registered like any other, but with a tiny send
+	// buffer and no writePump draining it.
+	stalledClient := &Client{hub: env.hub, userID: alice.User.ID, send: make(chan []byte, 1)}
+	env.hub.register <- stalledClient
+	env.waitForClients(t, 2)
+
+	// A concurrent reader of the client set, holding the read lock exactly
+	// as RLock allows. It runs until the eviction below has been observed.
+	stopReader := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-stopReader:
+				return
+			default:
+			}
+			env.hub.mu.RLock()
+			for c := range env.hub.clients {
+				_ = c.userID
+			}
+			env.hub.mu.RUnlock()
+		}
+	}()
+
+	env.hub.Broadcast(Event{Type: "first"})  // fills the stalled client's buffer
+	env.hub.Broadcast(Event{Type: "second"}) // finds it full -> eviction
+
+	env.waitForClients(t, 1)
+	close(stopReader)
+	<-readerDone
+
+	// The evicted client's channel retains the delivered message and is then
+	// closed.
+	select {
+	case msg, ok := <-stalledClient.send:
+		if !ok {
+			t.Fatalf("stalled client's buffered message was dropped by eviction")
+		}
+		if !strings.Contains(string(msg), "first") {
+			t.Fatalf("stalled client's buffered message = %q, want the first event", msg)
+		}
+	default:
+		t.Fatalf("stalled client's send channel is empty, want the buffered first event")
+	}
+	if _, ok := <-stalledClient.send; ok {
+		t.Fatalf("stalled client's send channel still open after eviction, want closed")
+	}
+
+	// A late unregister for the evicted client (its readPump exiting after
+	// the connection actually drops) must not close the channel a second
+	// time — a double close would panic the hub goroutine.
+	env.hub.unregister <- stalledClient
+
+	// The healthy client received both events in order and the hub is still
+	// routing.
+	if ev := readEvent(t, healthyConn); ev.Type != "first" {
+		t.Fatalf("healthy client first event = %+v, want first", ev)
+	}
+	if ev := readEvent(t, healthyConn); ev.Type != "second" {
+		t.Fatalf("healthy client second event = %+v, want second", ev)
+	}
+	env.hub.Broadcast(Event{Type: "fence"})
+	if ev := readEvent(t, healthyConn); ev.Type != "fence" {
+		t.Fatalf("post-eviction event = %+v, want fence (hub goroutine dead?)", ev)
+	}
+
+	remaining := env.clientsSnapshot()
+	if len(remaining) != 1 || remaining[0] == stalledClient {
+		t.Fatalf("remaining clients = %+v, want only the healthy client", remaining)
 	}
 }
 
