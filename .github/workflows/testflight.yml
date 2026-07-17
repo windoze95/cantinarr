@@ -128,7 +128,7 @@ jobs:
           </plist>
           EOF
 
-      - name: Build IPA (BASE-011 partial)
+      - name: Build IPA
         run: |
           flutter build ipa \
             --build-number=${{ steps.build_number.outputs.build_number }} \

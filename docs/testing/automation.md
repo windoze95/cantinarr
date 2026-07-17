@@ -1,45 +1,9 @@
 # Test automation
 
-Cantinarr has 584 parent cases, not 584 equivalent UI scripts. The explicit
-Plex vectors plus required download-client and MCP mode matrices raise the
-conservative minimum to 802 executions before prose variants are expanded.
-Automation therefore uses the cheapest layer that can prove each behavior,
-while the catalog ID remains the stable traceability key.
-
-## Coverage ledgers
-
-[coverage-plan.json](coverage-plan.json) classifies every one of the 584 parent
-cases by a dominant owner, disposition, and any additional recommended proof
-layers. It is a planning and ownership ledger only: classification does not
-mean that a test exists, ran, passed, or completed the case.
-
-| Planning classification | Cases |
-|---|---:|
-| Go/API dominant | 181 |
-| Flutter/widget dominant | 166 |
-| Maestro/web dominant | 13 |
-| Patrol/native dominant | 15 |
-| Manual/external dominant | 209 |
-| **Total** | **584** |
-
-The same plan classifies 364 cases as automatable, 210 as hybrid, 6 as manual,
-and 4 as blocked by known product gaps. Hybrid and manual cases retain their
-external-service, physical-device, privacy, accessibility, performance, or
-human-review obligations even when deterministic automation covers part of
-the behavior.
-
-[automation.json](automation.json) is the separate execution-proof manifest.
-Its current 30 mappings are deliberately conservative:
-
-| Status | Parent cases | Current sources |
-|---|---:|---|
-| Automated | 11 | 5 Go cases, 5 CI baseline cases, 1 Maestro case |
-| Partial | 19 | 7 Go cases, 1 Flutter widget case, 3 Maestro cases, 7 CI/release cases, 1 store-listing capture-tool case |
-
-An `automated` mapping means the listed evidence covers every catalog clause
-and applicable vector for that parent. A `partial` mapping names exactly what
-exists and what remains. Cases without a manifest mapping have ownership but
-no claimed proof. No Patrol suite is implemented yet.
+Automation uses the cheapest layer that can prove each behavior. Coverage
+lives in the test suites themselves — there is no per-case coverage ledger or
+evidence manifest to maintain. `make check-test-automation` validates only
+the catalog line format, the README area counts, and Maestro flow safety.
 
 ## Layer ownership
 
@@ -51,17 +15,23 @@ no claimed proof. No Patrol suite is implemented yet.
 | Patrol | Native-only boundaries that benefit from Dart assertions: passkeys, notification permissions/taps, deep links, external browser/WebView handoff, app lifecycle, and network controls |
 | Manual/external | Physical-device delivery, real Plex share truth, store submission, cross-browser/accessibility audits, low-end performance, and exploratory sessions |
 
+When adding coverage for a behavior, split its assertions by proof surface:
+add lower-level proof first where applicable, then one black-box journey only
+if visible integration behavior remains. Do not force API or chaos assertions
+through UI taps. A UI success message is never sufficient for a case that
+also requires API, upstream, filesystem, or realtime proof.
+
 Maestro is the first black-box browser lane because it can drive the actual
 same-origin web app served by the lab without changing application dependencies.
 Patrol should be introduced with the first native boundary case, not as a
-second copy of the Maestro suite. A UI success message is never sufficient for
-a case that also requires API, upstream, filesystem, or realtime proof.
+second copy of the Maestro suite. No Patrol suite is implemented yet.
 
 ## Current Maestro smoke suite
 
-The web suite contains three isolated flows. It completes `AUTH-007` and
-records honest partial coverage for `AUTH-022`, `NAV-001`, and `NAV-003` using
-the lab's second admin and no-grants requester. Search is not claimed: Maestro
+The web suite contains three isolated flows: a password-login journey that
+verifies error copy does not reveal whether a username exists, an admin
+module-inventory check, and a no-grants requester navigation check that
+verifies admin modules stay out of the drawer. Search is not claimed: Maestro
 web can focus Flutter's fixed search field but does not reliably inject text
 into its hidden editing element, so that attempted pilot was removed.
 
@@ -115,7 +85,8 @@ E2E_ARGS="--deploy --reset" make maestro-lab-smoke
 
 `--reset` is intentionally opt-in because it deletes and reseeds every lab
 Docker volume. It does not destroy or broaden the Droplet. `make destroy` in
-the private lab repo remains the billable-resource teardown.
+the private lab repo remains the billable-resource teardown; destroy the
+Droplet after each session — a powered-off Droplet still bills.
 
 The runner reports the ordinary Maestro exit result and keeps
 lab-password-scrubbed JUnit XML under the ignored private
@@ -125,52 +96,14 @@ they are not an evidence channel. A host crash or `SIGKILL` can prevent that
 cleanup. There is no bespoke Markdown or screenshot-report pipeline. Use
 [run-template.md](run-template.md) when a human run record is needed.
 
-## Exact proof schema
-
-The manifest uses schema version 2 and one object per catalog case:
-
-```json
-{
-  "case_id": "RAD-009",
-  "status": "partial",
-  "scope": "Current widget proof; gesture vectors remain.",
-  "evidence": [
-    {
-      "kind": "flutter-test",
-      "path": "app/test/radarr/movie_menu_delete_test.dart",
-      "selector": "menu shows a confirmation with delete-files unchecked"
-    }
-  ]
-}
-```
-
-Evidence kinds are `go-test`, `flutter-test`, `maestro-flow`,
-`workflow-step`, `script-check`, and, once introduced, `patrol-test`. Paths are
-repository-relative and selectors identify an exact test function, test name,
-flow name, workflow step, or check marker. Each evidence source also carries
-its catalog ID in a nearby test name or comment so renames and stale mappings
-fail validation instead of silently drifting.
-
-`e2e/maestro/suites.json` maps each executable flow to one of the five fixed
-lab identities. `scripts/check_test_automation.py` validates the 584-case plan,
-catalog and manifest parity, exact evidence selectors, proof-layer ownership,
-Maestro flow safety and suite membership, and both directions of the `AUTO`
-rule: every completed proof carries `AUTO`, and every `AUTO` case has a
-completed manifest proof.
-
-When converting a case:
-
-1. Split its assertions by proof surface; do not force API or chaos assertions through UI taps.
-2. Add lower-level proof first where applicable, then one black-box journey only if visible integration behavior remains.
-3. Put the catalog ID in the exact test, flow, workflow step, or nearby comment and add a scoped manifest mapping.
-4. Use `partial` until every clause and required vector has proof; add `AUTO` only when the parent is complete.
-5. Run `make check-test-automation`, the relevant normal tests, and the live lab or physical-device lane when required.
-
-PR CI validates the catalog, classification plan, manifest, and flow wiring but
-does not receive DigitalOcean, SSH, or lab credentials. Live lab execution
-belongs on the operator workstation today. A future scheduled/manual job must
-use a protected self-hosted runner or equivalent private-access design; never
-use `pull_request_target` to execute arbitrary PR code with lab credentials.
+`e2e/maestro/suites.json` maps each suite flow to one of the five fixed lab
+identities. Flows outside a suite are still safety-linted, so experimental
+flows can land without ceremony. PR CI validates catalog format, counts, and
+flow safety but does not receive DigitalOcean, SSH, or lab credentials. Live
+lab execution belongs on the operator workstation today. A future
+scheduled/manual job must use a protected self-hosted runner or equivalent
+private-access design; never use `pull_request_target` to execute arbitrary
+PR code with lab credentials.
 
 ## Selector policy and Patrol boundary
 
