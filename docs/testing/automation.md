@@ -5,6 +5,19 @@ lives in the test suites themselves — there is no per-case coverage ledger or
 evidence manifest to maintain. `make check-test-automation` validates only
 the catalog line format, the README area counts, and Maestro flow safety.
 
+## CI lanes
+
+Every pull request runs the same three checks: `Test catalog` (this folder's
+lint plus Maestro flow safety), `Go` (`go vet`, `go test` with the pinned
+Codex app-server smoke, and a `CGO_ENABLED=0` build), and `Flutter`
+(`flutter analyze`, `flutter test`, and a release web build). The same suite
+re-runs on every push to `main` to catch merge skew between independently
+green PRs, and on a weekly schedule to catch toolchain drift — the Flutter
+`stable` channel and Go toolchain float forward even when the repo does not
+change. None of these lanes receive credentials of any kind; see
+[environments](environments.md) for what each layer needs, and does not
+need, to run.
+
 ## Layer ownership
 
 | Layer | Primary responsibility |
@@ -14,6 +27,13 @@ the catalog line format, the README area counts, and Maestro flow safety.
 | Maestro | A thin set of black-box web journeys across authentication and role-specific navigation against the disposable lab; add other surfaces only when the web driver can prove them reliably |
 | Patrol | Native-only boundaries that benefit from Dart assertions: passkeys, notification permissions/taps, deep links, external browser/WebView handoff, app lifecycle, and network controls |
 | Manual/external | Physical-device delivery, real Plex share truth, store submission, cross-browser/accessibility audits, low-end performance, and exploratory sessions |
+
+Go integration proof runs against in-process fakes, never live services:
+the service clients take constructor-injected base URLs (`radarr`, `sonarr`,
+`chaptarr`, the download clients, `tautulli`, `plex`, the push gateway) and
+the AI SDKs honor base-URL environment overrides, so tests point them at
+`httptest` servers replaying real API shapes. Contract, authorization, and
+failure vectors run deterministically with zero credentials.
 
 When adding coverage for a behavior, split its assertions by proof surface:
 add lower-level proof first where applicable, then one black-box journey only

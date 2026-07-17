@@ -1,6 +1,6 @@
 # Cantinarr master test checklist
 
-This folder is the master list of end-to-end Cantinarr behavior to verify. Cases are grouped by product area, shared setup is listed in [fixtures](fixtures.md), and the [run template](run-template.md) can be copied when recording a test run.
+This folder is the master list of end-to-end Cantinarr behavior to verify. Cases are grouped by product area, shared setup is listed in [fixtures](fixtures.md), environment and credential needs per layer are in [environments](environments.md), and the [run template](run-template.md) can be copied when recording a test run.
 
 Machine-driven coverage lives in the ordinary test suites — `go test` under
 `server/`, `flutter test` under `app/`, and the private-lab Maestro smoke

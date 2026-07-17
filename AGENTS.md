@@ -20,7 +20,7 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 
 - Server changes: run `go vet ./...` and `go test ./...` from `server/`.
 - App changes: run `flutter analyze --no-fatal-infos` and `flutter test` from `app/`.
-- CI runs exactly those on every PR, plus a `CGO_ENABLED=0` server build and a `flutter build web --release`. A PR is not done if any of them fail.
+- CI runs exactly those on every PR, plus a `CGO_ENABLED=0` server build and a `flutter build web --release`. A PR is not done if any of them fail. The same suite re-runs on every push to `main` (merge-skew safety) and on a weekly schedule (toolchain drift); a red `main` run is a defect to fix promptly.
 - Codex integration changes are also proved against the checksum-verified pinned app-server in CI. The Docker workflow builds and smoke-tests both Dockerfiles, including bundled license notices, before publishing the root image to GHCR.
 - iOS release builds happen only in CI (`testflight.yml`, auto-deploys on `main` when iOS-relevant `app/**` paths change — web/android/desktop subdirs and store-listing metadata/screenshots are excluded; listing copy syncs via `storelisting.yml` instead). Don't assume a local iOS toolchain; when one isn't available, sanity-check Swift with `swiftc -parse` and let CI prove the build.
 - iOS signing is manual, via the `IOS_PROVISIONING_PROFILE_BASE64` secret. Changing app capabilities/entitlements invalidates the profile — regenerate it and update the secret.
