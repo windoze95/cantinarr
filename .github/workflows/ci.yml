@@ -66,7 +66,7 @@ jobs:
           echo "CANTINARR_CODEX_APP_SERVER_SMOKE_BINARY=$RUNNER_TEMP/codex-app-server" >> "$GITHUB_ENV"
 
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
 
       - name: Build
         run: CGO_ENABLED=0 go build -o cantinarr ./cmd/server
