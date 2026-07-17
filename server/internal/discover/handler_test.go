@@ -243,8 +243,9 @@ func TestAdjacentQueriesNeverShareCacheEntries(t *testing.T) {
 	e := newEnv(t, true)
 
 	pairs := [][2]string{
-		// "search:" + query + ":" + page — colon-separated free text.
-		{"/search?query=heat&page=12", "/search?query=heat:1&page=2"},
+		// "search:" + query + ":" + page — under separator-less
+		// concatenation both would key as "searchheat12".
+		{"/search?query=heat1&page=2", "/search?query=heat&page=12"},
 		// "movie:" + id vs "tv:" + id — same numeric id, different media type.
 		{"/media/movie/603", "/media/tv/603"},
 		// disc_movies uses params.Encode(): a with_genres VALUE containing a
