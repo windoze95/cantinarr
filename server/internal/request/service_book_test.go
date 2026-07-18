@@ -522,6 +522,103 @@ func TestBookRequestMonitorsAndSearchesNewAuthorBook(t *testing.T) {
 	}
 }
 
+// TestApproveBookRequestNotifiesWithForeignID: approving a pending book request
+// notifies the requester with the Chaptarr foreignBookId in the event data —
+// books store tmdb_id 0, so foreign_id is the only identity a client can
+// deep-link the decision tap to.
+func TestApproveBookRequestNotifiesWithForeignID(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"Ahsoka (Star Wars)","titleSlug":"ahsoka","foreignBookId":"29749107",
+					"author":{"authorName":"E.K. Johnston","foreignAuthorId":"gr:7418796"},
+					"editions":[{"foreignEditionId":"29749107","title":"Ahsoka (Star Wars)","links":[],"images":[]}]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`{"id":42,"title":"Ahsoka (Star Wars)","foreignBookId":"29749107","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	rec := &recordingNotifier{}
+	svc.notifier = rec
+	requireApproval(t, svc)
+	adminID := createTestAdmin(t, svc)
+
+	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType: "book", ForeignID: "29749107", Title: "Ahsoka (Star Wars)", BookFormat: BookFormatEbook,
+	}); err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	pending, err := svc.ListPending()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("ListPending = %+v err=%v, want exactly 1", pending, err)
+	}
+
+	if _, err := svc.ApproveRequest(adminID, pending[0].ID, nil); err != nil {
+		t.Fatalf("ApproveRequest: %v", err)
+	}
+	if len(rec.userEvents) != 1 {
+		t.Fatalf("user events = %+v, want exactly one decision", rec.userEvents)
+	}
+	ev := rec.userEvents[0]
+	if ev.userID != uid || ev.eventType != "request_decision" || ev.data["decision"] != "approved" {
+		t.Errorf("event = %+v, want an approved request_decision to the requester", ev)
+	}
+	if ev.data["media_type"] != "book" || ev.data["tmdb_id"] != 0 {
+		t.Errorf("event data = %#v, want media_type book with tmdb_id 0", ev.data)
+	}
+	if ev.data["foreign_id"] != "29749107" {
+		t.Errorf("event foreign_id = %v, want 29749107", ev.data["foreign_id"])
+	}
+}
+
+// TestDenyBookRequestNotifiesWithForeignID: the deny event carries the same
+// book identity (denial touches no arr, so only the DB path is exercised).
+func TestDenyBookRequestNotifiesWithForeignID(t *testing.T) {
+	s, uid := newBookTestService(t)
+	rec := &recordingNotifier{}
+	s.notifier = rec
+	adminID := createTestAdmin(t, s)
+
+	const fid = "goodreads:12345"
+	r := &resolvedRequest{userID: uid, mediaType: "book", foreignID: fid, title: "Some Book"}
+	if _, err := s.createPending(r); err != nil {
+		t.Fatalf("createPending: %v", err)
+	}
+	pending, err := s.ListPending()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("ListPending = %+v err=%v, want exactly 1", pending, err)
+	}
+
+	if err := s.DenyRequest(adminID, pending[0].ID, "not now"); err != nil {
+		t.Fatalf("DenyRequest: %v", err)
+	}
+	if len(rec.userEvents) != 1 {
+		t.Fatalf("user events = %+v, want exactly one decision", rec.userEvents)
+	}
+	ev := rec.userEvents[0]
+	if ev.data["decision"] != "denied" || ev.data["media_type"] != "book" {
+		t.Errorf("event = %+v, want a denied book decision", ev)
+	}
+	if ev.data["foreign_id"] != fid {
+		t.Errorf("event foreign_id = %v, want %s", ev.data["foreign_id"], fid)
+	}
+}
+
 func TestAdminBookRequestsUseDefaultChaptarrWithoutUserGrant(t *testing.T) {
 	database, err := db.Open(":memory:")
 	if err != nil {

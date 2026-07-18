@@ -125,6 +125,43 @@ func TestNotifyUserRequestDecision(t *testing.T) {
 	if data["type"] != "request_decision" {
 		t.Errorf("data.type = %v, want request_decision", data["type"])
 	}
+	// Movie/TV rows carry no foreign_id — the field is book-only and must not
+	// appear in their payloads.
+	if v, ok := data["foreign_id"]; ok {
+		t.Errorf("data.foreign_id = %v, want absent for a movie decision", v)
+	}
+}
+
+// A book decision's payload carries the Chaptarr foreignBookId (books store
+// tmdb_id 0), so the app can deep-link the tap to the right book.
+func TestNotifyUserBookRequestDecisionCarriesForeignID(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (42, 'req', '', 'user')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, request_decision) VALUES (42, 1)")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyUser(42, "request_decision", map[string]interface{}{
+		"decision":   "approved",
+		"tmdb_id":    0,
+		"media_type": "book",
+		"foreign_id": "29749107",
+		"title":      "Ahsoka (Star Wars)",
+		"status":     "requested",
+	})
+
+	body := cap.waitForNotification(t)
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "request_decision" || data["media_type"] != "book" {
+		t.Errorf("data = %v, want type/media_type request_decision/book", data)
+	}
+	if data["foreign_id"] != "29749107" {
+		t.Errorf("data.foreign_id = %v, want 29749107", data["foreign_id"])
+	}
 }
 
 func TestNotifyUserRequestDecisionSuppressedByDefault(t *testing.T) {

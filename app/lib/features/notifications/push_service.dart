@@ -153,10 +153,12 @@ class PushService {
       case 'new_movie':
       case 'new_episode':
         // Books never carry a TMDB id (the server sends tmdb_id 0; a book is
-        // keyed on its Chaptarr foreignBookId, which isn't in the payload) and
-        // the app has no id-addressable book detail route, so a book decision
-        // lands on the requester-facing Books tab. Movie/TV open media detail;
-        // an unknown media_type keeps the movie fallback.
+        // keyed on its Chaptarr foreignBookId, which newer servers include as
+        // foreign_id on decision payloads). The app has no id-addressable book
+        // detail route yet — the Books tab is a search surface — so a book
+        // decision lands on the requester-facing Books tab regardless of
+        // whether foreign_id is present. Movie/TV open media detail; an
+        // unknown media_type keeps the movie fallback.
         if (data['media_type'] == 'book') {
           router.push('/dashboard/books');
           return;

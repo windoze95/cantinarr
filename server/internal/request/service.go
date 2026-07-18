@@ -1757,13 +1757,20 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 	}
 
 	if s.notifier != nil {
-		s.notifier.NotifyUser(r.userID, "request_decision", map[string]interface{}{
+		data := map[string]interface{}{
 			"decision":   "approved",
 			"tmdb_id":    r.tmdbID,
 			"media_type": r.mediaType,
 			"title":      title,
 			"status":     newStatus,
-		})
+		}
+		// Books have no TMDB id (tmdb_id is 0); the Chaptarr foreignBookId is
+		// the identity a client can deep-link on. Movie/TV rows carry no
+		// foreign_id, so the field is omitted and their payloads are unchanged.
+		if r.foreignID != "" {
+			data["foreign_id"] = r.foreignID
+		}
+		s.notifier.NotifyUser(r.userID, "request_decision", data)
 	}
 	return &CreateResponse{Success: true, Status: newStatus, Title: title}, nil
 }
@@ -1788,14 +1795,20 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 		return nil // already decided by a concurrent action
 	}
 	if s.notifier != nil {
-		s.notifier.NotifyUser(r.userID, "request_decision", map[string]interface{}{
+		data := map[string]interface{}{
 			"decision":   "denied",
 			"tmdb_id":    r.tmdbID,
 			"media_type": r.mediaType,
 			"title":      r.title,
 			"reason":     reason,
 			"status":     StatusDenied,
-		})
+		}
+		// Same as the approval event: book rows carry their foreignBookId for
+		// deep-linking; movie/TV payloads are unchanged.
+		if r.foreignID != "" {
+			data["foreign_id"] = r.foreignID
+		}
+		s.notifier.NotifyUser(r.userID, "request_decision", data)
 	}
 	return nil
 }

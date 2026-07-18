@@ -190,11 +190,11 @@ void main() {
       expect(h.router.pushed, ['/detail/movie/9', '/detail/movie/10']);
     });
 
-    // A book decision's custom payload is {type, tmdb_id: 0, media_type} —
-    // the server's passthrough forwards no decision/reason, and a book row
-    // stores tmdb_id 0 (books key on the Chaptarr foreignBookId, which isn't
-    // in the payload). With no id-addressable book detail route, approved and
-    // denied both land on the requester-facing Books tab.
+    // A book decision's custom payload is {type, tmdb_id: 0, media_type} from
+    // old servers, plus foreign_id (the Chaptarr foreignBookId) from newer
+    // ones — the server's passthrough forwards no decision/reason, and a book
+    // row stores tmdb_id 0. With no id-addressable book detail route, approved
+    // and denied both land on the requester-facing Books tab.
     for (final decision in const ['approved', 'denied']) {
       test('book request_decision ($decision) opens the Books tab', () async {
         final h = _Harness();
@@ -208,6 +208,21 @@ void main() {
         expect(h.router.pushed, ['/dashboard/books']);
       });
     }
+
+    test('book request_decision with a foreign_id opens the Books tab',
+        () async {
+      // Newer servers add foreign_id to book decision payloads. There is no
+      // id-addressable book detail route yet, so the additive field must not
+      // change (or break) the Books-tab routing.
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'request_decision',
+        'tmdb_id': 0,
+        'media_type': 'book',
+        'foreign_id': '29749107',
+      });
+      expect(h.router.pushed, ['/dashboard/books']);
+    });
 
     test('media_type book wins over a stray positive tmdb_id', () async {
       final h = _Harness();

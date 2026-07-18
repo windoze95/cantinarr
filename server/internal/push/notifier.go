@@ -371,6 +371,12 @@ func passthrough(eventType string, data map[string]interface{}) map[string]any {
 	if v := str(data["media_type"]); v != "" {
 		out["media_type"] = v
 	}
+	// Books have no TMDB id; their identity is the Chaptarr foreignBookId.
+	// Only book request-decision events carry it, so movie/TV payloads are
+	// unchanged.
+	if v := str(data["foreign_id"]); v != "" {
+		out["foreign_id"] = v
+	}
 	return out
 }
 
