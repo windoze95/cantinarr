@@ -31,6 +31,14 @@ class WebSocketClient extends ChangeNotifier {
   final String? Function() _getServerUrl;
   final String? Function() _getAccessToken;
 
+  /// Creates the underlying channel. Production always uses
+  /// [WebSocketChannel.connect]; tests inject a factory so the
+  /// connect → drop → reconnect lifecycle can be driven with fake streams
+  /// instead of real sockets.
+  @visibleForTesting
+  final WebSocketChannel Function(Uri uri, {Iterable<String>? protocols})
+      connectChannel;
+
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   Timer? _reconnectTimer;
@@ -46,8 +54,11 @@ class WebSocketClient extends ChangeNotifier {
   WebSocketClient({
     required String? Function() getServerUrl,
     required String? Function() getAccessToken,
+    WebSocketChannel Function(Uri uri, {Iterable<String>? protocols})?
+        connectChannel,
   })  : _getServerUrl = getServerUrl,
-        _getAccessToken = getAccessToken;
+        _getAccessToken = getAccessToken,
+        connectChannel = connectChannel ?? WebSocketChannel.connect;
 
   /// Starts the connection on first call; subsequent calls are no-ops.
   /// Reconnection after that is handled internally with backoff.
@@ -77,7 +88,7 @@ class WebSocketClient extends ChangeNotifier {
           .replaceFirst('https://', 'wss://')
           .replaceFirst('http://', 'ws://');
 
-      final channel = WebSocketChannel.connect(
+      final channel = connectChannel(
         Uri.parse('$wsUrl/api/ws'),
         protocols: ['Bearer', accessToken],
       );
