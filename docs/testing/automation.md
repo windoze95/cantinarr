@@ -2,8 +2,12 @@
 
 Automation uses the cheapest layer that can prove each behavior. Coverage
 lives in the test suites themselves — there is no per-case coverage ledger or
-evidence manifest to maintain. `make check-test-automation` validates only
-the catalog line format, the README area counts, and Maestro flow safety.
+evidence manifest to maintain. The catalog under `docs/testing/catalog/` is
+the manual-only layer: it lists just the behavior no suite can prove — live
+third-party truth, physical devices, store/release operations, unstageable
+chaos, audits, and exploratory sessions. `make check-test-automation`
+validates only the catalog line format, the README area counts, and Maestro
+flow safety.
 
 ## CI lanes
 

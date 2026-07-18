@@ -29,9 +29,9 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 - Merges to `main` publish `ghcr.io/windoze95/cantinarr` (`latest`; version tags on `v*` releases).
 - Mention any tests or checks that could not be run.
 
-## Master test checklist
+## Manual test checklist
 
-- Keep `docs/testing/` aligned with the product: whenever a change adds, removes, or changes behavior, update the relevant cases and add any missing happy-path, edge-case, permission, and failure coverage in the same change.
+- `docs/testing/` is the manual-only layer: cases that genuinely need a human or a real environment — live third-party truth, physical devices, store/release operations, chaos no suite can stage, and audits/exploratory sessions. Update it only when one of those surfaces changes; everything else is proved by the Go/Flutter suites and belongs there, not in the checklist.
 
 ## Architecture conventions
 
