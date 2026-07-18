@@ -1,26 +1,41 @@
-# Cantinarr master test checklist
+# Cantinarr manual test checklist
 
-This folder is the master list of end-to-end Cantinarr behavior to verify. Cases are grouped by product area, shared setup is listed in [fixtures](fixtures.md), environment and credential needs per layer are in [environments](environments.md), and the [run template](run-template.md) can be copied when recording a test run.
+This folder is the manual-only layer of Cantinarr testing: the behaviors that
+the hermetic suites genuinely cannot prove. A case earns its place here only
+when proving it needs a human and/or a real environment — live third-party
+truth (plex.tv, TMDB/Trakt, AI providers, APNs, GitHub), physical devices and
+native ceremonies, store and release operations, destructive/chaos operations
+no suite can stage, accessibility/compatibility/performance audits, timed
+exploratory sessions, and a small set of end-to-end release-day journeys.
+Cases are grouped by product area, shared setup is listed in
+[fixtures](fixtures.md), environment and credential needs per layer are in
+[environments](environments.md), and the [run template](run-template.md) can
+be copied when recording a test run.
 
-Machine-driven coverage lives in the ordinary test suites — `go test` under
-`server/`, `flutter test` under `app/`, and the private-lab Maestro smoke
-suite — not in a per-case coverage ledger. See [automation](automation.md)
-for the layer boundaries and the private-lab runner. The checklist stays a
-lightweight human document: tags such as **AUTO** are informational hints,
-not machine-enforced claims.
+Everything else — contracts, authorization, validation vectors, state
+matrices, availability computation, event mapping, tool contracts — is
+machine-proven by the ordinary test suites that gate every merge: `go test`
+under `server/`, `flutter test` under `app/`, and the private-lab Maestro
+smoke suite. See [automation](automation.md) for the layer boundaries and the
+private-lab runner. The checklist stays a lightweight human document: tags
+such as **AUTO** are informational hints, not machine-enforced claims.
 
 ## Test areas
 
 | Area | Case prefixes | Cases |
 |---|---|---:|
-| [Build, operations, usability, and release](catalog/baseline-operations-release.md) | BASE, OPS, UX, PERF, REL, EXP | 69 |
-| [Authentication, navigation, users, and security](catalog/auth-users-security.md) | AUTH, NAV, USER, SEC | 88 |
-| [Instances, realtime behavior, and push](catalog/instances-realtime-push.md) | INST, RT, PUSH | 65 |
-| [Plex linking, libraries, and invitations](catalog/plex.md) | PLEX | 87 |
-| [Discovery and requests](catalog/discovery-requests.md) | DISC, REQ | 69 |
-| [Media services and download clients](catalog/media-services.md) | RAD, SON, BOOK, DOWN, TAUT | 91 |
-| [Issues, AI, and MCP](catalog/issues-ai-mcp.md) | ISS, AI, MCP | 115 |
-| **Total** | | **584** |
+| [Build, operations, usability, and release](catalog/baseline-operations-release.md) | OPS, UX, PERF, REL, EXP | 28 |
+| [Authentication, navigation, and security](catalog/auth-users-security.md) | AUTH, NAV, SEC | 11 |
+| [Instances, realtime behavior, and push](catalog/instances-realtime-push.md) | INST, RT, PUSH | 8 |
+| [Plex linking, libraries, and invitations](catalog/plex.md) | PLEX | 18 |
+| [Discovery and requests](catalog/discovery-requests.md) | DISC, REQ | 6 |
+| [Media services and download clients](catalog/media-services.md) | RAD, SON, BOOK, DOWN, TAUT | 10 |
+| [Issues, AI, and MCP](catalog/issues-ai-mcp.md) | ISS, AI, MCP | 8 |
+| **Total** | | **89** |
+
+Case IDs are stable and never renumbered, so deleted cases leave gaps in the
+sequences; a gap means the behavior moved into the automated suites, not that
+a case is missing.
 
 ## Running the checklist
 
@@ -48,4 +63,4 @@ Priorities describe impact:
 - **P1**: serious behavior that should be covered for changes in the affected area.
 - **P2**: extended, compatibility, or exploratory coverage.
 
-Tags describe the proof surface: **AUTO** machine-driven repository or CI proof, **API** direct contract check, **UI** app behavior, **LIVE** real third-party service/device, **CHAOS** controlled failure/recovery, **SEC** authorization/privacy, **RT** realtime convergence, and **GAP** expected behavior that is known not to be implemented yet.
+Tags describe the proof surface: **AUTO** machine-driven repository or CI proof, **API** direct contract check, **UI** app behavior, **LIVE** real third-party service/device, **CHAOS** controlled failure/recovery, and **SEC** authorization/privacy.
