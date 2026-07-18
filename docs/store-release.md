@@ -10,7 +10,7 @@ for a user-facing version change — build numbers/version codes are computed pe
 ### Pipeline
 
 `.github/workflows/playstore.yml` runs on every merge to `main` that touches Android-relevant
-`app/**` paths (web/ios/desktop subdirs, tests, and dev tooling excluded), and on manual dispatch (inputs: track
+`app/**` paths (web/ios/desktop subdirs, tests, dev tooling, and markdown excluded), and on manual dispatch (inputs: track
 `alpha`/`internal`, release status `completed`/`draft`).
 
 1. Version code = max version code across all Play tracks + 1 (`next_build_number` lane in
@@ -111,7 +111,7 @@ The Play 512 icon and the 1024×500 feature graphic derive from the committed 10
 ### Pipeline
 
 `.github/workflows/testflight.yml` auto-deploys to TestFlight on `main` for iOS-relevant `app/**`
-changes (tests and dev tooling excluded). Build number = latest TestFlight build + 1 (`next_build_number` lane in
+changes (tests, dev tooling, and markdown excluded). Build number = latest TestFlight build + 1 (`next_build_number` lane in
 `app/ios/fastlane/Fastfile`); signing is manual via the `IOS_DIST_CERT_*` and
 `IOS_PROVISIONING_PROFILE_BASE64` secrets (team `2M54LKDR89`, bundle `codes.julian.cantinarr`).
 Capability/entitlement changes invalidate the provisioning profile — regenerate it and update the
