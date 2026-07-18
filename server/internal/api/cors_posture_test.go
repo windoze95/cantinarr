@@ -7,20 +7,23 @@ import (
 	"testing"
 )
 
-// These tests pin the CORS posture the /api router actually ships (#231).
+// These tests pin the /api CORS posture: genuinely same-origin only (#231).
 //
-// The middleware is configured with cors.Handler(AllowedOrigins: []string{})
-// under a "same-origin only" comment, but go-chi/cors v1.2.2 treats an empty
-// origin allowlist as ALLOW ALL ORIGINS (allowedOriginsAll), so cross-origin
-// requests are answered with Access-Control-Allow-Origin: * — the comment and
-// the behavior disagree. What keeps the wildcard from being a session-riding
-// hole is AllowCredentials: false plus Bearer-token auth (no cookies): a
-// cross-origin page can never attach a victim's credentials, so the wildcard
-// only makes non-credentialed responses readable cross-origin. These tests
-// pin exactly that shipped shape; tightening the allowlist to genuinely
-// same-origin is a deliberate change that must flip these assertions.
-// (The separate /mcp mount configures AllowedOrigins: ["*"] explicitly for
-// external MCP clients — that wildcard is intended, not covered here.)
+// No CORS middleware is mounted on /api, so no request — whatever its Origin —
+// ever receives an Access-Control-* header. Browsers therefore enforce their
+// default same-origin policy: a cross-origin page can neither read responses
+// nor complete a preflight. The same-origin web build, native apps, and
+// server-side MCP clients never need CORS headers, so their flows are
+// unaffected. (The separate /mcp mount configures AllowedOrigins: ["*"]
+// explicitly for external MCP clients — that wildcard is intended, not
+// covered here.)
+//
+// History: an empty go-chi/cors allowlist previously sat on /api under a
+// "same-origin only" comment, but go-chi/cors treats an empty allowlist as
+// ALLOW ALL ORIGINS, reflecting Access-Control-Allow-Origin: * to anyone.
+// The exposure was bounded (AllowCredentials: false plus cookie-less Bearer
+// auth meant no credentialed cross-origin reads), but behavior and intent
+// disagreed; the middleware was removed to make them agree.
 
 // corsRequest performs one request against the full router and returns the
 // recorder. token and origin are optional ("" omits the header).
@@ -50,9 +53,9 @@ func assertNoCORSHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
 	}
 }
 
-// TestAPICORSActualRequestPosture pins the headers a cross-origin (and an
-// origin-less) request receives on a representative public route and a
-// representative authenticated route.
+// TestAPICORSActualRequestPosture pins that neither cross-origin nor
+// origin-less requests receive any Access-Control-* header on a
+// representative public route and a representative authenticated route.
 func TestAPICORSActualRequestPosture(t *testing.T) {
 	harness := newRBACRouterHarness(t, false)
 
@@ -70,24 +73,12 @@ func TestAPICORSActualRequestPosture(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 			}
-			// Shipped behavior: the empty allowlist is allow-all, so the
-			// wildcard is reflected (see the file comment; #231).
-			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
-				t.Fatalf("Access-Control-Allow-Origin = %q, want %q (go-chi/cors treats the empty allowlist as allow-all)", got, "*")
-			}
-			// The compensating control: the wildcard must never come with
-			// permission to send credentials.
-			if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
-				t.Fatalf("Access-Control-Allow-Credentials = %q, want unset", got)
-			}
-			if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "Link" {
-				t.Fatalf("Access-Control-Expose-Headers = %q, want %q", got, "Link")
-			}
+			// The request itself succeeds (the server does not reject on
+			// Origin), but without an Access-Control-Allow-Origin grant the
+			// browser refuses to hand the response to cross-origin callers.
+			assertNoCORSHeaders(t, rec)
 		})
 
-		// Native clients and the same-origin web build send no Origin header
-		// (browsers omit it on same-origin GETs): the response must carry no
-		// Access-Control-* headers at all.
 		t.Run(route.name+" without origin", func(t *testing.T) {
 			rec := corsRequest(harness.router, http.MethodGet, route.path, route.token, "", nil)
 			if rec.Code != http.StatusOK {
@@ -98,10 +89,10 @@ func TestAPICORSActualRequestPosture(t *testing.T) {
 	}
 }
 
-// TestAPICORSPreflightPosture pins preflight handling: the CORS middleware
-// answers OPTIONS before auth ever runs (a browser preflight carries no
-// credentials, so 200-not-401 on a protected route is the standard shape),
-// reflecting the allow-all wildcard without a credential grant.
+// TestAPICORSPreflightPosture pins that browser preflights get no CORS grant:
+// with no middleware answering OPTIONS, the router's method handling responds
+// (405 for these GET routes) and no Access-Control-* header appears, so a
+// cross-origin preflight can never succeed.
 func TestAPICORSPreflightPosture(t *testing.T) {
 	harness := newRBACRouterHarness(t, false)
 
@@ -110,21 +101,10 @@ func TestAPICORSPreflightPosture(t *testing.T) {
 			rec := corsRequest(harness.router, http.MethodOptions, path, "", "https://attacker.example", map[string]string{
 				"Access-Control-Request-Method": http.MethodGet,
 			})
-			if rec.Code != http.StatusOK {
-				t.Fatalf("preflight status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("preflight status = %d, want %d; body=%s", rec.Code, http.StatusMethodNotAllowed, rec.Body.String())
 			}
-			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
-				t.Fatalf("Access-Control-Allow-Origin = %q, want %q (go-chi/cors treats the empty allowlist as allow-all)", got, "*")
-			}
-			if got := rec.Header().Get("Access-Control-Allow-Methods"); got != http.MethodGet {
-				t.Fatalf("Access-Control-Allow-Methods = %q, want %q", got, http.MethodGet)
-			}
-			if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
-				t.Fatalf("Access-Control-Allow-Credentials = %q, want unset", got)
-			}
-			if got := rec.Header().Get("Access-Control-Max-Age"); got != "300" {
-				t.Fatalf("Access-Control-Max-Age = %q, want %q", got, "300")
-			}
+			assertNoCORSHeaders(t, rec)
 		})
 	}
 }

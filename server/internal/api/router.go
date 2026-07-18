@@ -81,15 +81,13 @@ func NewRouter(
 	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
 
 	r.Route("/api", func(r chi.Router) {
-		// CORS: same-origin only (frontend is served from the same origin).
-		r.Use(cors.Handler(cors.Options{
-			AllowedOrigins:   []string{},
-			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-			ExposedHeaders:   []string{"Link"},
-			AllowCredentials: false,
-			MaxAge:           300,
-		}))
+		// CORS: same-origin only. No CORS middleware is mounted on purpose —
+		// the web build is served from this same origin, native apps and MCP
+		// clients don't use CORS, and emitting no Access-Control-* headers
+		// leaves the browser's default same-origin policy in force. (The /mcp
+		// mount below configures its own explicit allow-all for external MCP
+		// clients.) Previously an empty go-chi/cors allowlist sat here, which
+		// that library treats as allow-all — the opposite of this intent.
 		r.Use(middleware.SetHeader("Content-Type", "application/json"))
 
 		// WebSocket (auth handled via subprotocol header)
