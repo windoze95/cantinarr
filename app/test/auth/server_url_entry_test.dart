@@ -88,23 +88,26 @@ void main() {
     );
   });
 
-  test('PIN: only ONE trailing slash is stripped', () async {
-    // Divergence from app.dart's normalizeServer, which strips them all. The
-    // survivor becomes part of the Dio base URL, so every request goes to
-    // '//api/…'. Pinned so a change here is a conscious one.
+  test('every trailing slash is stripped', () async {
+    // Matches app.dart's normalizeServer: a surviving slash would become part
+    // of the Dio base URL and send every request to '//api/…'.
     expect(
       await normalized('https://media.example.com//'),
-      'https://media.example.com/',
+      'https://media.example.com',
     );
   });
 
-  test('PIN: an uppercase scheme defeats the scheme probe', () async {
-    // Same case-sensitive probe as normalizeServer (pinned in
-    // app_deep_links_test.dart): 'HTTPS://' is not recognized, so https:// is
-    // prepended and the result is not a usable URL.
+  test('an uppercase scheme is recognized and lowercased', () async {
     expect(
       await normalized('HTTPS://media.example.com'),
-      'https://HTTPS://media.example.com',
+      'https://media.example.com',
+    );
+  });
+
+  test('an uppercase http scheme keeps http', () async {
+    expect(
+      await normalized('HTTP://media.example.com:8585'),
+      'http://media.example.com:8585',
     );
   });
 
