@@ -41,9 +41,9 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `RT-006` · P0 · LIVE — Send Radarr movie and Sonarr series add/delete/file-delete/grab events; verify only exact instance/media caches/statuses invalidate.
 - [ ] `RT-007` · P0 · LIVE — Import a movie and several episodes; verify availability/events and new-content notification once despite webhook + poll overlap.
 - [ ] `RT-008` · P0 · SEC — Send missing/wrong/query-string credentials, wrong instance type, path traversal/encoding, huge body, and malformed JSON; verify safe rejection and no access-log secret/query leakage.
-- [ ] `RT-009` · P0 · API — Connect WebSocket with valid/invalid/expired/revoked subprotocol auth; verify only the valid current user receives a connection.
+- [ ] `RT-009` · P0 · API — Connect WebSocket with valid/invalid/expired/revoked subprotocol auth; verify only the valid current user receives a connection and the accepted upgrade echoes the static `Bearer` subprotocol — never the token — so browser (web-build) clients can complete the handshake.
 - [ ] `RT-010` · P0 · SEC — Produce events for two users pinned to different instances plus admin-only events; verify each socket receives only authorized/relevant data.
-- [ ] `RT-011` · P0 · CHAOS — Drop network, restart server, rotate tokens, sleep/wake device, and reconnect; verify one subscription and refetch/backfill repairs missed state.
+- [ ] `RT-011` · P0 · CHAOS — Drop network, restart server, rotate tokens, sleep/wake device, and reconnect; verify one subscription and refetch/backfill repairs missed state, and that a client that stops reading is evicted without disrupting delivery to healthy sockets.
 - [ ] `RT-012` · P0 · API — Replay a valid authenticated webhook and deliver duplicate/out-of-order events; verify safe acknowledgement/idempotence, newer state never regresses, and duplicate content notification/action is suppressed.
 - [ ] `RT-013` · P1 · API/UI — Verify REST `partial` and any realtime variant map to one Partially Available state, including older/newer payload compatibility.
 - [ ] `RT-014` · P1 · CHAOS — Send malformed/version-skew/unknown events; verify ignored/generic-safe handling and polling repairs state without a crash.
@@ -65,15 +65,16 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `PUSH-009` · P0 · UI/API — Toggle every category independently, restart, and force save failure; verify persistence or optimistic rollback without changing other toggles.
 - [ ] `PUSH-010` · P0 · SEC — Forge admin-category preference as requester; verify SQL recipient selection still limits pending requests/issues/actions/Plex access requests to admins.
 - [ ] `PUSH-011` · P0 · LIVE — Submit a pending request; verify opted-in admins only, queue-depth badge, fixed body, and approval deep link.
-- [ ] `PUSH-012` · P0 · LIVE — Approve/deny a request; verify only its opted-in requester receives correct media identity and detail deep link.
+- [ ] `PUSH-012` · P0 · LIVE — Approve/deny a request; verify only its opted-in requester receives correct media identity and the movie/TV detail deep link (book decisions deep-link to the Books tab instead).
 - [ ] `PUSH-013` · P0 · LIVE — Import movie and multiple episodes; verify opted-in audiences, correct movie/series copy, title collapse keys, and no duplicate from poll/webhook overlap.
 - [ ] `PUSH-014` · P0 · LIVE — Promote an issue to actionable and create an agent action; verify admin pushes/deep links, and verify passive observing/recovering produces neither.
 - [ ] `PUSH-015` · P1 · LIVE — Trigger remediation circuit breaker; verify opted-in admins receive the settings deep link once with no model/user-supplied text.
 - [ ] `PUSH-016` · P0 · LIVE — Execute all Plex notification cases in `PLEX-050`–`PLEX-052` across multiple devices and verify exact preference separation.
-- [ ] `PUSH-017` · P0 · LIVE/UI — Tap every notification type from foreground, background, and terminated app; verify exact detail/approval/issue/action/users/Plex/settings destination and no duplicate navigation.
+- [ ] `PUSH-017` · P0 · LIVE/UI — Tap every notification type from foreground, background, and terminated app; verify exact detail/approval/issue/action/users/Plex/settings/Books-tab destination and no duplicate navigation.
 - [ ] `PUSH-018` · P1 · UI — Tap malformed payloads (missing/bad IDs, unknown type, wrong media type); verify safe no-op/fallback without opening an unrelated record.
 - [ ] `PUSH-019` · P0 · SEC — Put attacker-controlled text in usernames, titles, reports, agent output, and emails; verify lock-screen bodies remain server-authored templates and contain no secrets.
 - [ ] `PUSH-020` · P1 · LIVE — Fail one recipient among many; verify other sends complete and result/dead-token handling is per device.
 - [ ] `PUSH-021` · P1 · API — Verify 10-minute in-process dedupe suppresses duplicate source paths but a genuinely later event after the window sends again.
 - [ ] `PUSH-022` · P1 · CHAOS — Restart during fire-and-forget delivery or gateway timeout; verify app state remains correct, server does not block, and no false durable-delivery claim is shown.
 - [ ] `PUSH-023` · P1 · LIVE — Use self-test from preferences and admin per-user diagnostics; verify delivered/no-token/not-configured/partial/failure results and no test notification changes product badges.
+- [ ] `PUSH-024` · P1 · LIVE/UI — Tap a book request-decision notification (payload carries media_type book and no usable TMDB id); verify it opens the requester-facing Books tab — not a media detail route and not a silent no-op — from foreground, background, and terminated app.

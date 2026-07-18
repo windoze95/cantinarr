@@ -42,6 +42,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `AUTH-034` · P0 · UI — On native, enter host with no scheme, HTTP/HTTPS, surrounding whitespace, one/many trailing slashes, malformed scheme/host, 404, refusal, TLS failure, and timeout; verify deterministic normalization plus editable, non-secret recovery copy.
 - [ ] `AUTH-035` · P0 · UI/API — Paste connect links with missing/wrong scheme, host, token, duplicate parameters, invalid encoding, whitespace, expired/reused token, and hostile extra parameters; verify safe rejection before unintended connection/session creation.
 - [ ] `AUTH-036` · P0 · UI — Redeem equivalent valid `cantinarr://connect` links by native deep link and paste; verify identical normalized server/account/device outcome, one token consumption, and an already-authenticated app does not switch accounts silently.
+- [ ] `AUTH-037` · P1 · UI — Open a `cantinarr://passkeys` deep link cold-start and while running; verify an authenticated app whose connected server matches the link's `server` parameter (after normalization, or with the parameter absent) lands on the new-passkey settings screen, while a signed-out app or a mismatched server lands on login — never a silent no-op.
 
 ## Navigation, shell, setup checklist, and cross-platform layout
 

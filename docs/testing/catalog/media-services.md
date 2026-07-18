@@ -88,8 +88,8 @@ Run client-specific cases once for **each** of SABnzbd, qBittorrent, NZBGet, and
 - [ ] `DOWN-003` · P0 · LIVE — Pause and resume one active item per client; verify exact external item state and UI convergence.
 - [ ] `DOWN-004` · P0 · LIVE — Pause all and resume all per client; verify only the selected instance/client changes and commands are not repeated.
 - [ ] `DOWN-005` · P0 · LIVE — Remove a disposable item with data/files preserved; verify queue removal and data retention using that client's semantics.
-- [ ] `DOWN-006` · P0 · LIVE — Remove a disposable item with data/files deletion explicitly selected; verify confirmation and exact external deletion.
-- [ ] `DOWN-007` · P0 · UI — Cancel every remove dialog and verify no external mutation; delete-data must always default off.
+- [ ] `DOWN-006` · P0 · LIVE — Remove a disposable item with data/files deletion explicitly selected on SABnzbd, qBittorrent, and Transmission; verify confirmation and exact external deletion.
+- [ ] `DOWN-007` · P0 · UI — Cancel every remove dialog and verify no external mutation; where offered, delete-data must always default off.
 - [ ] `DOWN-008` · P0 · UI — Switch among multiple download clients while requests are in flight; verify queue/history/actions never target the previously selected instance.
 - [ ] `DOWN-009` · P1 · LIVE — Cover paused, queued, downloading, stalled, checking, seeding/post-processing, completed, warning, and failed statuses per applicable client; verify readable normalized labels.
 - [ ] `DOWN-010` · P1 · UI — Cover zero/unknown size, infinite/unknown ETA, zero speed, Unicode names, duplicate names with distinct IDs, and very large values; verify stable formatting and identity.
@@ -99,6 +99,7 @@ Run client-specific cases once for **each** of SABnzbd, qBittorrent, NZBGet, and
 - [ ] `DOWN-014` · P1 · LIVE — Verify WebSocket queue snapshots update rate/progress/state without duplicates, survive reconnect, and stop after leaving the module or forced auth loss from current-device revocation.
 - [ ] `DOWN-015` · P1 · SEC — Inspect URLs/logs/errors for client usernames, passwords, cookies, API keys, and torrent hashes where sensitive; verify appropriate scrubbing.
 - [ ] `DOWN-016` · P1 · UI — Verify queue/history tab state, pull-to-refresh, empty/error/retry, scroll restoration, and compact/wide layouts for every adapter without expecting nonexistent local filter/search.
+- [ ] `DOWN-017` · P1 · UI — Open the NZBGet remove dialog; verify it offers no delete-data checkbox, shows the hint that NZBGet removes the queue item only while downloaded files stay on disk, and confirming removal never requests file deletion.
 
 ## Tautulli
 
