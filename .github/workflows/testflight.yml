@@ -10,9 +10,10 @@ on:
       - "!app/android/**"
       - "!app/windows/**"
       - "!app/linux/**"
-      # Tests and dev tooling never change the shipped app — no build needed.
+      # Tests, dev tooling, and docs never change the shipped app — no build needed.
       - "!app/test/**"
       - "!app/tool/**"
+      - "!app/**/*.md"
       # Listing copy/screenshots sync via storelisting.yml — no build needed.
       - "!app/ios/fastlane/metadata/**"
       - "!app/ios/fastlane/screenshots/**"
