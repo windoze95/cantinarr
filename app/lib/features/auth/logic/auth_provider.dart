@@ -959,11 +959,15 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
   String _normalizeUrl(String url) {
     var normalized = url.trim();
-    if (!normalized.startsWith('http://') &&
-        !normalized.startsWith('https://')) {
+    final schemeProbe = normalized.toLowerCase();
+    if (schemeProbe.startsWith('http://')) {
+      normalized = 'http://${normalized.substring('http://'.length)}';
+    } else if (schemeProbe.startsWith('https://')) {
+      normalized = 'https://${normalized.substring('https://'.length)}';
+    } else {
       normalized = 'https://$normalized';
     }
-    if (normalized.endsWith('/')) {
+    while (normalized.endsWith('/')) {
       normalized = normalized.substring(0, normalized.length - 1);
     }
     return normalized;
