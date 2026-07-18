@@ -20,6 +20,7 @@ import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_releases_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
 import '../features/dashboard/ui/dashboard_tv_tab.dart';
+import '../features/dashboard/ui/requester_book_detail_screen.dart';
 import '../features/discover/data/tmdb_models.dart';
 import '../features/downloads/ui/downloads_history_screen.dart';
 import '../features/downloads/ui/downloads_module_shell.dart';
@@ -112,10 +113,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
         return '/dashboard/movies';
       }
+      // Requester book surfaces — the Books tab and the id-addressable book
+      // detail — require the books grant and degrade the same way without it.
       final hasChaptarrGrant = auth?.connection?.services.chaptarr ?? false;
       if (isAuthenticated &&
           !hasChaptarrGrant &&
-          _isWithinRoute(state.uri.path, '/dashboard/books')) {
+          (_isWithinRoute(state.uri.path, '/dashboard/books') ||
+              _isWithinRoute(state.uri.path, '/detail/book'))) {
         return '/dashboard/movies';
       }
       return null;
@@ -409,11 +413,24 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/detail/:type/:id',
-            redirect: (_, state) => _hasValidMediaDetailParameters(state)
-                ? null
-                : '/dashboard/movies',
+            redirect: (_, state) => _mediaDetailRedirect(state),
             builder: (context, state) {
               final type = state.pathParameters['type']!;
+              // Books are addressed by their (string) Chaptarr foreignBookId —
+              // the identity request rows store and decision push payloads
+              // carry — not a TMDB id.
+              if (type == 'book') {
+                final foreignId = state.pathParameters['id']?.trim() ?? '';
+                if (foreignId.isEmpty) {
+                  return const _InvalidRouteScreen(
+                    message: 'This book link is invalid.',
+                  );
+                }
+                return RequesterBookDetailScreen(
+                  foreignId: foreignId,
+                  titleHint: state.uri.queryParameters['title'],
+                );
+              }
               final id = _positiveIntParameter(state, 'id');
               if (id == null) {
                 return const _InvalidRouteScreen(
@@ -614,6 +631,18 @@ bool _hasValidMediaDetailParameters(GoRouterState state) {
   final type = state.pathParameters['type'];
   return (type == 'movie' || type == 'tv') &&
       _positiveIntParameter(state, 'id') != null;
+}
+
+/// Route-level guard for `/detail/:type/:id`. Books use a string foreign id,
+/// so the only malformed shape is a blank id — degrade to the Books tab (the
+/// requester book surface). Movie/TV keep the positive-TMDB-id validation and
+/// their movies-dashboard fallback.
+String? _mediaDetailRedirect(GoRouterState state) {
+  if (state.pathParameters['type'] == 'book') {
+    final id = state.pathParameters['id']?.trim() ?? '';
+    return id.isEmpty ? '/dashboard/books' : null;
+  }
+  return _hasValidMediaDetailParameters(state) ? null : '/dashboard/movies';
 }
 
 /// Defensive fallback for a malformed parameter if a future router version

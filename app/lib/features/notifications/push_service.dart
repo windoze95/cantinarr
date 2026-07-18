@@ -122,11 +122,11 @@ class PushService {
 
   /// Routes a tapped notification to the right screen from its custom payload:
   /// the approvals queue for `request_pending`; the media detail page for an
-  /// approval decision or a new-content alert (book decisions open the Books
-  /// tab instead — books have no TMDB id and no id-addressable detail route);
-  /// the agent approval queue for a pending fix; the issue thread for an
-  /// issue/decision update; and the remediation settings for the auto-dispatch
-  /// circuit-breaker notice.
+  /// approval decision or a new-content alert (a book decision opens the book
+  /// detail via its `foreign_id`, or the Books tab when an older server's
+  /// payload omits it); the agent approval queue for a pending fix; the issue
+  /// thread for an issue/decision update; and the remediation settings for the
+  /// auto-dispatch circuit-breaker notice.
   void _routeNotification(Object? arguments) {
     final data = _asStringMap(arguments);
     final type = data['type'] as String?;
@@ -154,13 +154,22 @@ class PushService {
       case 'new_episode':
         // Books never carry a TMDB id (the server sends tmdb_id 0; a book is
         // keyed on its Chaptarr foreignBookId, which newer servers include as
-        // foreign_id on decision payloads). The app has no id-addressable book
-        // detail route yet — the Books tab is a search surface — so a book
-        // decision lands on the requester-facing Books tab regardless of
-        // whether foreign_id is present. Movie/TV open media detail; an
+        // foreign_id on decision payloads). With a foreign_id, deep-link to
+        // the requester book detail; without one (old servers) the Books tab
+        // is the only reachable book surface. Movie/TV open media detail; an
         // unknown media_type keeps the movie fallback.
         if (data['media_type'] == 'book') {
-          router.push('/dashboard/books');
+          final foreignId = _asTrimmedString(data['foreign_id']);
+          if (foreignId == null) {
+            router.push('/dashboard/books');
+            return;
+          }
+          // The payload's title rides along so the detail screen can still
+          // name a book the library can't resolve (e.g. denied, never added).
+          final title = _asTrimmedString(data['title']);
+          final query =
+              title == null ? '' : '?title=${Uri.encodeComponent(title)}';
+          router.push('/detail/book/${Uri.encodeComponent(foreignId)}$query');
           return;
         }
         final tmdbId = _asInt(data['tmdb_id']);
@@ -187,6 +196,14 @@ class PushService {
     if (value is num) return value.toInt();
     if (value is String) return int.tryParse(value);
     return null;
+  }
+
+  /// The trimmed string form of a payload value, or null when it isn't a
+  /// non-blank string — so a malformed field degrades to the fallback route.
+  String? _asTrimmedString(Object? value) {
+    if (value is! String) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
   }
 
   /// Asks the backend to send a test push to this account's own devices and
