@@ -191,12 +191,15 @@ void main() {
     });
 
     // A book decision's custom payload is {type, tmdb_id: 0, media_type} from
-    // old servers, plus foreign_id (the Chaptarr foreignBookId) from newer
-    // ones — the server's passthrough forwards no decision/reason, and a book
-    // row stores tmdb_id 0. With no id-addressable book detail route, approved
-    // and denied both land on the requester-facing Books tab.
+    // old servers, plus foreign_id (the Chaptarr foreignBookId) and title from
+    // newer ones — the server's passthrough forwards no decision/reason, and a
+    // book row stores tmdb_id 0. Without a foreign_id there is no book
+    // identity to deep-link on, so approved and denied both land on the
+    // requester-facing Books tab.
     for (final decision in const ['approved', 'denied']) {
-      test('book request_decision ($decision) opens the Books tab', () async {
+      test(
+          'book request_decision ($decision) without a foreign_id opens '
+          'the Books tab', () async {
         final h = _Harness();
         await _emitNativeCall('onNotificationTap', {
           'type': 'request_decision',
@@ -209,11 +212,10 @@ void main() {
       });
     }
 
-    test('book request_decision with a foreign_id opens the Books tab',
+    test('book request_decision with a foreign_id opens the book detail',
         () async {
-      // Newer servers add foreign_id to book decision payloads. There is no
-      // id-addressable book detail route yet, so the additive field must not
-      // change (or break) the Books-tab routing.
+      // Newer servers add foreign_id (and title) to book decision payloads —
+      // the only identity a client can deep-link on (books store tmdb_id 0).
       final h = _Harness();
       await _emitNativeCall('onNotificationTap', {
         'type': 'request_decision',
@@ -221,7 +223,40 @@ void main() {
         'media_type': 'book',
         'foreign_id': '29749107',
       });
-      expect(h.router.pushed, ['/dashboard/books']);
+      expect(h.router.pushed, ['/detail/book/29749107']);
+    });
+
+    test('a book payload title rides along as an encoded query parameter',
+        () async {
+      // The detail screen uses the title to name a book the library can't
+      // resolve anymore (e.g. a denied request that was never added).
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'request_decision',
+        'tmdb_id': 0,
+        'media_type': 'book',
+        'foreign_id': '29749107',
+        'title': 'Dune Messiah',
+      });
+      expect(h.router.pushed, ['/detail/book/29749107?title=Dune%20Messiah']);
+    });
+
+    test('blank and non-string foreign_id values fall back to the Books tab',
+        () async {
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'request_decision',
+        'tmdb_id': 0,
+        'media_type': 'book',
+        'foreign_id': '  ',
+      });
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'request_decision',
+        'tmdb_id': 0,
+        'media_type': 'book',
+        'foreign_id': 29749107,
+      });
+      expect(h.router.pushed, ['/dashboard/books', '/dashboard/books']);
     });
 
     test('media_type book wins over a stray positive tmdb_id', () async {

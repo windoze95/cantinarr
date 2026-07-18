@@ -8,6 +8,7 @@ import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/features/ai_assistant/ui/codex_connection_screen.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
+import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
@@ -162,6 +163,43 @@ void main() {
     final (:router, container: _) = await _pumpRouter(tester, _booksState);
 
     router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    expect(router.routeInformationProvider.value.uri.path, '/dashboard/books');
+  });
+
+  testWidgets('book detail route requires the Chaptarr grant', (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/dashboard/movies',
+    );
+  });
+
+  testWidgets('book detail route resolves with the Chaptarr grant',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _booksState);
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/detail/book/29749107',
+    );
+    expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
+  });
+
+  testWidgets('a blank book detail id degrades to the Books tab',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _booksState);
+
+    // %20 decodes to a whitespace-only foreign id — malformed for a book.
+    router.go('/detail/book/%20');
     await tester.pumpAndSettle();
 
     expect(router.routeInformationProvider.value.uri.path, '/dashboard/books');

@@ -211,7 +211,7 @@ One authenticated shell hosts both module pages and secondary work screens over 
 
 ¹ Books appears only with a Chaptarr grant.
 
-`/login` is the only route outside the authenticated shell. Secondary routes inside it include `/assistant`, `/detail/:type/:id`, `/approvals`, `/issues`, `/issues/:id`, `/agent-actions`, `/agent-runs/:id`, `/settings/ai`, `/settings/chatgpt`, `/settings/...`, `/plex-guide`, and `/setup`.
+`/login` is the only route outside the authenticated shell. Secondary routes inside it include `/assistant`, `/detail/:type/:id` (movie/tv by TMDB id; `book` by Chaptarr foreign id, gated on the books grant — the target of book request-decision push taps), `/approvals`, `/issues`, `/issues/:id`, `/agent-actions`, `/agent-runs/:id`, `/settings/ai`, `/settings/chatgpt`, `/settings/...`, `/plex-guide`, and `/setup`.
 
 The router guard redirects unauthenticated users to `/login`, remembers safe internal deep-link targets through sign-in, centrally bounces non-admins from admin routes, and gates Books on the user's Chaptarr grant. Modules with multiple instances get an instance selector in the drawer/app bar.
 
