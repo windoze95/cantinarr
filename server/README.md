@@ -407,7 +407,7 @@ Notification categories (per-user preferences; admin-scoped ones are enforced in
 | `plex_access_request` | on | admins | a user shared their Plex email for a server invite (collapse-keyed per user; body says whether auto-invite already handled it) |
 | `plex_invite_sent` | on | requester | their Plex invite email went out (one-tap or auto) |
 
-Bodies are server-authored templates (untrusted text never hits the lock screen), sends are fire-and-forget with a 30s timeout, a 10-minute in-process dedupe window absorbs the overlap between queue polling and webhooks, and tokens the gateway reports dead are pruned automatically. Payloads carry deep-link data (`type`, `tmdb_id`/`issue_id`/`user_id`) the app routes on tap.
+Bodies are server-authored templates (untrusted text never hits the lock screen), sends are fire-and-forget with a 30s timeout, a 10-minute in-process dedupe window absorbs the overlap between queue polling and webhooks, and tokens the gateway reports dead are pruned automatically. Payloads carry deep-link data (`type`, `tmdb_id`/`issue_id`/`user_id`; book request decisions add `foreign_id`, the Chaptarr foreignBookId, since books store `tmdb_id` 0) the app routes on tap.
 
 ### Plex invites
 

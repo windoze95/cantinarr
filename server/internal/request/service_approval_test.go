@@ -394,6 +394,10 @@ func TestDenyRequest(t *testing.T) {
 	if ev.userID != uid || ev.data["decision"] != "denied" || ev.data["reason"] != "library full" {
 		t.Errorf("event = %+v, want denied with the reason", ev)
 	}
+	// foreign_id is book-only: a movie decision payload must not carry it.
+	if v, ok := ev.data["foreign_id"]; ok {
+		t.Errorf("event foreign_id = %v, want absent for a movie decision", v)
+	}
 
 	// The requester's own status now reads denied (nothing landed in any arr).
 	if st, err := s.GetUserStatus(uid, 550, "movie"); err != nil || st.Status != StatusDenied {
