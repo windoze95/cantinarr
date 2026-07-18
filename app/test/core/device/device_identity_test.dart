@@ -1,5 +1,8 @@
 import 'package:cantinarr/core/device/device_identity.dart';
 import 'package:cantinarr/core/storage/secure_storage.dart';
+import 'package:cantinarr/features/auth/data/auth_service.dart';
+import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Exercises [DeviceIdentityService]: the Apple model-name table, web
@@ -85,24 +88,38 @@ void main() {
       expect(data[StorageKeys.hardwareId], 'stable-id');
     });
 
-    test('survives a logout purge (which deliberately skips hardware_id)',
-        () async {
+    test('survives the real logout purge (which deliberately skips '
+        'hardware_id)', () async {
       final data = <String, String?>{};
       final original = await service(data).persistedId();
 
-      // Mirror AuthNotifier._clearStorage: every auth key is deleted on
-      // logout, but StorageKeys.hardwareId is deliberately not among them.
-      for (final key in [
-        StorageKeys.serverUrl,
-        StorageKeys.jwt,
-        StorageKeys.refreshToken,
-        StorageKeys.refreshTokenBackup,
-        StorageKeys.deviceId,
-        StorageKeys.sessionUser,
-        StorageKeys.sessionConnection,
-      ]) {
-        data.remove(key);
-      }
+      // Build the REAL AuthNotifier over the same fake storage so the purge
+      // below runs its actual _clearStorage routine, not a mirrored key list.
+      // Storage holds no auth keys yet, so restore settles without touching
+      // the network.
+      final container = ProviderContainer(overrides: [
+        storageServiceProvider.overrideWithValue(_FakeStorage(data)),
+        authServiceProvider.overrideWithValue(_NoNetworkAuthService()),
+      ]);
+      addTearDown(container.dispose);
+      await container.read(authProvider.future);
+
+      // A full session now sits in storage alongside the persisted id.
+      data.addAll({
+        StorageKeys.serverUrl: 'http://localhost',
+        StorageKeys.jwt: 'access',
+        StorageKeys.refreshToken: 'refresh',
+        StorageKeys.refreshTokenBackup: 'refresh',
+        StorageKeys.deviceId: 'dev-1',
+        StorageKeys.sessionUser: '{}',
+        StorageKeys.sessionConnection: '{}',
+      });
+
+      // The production purge path (session expiry / logout).
+      await container.read(authProvider.notifier).onAuthExpired();
+
+      expect(data.keys.toSet(), {StorageKeys.hardwareId},
+          reason: 'the purge must delete every auth key — and nothing else');
 
       // A fresh service (new session after re-login) sees the same id.
       expect(await service(data).persistedId(), original);
@@ -200,6 +217,18 @@ class _StubbedIdentityService extends DeviceIdentityService {
     if (failure != null) throw failure;
     return identity!;
   }
+}
+
+/// [AuthService] that fails loudly if the notifier ever reaches for the
+/// network — the logout-purge test must exercise storage only.
+class _NoNetworkAuthService extends AuthService {
+  @override
+  Future<AuthResponse> refreshToken(String serverUrl, String refreshToken) =>
+      throw StateError('unexpected network call: refreshToken');
+
+  @override
+  Future<ServerConfig> fetchConfig(String serverUrl, String accessToken) =>
+      throw StateError('unexpected network call: fetchConfig');
 }
 
 /// In-memory [StorageService] over a caller-owned map, with a read counter so

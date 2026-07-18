@@ -77,7 +77,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Full module** -- library with author drill-down, queue with Import Doctor, history, and wanted (missing / cutoff unmet).
 
 ### Downloads & Tautulli (admin)
-- **Unified download queue** across SABnzbd, qBittorrent, NZBGet, and Transmission: pause/resume all or per item, remove (optionally with data), speeds, ETAs -- live via WebSocket snapshots.
+- **Unified download queue** across SABnzbd, qBittorrent, NZBGet, and Transmission: pause/resume all or per item, remove (optionally with data; NZBGet removes the queue item only, files stay on disk), speeds, ETAs -- live via WebSocket snapshots.
 - **Tautulli** -- current Plex streams with quality/transcode badges, watch history, and top-stats.
 
 ### Issues & AI remediation
