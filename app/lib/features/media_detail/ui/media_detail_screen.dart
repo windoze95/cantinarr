@@ -193,68 +193,77 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                             padding: const EdgeInsets.symmetric(horizontal: 16),
                             child: AppPanel(
                               accentColor: AppTheme.accent,
-                              child: ListenableBuilder(
-                                listenable: _requestNotifier,
-                                builder: (_, __) => Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    RequestButton(
-                                      status: _requestNotifier.state.status,
-                                      isRequesting:
-                                          _requestNotifier.state.isRequesting,
-                                      error: _requestNotifier.state.error,
-                                      onRequest: () => _onRequest(),
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Wrap(
-                                      alignment: WrapAlignment.center,
-                                      crossAxisAlignment:
-                                          WrapCrossAlignment.center,
-                                      spacing: 6,
-                                      runSpacing: 4,
-                                      children: [
-                                        TextButton.icon(
-                                          onPressed: () => _showStatusSheet(
-                                            context,
-                                            state.title,
-                                            _requestNotifier.state.status,
-                                          ),
-                                          icon: const Icon(
-                                            Icons.info_outline_rounded,
-                                            size: 17,
-                                          ),
-                                          label: Text(
-                                            _requestNotifier.state.status.label,
-                                          ),
-                                        ),
-                                        if (_canReport(
-                                          _requestNotifier.state.status,
-                                        ))
+                              // Secondary actions land async (request status,
+                              // admin arr-link resolution), so the dock height
+                              // morphs instead of snapping when one appears.
+                              child: AnimatedSize(
+                                duration: const Duration(milliseconds: 220),
+                                curve: Curves.easeOutCubic,
+                                alignment: Alignment.topCenter,
+                                child: ListenableBuilder(
+                                  listenable: _requestNotifier,
+                                  builder: (_, __) => Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      RequestButton(
+                                        status: _requestNotifier.state.status,
+                                        isRequesting:
+                                            _requestNotifier.state.isRequesting,
+                                        error: _requestNotifier.state.error,
+                                        onRequest: () => _onRequest(),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Wrap(
+                                        alignment: WrapAlignment.center,
+                                        crossAxisAlignment:
+                                            WrapCrossAlignment.center,
+                                        spacing: 6,
+                                        runSpacing: 4,
+                                        children: [
                                           TextButton.icon(
-                                            onPressed: () =>
-                                                _onReportProblem(state),
-                                            icon: const Icon(
-                                              Icons.flag_outlined,
-                                              size: 17,
+                                            onPressed: () => _showStatusSheet(
+                                              context,
+                                              state.title,
+                                              _requestNotifier.state.status,
                                             ),
-                                            label: const Text(
-                                              'Report a problem',
-                                            ),
-                                          ),
-                                        if (_arrLink != null)
-                                          TextButton.icon(
-                                            onPressed: _openInArr,
                                             icon: const Icon(
-                                              Icons.open_in_new_rounded,
+                                              Icons.info_outline_rounded,
                                               size: 17,
                                             ),
                                             label: Text(
-                                              'Open in ${_arrLink!.moduleLabel}',
+                                              _requestNotifier
+                                                  .state.status.label,
                                             ),
                                           ),
-                                      ],
-                                    ),
-                                  ],
+                                          if (_canReport(
+                                            _requestNotifier.state.status,
+                                          ))
+                                            TextButton.icon(
+                                              onPressed: () =>
+                                                  _onReportProblem(state),
+                                              icon: const Icon(
+                                                Icons.flag_outlined,
+                                                size: 17,
+                                              ),
+                                              label: const Text(
+                                                'Report a problem',
+                                              ),
+                                            ),
+                                          if (_arrLink != null)
+                                            TextButton.icon(
+                                              onPressed: _openInArr,
+                                              icon: const Icon(
+                                                Icons.open_in_new_rounded,
+                                                size: 17,
+                                              ),
+                                              label: Text(
+                                                'Open in ${_arrLink!.moduleLabel}',
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
