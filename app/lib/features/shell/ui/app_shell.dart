@@ -567,18 +567,45 @@ class _AppShellState extends ConsumerState<AppShell>
             // Base layer: search bar + module content
             Column(
               children: [
-                // Search bar at top (hidden during AI mode)
-                if (showGlobalSearch) ...[
-                  if (mobile)
-                    SizeTransition(
-                      sizeFactor: _searchBarCurve,
-                      axisAlignment: -1,
-                      child: topBar,
-                    )
-                  else
-                    topBar,
-                ] else if (!desktop)
-                  secondaryTopBar,
+                // Search bar at top (hidden during AI mode). Navigating
+                // between module and pushed routes swaps this slot (search
+                // bar <-> secondary label bar, or nothing on desktop); the
+                // swap cross-fades and height-morphs so the chrome glides
+                // with the page transition below instead of snapping.
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    layoutBuilder: (currentChild, previousChildren) => Stack(
+                      alignment: Alignment.topCenter,
+                      children: [
+                        ...previousChildren,
+                        if (currentChild != null) currentChild,
+                      ],
+                    ),
+                    child: showGlobalSearch
+                        ? KeyedSubtree(
+                            key: const ValueKey('module-top-bar'),
+                            child: mobile
+                                ? SizeTransition(
+                                    sizeFactor: _searchBarCurve,
+                                    axisAlignment: -1,
+                                    child: topBar,
+                                  )
+                                : topBar,
+                          )
+                        : !desktop
+                            ? KeyedSubtree(
+                                key: const ValueKey('secondary-top-bar'),
+                                child: secondaryTopBar,
+                              )
+                            : const SizedBox.shrink(
+                                key: ValueKey('no-top-bar'),
+                              ),
+                  ),
+                ),
                 // Module content (includes its own bottom nav)
                 Expanded(
                   child: Stack(
