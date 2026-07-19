@@ -19,8 +19,10 @@ type Config struct {
 	DBPath     string
 	Port       int
 	ServerName string
-	// PublicURL is the trusted browser-facing origin used when Cantinarr installs
-	// server-managed arr webhooks. Empty falls back to the direct request origin;
+	// PublicURL is the trusted origin used to build the callback that
+	// Radarr/Sonarr POST webhooks to, so it must be resolvable and reachable
+	// from the arr containers themselves (cluster-internal origins are valid
+	// and often correct). Empty falls back to the direct request origin;
 	// forwarded headers are never trusted for callback credentials.
 	PublicURL string
 	// EncryptionKeyFile backs secrets-at-rest when CANTINARR_ENCRYPTION_KEY
