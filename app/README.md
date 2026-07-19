@@ -54,6 +54,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 
 ### Discover
 - **Movies / TV tabs** -- discovery rows plus live library rows from the user's default instances: Downloading Soon, Recently Downloaded, Airing Next.
+- **Cinematic title pages** -- movie/show detail opens under a full-bleed, unblurred backdrop hero: the image parallaxes at half scroll speed (with an iOS overscroll stretch-zoom and a settle-in on load), then hands off to a pinned marquee bar carrying the title and back control. Titles without artwork get a warm ambient-glow stage instead.
 - **Releases tab** -- a unified movie + episode release timeline with list and month-calendar views.
 - **Books tab** -- appears only for users with a Chaptarr grant: owned-aware book search with per-format request buttons (see Books).
 

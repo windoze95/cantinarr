@@ -11,7 +11,6 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
-import '../../../core/widgets/media_header.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
@@ -28,6 +27,7 @@ import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/ui/sonarr_series_detail_screen.dart';
 import '../logic/arr_deep_link.dart';
 import '../logic/media_detail_provider.dart';
+import 'media_hero.dart';
 import 'season_table.dart';
 
 /// Full detail screen for a movie or TV show.
@@ -146,31 +146,39 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
           );
         }
 
+        final size = MediaQuery.sizeOf(context);
+        final topPadding = MediaQuery.paddingOf(context).top;
         return Scaffold(
           body: CustomScrollView(
             slivers: [
-              // Back button
-              SliverAppBar(
-                backgroundColor: Colors.transparent,
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () => context.pop(),
+              // Cinematic hero: pinned, scroll-choreographed backdrop +
+              // poster + title that collapses into a marquee bar owning the
+              // back affordance (full-bleed; the detail content below it
+              // reads as a centered column on desktop).
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: MediaHeroDelegate(
+                  title: state.title,
+                  posterPath: state.posterPath,
+                  backdropPath: state.backdropPath,
+                  expandedExtent: MediaHeroDelegate.expandedExtentFor(
+                    viewportHeight: size.height,
+                    viewportWidth: size.width,
+                    hasBackdrop: state.backdropPath != null,
+                  ),
+                  collapsedExtent: MediaHeroDelegate.collapsedExtentFor(
+                    topPadding: topPadding,
+                  ),
+                  topPadding: topPadding,
+                  disableAnimations: MediaQuery.disableAnimationsOf(context),
+                  onBack: () => context.pop(),
                 ),
-                pinned: false,
-                floating: true,
               ),
 
               SliverToBoxAdapter(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Header with backdrop + poster (full-bleed; the detail
-                    // content below it reads as a centered column on desktop)
-                    MediaHeader(
-                      posterPath: state.posterPath,
-                      backdropPath: state.backdropPath,
-                      title: state.title,
-                    ),
                     const SizedBox(height: 16),
                     CenteredContent(
                       child: Column(
