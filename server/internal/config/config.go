@@ -112,12 +112,16 @@ func Load() (*Config, error) {
 	)
 
 	portStr := os.Getenv("CANTINARR_PORT")
-	if portStr == "" || isKubernetesServiceLinkPort(portStr) {
+	switch {
+	case portStr == "":
+		cfg.Port = 8585
+	case isKubernetesServiceLinkPort(portStr):
 		// Kubernetes injects CANTINARR_PORT=tcp://<service-ip>:<port> when a
 		// Service named cantinarr has service links enabled. It is not an app
 		// setting, so retain the default listen port.
+		log.Printf("CANTINARR_PORT=%q is a Kubernetes service link, not a port setting; listening on the default port 8585", portStr)
 		cfg.Port = 8585
-	} else {
+	default:
 		p, err := strconv.Atoi(portStr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid CANTINARR_PORT: %w", err)

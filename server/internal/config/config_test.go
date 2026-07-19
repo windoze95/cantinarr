@@ -107,11 +107,13 @@ func TestLoadPort(t *testing.T) {
 		{name: "numeric override", value: "8586", want: 8586},
 		{name: "Kubernetes IPv4 service link", value: "tcp://10.43.161.118:8585", serviceHost: "10.43.161.118", servicePort: "8585", want: 8585},
 		{name: "Kubernetes IPv6 service link", value: "tcp://[fd00::1]:8585", serviceHost: "fd00::1", servicePort: "8585", want: 8585},
+		{name: "numeric override beside service link companions", value: "8586", serviceHost: "10.43.161.118", servicePort: "8585", want: 8586},
 		{name: "invalid value", value: "not-a-port", wantErr: true},
 		{name: "malformed TCP URI", value: "tcp://localhost:not-a-port", wantErr: true},
 		{name: "non-service TCP URI", value: "tcp://example.com:9999", wantErr: true},
 		{name: "manual IP TCP URI", value: "tcp://127.0.0.1:9000", wantErr: true},
-		{name: "mismatched service link", value: "tcp://10.43.161.119:8585", serviceHost: "10.43.161.118", servicePort: "8585", wantErr: true},
+		{name: "mismatched service link host", value: "tcp://10.43.161.119:8585", serviceHost: "10.43.161.118", servicePort: "8585", wantErr: true},
+		{name: "mismatched service link port", value: "tcp://10.43.161.118:8585", serviceHost: "10.43.161.118", servicePort: "9999", wantErr: true},
 	}
 
 	for _, tt := range tests {
