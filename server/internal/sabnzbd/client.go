@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -56,7 +57,17 @@ func (c *Client) call(params url.Values, out interface{}) error {
 	if err != nil {
 		return fmt.Errorf("sabnzbd read response: %w", err)
 	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		location := redactSecret(resp.Header.Get("Location"), c.apiKey)
+		return fmt.Errorf("sabnzbd returned redirect status %d to %q (redirects are not followed; use the service's final URL)", resp.StatusCode, location)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Keep the body's explanation: SABnzbd's hostname verification — which
+		// rejects Docker/k8s service names it doesn't know — answers 403 with
+		// the actionable "Access denied - Hostname verification failed" text.
+		if excerpt := c.bodyExcerpt(body); excerpt != "" {
+			return fmt.Errorf("sabnzbd returned status %d: %s", resp.StatusCode, excerpt)
+		}
 		return fmt.Errorf("sabnzbd returned status %d", resp.StatusCode)
 	}
 
@@ -74,10 +85,34 @@ func (c *Client) call(params url.Values, out interface{}) error {
 
 	if out != nil {
 		if err := json.Unmarshal(body, out); err != nil {
+			// A 200 that isn't JSON at all is usually an HTML page (wrong port,
+			// or a denial served with 200); its text beats "invalid character".
+			if excerpt := c.bodyExcerpt(body); excerpt != "" && !json.Valid(body) {
+				return fmt.Errorf("sabnzbd returned an unexpected response: %s", excerpt)
+			}
 			return fmt.Errorf("sabnzbd decode response: %w", err)
 		}
 	}
 	return nil
+}
+
+// htmlTagPattern strips markup from error-page bodies before excerpting.
+var htmlTagPattern = regexp.MustCompile(`<[^>]*>`)
+
+// bodyExcerpt condenses an error-response body into a short, single-line,
+// secret-free excerpt so actionable upstream messages (e.g. SABnzbd's
+// hostname-verification denial) survive into the error.
+func (c *Client) bodyExcerpt(body []byte) string {
+	text := string(body)
+	if strings.Contains(text, "<") {
+		text = htmlTagPattern.ReplaceAllString(text, " ")
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	text = redactSecret(text, c.apiKey)
+	if len(text) > 200 {
+		text = text[:200] + "..."
+	}
+	return text
 }
 
 // Version returns the SABnzbd version; used as the connection test.

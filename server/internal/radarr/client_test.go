@@ -1,12 +1,43 @@
 package radarr
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 )
+
+type failingTransport struct{ err error }
+
+func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
+
+// TestTransportErrorOmitsHost pins the topology-privacy property: transport
+// failures embed the full request URL (and DNS errors repeat the hostname),
+// and these errors surface to requesters through request failures — so the
+// client must summarize them host-free.
+func TestTransportErrorOmitsHost(t *testing.T) {
+	dnsFailure := &net.OpError{Op: "dial", Err: &net.DNSError{Err: "no such host", Name: "radarr-internal"}}
+	c := NewClient("http://radarr-internal:7878", "key")
+	c.httpClient = &http.Client{Transport: failingTransport{dnsFailure}}
+
+	if err := c.AddMovie(&AddMovieRequest{}); err == nil {
+		t.Fatal("AddMovie succeeded against a failing transport")
+	} else if msg := err.Error(); strings.Contains(msg, "radarr-internal") || strings.Contains(msg, "7878") {
+		t.Errorf("AddMovie error %q names the host", msg)
+	} else if !strings.Contains(msg, "could not resolve host") {
+		t.Errorf("AddMovie error %q lacks the failure summary", msg)
+	}
+
+	if _, err := c.LookupByTMDB(603); err == nil {
+		t.Fatal("LookupByTMDB succeeded against a failing transport")
+	} else if msg := err.Error(); strings.Contains(msg, "radarr-internal") || strings.Contains(msg, "7878") {
+		t.Errorf("LookupByTMDB error %q names the host", msg)
+	} else if !strings.Contains(msg, "radarr GET /api/v3/movie/lookup") {
+		t.Errorf("LookupByTMDB error %q does not identify the call", msg)
+	}
+}
 
 func TestClientDoesNotFollowRedirects(t *testing.T) {
 	var redirectedRequests atomic.Int32

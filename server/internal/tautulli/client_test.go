@@ -51,6 +51,27 @@ func TestCallSendsCmdAndAPIKey(t *testing.T) {
 // TestGetActivityToleratesStringNumbers pins the flexInt mapping: Tautulli
 // encodes many numeric fields as strings (sometimes empty or junk), and the
 // client must map every session anyway.
+// TestRedirectErrorNamesLocationRedacted pins that a refused redirect reports
+// where Tautulli tried to send us with the apikey query parameter redacted —
+// Tautulli echoes the request query into the redirect Location.
+func TestRedirectErrorNamesLocationRedacted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://tautulli.internal/api/v2?apikey=tautulli-api-key&cmd=get_server_info", http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewClient(srv.URL, "tautulli-api-key").GetServerInfo()
+	if err == nil || !strings.Contains(err.Error(), "redirects are not followed") {
+		t.Fatalf("redirect error = %v, want a redirect explanation", err)
+	}
+	if !strings.Contains(err.Error(), "https://tautulli.internal/api/v2") {
+		t.Errorf("error %q does not name the Location", err.Error())
+	}
+	if strings.Contains(err.Error(), "tautulli-api-key") {
+		t.Errorf("error %q echoes the API key", err.Error())
+	}
+}
+
 func TestGetActivityToleratesStringNumbers(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("cmd"); got != "get_activity" {

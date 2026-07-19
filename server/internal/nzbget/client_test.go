@@ -142,6 +142,23 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 // TestEditQueueFallsBackToLegacySignature pins the v16+/pre-v16 shim: the
 // modern 3-parameter editqueue is tried first, and on an RPC error the legacy
 // 4-parameter signature (with the Offset param) is used.
+// TestRedirectErrorNamesLocation pins that a refused redirect reports where
+// the service tried to send us, so scheme misconfigurations are self-diagnosing.
+func TestRedirectErrorNamesLocation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://nzbget.internal/jsonrpc", http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewClient(srv.URL, "user", "password").Version()
+	if err == nil || !strings.Contains(err.Error(), "https://nzbget.internal/jsonrpc") {
+		t.Fatalf("redirect error = %v, want the Location named", err)
+	}
+	if strings.Contains(err.Error(), "password") {
+		t.Errorf("error %q echoes credentials", err.Error())
+	}
+}
+
 func TestEditQueueFallsBackToLegacySignature(t *testing.T) {
 	var mu sync.Mutex
 	var calls []rpcRequest

@@ -111,6 +111,15 @@ func (c *Client) call(method string, args interface{}, out interface{}) error {
 	if resp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("transmission: invalid credentials")
 	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return fmt.Errorf("transmission returned redirect status %d to %q (redirects are not followed; use the service's final URL)", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		// The RPC path is appended to the base URL, so a 404 almost always
+		// means the admin pasted the web UI URL (…/transmission or
+		// …/transmission/web) or a custom rpc-url install.
+		return fmt.Errorf("transmission returned status 404 (not the RPC endpoint — enter just scheme://host:port; Cantinarr appends /transmission/rpc)")
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("transmission returned status %d", resp.StatusCode)
 	}

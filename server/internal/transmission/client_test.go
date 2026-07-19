@@ -145,6 +145,33 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 // TestRemoveTorrentsGuardsEmptyList pins the destructive-op guard: an empty
 // hash list must be rejected client-side, because a bare torrent-remove would
 // remove every torrent Transmission knows.
+// TestNotFoundExplainsRPCPathShape pins the pasted-web-UI-URL failure: the
+// RPC path is appended to the base URL, so a 404 names the expected shape
+// instead of leaving a bare status number.
+func TestNotFoundExplainsRPCPathShape(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+
+	_, err := NewClient(srv.URL+"/transmission/web", "", "").SessionGet()
+	if err == nil || !strings.Contains(err.Error(), "Cantinarr appends /transmission/rpc") {
+		t.Fatalf("404 error = %v, want the expected-URL-shape explanation", err)
+	}
+}
+
+// TestRedirectErrorNamesLocation pins that a refused redirect reports where
+// the daemon tried to send us, so scheme misconfigurations are self-diagnosing.
+func TestRedirectErrorNamesLocation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://transmission.internal/transmission/rpc", http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewClient(srv.URL, "", "").SessionGet()
+	if err == nil || !strings.Contains(err.Error(), "https://transmission.internal/transmission/rpc") {
+		t.Fatalf("redirect error = %v, want the Location named", err)
+	}
+}
+
 func TestRemoveTorrentsGuardsEmptyList(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

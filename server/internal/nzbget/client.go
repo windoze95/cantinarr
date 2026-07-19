@@ -71,6 +71,9 @@ func (c *Client) call(method string, params []interface{}, out interface{}) erro
 	if resp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("nzbget: invalid credentials")
 	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return fmt.Errorf("nzbget returned redirect status %d to %q (redirects are not followed; use the service's final URL)", resp.StatusCode, resp.Header.Get("Location"))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("nzbget returned status %d", resp.StatusCode)
 	}

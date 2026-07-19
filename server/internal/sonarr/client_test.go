@@ -3,6 +3,7 @@ package sonarr
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,36 @@ import (
 	"testing"
 	"time"
 )
+
+type failingTransport struct{ err error }
+
+func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
+
+// TestTransportErrorOmitsHost pins the topology-privacy property: transport
+// failures embed the full request URL (and DNS errors repeat the hostname),
+// and these errors surface to requesters through request failures — so the
+// client must summarize them host-free.
+func TestTransportErrorOmitsHost(t *testing.T) {
+	dnsFailure := &net.OpError{Op: "dial", Err: &net.DNSError{Err: "no such host", Name: "sonarr-internal"}}
+	c := NewClient("http://sonarr-internal:8989", "key")
+	c.httpClient = &http.Client{Transport: failingTransport{dnsFailure}}
+
+	if err := c.AddSeries(&AddSeriesRequest{}); err == nil {
+		t.Fatal("AddSeries succeeded against a failing transport")
+	} else if msg := err.Error(); strings.Contains(msg, "sonarr-internal") || strings.Contains(msg, "8989") {
+		t.Errorf("AddSeries error %q names the host", msg)
+	} else if !strings.Contains(msg, "could not resolve host") {
+		t.Errorf("AddSeries error %q lacks the failure summary", msg)
+	}
+
+	if _, err := c.LookupByTVDB(1234); err == nil {
+		t.Fatal("LookupByTVDB succeeded against a failing transport")
+	} else if msg := err.Error(); strings.Contains(msg, "sonarr-internal") || strings.Contains(msg, "8989") {
+		t.Errorf("LookupByTVDB error %q names the host", msg)
+	} else if !strings.Contains(msg, "sonarr GET /api/v3/series/lookup") {
+		t.Errorf("LookupByTVDB error %q does not identify the call", msg)
+	}
+}
 
 func TestClientDoesNotFollowRedirects(t *testing.T) {
 	var redirectedRequests atomic.Int32

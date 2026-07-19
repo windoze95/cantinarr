@@ -61,7 +61,14 @@ func (h *Handler) ConfigureWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// arrConfigurationClient errors contain method/path/status only, never a
 		// response body or the request payload carrying the callback credential.
-		http.Error(w, fmt.Sprintf(`{"error":"failed to configure %s webhook: %s"}`, inst.ServiceType, err), http.StatusBadGateway)
+		// A 400 on the notification save usually means the arr tested the
+		// webhook and could not reach the callback — the one URL that must be
+		// reachable from the arr's own network, not from browsers.
+		hint := ""
+		if strings.Contains(err.Error(), "status 400") {
+			hint = " (the arr tests the webhook when saving; check that the callback URL derived from CANTINARR_PUBLIC_URL is reachable from the arr's own network)"
+		}
+		http.Error(w, fmt.Sprintf(`{"error":"failed to configure %s webhook: %s%s"}`, inst.ServiceType, err, hint), http.StatusBadGateway)
 		return
 	}
 	if err := h.store.PromoteWebhookToken(instanceID, token); err != nil {
