@@ -395,6 +395,16 @@ func TestOpenAIToolSchemasUseSupportedObjectRoots(t *testing.T) {
 	if !seenGrabRelease {
 		t.Fatal("serialized OpenAI request omitted grab_release")
 	}
+	// The sanitizer must strip a copy, never the canonical schema: Gemini and
+	// native MCP clients still rely on grab_release's root oneOf.
+	for _, tool := range adminTools {
+		if tool.Name != "grab_release" {
+			continue
+		}
+		if _, found := tool.InputSchema["oneOf"]; !found {
+			t.Error("toOpenAITools mutated the canonical grab_release schema: root oneOf removed")
+		}
+	}
 }
 
 func TestOpenAIValidationOmitsUnsupportedReasoningField(t *testing.T) {
