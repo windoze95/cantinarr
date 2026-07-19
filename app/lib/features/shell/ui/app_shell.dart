@@ -1221,38 +1221,46 @@ class _DrawerItem extends StatelessWidget {
           selected: e2eWebSemanticsEnabled ? selected : null,
           excludeSemantics: e2eWebSemanticsEnabled,
           onTap: e2eWebSemanticsEnabled ? onTap : null,
-          child: ListTile(
-            leading: AnimatedContainer(
-              duration: AppTheme.motionFast,
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: selected
-                    ? AppTheme.accent.withValues(alpha: 0.14)
-                    : AppTheme.surfaceVariant.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+          // Ink (ripple/hover) must find a Material *inside* the scrolling
+          // list; otherwise it paints on the sidebar-level Material and
+          // escapes the list's clip, bleeding over the fixed rows above.
+          child: Material(
+            type: MaterialType.transparency,
+            child: ListTile(
+              leading: AnimatedContainer(
+                duration: AppTheme.motionFast,
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? AppTheme.accent.withValues(alpha: 0.14)
+                      : AppTheme.surfaceVariant.withValues(alpha: 0.7),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+                ),
+                child: Icon(
+                  icon,
+                  size: 20,
+                  color: selected ? AppTheme.accent : AppTheme.textSecondary,
+                ),
               ),
-              child: Icon(
-                icon,
-                size: 20,
-                color: selected ? AppTheme.accent : AppTheme.textSecondary,
+              title: Text(
+                title,
+                style: TextStyle(
+                  color:
+                      selected ? AppTheme.textPrimary : AppTheme.textSecondary,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  letterSpacing: selected ? 0.05 : 0,
+                ),
               ),
-            ),
-            title: Text(
-              title,
-              style: TextStyle(
-                color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                letterSpacing: selected ? 0.05 : 0,
+              trailing:
+                  badgeCount > 0 ? _CountPill(count: badgeCount) : trailing,
+              selected: selected,
+              selectedTileColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
               ),
+              onTap: onTap,
             ),
-            trailing: badgeCount > 0 ? _CountPill(count: badgeCount) : trailing,
-            selected: selected,
-            selectedTileColor: Colors.transparent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-            ),
-            onTap: onTap,
           ),
         ),
       ),
@@ -1308,30 +1316,37 @@ class _DrawerSubItem extends StatelessWidget {
         selected: e2eWebSemanticsEnabled ? selected : null,
         excludeSemantics: e2eWebSemanticsEnabled,
         onTap: e2eWebSemanticsEnabled ? onTap : null,
-        child: ListTile(
-          dense: true,
-          contentPadding: const EdgeInsets.only(left: 13, right: 12),
-          minLeadingWidth: 0,
-          horizontalTitleGap: 11,
-          leading: Icon(
-            selected ? page.activeIcon : page.icon,
-            size: 18,
-            color: selected ? AppTheme.signal : AppTheme.textMuted,
-          ),
-          title: Text(
-            page.label,
-            style: TextStyle(
-              fontSize: 13,
-              color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        // The selected pill (selectedTileColor) is painted as ink on the
+        // nearest Material. That Material must live *inside* the scrolling
+        // list; otherwise the pill paints at the sidebar level, escaping the
+        // list's clip and bleeding across the fixed rows while scrolling.
+        child: Material(
+          type: MaterialType.transparency,
+          child: ListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.only(left: 13, right: 12),
+            minLeadingWidth: 0,
+            horizontalTitleGap: 11,
+            leading: Icon(
+              selected ? page.activeIcon : page.icon,
+              size: 18,
+              color: selected ? AppTheme.signal : AppTheme.textMuted,
             ),
+            title: Text(
+              page.label,
+              style: TextStyle(
+                fontSize: 13,
+                color: selected ? AppTheme.textPrimary : AppTheme.textSecondary,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+            selected: selected,
+            selectedTileColor: AppTheme.signal.withValues(alpha: 0.075),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+            ),
+            onTap: onTap,
           ),
-          selected: selected,
-          selectedTileColor: AppTheme.signal.withValues(alpha: 0.075),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
-          ),
-          onTap: onTap,
         ),
       ),
     );
