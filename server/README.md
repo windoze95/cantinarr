@@ -276,7 +276,8 @@ POST   /api/instances/test                   # admin: dry-run connectivity check
 PUT|DELETE /api/instances/{instanceID}       # admin: update/delete
 GET|PUT /api/instances/{instanceID}/users    # admin: which users are pinned/assigned here
 POST   /api/instances/{instanceID}/webhook   # admin: rotate credentials and upsert a managed arr webhook
-ANY    /api/instances/{instanceID}/*         # proxy to the instance's own API; JSON secrets are redacted
+ANY    /api/instances/{instanceID}/*         # proxy to the instance's own API; JSON secrets are redacted,
+                                             # and upstream redirects are remapped onto this route (off-origin ones become 502)
 ```
 The proxy allows read-only Radarr/Sonarr browsing (library, queue, history, wanted, calendar) for regular users; writes, commands, interactive search, config, and all non-arr services require admin. Requesters are bound to their own effective instance -- their pin, or the deterministic global default/fallback -- exactly as `/api/config` reports it; a sibling instance the admin has hidden cannot be reached by guessing its ID, and instance authorization is classified from stored metadata so an undecryptable secret can never widen access. JSON responses are bounded and recursively scrubbed for credential fields and secret-bearing URL query parameters before they reach any client. An encoded, malformed, streaming, or oversized JSON response fails closed rather than bypassing that scrubber.
 

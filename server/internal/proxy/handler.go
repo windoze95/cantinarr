@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -110,7 +111,10 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 			// bypass the response sanitizer.
 			req.Header.Set("Accept-Encoding", "identity")
 		},
-		ModifyResponse: sanitizeProxyTransportResponse,
+		ModifyResponse: func(resp *http.Response) error {
+			remapUpstreamRedirect(resp, target, stripPrefix)
+			return sanitizeProxyTransportResponse(resp)
+		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			// ModifyResponse errors are intentionally opaque: an upstream parse
 			// error must never reflect the response body (and any embedded secret)
@@ -129,6 +133,79 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 	// through verbatim.
 	w.Header().Del("Content-Type")
 	proxy.ServeHTTP(w, r)
+}
+
+// remapUpstreamRedirect rewrites a 3xx Location back onto the instance proxy
+// route (/api/instances/{id}/...) so clients follow redirects through
+// Cantinarr — the upstream origin (e.g. http://radarr:7878) may be resolvable
+// only by the server, and a root-relative Location would resolve against the
+// Cantinarr origin without the proxy prefix. A redirect that leaves the
+// instance URL's origin (or escapes its base path) cannot be served through
+// the proxy, so it is replaced with a diagnosable 502 instead of handing
+// clients an address they cannot reach.
+func remapUpstreamRedirect(resp *http.Response, target *url.URL, stripPrefix string) {
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		return
+	}
+	location := strings.TrimSpace(resp.Header.Get("Location"))
+	if location == "" {
+		return
+	}
+	parsed, err := url.Parse(location)
+	if err != nil {
+		replaceWithOffOriginRedirectError(resp)
+		return
+	}
+	if resp.Request == nil || resp.Request.URL == nil {
+		replaceWithOffOriginRedirectError(resp)
+		return
+	}
+	absolute := resp.Request.URL.ResolveReference(parsed)
+	if !strings.EqualFold(absolute.Scheme, target.Scheme) || !strings.EqualFold(absolute.Host, target.Host) {
+		replaceWithOffOriginRedirectError(resp)
+		return
+	}
+	basePath := strings.TrimRight(target.Path, "/")
+	if basePath != "" && !strings.HasPrefix(absolute.Path, basePath) {
+		replaceWithOffOriginRedirectError(resp)
+		return
+	}
+	mapped := *absolute
+	mapped.Scheme = ""
+	mapped.Host = ""
+	mapped.User = nil
+	mapped.Path = joinURLPath(stripPrefix, strings.TrimPrefix(absolute.Path, basePath))
+	mapped.RawPath = ""
+	resp.Header.Set("Location", mapped.String())
+	// Redirect bodies are decoration (clients act on Location) and typically
+	// embed the upstream origin — the very thing the remap keeps private.
+	if resp.Body != nil {
+		resp.Body.Close()
+	}
+	resp.Body = http.NoBody
+	resp.ContentLength = 0
+	resp.TransferEncoding = nil
+	resp.Header.Del("Content-Type")
+	resp.Header.Set("Content-Length", "0")
+}
+
+// replaceWithOffOriginRedirectError swaps an unfollowable redirect for a 502
+// the client can act on. The message deliberately omits the redirect target:
+// naming another host would hand arr:browse users the very topology detail
+// the proxy exists to contain, and admins can reproduce the redirect with the
+// instance connection test.
+func replaceWithOffOriginRedirectError(resp *http.Response) {
+	if resp.Body != nil {
+		resp.Body.Close()
+	}
+	const body = `{"error":"upstream redirected outside the instance URL origin; check the instance URL, its URL base, and any proxy in front of it"}`
+	resp.StatusCode = http.StatusBadGateway
+	resp.Status = http.StatusText(http.StatusBadGateway)
+	resp.Header = http.Header{"Content-Type": []string{"application/json"}}
+	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	resp.Body = io.NopCloser(strings.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.TransferEncoding = nil
 }
 
 // sanitizeProxyTransportResponse applies the content scrubber and then removes

@@ -232,6 +232,115 @@ func TestJoinURLPathPreservesInstanceBasePath(t *testing.T) {
 }
 
 // INST-018: Nested proxy JSON and secret-bearing URLs are recursively scrubbed.
+// noFollowClient returns redirects to the caller instead of chasing them, so
+// tests can assert on the Location the app would actually receive.
+func noFollowClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// Upstream redirects must come back on the proxy route: clients cannot
+// resolve the upstream origin (cluster-internal names like radarr:7878), and
+// a root-relative Location would resolve against the Cantinarr origin without
+// the /api/instances/{id} prefix.
+func TestInstanceProxyRemapsSameOriginRedirects(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/absolute":
+			// The proxy sets the upstream Host, so this is the instance URL's
+			// own origin — the shape a Host-derived fronting redirect takes.
+			http.Redirect(w, r, "http://"+r.Host+"/api/v3/system/status?page=2", http.StatusFound)
+		case "/relative":
+			w.Header().Set("Location", "/login")
+			w.WriteHeader(http.StatusMovedPermanently)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	proxyURL, instanceID := startTestProxy(t, upstream)
+
+	resp, err := noFollowClient().Get(proxyURL + "/api/instances/" + instanceID + "/absolute")
+	if err != nil {
+		t.Fatalf("GET absolute: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("absolute redirect status = %d, want 302", resp.StatusCode)
+	}
+	want := "/api/instances/" + instanceID + "/api/v3/system/status?page=2"
+	if got := resp.Header.Get("Location"); got != want {
+		t.Errorf("absolute Location = %q, want %q", got, want)
+	}
+	// http.Redirect's HTML body names the upstream origin; it must not pass.
+	if len(body) != 0 {
+		t.Errorf("redirect body was not dropped: %q", body)
+	}
+
+	resp, err = noFollowClient().Get(proxyURL + "/api/instances/" + instanceID + "/relative")
+	if err != nil {
+		t.Fatalf("GET relative: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMovedPermanently {
+		t.Fatalf("relative redirect status = %d, want 301", resp.StatusCode)
+	}
+	want = "/api/instances/" + instanceID + "/login"
+	if got := resp.Header.Get("Location"); got != want {
+		t.Errorf("relative Location = %q, want %q", got, want)
+	}
+}
+
+// A redirect that leaves the instance URL's origin cannot be served through
+// the proxy; clients get a diagnosable 502 that does not name the target —
+// that would hand arr:browse users the topology detail the proxy contains.
+func TestInstanceProxyBlocksOffOriginRedirects(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://internal-sso.invalid/login", http.StatusFound)
+	})
+	proxyURL, instanceID := startTestProxy(t, upstream)
+
+	resp, err := noFollowClient().Get(proxyURL + "/api/instances/" + instanceID + "/api/v3/queue")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", resp.StatusCode, body)
+	}
+	if resp.Header.Get("Location") != "" {
+		t.Errorf("Location header survived: %q", resp.Header.Get("Location"))
+	}
+	if bytes.Contains(body, []byte("internal-sso.invalid")) {
+		t.Errorf("502 body names the redirect target: %s", body)
+	}
+	if !bytes.Contains(body, []byte("instance URL")) {
+		t.Errorf("502 body is not diagnosable: %s", body)
+	}
+}
+
+// A same-host redirect that escapes the instance's base path is equally
+// unservable through the proxy (the mapped path would point at a different
+// upstream resource).
+func TestInstanceProxyBlocksRedirectsEscapingBasePath(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/login")
+		w.WriteHeader(http.StatusFound)
+	})
+	proxyURL, instanceID := startTestProxyWithBasePath(t, upstream, "/sonarr")
+
+	resp, err := noFollowClient().Get(proxyURL + "/api/instances/" + instanceID + "/api/v3/queue")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+}
+
 func TestInstanceProxyRedactsNestedSecretsAndURLQueries(t *testing.T) {
 	const (
 		objectSecret        = "object-secret-value"

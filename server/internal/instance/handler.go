@@ -486,6 +486,11 @@ func validateArrURL(baseURL, apiKey, apiVersion string) error {
 	if resp.StatusCode == 401 {
 		return fmt.Errorf("invalid API key")
 	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// Admin-only surface: naming the Location makes http→https fronting
+		// and URL-base redirects self-diagnosing from the connection test.
+		return fmt.Errorf("server returned redirect status %d to %q (redirects are not followed; use the service's final URL)", resp.StatusCode, resp.Header.Get("Location"))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
