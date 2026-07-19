@@ -355,6 +355,58 @@ func TestOpenAIInteractiveFinalIterationKeepsToolChoiceWithTools(t *testing.T) {
 	}
 }
 
+func TestOpenAIToolSchemasUseSupportedObjectRoots(t *testing.T) {
+	adminTools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
+	params := openAIInteractiveParams(
+		"gpt-5.5",
+		[]openai.ChatCompletionMessageParamUnion{openai.UserMessage("hello")},
+		toOpenAITools(adminTools),
+		false,
+	)
+	body, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Tools []struct {
+			Function struct {
+				Name       string         `json:"name"`
+				Parameters map[string]any `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	seenGrabRelease := false
+	for _, tool := range decoded.Tools {
+		if tool.Function.Name == "grab_release" {
+			seenGrabRelease = true
+		}
+		if tool.Function.Parameters["type"] != "object" {
+			t.Errorf("tool %q parameters must have type object", tool.Function.Name)
+		}
+		for _, keyword := range []string{"oneOf", "anyOf", "allOf", "enum", "const", "not"} {
+			if _, found := tool.Function.Parameters[keyword]; found {
+				t.Errorf("tool %q has unsupported top-level %s", tool.Function.Name, keyword)
+			}
+		}
+	}
+	if !seenGrabRelease {
+		t.Fatal("serialized OpenAI request omitted grab_release")
+	}
+	// The sanitizer must strip a copy, never the canonical schema: Gemini and
+	// native MCP clients still rely on grab_release's root oneOf.
+	for _, tool := range adminTools {
+		if tool.Name != "grab_release" {
+			continue
+		}
+		if _, found := tool.InputSchema["oneOf"]; !found {
+			t.Error("toOpenAITools mutated the canonical grab_release schema: root oneOf removed")
+		}
+	}
+}
+
 func TestOpenAIValidationOmitsUnsupportedReasoningField(t *testing.T) {
 	params := openAINextTurnParams("gpt-4.1", TurnParams{
 		DisableReasoning: true,

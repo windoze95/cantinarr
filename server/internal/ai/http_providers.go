@@ -331,9 +331,16 @@ func openAIMessageToTranscript(message openAIMessage) transcriptMessage {
 func toOpenAITools(tools []mcp.Tool) []openai.ChatCompletionToolUnionParam {
 	out := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
 	for _, t := range tools {
+		parameters := make(openai.FunctionParameters, len(t.InputSchema))
+		for key, value := range t.InputSchema {
+			parameters[key] = value
+		}
+		for _, key := range []string{"oneOf", "anyOf", "allOf", "enum", "const", "not"} {
+			delete(parameters, key)
+		}
 		fn := openai.FunctionDefinitionParam{
 			Name:       t.Name,
-			Parameters: openai.FunctionParameters(t.InputSchema),
+			Parameters: parameters,
 		}
 		if t.Description != "" {
 			fn.Description = openai.String(t.Description)
