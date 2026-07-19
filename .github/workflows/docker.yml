@@ -131,6 +131,9 @@ jobs:
           '
 
       - name: Build and push
+        # Fork PRs run with a read-only GITHUB_TOKEN, so pushing the pr-N tag
+        # is denied; the smoke-test builds above still prove both Dockerfiles.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/build-push-action@v6
         with:
           context: .
