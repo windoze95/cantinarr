@@ -161,7 +161,10 @@ class PushService {
         if (data['media_type'] == 'book') {
           final foreignId = _asTrimmedString(data['foreign_id']);
           if (foreignId == null) {
-            router.push('/dashboard/books');
+            // go(), not push(): a module surface must replace the stack — a
+            // pushed module shell has no back affordance (no app-bar back
+            // button, and its fade page has no iOS swipe-back gesture).
+            router.go('/dashboard/books');
             return;
           }
           // The payload's title rides along so the detail screen can still

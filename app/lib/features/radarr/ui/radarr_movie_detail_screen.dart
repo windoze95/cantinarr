@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/status_pill.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../data/radarr_api_service.dart';
@@ -99,7 +100,7 @@ class _RadarrMovieDetailScreenState
 
   void _interactiveSearch() {
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => RadarrReleasesScreen(
           instanceId: widget.instanceId,
           movieId: _movie.id,

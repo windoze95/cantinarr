@@ -38,11 +38,17 @@ class _RecordingRouter extends GoRouter {
         );
 
   final pushed = <String>[];
+  final went = <String>[];
 
   @override
   Future<T?> push<T extends Object?>(String location, {Object? extra}) {
     pushed.add(location);
     return Future<T?>.value();
+  }
+
+  @override
+  void go(String location, {Object? extra}) {
+    went.add(location);
   }
 }
 
@@ -208,7 +214,8 @@ void main() {
           // Not part of the real push payload; routing must not depend on it.
           'decision': decision,
         });
-        expect(h.router.pushed, ['/dashboard/books']);
+        expect(h.router.went, ['/dashboard/books']);
+        expect(h.router.pushed, isEmpty);
       });
     }
 
@@ -256,7 +263,8 @@ void main() {
         'media_type': 'book',
         'foreign_id': 29749107,
       });
-      expect(h.router.pushed, ['/dashboard/books', '/dashboard/books']);
+      expect(h.router.went, ['/dashboard/books', '/dashboard/books']);
+      expect(h.router.pushed, isEmpty);
     });
 
     test('media_type book wins over a stray positive tmdb_id', () async {
@@ -266,7 +274,8 @@ void main() {
         'tmdb_id': 10,
         'media_type': 'book',
       });
-      expect(h.router.pushed, ['/dashboard/books']);
+      expect(h.router.went, ['/dashboard/books']);
+      expect(h.router.pushed, isEmpty);
     });
 
     test('tmdb_id survives string and double payload encodings', () async {

@@ -3,13 +3,17 @@ import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/widgets/app_ambient_background.dart';
 import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/features/ai_assistant/ui/codex_connection_screen.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/auth/ui/auth_screen.dart';
 import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
+import 'package:cantinarr/features/dashboard/ui/dashboard_shell.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
+import 'package:cantinarr/features/sonarr/ui/sonarr_module_shell.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -226,6 +230,80 @@ void main() {
     router.go('/settings/users/not-a-number/request-settings');
     await tester.pumpAndSettle();
     expect(router.routeInformationProvider.value.uri.path, '/settings/users');
+  });
+
+  // Scaffolds are transparent by theme, so every routed page must paint its
+  // own ambient backdrop — a page without one lets the previous route show
+  // through mid-transition as a double exposure.
+  testWidgets('routed pages paint their own opaque ambient backdrop',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    // Module page: backdrop on the shell page AND the module shell page.
+    expect(
+      find.ancestor(
+        of: find.byType(DashboardShell),
+        matching: find.byType(AppAmbientBackground),
+      ),
+      findsNWidgets(2),
+    );
+
+    // Pushed secondary route: its own backdrop plus the shell page's.
+    router.push('/settings/password');
+    await tester.pumpAndSettle();
+    expect(
+      find.ancestor(
+        of: find.byType(SetPasswordScreen),
+        matching: find.byType(AppAmbientBackground),
+      ),
+      findsNWidgets(2),
+    );
+  });
+
+  testWidgets('the login page paints its own opaque ambient backdrop',
+      (tester) async {
+    await _pumpRouter(tester, const AuthState());
+
+    expect(
+      find.ancestor(
+        of: find.byType(AuthScreen),
+        matching: find.byType(AppAmbientBackground),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('module switches dissolve the incoming shell over the old one',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _adminState);
+
+    router.go('/sonarr/library');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 140));
+
+    // Mid-dissolve: both module pages are mounted and the incoming page is
+    // fading in (over its opaque backdrop) rather than double-exposing.
+    expect(find.byType(DashboardShell), findsOneWidget);
+    expect(find.byType(SonarrModuleShell), findsOneWidget);
+    final fades = tester.widgetList<FadeTransition>(
+      find.ancestor(
+        of: find.byType(SonarrModuleShell),
+        matching: find.byType(FadeTransition),
+      ),
+    );
+    expect(
+      fades.any((f) => f.opacity.value > 0 && f.opacity.value < 1),
+      isTrue,
+      reason: 'incoming module page should be mid-fade',
+    );
+
+    // Bounded pumps (not pumpAndSettle): the stubbed Sonarr library shows an
+    // indeterminate spinner, which never settles. 140+200+100ms covers the
+    // 280ms dissolve plus a frame for the outgoing route's removal.
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byType(DashboardShell), findsNothing);
+    expect(find.byType(SonarrModuleShell), findsOneWidget);
   });
 }
 

@@ -5,6 +5,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/radarr_api_service.dart';
 import '../data/radarr_models.dart';
 import 'radarr_releases_screen.dart';
@@ -159,7 +160,7 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
     final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
     if (instanceId == null) return;
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => RadarrReleasesScreen(
           instanceId: instanceId,
           movieId: movie.id,

@@ -5,6 +5,7 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/library_command_header.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
 import '../logic/chaptarr_library_provider.dart';
@@ -68,7 +69,7 @@ class _ChaptarrHomeScreenState extends ConsumerState<ChaptarrHomeScreen> {
     final instanceId = ref.read(instanceProvider).activeChaptarrInstance?.id;
     if (instanceId == null) return;
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => ChaptarrAuthorDetailScreen(
           instanceId: instanceId,
           authorId: author.id,

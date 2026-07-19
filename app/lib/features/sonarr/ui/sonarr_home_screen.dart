@@ -5,6 +5,7 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/library_command_header.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/sonarr_series_provider.dart';
@@ -70,7 +71,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
     final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
     if (instanceId == null) return;
     await Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => SonarrSeriesDetailScreen(
           instanceId: instanceId,
           series: show,
@@ -137,7 +138,7 @@ class _SonarrHomeScreenState extends ConsumerState<SonarrHomeScreen> {
     if (seasonNumber == null || !mounted) return;
 
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => SonarrReleasesScreen(
           instanceId: instanceId,
           seriesId: show.id,

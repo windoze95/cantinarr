@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/action_sheet.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import 'edit_series_screen.dart';
@@ -51,7 +52,7 @@ Future<void> showSeriesActions(
         toast('Searching for monitored episodes of ${series.title}…');
       case SeriesAction.edit:
         final saved = await Navigator.of(context, rootNavigator: true)
-            .push<bool>(MaterialPageRoute(
+            .push<bool>(AmbientPageRoute(
           builder: (_) =>
               EditSeriesScreen(instanceId: instanceId, series: series),
         ));

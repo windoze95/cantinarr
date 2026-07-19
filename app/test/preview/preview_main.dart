@@ -16,6 +16,7 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
+import 'package:cantinarr/core/widgets/app_ambient_background.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
@@ -47,6 +48,8 @@ class _PreviewApp extends ConsumerWidget {
       theme: AppTheme.dark,
       debugShowCheckedModeBanner: false,
       routerConfig: ref.watch(appRouterProvider),
+      builder: (context, child) =>
+          AppAmbientBackground(child: child ?? const SizedBox.shrink()),
     );
   }
 }

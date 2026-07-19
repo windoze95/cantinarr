@@ -5,6 +5,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import 'sonarr_releases_screen.dart';
@@ -164,7 +165,7 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
     if (instanceId == null) return;
     // The interactive search is season-scoped; pass the episode's season.
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => SonarrReleasesScreen(
           instanceId: instanceId,
           seriesId: record.seriesId,

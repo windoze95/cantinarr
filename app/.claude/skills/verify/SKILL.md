@@ -27,9 +27,11 @@ flutter run -d web-server -t test/preview/preview_main.dart \
 Drive with the claude-in-chrome tools. Gotchas learned the hard way:
 
 - **Debug-web page transitions are slow (2–4s)** — a screenshot right after a
-  click captures a mid-transition frame that looks like two screens layered
-  (e.g. login ghosting behind the shell on first load). Always `wait` 3–4s and
-  re-screenshot before judging layout.
+  click captures a mid-transition frame. Routed pages paint an opaque ambient
+  backdrop, so a mid-transition frame is a clean dissolve (lateral surfaces)
+  or slide (pushes) — two screens showing *through* each other is a
+  regression, not debug-web noise. Still `wait` 3–4s and re-screenshot before
+  judging final layout.
 - **`resize_window` may not change the CSS viewport** (window managers /
   non-100% zoom). Confirm with `javascript_tool`:
   `window.innerWidth` — the app's breakpoints key off CSS px (desktop ≥ 900).

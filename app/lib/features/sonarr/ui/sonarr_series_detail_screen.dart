@@ -6,6 +6,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/action_sheet.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import 'edit_series_screen.dart';
@@ -121,7 +122,7 @@ class _SonarrSeriesDetailScreenState
 
   void _openSeason(SonarrSeason season) {
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => SonarrSeasonScreen(
           instanceId: widget.instanceId,
           series: _series,
@@ -134,7 +135,7 @@ class _SonarrSeriesDetailScreenState
   /// Every episode across all seasons, grouped by season headers.
   void _openAllSeasons() {
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => SonarrSeasonScreen(
           instanceId: widget.instanceId,
           series: _series,
@@ -170,7 +171,7 @@ class _SonarrSeriesDetailScreenState
         }
       case 'interactive':
         Navigator.of(context, rootNavigator: true).push(
-          MaterialPageRoute(
+          AmbientPageRoute(
             builder: (_) => SonarrReleasesScreen(
               instanceId: widget.instanceId,
               seriesId: _series.id,
@@ -184,7 +185,7 @@ class _SonarrSeriesDetailScreenState
 
   Future<void> _openEdit() async {
     final saved = await Navigator.of(context, rootNavigator: true).push<bool>(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => EditSeriesScreen(
           instanceId: widget.instanceId,
           series: _series,

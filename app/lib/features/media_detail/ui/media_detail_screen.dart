@@ -12,6 +12,7 @@ import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
@@ -568,7 +569,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       return;
     }
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(builder: (_) => screen),
+      AmbientPageRoute(builder: (_) => screen),
     );
   }
 
