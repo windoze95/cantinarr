@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/transporterr"
 )
 
 type Client struct {
@@ -453,7 +455,11 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		// Transport errors embed the full request URL (and DNS failures repeat
+		// the hostname). These errors surface beyond admins — e.g. in request
+		// failures — so summarize them host-free like the status branch below.
+		requestPath, _, _ := strings.Cut(path, "?")
+		return fmt.Errorf("chaptarr %s %s: %s", method, requestPath, transporterr.Summarize(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -474,7 +480,13 @@ func (c *Client) doRequest(method, path string) (*http.Response, error) {
 		return nil, err
 	}
 	req.Header.Set("X-Api-Key", c.apiKey)
-	return c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		// Host-free, like doWith: transport errors embed the full request URL.
+		requestPath, _, _ := strings.Cut(path, "?")
+		return nil, fmt.Errorf("chaptarr %s %s: %s", method, requestPath, transporterr.Summarize(err))
+	}
+	return resp, nil
 }
 
 // LookupAuthor searches Chaptarr's metadata for authors matching term.

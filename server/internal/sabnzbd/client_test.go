@@ -111,6 +111,69 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 
 // TestQueueSlotDerivedFields pins the string-typed numeric parsing SABnzbd
 // forces on clients, in particular the "[dd:]hh:mm:ss" timeleft format.
+// TestErrorBodyExcerptSurfaced pins that actionable upstream denials — like
+// SABnzbd's hostname verification, which rejects Docker/k8s service names it
+// doesn't know — reach the admin instead of a bare status number, markup
+// stripped and API key redacted.
+func TestErrorBodyExcerptSurfaced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("<html><body>Access denied - Hostname verification failed " +
+			"https://sabnzbd.org/hostname-check key=sab-api-key</body></html>"))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewClient(srv.URL, "sab-api-key").Version()
+	if err == nil {
+		t.Fatal("Version succeeded, want a hostname-verification error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "Hostname verification failed") {
+		t.Errorf("error %q does not surface the denial text", msg)
+	}
+	if strings.Contains(msg, "sab-api-key") {
+		t.Errorf("error %q echoes the API key", msg)
+	}
+	if strings.Contains(msg, "<body>") {
+		t.Errorf("error %q contains markup", msg)
+	}
+}
+
+// TestNonJSONResponseExcerptSurfaced pins the wrong-port/HTML-page shape: a
+// 200 that isn't JSON reports the page text, not "invalid character '<'".
+func TestNonJSONResponseExcerptSurfaced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html><title>Some other WebUI</title></html>"))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewClient(srv.URL, "sab-api-key").Version()
+	if err == nil || !strings.Contains(err.Error(), "Some other WebUI") {
+		t.Fatalf("non-JSON error = %v, want page text excerpt", err)
+	}
+}
+
+// TestRedirectErrorNamesLocation pins that a refused redirect reports where
+// the service tried to send us (with the API key redacted), so scheme/path
+// misconfigurations are self-diagnosing.
+func TestRedirectErrorNamesLocation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://sabnzbd.internal/api?apikey=sab-api-key", http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewClient(srv.URL, "sab-api-key").Version()
+	if err == nil || !strings.Contains(err.Error(), "redirects are not followed") {
+		t.Fatalf("redirect error = %v, want a redirect explanation", err)
+	}
+	if !strings.Contains(err.Error(), "https://sabnzbd.internal/api") {
+		t.Errorf("error %q does not name the Location", err.Error())
+	}
+	if strings.Contains(err.Error(), "sab-api-key") {
+		t.Errorf("error %q echoes the API key", err.Error())
+	}
+}
+
 func TestQueueSlotDerivedFields(t *testing.T) {
 	etaCases := []struct {
 		timeLeft string

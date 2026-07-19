@@ -3,6 +3,7 @@ package chaptarr
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,28 @@ import (
 	"sync/atomic"
 	"testing"
 )
+
+type failingTransport struct{ err error }
+
+func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
+
+// TestTransportErrorOmitsHost pins the topology-privacy property: transport
+// failures embed the full request URL (and DNS errors repeat the hostname),
+// and these errors surface to requesters through book-request failures — so
+// the client must summarize them host-free.
+func TestTransportErrorOmitsHost(t *testing.T) {
+	dnsFailure := &net.OpError{Op: "dial", Err: &net.DNSError{Err: "no such host", Name: "chaptarr-internal"}}
+	c := NewClient("http://chaptarr-internal:8787", "key")
+	c.httpClient = &http.Client{Transport: failingTransport{dnsFailure}}
+
+	if _, err := c.LookupAuthor("le guin"); err == nil {
+		t.Fatal("LookupAuthor succeeded against a failing transport")
+	} else if msg := err.Error(); strings.Contains(msg, "chaptarr-internal") || strings.Contains(msg, "8787") {
+		t.Errorf("LookupAuthor error %q names the host", msg)
+	} else if !strings.Contains(msg, "could not resolve host") {
+		t.Errorf("LookupAuthor error %q lacks the failure summary", msg)
+	}
+}
 
 func TestClientDoesNotFollowRedirects(t *testing.T) {
 	var redirectedRequests atomic.Int32

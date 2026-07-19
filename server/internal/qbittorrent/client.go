@@ -55,10 +55,19 @@ func (c *Client) Login() error {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return fmt.Errorf("qbittorrent login failed: redirect status %d to %q (redirects are not followed; use the WebUI's final URL)", resp.StatusCode, resp.Header.Get("Location"))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("qbittorrent login failed: status %d", resp.StatusCode)
 	}
-	if !strings.HasPrefix(strings.TrimSpace(string(body)), "Ok") {
+	trimmed := strings.TrimSpace(string(body))
+	if !strings.HasPrefix(trimmed, "Ok") {
+		// The login endpoint answers plain "Ok." or "Fails."; an HTML body is
+		// some other page entirely (wrong port or path), not a bad password.
+		if strings.HasPrefix(trimmed, "<") {
+			return fmt.Errorf("qbittorrent login failed: unexpected response (is this the qBittorrent WebUI URL?)")
+		}
 		return fmt.Errorf("qbittorrent login failed: invalid credentials")
 	}
 

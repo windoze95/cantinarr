@@ -154,6 +154,42 @@ func TestLoginFailuresDoNotEchoCredentials(t *testing.T) {
 	}
 }
 
+// TestLoginDistinguishesWrongPageFromBadPassword pins that an HTML answer —
+// some other WebUI on the entered port, not qBittorrent's plain "Ok."/"Fails."
+// endpoint — is not misreported as invalid credentials.
+func TestLoginDistinguishesWrongPageFromBadPassword(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "<html><title>Some other WebUI</title></html>")
+	}))
+	t.Cleanup(srv.Close)
+
+	err := NewClient(srv.URL, "admin", "password").Login()
+	if err == nil {
+		t.Fatal("Login accepted an HTML response")
+	}
+	if strings.Contains(err.Error(), "invalid credentials") {
+		t.Errorf("error %v misreports a non-qBittorrent page as bad credentials", err)
+	}
+	if !strings.Contains(err.Error(), "unexpected response") {
+		t.Errorf("error %v lacks the wrong-page explanation", err)
+	}
+}
+
+// TestLoginRedirectNamesLocation pins that a refused login redirect reports
+// where the WebUI tried to send us, so scheme misconfigurations are
+// self-diagnosing.
+func TestLoginRedirectNamesLocation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://qbittorrent.internal/", http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+
+	err := NewClient(srv.URL, "admin", "password").Login()
+	if err == nil || !strings.Contains(err.Error(), "https://qbittorrent.internal/") {
+		t.Fatalf("redirect error = %v, want the Location named", err)
+	}
+}
+
 func TestClientDoesNotFollowRedirects(t *testing.T) {
 	var redirectedRequests atomic.Int32
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

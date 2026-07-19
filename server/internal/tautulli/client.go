@@ -59,6 +59,11 @@ func (c *Client) call(cmd string, params url.Values, out interface{}) error {
 	if err != nil {
 		return fmt.Errorf("tautulli read response: %w", err)
 	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// The Location can echo the request query, which carries the apikey.
+		location := redactSecret(resp.Header.Get("Location"), c.apiKey)
+		return fmt.Errorf("tautulli returned redirect status %d to %q (redirects are not followed; use the service's final URL)", resp.StatusCode, location)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("tautulli returned status %d", resp.StatusCode)
 	}
