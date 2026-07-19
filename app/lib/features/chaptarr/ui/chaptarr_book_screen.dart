@@ -5,6 +5,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
 import 'chaptarr_book_detail_sheet.dart';
@@ -98,7 +99,7 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
     final chosen = await pickFormatRecord(context, _records);
     if (chosen == null || !mounted) return;
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => ChaptarrReleasesScreen(
           instanceId: widget.instanceId,
           bookId: chosen.id,

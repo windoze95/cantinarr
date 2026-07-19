@@ -61,8 +61,36 @@ import '../features/tautulli/ui/tautulli_activity_screen.dart';
 import '../features/tautulli/ui/tautulli_history_screen.dart';
 import '../features/tautulli/ui/tautulli_module_shell.dart';
 import '../features/tautulli/ui/tautulli_stats_screen.dart';
+import '../core/widgets/app_ambient_background.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
+
+/// Lateral page for top-level surfaces: login, the app shell, and the module
+/// shells. The incoming page dissolves in over whatever it replaces.
+///
+/// Scaffolds are transparent by theme, so every routed page must paint its own
+/// opaque backdrop (AppAmbientBackground) — otherwise the previous route shows
+/// through during transitions and both screens render at once as a jarring
+/// double exposure. Lateral surfaces fade because they're peer navigation with
+/// no back stack; pushed routes keep MaterialPage's platform slide (and iOS
+/// swipe-back), made correct by the same opaque backdrop on their children.
+CustomTransitionPage<void> _fadeSurfacePage({
+  required LocalKey key,
+  required Widget child,
+}) {
+  return CustomTransitionPage<void>(
+    key: key,
+    transitionDuration: const Duration(milliseconds: 280),
+    reverseTransitionDuration: const Duration(milliseconds: 220),
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      return FadeTransition(
+        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+        child: child,
+      );
+    },
+    child: AppAmbientBackground(child: child),
+  );
+}
 
 /// Central router configuration using GoRouter with module-based navigation.
 /// Outer ShellRoute provides the drawer + search bar.
@@ -129,24 +157,29 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/login',
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (_, __) => const AuthScreen(),
+        pageBuilder: (context, state) => _fadeSurfacePage(
+          key: state.pageKey,
+          child: const AuthScreen(),
+        ),
       ),
 
       // Module shell (provides drawer/sidebar + search bar, no bottom nav)
       ShellRoute(
-        builder: (context, state, child) {
-          return AppShell(currentPath: state.uri.path, child: child);
-        },
+        pageBuilder: (context, state, child) => _fadeSurfacePage(
+          key: state.pageKey,
+          child: AppShell(currentPath: state.uri.path, child: child),
+        ),
         routes: [
           // Dashboard module (Movies/TV tabs)
           StatefulShellRoute.indexedStack(
-            builder: (context, state, navigationShell) {
-              return DashboardShell(
+            pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
+              key: state.pageKey,
+              child: DashboardShell(
                 currentIndex: navigationShell.currentIndex,
                 onTabChanged: (index) => navigationShell.goBranch(index),
                 child: navigationShell,
-              );
-            },
+              ),
+            ),
             branches: [
               StatefulShellBranch(
                 routes: [
@@ -189,13 +222,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
           // Radarr module (Library/Queue/History/Wanted/Calendar tabs)
           StatefulShellRoute.indexedStack(
-            builder: (context, state, navigationShell) {
-              return RadarrModuleShell(
+            pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
+              key: state.pageKey,
+              child: RadarrModuleShell(
                 currentIndex: navigationShell.currentIndex,
                 onTabChanged: (index) => navigationShell.goBranch(index),
                 child: navigationShell,
-              );
-            },
+              ),
+            ),
             branches: [
               StatefulShellBranch(
                 routes: [
@@ -242,13 +276,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
           // Sonarr module (Library/Queue/History/Wanted/Calendar tabs)
           StatefulShellRoute.indexedStack(
-            builder: (context, state, navigationShell) {
-              return SonarrModuleShell(
+            pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
+              key: state.pageKey,
+              child: SonarrModuleShell(
                 currentIndex: navigationShell.currentIndex,
                 onTabChanged: (index) => navigationShell.goBranch(index),
                 child: navigationShell,
-              );
-            },
+              ),
+            ),
             branches: [
               StatefulShellBranch(
                 routes: [
@@ -295,13 +330,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
           // Chaptarr module (Library/Queue/History/Wanted tabs)
           StatefulShellRoute.indexedStack(
-            builder: (context, state, navigationShell) {
-              return ChaptarrModuleShell(
+            pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
+              key: state.pageKey,
+              child: ChaptarrModuleShell(
                 currentIndex: navigationShell.currentIndex,
                 onTabChanged: (index) => navigationShell.goBranch(index),
                 child: navigationShell,
-              );
-            },
+              ),
+            ),
             branches: [
               StatefulShellBranch(
                 routes: [
@@ -340,13 +376,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
           // Downloads module (Queue/History tabs, admin only)
           StatefulShellRoute.indexedStack(
-            builder: (context, state, navigationShell) {
-              return DownloadsModuleShell(
+            pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
+              key: state.pageKey,
+              child: DownloadsModuleShell(
                 currentIndex: navigationShell.currentIndex,
                 onTabChanged: (index) => navigationShell.goBranch(index),
                 child: navigationShell,
-              );
-            },
+              ),
+            ),
             branches: [
               StatefulShellBranch(
                 routes: [
@@ -369,13 +406,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
           // Tautulli module (Activity/History/Stats tabs, admin only)
           StatefulShellRoute.indexedStack(
-            builder: (context, state, navigationShell) {
-              return TautulliModuleShell(
+            pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
+              key: state.pageKey,
+              child: TautulliModuleShell(
                 currentIndex: navigationShell.currentIndex,
                 onTabChanged: (index) => navigationShell.goBranch(index),
                 child: navigationShell,
-              );
-            },
+              ),
+            ),
             branches: [
               StatefulShellBranch(
                 routes: [
@@ -409,70 +447,52 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           // each screen's own back affordance.
           GoRoute(
             path: '/assistant',
-            builder: (_, __) => const AiChatScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: AiChatScreen()),
           ),
           GoRoute(
             path: '/detail/:type/:id',
             redirect: (_, state) => _mediaDetailRedirect(state),
-            builder: (context, state) {
-              final type = state.pathParameters['type']!;
-              // Books are addressed by their (string) Chaptarr foreignBookId —
-              // the identity request rows store and decision push payloads
-              // carry — not a TMDB id.
-              if (type == 'book') {
-                final foreignId = state.pathParameters['id']?.trim() ?? '';
-                if (foreignId.isEmpty) {
-                  return const _InvalidRouteScreen(
-                    message: 'This book link is invalid.',
-                  );
-                }
-                return RequesterBookDetailScreen(
-                  foreignId: foreignId,
-                  titleHint: state.uri.queryParameters['title'],
-                );
-              }
-              final id = _positiveIntParameter(state, 'id');
-              if (id == null) {
-                return const _InvalidRouteScreen(
-                  message: 'This media link is invalid.',
-                );
-              }
-              final mediaType = type == 'tv' ? MediaType.tv : MediaType.movie;
-              return MediaDetailScreen(
-                id: id,
-                mediaType: mediaType,
-              );
-            },
+            builder: (context, state) =>
+                AppAmbientBackground(child: _mediaDetailChild(state)),
           ),
           GoRoute(
             path: '/settings',
-            builder: (_, __) => const SettingsScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: SettingsScreen()),
           ),
           GoRoute(
             path: '/settings/ai',
-            builder: (_, __) => const AiAccessScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: AiAccessScreen()),
           ),
           GoRoute(
             path: '/settings/chatgpt',
-            builder: (_, __) => const CodexConnectionScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: CodexConnectionScreen()),
           ),
           GoRoute(
             path: '/settings/credentials/chatgpt',
-            builder: (_, __) => const CodexConnectionScreen(
-              scope: CodexOAuthScope.adminShared,
+            builder: (_, __) => const AppAmbientBackground(
+              child: CodexConnectionScreen(
+                scope: CodexOAuthScope.adminShared,
+              ),
             ),
           ),
           GoRoute(
             path: '/settings/credentials',
-            builder: (_, __) => const CredentialsScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: CredentialsScreen()),
           ),
           GoRoute(
             path: '/settings/ai-tools',
-            builder: (_, __) => const AiToolsScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: AiToolsScreen()),
           ),
           GoRoute(
             path: '/settings/users',
-            builder: (_, __) => const UsersScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: UsersScreen()),
           ),
           GoRoute(
             path: '/settings/users/:userId/request-settings',
@@ -483,99 +503,120 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             builder: (context, state) {
               final userId = _positiveIntParameter(state, 'userId');
               if (userId == null) {
-                return const _InvalidRouteScreen(
-                  message: 'This user settings link is invalid.',
+                return const AppAmbientBackground(
+                  child: _InvalidRouteScreen(
+                    message: 'This user settings link is invalid.',
+                  ),
                 );
               }
               final username = state.extra as String? ?? '';
-              return UserRequestSettingsScreen(
-                  userId: userId, username: username);
+              return AppAmbientBackground(
+                child: UserRequestSettingsScreen(
+                    userId: userId, username: username),
+              );
             },
           ),
           GoRoute(
             path: '/approvals',
-            builder: (_, __) => const PendingRequestsScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: PendingRequestsScreen()),
           ),
           GoRoute(
             path: '/issues',
-            builder: (_, __) => const IssuesListScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: IssuesListScreen()),
           ),
           GoRoute(
             path: '/issues/:id',
             builder: (context, state) {
               final id = int.tryParse(state.pathParameters['id'] ?? '') ?? 0;
-              return IssueThreadScreen(issueId: id);
+              return AppAmbientBackground(
+                  child: IssueThreadScreen(issueId: id));
             },
           ),
           GoRoute(
             path: '/agent-actions',
-            builder: (_, __) => const PendingAgentActionsScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: PendingAgentActionsScreen()),
           ),
           GoRoute(
             path: '/agent-runs/:id',
             builder: (context, state) {
               final id = int.tryParse(state.pathParameters['id'] ?? '') ?? 0;
-              return AgentRunScreen(runId: id);
+              return AppAmbientBackground(child: AgentRunScreen(runId: id));
             },
           ),
           GoRoute(
             path: '/settings/ai-remediation',
-            builder: (_, __) => const AiRemediationSettingsScreen(),
+            builder: (_, __) => const AppAmbientBackground(
+                child: AiRemediationSettingsScreen()),
           ),
           GoRoute(
             path: '/settings/request-settings',
-            builder: (_, __) => const RequestSettingsScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: RequestSettingsScreen()),
           ),
           GoRoute(
             path: '/settings/devices',
-            builder: (_, __) => const DevicesScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: DevicesScreen()),
           ),
           GoRoute(
             path: '/settings/plex',
-            builder: (_, __) => const PlexSettingsScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: PlexSettingsScreen()),
           ),
           GoRoute(
             path: '/settings/notifications',
-            builder: (_, __) => const NotificationPreferencesScreen(),
+            builder: (_, __) => const AppAmbientBackground(
+                child: NotificationPreferencesScreen()),
           ),
           GoRoute(
             path: '/settings/passkeys',
-            builder: (_, __) => const PasskeyManagementScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: PasskeyManagementScreen()),
           ),
           GoRoute(
             path: '/settings/passkeys/new',
-            builder: (_, __) => const PasskeyCreateScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: PasskeyCreateScreen()),
           ),
           GoRoute(
             path: '/settings/password',
-            builder: (_, __) => const SetPasswordScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: SetPasswordScreen()),
           ),
           GoRoute(
             path: '/settings/instance/new',
-            builder: (_, __) => const InstanceEditScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: InstanceEditScreen()),
           ),
           GoRoute(
             path: '/settings/instance/:id',
             builder: (context, state) {
               final extra = state.extra as Map<String, dynamic>?;
-              return InstanceEditScreen(
-                instanceId: state.pathParameters['id'],
-                initialServiceType: extra?['service_type'] as String?,
-                initialName: extra?['name'] as String?,
-                initialUrl: extra?['url'] as String?,
-                initialApiKey: extra?['api_key'] as String?,
-                initialUsername: extra?['username'] as String?,
-                initialIsDefault: extra?['is_default'] as bool? ?? false,
+              return AppAmbientBackground(
+                child: InstanceEditScreen(
+                  instanceId: state.pathParameters['id'],
+                  initialServiceType: extra?['service_type'] as String?,
+                  initialName: extra?['name'] as String?,
+                  initialUrl: extra?['url'] as String?,
+                  initialApiKey: extra?['api_key'] as String?,
+                  initialUsername: extra?['username'] as String?,
+                  initialIsDefault: extra?['is_default'] as bool? ?? false,
+                ),
               );
             },
           ),
           GoRoute(
             path: '/setup',
-            builder: (_, __) => const SetupWizardScreen(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: SetupWizardScreen()),
           ),
           GoRoute(
             path: '/plex-guide',
-            builder: (_, __) => const PlexWatchGuide(),
+            builder: (_, __) =>
+                const AppAmbientBackground(child: PlexWatchGuide()),
           ),
         ],
       ),
@@ -625,6 +666,36 @@ bool _isAdminOnlyRoute(String path) {
 int? _positiveIntParameter(GoRouterState state, String name) {
   final value = int.tryParse(state.pathParameters[name] ?? '');
   return value != null && value > 0 ? value : null;
+}
+
+/// The `/detail/:type/:id` route body. Books are addressed by their (string)
+/// Chaptarr foreignBookId — the identity request rows store and decision push
+/// payloads carry — not a TMDB id.
+Widget _mediaDetailChild(GoRouterState state) {
+  final type = state.pathParameters['type']!;
+  if (type == 'book') {
+    final foreignId = state.pathParameters['id']?.trim() ?? '';
+    if (foreignId.isEmpty) {
+      return const _InvalidRouteScreen(
+        message: 'This book link is invalid.',
+      );
+    }
+    return RequesterBookDetailScreen(
+      foreignId: foreignId,
+      titleHint: state.uri.queryParameters['title'],
+    );
+  }
+  final id = _positiveIntParameter(state, 'id');
+  if (id == null) {
+    return const _InvalidRouteScreen(
+      message: 'This media link is invalid.',
+    );
+  }
+  final mediaType = type == 'tv' ? MediaType.tv : MediaType.movie;
+  return MediaDetailScreen(
+    id: id,
+    mediaType: mediaType,
+  );
 }
 
 bool _hasValidMediaDetailParameters(GoRouterState state) {

@@ -5,6 +5,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/chaptarr_add_payload.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_image.dart';
@@ -104,7 +105,7 @@ class _ChaptarrAuthorDetailScreenState
 
   void _openBookGroup(List<ChaptarrBook> records) {
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => ChaptarrBookScreen(
           instanceId: widget.instanceId,
           records: records,

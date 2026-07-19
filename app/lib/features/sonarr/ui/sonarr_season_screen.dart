@@ -5,6 +5,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/action_sheet.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import '../logic/episode_selection.dart';
@@ -158,7 +159,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       if (seasonNumber == null || !mounted) return;
     }
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => SonarrReleasesScreen(
           instanceId: widget.instanceId,
           seriesId: widget.series.id,
@@ -180,7 +181,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
 
   void _interactiveEpisodeSearch(SonarrEpisode episode) {
     Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => SonarrReleasesScreen(
           instanceId: widget.instanceId,
           seriesId: widget.series.id,

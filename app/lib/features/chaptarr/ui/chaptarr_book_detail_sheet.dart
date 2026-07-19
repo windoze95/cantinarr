@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/status_pill.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
 import 'chaptarr_releases_screen.dart';
@@ -109,7 +110,7 @@ class _ChaptarrBookDetailSheetState
     final nav = Navigator.of(context, rootNavigator: true);
     Navigator.of(context).pop(true);
     nav.push(
-      MaterialPageRoute(
+      AmbientPageRoute(
         builder: (_) => ChaptarrReleasesScreen(
           instanceId: widget.instanceId,
           bookId: chosen.id,
