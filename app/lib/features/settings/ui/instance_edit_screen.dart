@@ -50,6 +50,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _isSaving = false;
   bool _isTesting = false;
   String? _testResult;
+  bool _testSucceeded = false;
   bool _isConfiguringWebhook = false;
   bool? _webhookConfigured;
   String? _webhookResult;
@@ -94,12 +95,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'qbittorrent' ||
       _serviceType == 'nzbget' ||
       _serviceType == 'transmission';
-
-  /// Only the v3 arr services support a device-direct connection test (it hits
-  /// `/api/v3/system/status`); the rest — including Chaptarr, which is `/api/v1`
-  /// — are validated by the backend when saving.
-  bool get _supportsDirectTest =>
-      _serviceType == 'radarr' || _serviceType == 'sonarr';
 
   bool get _supportsWebhook =>
       _serviceType == 'radarr' || _serviceType == 'sonarr';
@@ -267,17 +262,34 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _testResult = null;
     });
 
-    final backendDio = ref.read(backendClientProvider);
-    final service = InstanceApiService(backendDio: backendDio);
-    final success = await service.testConnection(
-      _urlController.text.trim(),
-      _apiKeyController.text.trim(),
-    );
-
-    setState(() {
-      _isTesting = false;
-      _testResult = success ? 'Connection successful!' : 'Connection failed';
-    });
+    // The server performs the check: it is what dials instance URLs in
+    // production, so cluster-internal names this device cannot resolve still
+    // test truthfully, and blank credentials fall back to the stored ones.
+    try {
+      final backendDio = ref.read(backendClientProvider);
+      final service = InstanceApiService(backendDio: backendDio);
+      await service.testConnection(
+        id: widget.instanceId,
+        serviceType: _serviceType,
+        url: _urlController.text.trim(),
+        apiKey: _apiKeyController.text.trim(),
+        username: _usernameController.text.trim(),
+        password: _passwordController.text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isTesting = false;
+        _testSucceeded = true;
+        _testResult = 'Connection successful!';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isTesting = false;
+        _testSucceeded = false;
+        _testResult = _errorMessage(e);
+      });
+    }
   }
 
   String? _validate() {
@@ -721,24 +733,27 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     }
   }
 
+  /// Service-name examples: the Cantinarr server is what dials this URL, so
+  /// the container/cluster DNS name is the canonical form for the primary
+  /// (compose/k8s) distribution. LAN IPs and FQDNs work just as well.
   String get _urlHint {
     switch (_serviceType) {
       case 'sonarr':
-        return 'http://192.168.1.100:8989';
+        return 'http://sonarr:8989';
       case 'chaptarr':
-        return 'http://192.168.1.100:8787';
+        return 'http://chaptarr:8787';
       case 'sabnzbd':
-        return 'http://192.168.1.100:8080';
+        return 'http://sabnzbd:8080';
       case 'qbittorrent':
-        return 'http://192.168.1.100:8081';
+        return 'http://qbittorrent:8081';
       case 'nzbget':
-        return 'http://192.168.1.100:6789';
+        return 'http://nzbget:6789';
       case 'transmission':
-        return 'http://192.168.1.100:9091';
+        return 'http://transmission:9091';
       case 'tautulli':
-        return 'http://192.168.1.100:8181';
+        return 'http://tautulli:8181';
       default:
-        return 'http://192.168.1.100:7878';
+        return 'http://radarr:7878';
     }
   }
 
@@ -813,6 +828,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             decoration: InputDecoration(
               labelText: 'URL',
               hintText: _urlHint,
+              helperText:
+                  'Reached from the Cantinarr server, not from this device.',
             ),
             keyboardType: TextInputType.url,
           ),
@@ -892,41 +909,31 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
           const SizedBox(height: 24),
 
-          // Test connection button (Radarr/Sonarr only — the device calls
-          // the arr server directly). Download clients and Tautulli are
-          // validated by the backend when saving.
-          if (_supportsDirectTest) ...[
-            OutlinedButton.icon(
-              onPressed: _isTesting ? null : _testConnection,
-              icon: _isTesting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppTheme.accent),
-                    )
-                  : const Icon(Icons.wifi_tethering),
-              label: const Text('Test Connection'),
-            ),
-            if (_testResult != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                _testResult!,
-                style: TextStyle(
-                  color: _testResult!.contains('successful')
-                      ? AppTheme.available
-                      : AppTheme.error,
-                  fontSize: 13,
-                ),
-                textAlign: TextAlign.center,
+          // Test connection button — the server performs the check for every
+          // service type, so it works for URLs only the server can resolve.
+          OutlinedButton.icon(
+            onPressed: _isTesting ? null : _testConnection,
+            icon: _isTesting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppTheme.accent),
+                  )
+                : const Icon(Icons.wifi_tethering),
+            label: const Text('Test Connection'),
+          ),
+          if (_testResult != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _testResult!,
+              style: TextStyle(
+                color: _testSucceeded ? AppTheme.available : AppTheme.error,
+                fontSize: 13,
               ),
-            ],
-          ] else
-            const Text(
-              'The connection is verified by the server when you save.',
-              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
               textAlign: TextAlign.center,
             ),
+          ],
 
           const SizedBox(height: 32),
 

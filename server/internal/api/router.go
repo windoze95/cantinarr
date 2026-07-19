@@ -345,6 +345,10 @@ func NewRouter(
 				r.Use(auth.RequirePermission(auth.PermissionInstancesManage))
 				r.Get("/instances", instanceHandler.List)
 				r.Post("/instances", instanceHandler.Create)
+				// Dry-run connectivity check from the server — the host that
+				// actually dials instance URLs — so cluster-internal names the
+				// admin's device cannot resolve still test truthfully.
+				r.Post("/instances/test", instanceHandler.TestConnection)
 				r.Put("/instances/{instanceID}", instanceHandler.Update)
 				r.Delete("/instances/{instanceID}", instanceHandler.Delete)
 				// Instance-centric view of user_default_instances (the static

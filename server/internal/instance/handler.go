@@ -193,6 +193,65 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(toResponse(&inst))
 }
 
+// TestConnection validates a candidate configuration's reachability and
+// credentials from the server — the host that actually dials instance URLs,
+// so cluster-internal names the admin's device cannot resolve still test
+// truthfully — without persisting anything. For an existing instance (id set
+// in the body), blank credentials fall back to the stored ones, mirroring
+// Update's write-only semantics.
+func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
+	var inst Instance
+	if err := json.NewDecoder(r.Body).Decode(&inst); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if inst.ID != "" {
+		existing, err := h.store.Get(inst.ID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+			return
+		}
+		if existing == nil {
+			http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+			return
+		}
+		inst.ServiceType = existing.ServiceType
+		if inst.APIKey == "" {
+			inst.APIKey = existing.APIKey
+		}
+		if inst.Username == "" {
+			inst.Username = existing.Username
+		}
+		if inst.Password == "" {
+			inst.Password = existing.Password
+		}
+	}
+
+	if !allowedServiceTypes[inst.ServiceType] {
+		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"}`, http.StatusBadRequest)
+		return
+	}
+	// The test doesn't need a name; default it so the shared validation only
+	// enforces the URL and credentials.
+	if inst.Name == "" {
+		inst.Name = inst.ServiceType
+	}
+	if err := validateRequiredFields(&inst); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+
+	inst.URL = strings.TrimRight(inst.URL, "/")
+
+	if err := validateConnection(&inst); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"connection test failed: %s"}`, err), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Delete removes a service instance.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "instanceID")
