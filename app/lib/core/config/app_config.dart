@@ -21,4 +21,8 @@ class AppConfig {
       path != null ? '$tmdbImageBase/w$width$path' : '';
   static String tmdbBackdrop(String? path, {int width = 780}) =>
       path != null ? '$tmdbImageBase/w$width$path' : '';
+
+  /// Full-resolution backdrop — only worth the bytes on very wide displays.
+  static String tmdbBackdropOriginal(String? path) =>
+      path != null ? '$tmdbImageBase/original$path' : '';
 }
