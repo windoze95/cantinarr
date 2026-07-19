@@ -94,6 +94,48 @@ func TestLoadCodexRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestLoadPort(t *testing.T) {
+	tests := []struct {
+		name        string
+		value       string
+		serviceHost string
+		servicePort string
+		want        int
+		wantErr     bool
+	}{
+		{name: "default", value: "", want: 8585},
+		{name: "numeric override", value: "8586", want: 8586},
+		{name: "Kubernetes IPv4 service link", value: "tcp://10.43.161.118:8585", serviceHost: "10.43.161.118", servicePort: "8585", want: 8585},
+		{name: "Kubernetes IPv6 service link", value: "tcp://[fd00::1]:8585", serviceHost: "fd00::1", servicePort: "8585", want: 8585},
+		{name: "invalid value", value: "not-a-port", wantErr: true},
+		{name: "malformed TCP URI", value: "tcp://localhost:not-a-port", wantErr: true},
+		{name: "non-service TCP URI", value: "tcp://example.com:9999", wantErr: true},
+		{name: "manual IP TCP URI", value: "tcp://127.0.0.1:9000", wantErr: true},
+		{name: "mismatched service link", value: "tcp://10.43.161.119:8585", serviceHost: "10.43.161.118", servicePort: "8585", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CANTINARR_PORT", tt.value)
+			t.Setenv("CANTINARR_SERVICE_HOST", tt.serviceHost)
+			t.Setenv("CANTINARR_SERVICE_PORT", tt.servicePort)
+			cfg, err := Load()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Load() error = nil, want invalid port error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Port != tt.want {
+				t.Fatalf("Port = %d, want %d", cfg.Port, tt.want)
+			}
+		})
+	}
+}
+
 func contains(values []string, needle string) bool {
 	for _, value := range values {
 		if value == needle {

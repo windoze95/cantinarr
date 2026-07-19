@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -111,7 +112,10 @@ func Load() (*Config, error) {
 	)
 
 	portStr := os.Getenv("CANTINARR_PORT")
-	if portStr == "" {
+	if portStr == "" || isKubernetesServiceLinkPort(portStr) {
+		// Kubernetes injects CANTINARR_PORT=tcp://<service-ip>:<port> when a
+		// Service named cantinarr has service links enabled. It is not an app
+		// setting, so retain the default listen port.
 		cfg.Port = 8585
 	} else {
 		p, err := strconv.Atoi(portStr)
@@ -122,6 +126,23 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func isKubernetesServiceLinkPort(value string) bool {
+	serviceHost := os.Getenv("CANTINARR_SERVICE_HOST")
+	servicePort := os.Getenv("CANTINARR_SERVICE_PORT")
+	if serviceHost == "" || servicePort == "" {
+		return false
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme != "tcp" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	if net.ParseIP(u.Hostname()) == nil || u.Hostname() != serviceHost || u.Port() != servicePort {
+		return false
+	}
+	port, err := strconv.Atoi(u.Port())
+	return err == nil && port > 0 && port <= 65535
 }
 
 func validatePublicURL(value string) error {

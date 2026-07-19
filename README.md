@@ -138,7 +138,7 @@ Optional server env vars for deployment tuning:
 
 | Variable | Default | Description |
 |---|---|---|
-| `CANTINARR_PORT` | `8585` | HTTP listen port |
+| `CANTINARR_PORT` | `8585` | HTTP listen port. Kubernetes service-link URI values are ignored so a Service named `cantinarr` does not override the application setting |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
 | `CANTINARR_PUBLIC_URL` | direct request origin | Trusted public origin (for example `https://cantinarr.example.com`) used when installing authenticated Radarr/Sonarr webhooks; recommended behind a reverse proxy |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for signing short-lived access tokens. Device sessions do not depend on it: changing it never signs anyone out |
