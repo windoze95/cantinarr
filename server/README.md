@@ -272,6 +272,7 @@ Tool debug mode records names, timing, status, and payload sizes only; tool inpu
 ### Instances & arr proxy
 ```
 GET|POST /api/instances                      # admin: list/create
+POST   /api/instances/test                   # admin: dry-run connectivity check, dialed from the server
 PUT|DELETE /api/instances/{instanceID}       # admin: update/delete
 GET|PUT /api/instances/{instanceID}/users    # admin: which users are pinned/assigned here
 POST   /api/instances/{instanceID}/webhook   # admin: rotate credentials and upsert a managed arr webhook

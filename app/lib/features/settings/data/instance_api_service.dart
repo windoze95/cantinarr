@@ -97,20 +97,27 @@ class InstanceApiService {
     await _dio.put('/api/instances/$id/users', data: {'user_ids': userIds});
   }
 
-  /// Test connection to a service URL.
-  Future<bool> testConnection(String url, String apiKey) async {
-    try {
-      final testDio = Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 10),
-      ));
-      final resp = await testDio.get(
-        '$url/api/v3/system/status',
-        options: Options(headers: {'X-Api-Key': apiKey}),
-      );
-      return resp.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
+  /// Ask the server to test a candidate instance configuration. The server is
+  /// what dials instance URLs in production, so cluster-internal names this
+  /// device cannot resolve (e.g. http://radarr:7878) still test truthfully —
+  /// and credentials never leave the backend boundary. When [id] is set,
+  /// blank credentials fall back to the stored write-only ones, matching
+  /// save's semantics. Throws on failure with the server's reason.
+  Future<void> testConnection({
+    String? id,
+    required String serviceType,
+    required String url,
+    String apiKey = '',
+    String username = '',
+    String password = '',
+  }) async {
+    await _dio.post('/api/instances/test', data: {
+      if (id != null) 'id': id,
+      'service_type': serviceType,
+      'url': url,
+      'api_key': apiKey,
+      'username': username,
+      'password': password,
+    });
   }
 }

@@ -20,11 +20,13 @@ class _FakeAdapter implements HttpClientAdapter {
     this.instances = const [],
     this.pins = const [],
     this.webhookError,
+    this.testError,
   });
 
   final List<Map<String, dynamic>> instances;
   final List<Map<String, dynamic>> pins;
   final String? webhookError;
+  final String? testError;
   final List<({String method, String path, dynamic body})> requests = [];
 
   @override
@@ -46,6 +48,19 @@ class _FakeAdapter implements HttpClientAdapter {
       response = instances;
     } else if (options.method == 'GET' && path.endsWith('/users')) {
       response = pins;
+    } else if (options.method == 'POST' && path == '/api/instances/test') {
+      final error = testError;
+      if (error != null) {
+        // Mirrors Go's http.Error: JSON-shaped body, text/plain content type.
+        return ResponseBody.fromString(
+          '${jsonEncode({'error': error})}\n',
+          400,
+          headers: {
+            'content-type': ['text/plain; charset=utf-8'],
+          },
+        );
+      }
+      return ResponseBody.fromString('', 204, headers: {});
     } else if (options.method == 'POST' && path == '/api/instances') {
       final map = body as Map<String, dynamic>;
       response = {...map, 'id': '${map['service_type']}-new'};
@@ -403,6 +418,82 @@ void main() {
     expect(putUsers.body, {
       'user_ids': [1]
     });
+  });
+
+  testWidgets('Test Connection asks the server to dial the URL', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    // Only the URL and key are filled in: the test must not require a name.
+    await tester.enterText(
+        find.widgetWithText(TextField, 'URL'), 'http://radarr:7878');
+    await tester.enterText(find.widgetWithText(TextField, 'API Key'), 'key');
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test Connection'));
+    await tester.pumpAndSettle();
+
+    // The check runs on the server — the host that can resolve
+    // cluster-internal names — never as a device-direct arr call.
+    final test = adapter.requests
+        .singleWhere((r) => r.path == '/api/instances/test');
+    expect(test.method, 'POST');
+    expect(test.body['service_type'], 'radarr');
+    expect(test.body['url'], 'http://radarr:7878');
+    expect(test.body['api_key'], 'key');
+    expect(test.body.containsKey('id'), isFalse);
+    expect(find.text('Connection successful!'), findsOneWidget);
+  });
+
+  testWidgets(
+      'Test Connection on edit sends the id so stored credentials are used',
+      (tester) async {
+    final adapter = _FakeAdapter(instances: [Map.of(_radarrB)]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    // The key field is blank (write-only credentials); the id lets the
+    // server fall back to the stored key instead of failing with a 401.
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test Connection'));
+    await tester.pumpAndSettle();
+
+    final test = adapter.requests
+        .singleWhere((r) => r.path == '/api/instances/test');
+    expect(test.body['id'], 'radarr-b');
+    expect(test.body['api_key'], '');
+    expect(find.text('Connection successful!'), findsOneWidget);
+  });
+
+  testWidgets('Test Connection failure surfaces the server reason',
+      (tester) async {
+    const reason =
+        'connection test failed: could not reach server: dial tcp: connection refused';
+    final adapter = _FakeAdapter(testError: reason);
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    // Download clients get the same server-side test as the arrs.
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('SABnzbd').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'URL'), 'http://sabnzbd:8080');
+    await tester.enterText(find.widgetWithText(TextField, 'API Key'), 'key');
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test Connection'));
+    await tester.pumpAndSettle();
+
+    final test = adapter.requests
+        .singleWhere((r) => r.path == '/api/instances/test');
+    expect(test.body['service_type'], 'sabnzbd');
+    expect(find.text(reason), findsOneWidget);
   });
 
   testWidgets('configures instant updates without displaying a webhook token',

@@ -108,6 +108,91 @@ func TestInstanceURLRejectsEmbeddedSecrets(t *testing.T) {
 	}
 }
 
+// Instance URLs are dialed only by the server, so cluster-internal names
+// (Docker service names, k8s cluster DNS, Tailscale MagicDNS) are a supported
+// production configuration — lock in that the URL contract accepts them.
+func TestInstanceURLAcceptsClusterInternalHostnames(t *testing.T) {
+	for _, rawURL := range []string{
+		"http://radarr:7878",
+		"http://sonarr",
+		"https://radarr.media.svc.cluster.local:7878",
+		"http://chaptarr:8787/books",
+	} {
+		inst := &Instance{ServiceType: "sonarr", Name: "TV", URL: rawURL, APIKey: "write-only"}
+		if err := validateRequiredFields(inst); err != nil {
+			t.Fatalf("validateRequiredFields(%q) = %v, want accepted", rawURL, err)
+		}
+	}
+	// A schemeless host:port parses as an opaque URL, not an absolute one.
+	inst := &Instance{ServiceType: "sonarr", Name: "TV", URL: "radarr:7878", APIKey: "write-only"}
+	if err := validateRequiredFields(inst); err == nil {
+		t.Fatal("validateRequiredFields accepted a schemeless URL")
+	}
+}
+
+func TestTestConnectionEndpoint(t *testing.T) {
+	const storedKey = "stored-api-secret"
+	arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/system/status" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("X-Api-Key") != storedKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(arr.Close)
+
+	s := newTestStore(t)
+	stored := &Instance{ServiceType: "radarr", Name: "Movies", URL: arr.URL, APIKey: storedKey}
+	if err := s.Create(stored); err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+
+	h := NewHandler(s, nil)
+	router := chi.NewRouter()
+	router.Post("/instances/test", h.TestConnection)
+	do := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/instances/test", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// A candidate config tests without persisting anything; name is optional
+	// because the Test button is usable before the form is complete.
+	rec := do(`{"service_type":"radarr","url":"` + arr.URL + `","api_key":"` + storedKey + `"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("test candidate = %d %s, want 204", rec.Code, rec.Body.String())
+	}
+
+	// Editing an existing instance: blank credentials fall back to the stored
+	// write-only ones, so re-testing an unmodified form passes.
+	rec = do(`{"id":"` + stored.ID + `","url":"` + arr.URL + `","api_key":""}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("test with stored credentials = %d %s, want 204", rec.Code, rec.Body.String())
+	}
+
+	// A wrong key still fails even when an id is supplied.
+	rec = do(`{"id":"` + stored.ID + `","url":"` + arr.URL + `","api_key":"wrong"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "connection test failed") {
+		t.Fatalf("test with wrong key = %d %s, want 400 connection test failed", rec.Code, rec.Body.String())
+	}
+
+	if rec := do(`{"id":"radarr-missing","url":"` + arr.URL + `"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("test unknown id = %d, want 404", rec.Code)
+	}
+	if rec := do(`{"service_type":"floppy","url":"` + arr.URL + `"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("test unknown service type = %d, want 400", rec.Code)
+	}
+	if rec := do(`not json`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("test invalid body = %d, want 400", rec.Code)
+	}
+}
+
 func TestValidateArrURLDoesNotFollowRedirects(t *testing.T) {
 	var redirectedRequests atomic.Int32
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
