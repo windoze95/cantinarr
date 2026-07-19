@@ -134,13 +134,15 @@ Included AI is an explicit per-user entitlement for new accounts; the initial ad
 | OpenAI (OAuth) | Personal link under Settings > AI Access, or an admin-managed shared link | Uses a ChatGPT account's Codex allowance for the selected personal or included model; the admin-shared link also powers server-owned remediation. Per-user shared chat access is opt-in and carries a quota/cost warning |
 | Trakt client ID | Admin UI | Enhances discovery + fallback ID bridging |
 
+**Instance URLs are dialed only by the Cantinarr server** -- phones and browsers never contact them, so cluster-internal names (Docker service names like `http://radarr:7878`, Kubernetes cluster DNS, Tailscale MagicDNS) are the recommended form, and the arrs never need to be exposed outside their network. The in-app **Test Connection** button runs from the server too, so it tells the truth about these URLs. Plain `http` is fully supported on a trusted network; `https` needs a certificate the server's container trusts (mount an internal CA into the image trust store -- a self-signed cert otherwise fails the connection test with an x509 error). Two service-specific notes: SABnzbd's hostname verification rejects service names it doesn't know, so add the name to its `host_whitelist` (Config > Special) or set the container's hostname to match; for Transmission enter just `scheme://host:port` -- Cantinarr appends `/transmission/rpc`. Poster and fanart images load on devices straight from the TMDB/TVDB CDNs, so client devices still need internet egress to those hosts.
+
 Optional server env vars for deployment tuning:
 
 | Variable | Default | Description |
 |---|---|---|
 | `CANTINARR_PORT` | `8585` | HTTP listen port |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
-| `CANTINARR_PUBLIC_URL` | direct request origin | Trusted public origin (for example `https://cantinarr.example.com`) used when installing authenticated Radarr/Sonarr webhooks; recommended behind a reverse proxy |
+| `CANTINARR_PUBLIC_URL` | direct request origin | Origin the Radarr/Sonarr containers POST webhooks back to, so it must be resolvable and reachable **from the arrs themselves** -- in same-network/cluster deployments a cluster-internal origin like `http://cantinarr:8585` is usually the right value. Set it explicitly behind a reverse proxy (forwarded headers are deliberately ignored) |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for signing short-lived access tokens. Device sessions do not depend on it: changing it never signs anyone out |
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
 | `CANTINARR_AI_PROVIDER` | `anthropic` | Fallback provider for the included server AI profile when none is saved in the admin UI (`anthropic`, `openai`, `gemini`, or `codex`) |

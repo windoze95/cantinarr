@@ -525,7 +525,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               const Text(
                 'Optional. When set, the "update available" banner links here so '
                 'you can apply the update in your own container manager (e.g. an '
-                'Unraid Docker page or Portainer). Leave blank to clear.',
+                'Unraid Docker page or Portainer). The link opens on your '
+                'devices, so use an address they can reach — a cluster-internal '
+                'name only the server resolves won\'t work from a phone. Leave '
+                'blank to clear.',
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
               const SizedBox(height: 12),
