@@ -154,22 +154,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 			emit(map[string]any{"media_results": structuredData})
 		},
 	}
-	var assistantText strings.Builder
-	type codexToolRecord struct {
-		name    string
-		input   json.RawMessage
-		result  string
-		isError bool
-	}
-	var codexRecordsMu sync.Mutex
-	var codexRecords []codexToolRecord
-	originalOnText := callbacks.OnText
-	callbacks.OnText = func(value string) {
-		if remaining := maxStoredTextBytes - assistantText.Len(); remaining > 0 {
-			assistantText.WriteString(boundedString(value, remaining))
-		}
-		originalOnText(value)
-	}
+	codexBuilder := &codexTranscriptBuilder{}
 
 	chatCtx := ChatContext{
 		UserID:          claims.UserID,
@@ -239,7 +224,10 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 			dynamicContext(chatCtx),
 			renderCodexPrompt(history),
 			codexapp.Callbacks{
-				OnText: callbacks.OnText,
+				OnText: func(value string) {
+					codexBuilder.Text(value)
+					callbacks.OnText(value)
+				},
 				OnToolStart: func(name string) {
 					if callbacks.OnToolStart != nil {
 						callbacks.OnToolStart(name, toolLabel(name))
@@ -247,48 +235,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 				},
 				OnToolEnd:    callbacks.OnToolEnd,
 				OnToolResult: callbacks.OnToolResult,
-				OnToolRecord: func(name string, input json.RawMessage, result string, isError bool) {
-					recordInput := append(json.RawMessage(nil), input...)
-					if len(recordInput) > maxStoredToolInputBytes || !json.Valid(recordInput) {
-						recordInput = json.RawMessage(`{"_cantinarr_truncated":true}`)
-					}
-					codexRecordsMu.Lock()
-					codexRecords = append(codexRecords, codexToolRecord{
-						name:    name,
-						input:   recordInput,
-						result:  boundedString(result, maxStoredToolResultBytes),
-						isError: isError,
-					})
-					codexRecordsMu.Unlock()
-				},
+				OnToolRecord: codexBuilder.ToolRecord,
 			},
 		)
 		if err == nil {
-			finalHistory = cloneTranscript(history)
-			codexRecordsMu.Lock()
-			records := append([]codexToolRecord(nil), codexRecords...)
-			codexRecordsMu.Unlock()
-			if len(records) > 0 {
-				toolUses := make([]transcriptBlock, 0, len(records))
-				toolResults := make([]transcriptBlock, 0, len(records))
-				for _, record := range records {
-					id := "codex_" + newConversationID()
-					toolUses = append(toolUses, transcriptBlock{
-						Type: blockTypeToolUse, ID: id, Name: record.name, Input: record.input,
-					})
-					toolResults = append(toolResults, transcriptBlock{
-						Type: blockTypeToolResult, ToolUseID: id, Name: record.name,
-						Content: record.result, IsError: record.isError,
-					})
-				}
-				finalHistory = append(finalHistory,
-					transcriptMessage{Role: agentRoleAssistant, Content: toolUses},
-					transcriptMessage{Role: agentRoleUser, Content: toolResults},
-				)
-			}
-			if text := strings.TrimSpace(assistantText.String()); text != "" {
-				finalHistory = append(finalHistory, textTranscriptMessage(agentRoleAssistant, text))
-			}
+			finalHistory = append(cloneTranscript(history), codexBuilder.Finish()...)
 		}
 	default:
 		err = fmt.Errorf("unsupported AI provider: %s", aiConfig.Provider)
