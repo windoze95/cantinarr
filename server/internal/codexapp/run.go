@@ -123,6 +123,10 @@ type runBehavior struct {
 	callbacks       Callbacks
 	captured        *AutonomousTurnResult
 	maxOutput       int64
+	// historyItems are raw Responses API items injected into the fresh thread
+	// via thread/inject_items before the turn starts, so the model sees prior
+	// turns natively instead of a flattened text replay.
+	historyItems []json.RawMessage
 }
 
 // Run executes one ephemeral, dynamic-tools-only Codex turn. baseInstructions
@@ -166,6 +170,7 @@ func (m *Manager) RunWithAccountSession(
 	actorID int64,
 	deviceID string,
 	role, model, baseInstructions, developerInstructions, prompt string,
+	historyItems []json.RawMessage,
 	callbacks Callbacks,
 ) (err error) {
 	return m.runWithAccount(ctx, account, model, baseInstructions, developerInstructions, prompt, runBehavior{
@@ -177,6 +182,7 @@ func (m *Manager) RunWithAccountSession(
 		requireSharedAI: account.shared,
 		executeTools:    true,
 		callbacks:       callbacks,
+		historyItems:    historyItems,
 	})
 }
 
@@ -485,6 +491,20 @@ func (m *Manager) runWithAccount(
 	stateMu.Lock()
 	threadID = threadStart.Thread.ID
 	stateMu.Unlock()
+
+	if len(behavior.historyItems) > 0 {
+		var injected struct{}
+		if requestErr := session.request(runCtx, "thread/inject_items", map[string]any{
+			"threadId": threadStart.Thread.ID,
+			"items":    behavior.historyItems,
+		}, &injected); requestErr != nil {
+			classified := contextOrClassified(runCtx, requestErr)
+			if errors.Is(classified, ErrProvider) {
+				return ErrHistoryInject
+			}
+			return classified
+		}
+	}
 
 	var turnStart struct {
 		Turn struct {

@@ -149,6 +149,7 @@ const (
 	CodeStorage          Code = "storage_error"
 	CodeInvalidInput     Code = "invalid_input"
 	CodeBusy             Code = "busy"
+	CodeHistoryInject    Code = "history_inject"
 )
 
 // Error is intentionally small: it never wraps process stderr, OAuth payloads,
@@ -177,6 +178,10 @@ var (
 	ErrStorage          = &Error{Code: CodeStorage, message: "Codex account storage failed"}
 	ErrInvalidInput     = &Error{Code: CodeInvalidInput, message: "invalid Codex request"}
 	ErrBusy             = &Error{Code: CodeBusy, message: "Codex account is busy"}
+	// ErrHistoryInject reports that thread/inject_items failed for reasons other
+	// than auth or usage limits. Native history replay is an enhancement, so
+	// callers retry the turn with a flattened prompt instead of surfacing it.
+	ErrHistoryInject = &Error{Code: CodeHistoryInject, message: "Codex history injection failed"}
 )
 
 // IsCode is a convenience for HTTP adapters that map safe error classes to
