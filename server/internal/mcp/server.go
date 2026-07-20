@@ -281,6 +281,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.getRecommendations(input)
 	case "check_request_status":
 		return s.checkRequestStatus(input, callCtx.UserID)
+	case "get_request_options":
+		return s.getRequestOptions(input, callCtx.UserID, callCtx.Role)
 	case "request_media":
 		return s.requestMedia(input, callCtx.UserID)
 	case "list_my_requests":
