@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/auth/logic/auth_provider.dart';
 import '../config/app_config.dart';
 import 'backend_auth_interceptor.dart';
+import 'backend_http_adapter.dart';
 import 'safe_http_log_interceptor.dart';
 
 /// Provides an authenticated Dio instance configured for the backend.
@@ -32,6 +33,10 @@ final backendClientProvider = Provider<Dio>((ref) {
     receiveTimeout: AppConfig.requestTimeout,
     headers: {'Content-Type': 'application/json'},
   ));
+  final platformAdapter = createBackendHttpClientAdapter();
+  if (platformAdapter != null) {
+    dio.httpClientAdapter = platformAdapter;
+  }
 
   final authNotifier = ref.read(authProvider.notifier);
 
@@ -48,11 +53,15 @@ final backendClientProvider = Provider<Dio>((ref) {
     onAuthExpired: () {
       authNotifier.onAuthExpired();
     },
+    // Retrying through the same adapter preserves incremental Fetch streaming
+    // when a Web chat request first has to refresh an expired access token.
+    getRetryAdapter: () => dio.httpClientAdapter,
   ));
 
   if (kDebugMode) {
     dio.interceptors.add(SafeHttpLogInterceptor(logPrint: debugPrint));
   }
 
+  ref.onDispose(() => dio.close(force: true));
   return dio;
 });

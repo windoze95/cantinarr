@@ -90,7 +90,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Focused attention menu** -- admins can independently keep Approvals, Issues, and Agent fixes pinned or show each only while requests await approval, an issue needs attention or is being tracked, or a fix awaits review. These device-local switches appear on the queue screens and in Settings, so a hidden entry can always be restored; passive tracking keeps the Issues entry available without inflating its actionable badge.
 
 ### AI assistant
-- **Multi-provider chat** with SSE streaming, visible tool activity, and a poster carousel for results. Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link OpenAI (OAuth) with a ChatGPT browser device code. Admins can configure the same choices as an included server profile and grant it per user. Personal overrides fail closed instead of silently spending shared quota.
+- **Multi-provider chat** with incremental SSE streaming on native and web, visible tool activity, and a poster carousel for results. Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link OpenAI (OAuth) with a ChatGPT browser device code. Admins can configure the same choices as an included server profile and grant it per user. Personal overrides fail closed instead of silently spending shared quota.
 - **Server-side tools** -- the assistant searches, checks availability, and requests on your behalf; admins can triage queues conversationally.
 - **Configuration receipts** -- explicit admin requests can update supported connected-app settings in one turn, without copying a confirmation command back into chat. Supported profile and custom-format writes return a trusted review receipt; quality-profile receipts also lead to a guarded restore when the live state still matches. Assistant prose never creates controls.
 - **Persistent session** -- the focused `/assistant` workspace keeps one conversation alive across navigation (30-minute idle expiry).
@@ -127,7 +127,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 ## Getting Started
 
 ### Prerequisites
-- Flutter (stable channel), Dart SDK 3.3+
+- Flutter (stable channel), Dart SDK 3.4+
 - A running [Cantinarr server](../server/)
 
 ### Run the app
@@ -227,6 +227,7 @@ The router guard redirects unauthenticated users to `/login`, remembers safe int
 | `flutter_riverpod` | State management (hand-written providers) |
 | `go_router` | Shell + stateful tab-shell routing with guards |
 | `dio` | HTTP client with auth/refresh interceptor |
+| `http` | Fetch-backed incremental AI chat streaming on web |
 | `web_socket_channel` | Realtime backend events |
 | `cached_network_image` + `flutter_cache_manager` | Tuned shared image cache |
 | `flutter_secure_storage` / `shared_preferences` | Tokens + device id / lightweight prefs |

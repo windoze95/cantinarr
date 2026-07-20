@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cantinarr/features/ai_assistant/data/ai_chat_service.dart';
 import 'package:cantinarr/features/ai_assistant/data/ai_models.dart';
 import 'package:cantinarr/features/ai_assistant/logic/ai_chat_provider.dart';
@@ -83,18 +85,95 @@ void main() {
       isNot(contains('provider account details')),
     );
   });
+
+  test('publishes tool progress before the assistant stream completes',
+      () async {
+    final service = _ControlledAiChatService();
+    final notifier = AiChatNotifier(chatService: service);
+    addTearDown(notifier.dispose);
+
+    var completed = false;
+    final send = notifier.sendMessage('update my profiles').whenComplete(() {
+      completed = true;
+    });
+    await pumpEventQueue();
+
+    service.events.add(ToolStartEvent(
+      'get_quality_profiles',
+      'Getting quality profiles',
+    ));
+    await pumpEventQueue();
+
+    final streamingMessage = notifier.state.messages.last;
+    expect(completed, isFalse);
+    expect(streamingMessage.isStreaming, isTrue);
+    expect(streamingMessage.toolActivity.single.name, 'get_quality_profiles');
+
+    service.events.add(TextChunkEvent('Working on it.'));
+    await service.events.close();
+    await send;
+
+    expect(notifier.state.messages.last.content, 'Working on it.');
+    expect(notifier.state.messages.last.isStreaming, isFalse);
+  });
+
+  test('clearing chat aborts the active request and ignores late events',
+      () async {
+    final service = _ControlledAiChatService();
+    final notifier = AiChatNotifier(chatService: service);
+    addTearDown(notifier.dispose);
+
+    final send = notifier.sendMessage('change every profile');
+    await pumpEventQueue();
+    expect(service.cancelToken, isNotNull);
+    expect(service.cancelToken!.isCancelled, isFalse);
+
+    notifier.clearChat();
+
+    expect(service.cancelToken!.isCancelled, isTrue);
+    service.events.add(ConversationIdEvent('late-conversation-id'));
+    service.events.add(TextChunkEvent('late response'));
+    await service.events.close();
+    await send;
+
+    expect(notifier.state.messages, hasLength(1));
+    expect(
+      notifier.state.messages.single.content,
+      'Chat cleared! What can I help you find?',
+    );
+    expect(notifier.conversationId, isNull);
+    expect(notifier.state.isLoading, isFalse);
+  });
 }
 
 class _FailingAiChatService extends AiChatService {
   final Object failure;
 
   _FailingAiChatService(this.failure)
-      : super(backendDio: Dio(), isWeb: false);
+      : super(backendDio: Dio());
 
   @override
   Stream<ChatStreamEvent> sendMessage({
     required List<ChatMessage> messages,
     String? conversationId,
+    CancelToken? cancelToken,
   }) =>
       Stream.error(failure);
+}
+
+class _ControlledAiChatService extends AiChatService {
+  final events = StreamController<ChatStreamEvent>();
+  CancelToken? cancelToken;
+
+  _ControlledAiChatService() : super(backendDio: Dio());
+
+  @override
+  Stream<ChatStreamEvent> sendMessage({
+    required List<ChatMessage> messages,
+    String? conversationId,
+    CancelToken? cancelToken,
+  }) async* {
+    this.cancelToken = cancelToken;
+    yield* events.stream;
+  }
 }

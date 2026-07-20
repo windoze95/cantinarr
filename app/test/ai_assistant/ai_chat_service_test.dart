@@ -13,7 +13,7 @@ void main() {
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
 
-    final events = await AiChatService(backendDio: dio, isWeb: false)
+    final events = await AiChatService(backendDio: dio)
         .sendMessage(messages: const [])
         .toList();
 
@@ -24,8 +24,7 @@ void main() {
     expect(receipt.changes.single.after, '+100');
   });
 
-  test('disables the whole-request timeout for browser chat streams',
-      () async {
+  test('keeps a connection timeout without a response deadline', () async {
     final adapter = _SseAdapter();
     final dio = Dio(BaseOptions(
       baseUrl: 'http://localhost',
@@ -33,23 +32,7 @@ void main() {
       receiveTimeout: const Duration(seconds: 15),
     ))..httpClientAdapter = adapter;
 
-    await AiChatService(backendDio: dio, isWeb: true)
-        .sendMessage(messages: const [])
-        .toList();
-
-    expect(adapter.requests.single.connectTimeout, Duration.zero);
-    expect(adapter.requests.single.receiveTimeout, Duration.zero);
-  });
-
-  test('retains the connection timeout for native chat streams', () async {
-    final adapter = _SseAdapter();
-    final dio = Dio(BaseOptions(
-      baseUrl: 'http://localhost',
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 15),
-    ))..httpClientAdapter = adapter;
-
-    await AiChatService(backendDio: dio, isWeb: false)
+    await AiChatService(backendDio: dio)
         .sendMessage(messages: const [])
         .toList();
 
@@ -57,10 +40,34 @@ void main() {
         const Duration(seconds: 15));
     expect(adapter.requests.single.receiveTimeout, Duration.zero);
   });
+
+  test('preserves multi-byte text split across network chunks', () async {
+    final bytes = utf8.encode(
+      'data: ${jsonEncode({'text': 'Ready 👋'})}\n\n'
+      'data: [DONE]\n\n',
+    );
+    final emojiStart = bytes.indexOf(0xf0);
+    expect(emojiStart, greaterThan(0));
+    final adapter = _SseAdapter(chunks: [
+      Uint8List.fromList(bytes.sublist(0, emojiStart + 2)),
+      Uint8List.fromList(bytes.sublist(emojiStart + 2)),
+    ]);
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    final events = await AiChatService(backendDio: dio)
+        .sendMessage(messages: const [])
+        .toList();
+
+    expect(events.whereType<TextChunkEvent>().single.text, 'Ready 👋');
+  });
 }
 
 class _SseAdapter implements HttpClientAdapter {
+  final List<Uint8List>? chunks;
   final requests = <RequestOptions>[];
+
+  _SseAdapter({this.chunks});
 
   @override
   Future<ResponseBody> fetch(
@@ -69,6 +76,15 @@ class _SseAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     requests.add(options);
+    if (chunks != null) {
+      return ResponseBody(
+        Stream.fromIterable(chunks!),
+        200,
+        headers: {
+          'content-type': ['text/event-stream'],
+        },
+      );
+    }
     final receipt = {
       'id': 42,
       'actor_user_id': 1,

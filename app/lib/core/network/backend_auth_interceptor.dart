@@ -18,6 +18,7 @@ class BackendAuthInterceptor extends Interceptor {
   final Future<void> Function(String accessToken, String refreshToken)
       onTokenRefreshed;
   final VoidCallback onAuthExpired;
+  final HttpClientAdapter Function()? getRetryAdapter;
 
   /// Guards against concurrent refresh attempts.
   Completer<bool>? _refreshCompleter;
@@ -28,6 +29,7 @@ class BackendAuthInterceptor extends Interceptor {
     required this.getServerUrl,
     required this.onTokenRefreshed,
     required this.onAuthExpired,
+    this.getRetryAdapter,
   });
 
   @override
@@ -64,6 +66,10 @@ class BackendAuthInterceptor extends Interceptor {
       final opts = err.requestOptions;
       opts.headers['Authorization'] = 'Bearer ${getAccessToken()}';
       final dio = Dio();
+      final retryAdapter = getRetryAdapter?.call();
+      if (retryAdapter != null) {
+        dio.httpClientAdapter = retryAdapter;
+      }
       final response = await dio.fetch(opts);
       handler.resolve(response);
     } catch (retryErr) {

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import '../../config_changes/data/config_change_models.dart';
 import 'ai_models.dart';
 
@@ -10,11 +9,8 @@ import 'ai_models.dart';
 /// Uses SSE streaming for real-time response delivery.
 class AiChatService {
   final Dio _backendDio;
-  final bool _isWeb;
 
-  AiChatService({required Dio backendDio, bool? isWeb})
-      : _backendDio = backendDio,
-        _isWeb = isWeb ?? kIsWeb;
+  AiChatService({required Dio backendDio}) : _backendDio = backendDio;
 
   /// Send messages and stream response events via SSE.
   ///
@@ -24,6 +20,7 @@ class AiChatService {
   Stream<ChatStreamEvent> sendMessage({
     required List<ChatMessage> messages,
     String? conversationId,
+    CancelToken? cancelToken,
   }) async* {
     final apiMessages = messages
         .where((m) => m.role != ChatRole.system)
@@ -39,26 +36,25 @@ class AiChatService {
       },
       options: Options(
         responseType: ResponseType.stream,
-        // Agent thinking and slow tools can legitimately run longer than the
-        // normal request timeout. dio_web_adapter implements XMLHttpRequest's
-        // whole-request timeout as connectTimeout + receiveTimeout, so leaving
-        // the inherited 15s connect timeout beside a zero receive timeout
-        // still aborts browser chat after 15s and reports a misleading zero
-        // receive timeout. Disable both browser XHR components; native keeps
-        // its bounded connection setup while the server's SSE keepalives cover
-        // inter-chunk inactivity.
-        connectTimeout:
-            _isWeb ? Duration.zero : _backendDio.options.connectTimeout,
+        // Chat turns can legitimately take minutes. Keep a bounded connection
+        // setup, but never impose an inactivity/whole-response deadline after
+        // headers arrive. Web uses the Fetch-backed streaming adapter while
+        // native Dio receives the server's SSE stream directly.
+        connectTimeout: _backendDio.options.connectTimeout,
         receiveTimeout: Duration.zero,
         headers: {'Accept': 'text/event-stream'},
       ),
+      cancelToken: cancelToken,
     );
 
-    final stream = resp.data.stream as Stream<List<int>>;
+    final byteStream = resp.data.stream as Stream<List<int>>;
     String buffer = '';
 
-    await for (final chunk in stream) {
-      buffer += utf8.decode(chunk);
+    // Browser ReadableStream chunks can split a multi-byte character. Decode
+    // across chunk boundaries instead of treating each network chunk as a
+    // standalone UTF-8 document.
+    await for (final decoded in utf8.decoder.bind(byteStream)) {
+      buffer += decoded;
 
       // Parse SSE events from the buffer
       while (buffer.contains('\n\n')) {

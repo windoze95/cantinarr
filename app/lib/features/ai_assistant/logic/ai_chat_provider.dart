@@ -130,6 +130,7 @@ class AiChatNotifier extends ChangeNotifier {
   final AiChatService _chatService;
   final _uuid = const Uuid();
   bool _disposed = false;
+  CancelToken? _activeCancelToken;
 
   /// Server-assigned conversation ID; sent on every turn so the server can
   /// keep full tool context. Reset when the chat is cleared.
@@ -183,6 +184,8 @@ class AiChatNotifier extends ChangeNotifier {
     final mediaItems = <MediaResultItem>[];
     final configurationChanges = <ConfigChange>[];
     final toolActivity = <ToolActivity>[];
+    final cancelToken = CancelToken();
+    _activeCancelToken = cancelToken;
     String? errorText;
 
     void upsertResponse({required bool streaming}) {
@@ -218,7 +221,11 @@ class AiChatNotifier extends ChangeNotifier {
       await for (final event in _chatService.sendMessage(
         messages: history,
         conversationId: _conversationId,
+        cancelToken: cancelToken,
       )) {
+        // clearChat (or a future turn) owns every piece of conversation state,
+        // including the server-assigned ID, once the generation changes.
+        if (generation != _generation) break;
         switch (event) {
           case ConversationIdEvent(:final id):
             _conversationId = id;
@@ -279,6 +286,10 @@ class AiChatNotifier extends ChangeNotifier {
       if (generation == _generation) {
         _conversationId = null;
         state = state.copyWith(isLoading: false);
+      }
+    } finally {
+      if (identical(_activeCancelToken, cancelToken)) {
+        _activeCancelToken = null;
       }
     }
   }
@@ -345,6 +356,8 @@ class AiChatNotifier extends ChangeNotifier {
     if (_disposed) return;
     _conversationId = null;
     _generation++; // orphan any in-flight stream
+    _activeCancelToken?.cancel('Chat cleared');
+    _activeCancelToken = null;
     state = const AiChatState();
     _addMessage(ChatMessage(
       id: _uuid.v4(),
@@ -358,6 +371,8 @@ class AiChatNotifier extends ChangeNotifier {
   @override
   void dispose() {
     _generation++;
+    _activeCancelToken?.cancel('Chat disposed');
+    _activeCancelToken = null;
     _disposed = true;
     super.dispose();
   }

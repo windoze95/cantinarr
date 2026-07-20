@@ -79,7 +79,7 @@ Open `http://your-server:8585` -- the setup wizard walks you through creating an
 cd server
 go run ./cmd/server
 
-# App (requires Flutter stable, Dart SDK 3.3+)
+# App (requires Flutter stable, Dart SDK 3.4+)
 cd app
 flutter pub get
 flutter run
