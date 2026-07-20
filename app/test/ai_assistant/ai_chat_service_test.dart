@@ -9,10 +9,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('parses a structured configuration-change SSE receipt', () async {
+    final adapter = _SseAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
-      ..httpClientAdapter = _SseAdapter();
+      ..httpClientAdapter = adapter;
 
-    final events = await AiChatService(backendDio: dio)
+    final events = await AiChatService(backendDio: dio, isWeb: false)
         .sendMessage(messages: const [])
         .toList();
 
@@ -22,15 +23,52 @@ void main() {
     expect(receipt.resourceName, 'Very High (4K)');
     expect(receipt.changes.single.after, '+100');
   });
+
+  test('disables the whole-request timeout for browser chat streams',
+      () async {
+    final adapter = _SseAdapter();
+    final dio = Dio(BaseOptions(
+      baseUrl: 'http://localhost',
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 15),
+    ))..httpClientAdapter = adapter;
+
+    await AiChatService(backendDio: dio, isWeb: true)
+        .sendMessage(messages: const [])
+        .toList();
+
+    expect(adapter.requests.single.connectTimeout, Duration.zero);
+    expect(adapter.requests.single.receiveTimeout, Duration.zero);
+  });
+
+  test('retains the connection timeout for native chat streams', () async {
+    final adapter = _SseAdapter();
+    final dio = Dio(BaseOptions(
+      baseUrl: 'http://localhost',
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 15),
+    ))..httpClientAdapter = adapter;
+
+    await AiChatService(backendDio: dio, isWeb: false)
+        .sendMessage(messages: const [])
+        .toList();
+
+    expect(adapter.requests.single.connectTimeout,
+        const Duration(seconds: 15));
+    expect(adapter.requests.single.receiveTimeout, Duration.zero);
+  });
 }
 
 class _SseAdapter implements HttpClientAdapter {
+  final requests = <RequestOptions>[];
+
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    requests.add(options);
     final receipt = {
       'id': 42,
       'actor_user_id': 1,

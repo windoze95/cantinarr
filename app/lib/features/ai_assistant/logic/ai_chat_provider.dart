@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -307,8 +308,31 @@ class AiChatNotifier extends ChangeNotifier {
       .toList();
 
   String _friendlyError(Object e) {
-    final text = e.toString();
-    return 'Failed to get a response: ${text.length > 100 ? '${text.substring(0, 100)}...' : text}';
+    if (e is DioException) {
+      if (e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.sendTimeout) {
+        return 'The assistant did not finish responding in time. If this '
+            'request could change settings, check Configuration History '
+            'before retrying.';
+      }
+      if (e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout) {
+        return 'Cantinarr could not reach the assistant. Check your '
+            'connection, then try again.';
+      }
+      if (e.type == DioExceptionType.cancel) {
+        return 'The assistant request was cancelled.';
+      }
+
+      final statusCode = e.response?.statusCode;
+      if (statusCode == 429) {
+        return 'The assistant is busy. Wait a moment, then try again.';
+      }
+      if (statusCode != null && statusCode >= 500) {
+        return 'The assistant service had a problem. Try again in a moment.';
+      }
+    }
+    return 'Something went wrong while contacting the assistant. Try again.';
   }
 
   void _addMessage(ChatMessage message) {
