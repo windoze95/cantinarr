@@ -472,7 +472,7 @@ func (m *Manager) runWithAccount(
 			return dynamicToolResponse(text, false), nil
 		}
 		text := boundedToolText(result.Text)
-		if result.StructuredData != nil && mcp.ToolsWithUI[call.Tool] {
+		if result.StructuredData != nil && mcp.ToolsWithStructuredResults[call.Tool] {
 			sink.toolResult(call.Tool, result.StructuredData)
 		}
 		sink.toolEnd(call.Tool, true)

@@ -373,7 +373,7 @@ func TestRunWithAccountSessionProvenanceCarriesTrustedInteractiveTurn(t *testing
 
 	wantProvenance := mcp.CallContext{
 		Origin:            mcp.OriginInteractiveChat,
-		TrustedUserText:   "APPLY profile_change_current",
+		TrustedUserText:   "Set the x265 score to 25",
 		InteractiveTurnID: "interactive-turn-2",
 	}
 	var observed mcp.CallContext

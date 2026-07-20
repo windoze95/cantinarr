@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
+import '../../config_changes/ui/config_change_receipt_card.dart';
 import '../data/ai_models.dart';
 
 /// A single chat message bubble with optional media result cards.
@@ -122,6 +123,15 @@ class ChatBubble extends StatelessWidget {
                       ? _MediaResultsCarousel(items: message.mediaResults)
                       : const _MediaResultsLoadingStrip(),
                 ],
+
+                // Configuration controls come only from the server's typed SSE
+                // receipt. Assistant prose remains passive selectable text.
+                if (!isUser && message.configurationChanges.isNotEmpty)
+                  for (final change in message.configurationChanges)
+                    ConfigChangeReceiptCard(
+                      key: ValueKey('configuration-change-${change.id}'),
+                      change: change,
+                    ),
               ],
             ),
           ),

@@ -82,7 +82,7 @@ func TestExternalMCPDirectCallHasNoTrustedInteractiveProvenance(t *testing.T) {
 		t.Fatalf("direct in-app-only call result = %#v", result)
 	}
 	content, ok := mcplib.AsTextContent(result.Content[0])
-	if !ok || !strings.Contains(content.Text, "new in-app chat message") {
+	if !ok || !strings.Contains(content.Text, "authenticated in-app AI chat") {
 		t.Fatalf("direct in-app-only call did not fail closed: %#v", result.Content)
 	}
 }

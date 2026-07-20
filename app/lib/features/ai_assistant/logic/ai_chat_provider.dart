@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/network/backend_client.dart';
+import '../../config_changes/data/config_change_models.dart';
 import '../data/ai_models.dart';
 import '../data/ai_chat_service.dart';
 
@@ -179,6 +180,7 @@ class AiChatNotifier extends ChangeNotifier {
     final responseId = _uuid.v4();
     final buffer = StringBuffer();
     final mediaItems = <MediaResultItem>[];
+    final configurationChanges = <ConfigChange>[];
     final toolActivity = <ToolActivity>[];
     String? errorText;
 
@@ -194,6 +196,7 @@ class AiChatNotifier extends ChangeNotifier {
         content: buffer.toString(),
         timestamp: DateTime.now(),
         mediaResults: List.unmodifiable(mediaItems),
+        configurationChanges: List.unmodifiable(configurationChanges),
         toolActivity: List.unmodifiable(toolActivity),
         isStreaming: streaming,
         errorText: errorText,
@@ -222,6 +225,8 @@ class AiChatNotifier extends ChangeNotifier {
             buffer.write(text);
           case MediaResultsEvent(:final items):
             mediaItems.addAll(items);
+          case ConfigurationChangeEvent(:final change):
+            configurationChanges.add(change);
           case ToolStartEvent(:final name, :final label):
             toolActivity.add(ToolActivity(name: name, label: label));
           case ToolEndEvent(:final name, :final ok):
@@ -243,6 +248,7 @@ class AiChatNotifier extends ChangeNotifier {
         // to show (text, media, or tool activity).
         if (buffer.isNotEmpty ||
             mediaItems.isNotEmpty ||
+            configurationChanges.isNotEmpty ||
             toolActivity.isNotEmpty) {
           upsertResponse(streaming: true);
         }
@@ -251,7 +257,10 @@ class AiChatNotifier extends ChangeNotifier {
       // An empty response with no explicit error is still a failure from
       // the user's perspective: surface it as a retryable inline error
       // instead of injecting fake assistant text into the transcript.
-      if (errorText == null && buffer.isEmpty && mediaItems.isEmpty) {
+      if (errorText == null &&
+          buffer.isEmpty &&
+          mediaItems.isEmpty &&
+          configurationChanges.isEmpty) {
         errorText = 'I didn\'t get a response. Please try again.';
       }
 

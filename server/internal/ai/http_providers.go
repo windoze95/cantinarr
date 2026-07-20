@@ -182,7 +182,7 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 			IsError:   true,
 		}, nil
 	}
-	if result.StructuredData != nil && mcp.ToolsWithUI[name] && cb.OnToolResult != nil {
+	if result.StructuredData != nil && mcp.ToolsWithStructuredResults[name] && cb.OnToolResult != nil {
 		cb.OnToolResult(name, result.StructuredData)
 	}
 	if cb.OnToolEnd != nil {
@@ -695,7 +695,7 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionC
 				IsError:   true,
 			}, nil
 	}
-	if result.StructuredData != nil && mcp.ToolsWithUI[call.Name] && cb.OnToolResult != nil {
+	if result.StructuredData != nil && mcp.ToolsWithStructuredResults[call.Name] && cb.OnToolResult != nil {
 		cb.OnToolResult(call.Name, result.StructuredData)
 	}
 	if cb.OnToolEnd != nil {

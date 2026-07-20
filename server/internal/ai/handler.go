@@ -157,7 +157,12 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 			emit(map[string]any{"tool_end": map[string]any{"name": name, "ok": ok}})
 		},
 		OnToolResult: func(toolName string, structuredData any) {
-			emit(map[string]any{"media_results": structuredData})
+			switch toolName {
+			case "display_media":
+				emit(map[string]any{"media_results": structuredData})
+			case "apply_profile_change", "upsert_custom_format":
+				emit(map[string]any{"configuration_change": structuredData})
+			}
 		},
 	}
 	codexBuilder := &codexTranscriptBuilder{}

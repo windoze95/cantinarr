@@ -212,6 +212,8 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   Widget _buildChat(BuildContext context, AiChatNotifier notifier) {
     final state = notifier.state;
+    final isAdmin =
+        ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
 
     return Scaffold(
       appBar: AppBar(
@@ -222,6 +224,12 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         ),
         title: const Text('AI Assistant'),
         actions: [
+          if (isAdmin)
+            IconButton(
+              icon: const Icon(Icons.manage_history_outlined),
+              onPressed: () => context.push('/settings/change-history'),
+              tooltip: 'Configuration history',
+            ),
           IconButton(
             icon: const Icon(Icons.add_comment_outlined),
             onPressed: notifier.clearChat,

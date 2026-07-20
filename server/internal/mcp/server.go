@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -97,6 +98,7 @@ type ToolServer struct {
 	settingsMutationMu    sync.Mutex
 	settingsMutationLocks map[string]chan struct{}
 	profileChanges        *profileChangeStore
+	settingsChanges       *settingChangeStore
 }
 
 // SetCallAuthorizer wires the live account/device authorization check used by
@@ -104,6 +106,13 @@ type ToolServer struct {
 // before any requests are served.
 func (s *ToolServer) SetCallAuthorizer(authorizer CallAuthorizer) {
 	s.callAuthorizer = authorizer
+}
+
+// SetSettingsChangeDatabase enables the durable ledger required before any AI
+// settings write. Production wires it during startup; tests that exercise a
+// mutation wire their isolated database through the same boundary.
+func (s *ToolServer) SetSettingsChangeDatabase(database *sql.DB) {
+	s.settingsChanges = newSettingChangeStore(database)
 }
 
 func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, registry *instance.Registry, bridge *tmdb.Bridge) *ToolServer {

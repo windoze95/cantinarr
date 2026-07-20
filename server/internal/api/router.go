@@ -201,6 +201,14 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionAIToolsManage)).Put("/ai-tools/debug", aiToolsHandler.UpdateDebug)
 			r.With(auth.RequirePermission(auth.PermissionAIToolsManage)).Put("/ai-tools/{name}", aiToolsHandler.Update)
 
+			// Append-only history for AI-driven external settings changes. Detail
+			// performs a live comparison; revert refuses drift and appends a linked
+			// inverse record instead of editing history.
+			settingsChangesHandler := mcp.NewSettingsChangeHandler(toolServer)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/external-settings-changes", settingsChangesHandler.List)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/external-settings-changes/{id}", settingsChangesHandler.Get)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/external-settings-changes/{id}/revert", settingsChangesHandler.Revert)
+
 			// Media request management: approval queue + request defaults
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/requests", requestHandler.ListPending)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/approve", requestHandler.Approve)

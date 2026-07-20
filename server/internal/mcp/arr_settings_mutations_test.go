@@ -61,7 +61,15 @@ func (f *fakeCustomFormatMutator) CreateCustomFormatRawContext(_ context.Context
 	f.createBody = append(json.RawMessage(nil), body...)
 	stored := f.createStore
 	if len(stored) == 0 {
-		stored = f.createRaw
+		var responseHead customFormatHead
+		var object map[string]any
+		if json.Unmarshal(f.createRaw, &responseHead) == nil && responseHead.ID > 0 &&
+			json.Unmarshal(body, &object) == nil {
+			object["id"] = responseHead.ID
+			stored, _ = json.Marshal(object)
+		} else {
+			stored = f.createRaw
+		}
 	}
 	if f.createErr == nil && len(stored) > 0 {
 		f.formats = append(f.formats, append(json.RawMessage(nil), stored...))
@@ -75,6 +83,15 @@ func (f *fakeCustomFormatMutator) UpdateCustomFormatRawContext(_ context.Context
 	f.updateCalls++
 	f.updateID = id
 	f.updateBody = append(json.RawMessage(nil), body...)
+	if f.updateErr == nil {
+		for i, raw := range f.formats {
+			head, err := decodeCustomFormatHead(raw)
+			if err == nil && head.ID == id {
+				f.formats[i] = append(json.RawMessage(nil), body...)
+				break
+			}
+		}
+	}
 	return f.updateRaw, f.updateErr
 }
 
@@ -191,7 +208,7 @@ func TestUpsertCustomFormatPreservesNameWhitespaceForIdentity(t *testing.T) {
 	}
 }
 
-func TestUpsertCustomFormatRepeatChangesFromCreateToUpdate(t *testing.T) {
+func TestUpsertCustomFormatRepeatIsAnUnrecordedNoOp(t *testing.T) {
 	fake := &fakeCustomFormatMutator{createRaw: json.RawMessage(`{"id":7,"name":"x265"}`)}
 	payload := json.RawMessage(`{"name":"x265","specifications":[]}`)
 
@@ -200,10 +217,10 @@ func TestUpsertCustomFormatRepeatChangesFromCreateToUpdate(t *testing.T) {
 		t.Fatalf("first upsert = %+v, %v", first, err)
 	}
 	second, err := UpsertCustomFormatHelper(context.Background(), fake, payload, nil)
-	if err != nil || second.Action != "updated" || second.ID != 7 {
+	if err != nil || second.Action != "unchanged" || second.ID != 7 {
 		t.Fatalf("second upsert = %+v, %v", second, err)
 	}
-	if fake.createCalls != 1 || fake.updateCalls != 1 {
+	if fake.createCalls != 1 || fake.updateCalls != 0 {
 		t.Fatalf("calls = create %d update %d", fake.createCalls, fake.updateCalls)
 	}
 }
@@ -291,7 +308,7 @@ func TestUpsertCustomFormatUnknownWriteOutcomesArePartial(t *testing.T) {
 	}{
 		{name: "create", fake: &fakeCustomFormatMutator{createErr: unknown}},
 		{name: "update", fake: &fakeCustomFormatMutator{
-			formats:   []json.RawMessage{json.RawMessage(`{"id":7,"name":"x265","specifications":[]}`)},
+			formats:   []json.RawMessage{json.RawMessage(`{"id":7,"name":"x265","specifications":[{"name":"old","fields":[]}]}`)},
 			updateErr: unknown,
 		}},
 	} {
@@ -358,5 +375,54 @@ func TestUpsertCustomFormatPreflightFailuresDispatchNothing(t *testing.T) {
 				t.Fatalf("preflight failure dispatched create=%d update=%d", fake.createCalls, fake.updateCalls)
 			}
 		})
+	}
+}
+
+func TestCustomFormatReadbackAllowsServerFieldsAndArrayReordering(t *testing.T) {
+	plan := customFormatUpsertPlan{AfterRaw: json.RawMessage(`{
+		"name":"Not English",
+		"specifications":[{
+			"name":"Language",
+			"implementation":"LanguageSpecification",
+			"fields":[{"name":"value","value":1},{"name":"exceptLanguage","value":false}]
+		}]
+	}`)}
+	readback := json.RawMessage(`{
+		"id":7,
+		"name":"Not English",
+		"specifications":[{
+			"implementationName":"Language",
+			"implementation":"LanguageSpecification",
+			"name":"Language",
+			"fields":[{"name":"exceptLanguage","value":false},{"name":"value","value":1}]
+		}]
+	}`)
+	if err := customFormatReadbackMatchesPlan(plan, readback); err != nil {
+		t.Fatalf("compatible normalized readback was rejected: %v", err)
+	}
+
+	missing := json.RawMessage(`{"id":7,"name":"Not English","specifications":[]}`)
+	if err := customFormatReadbackMatchesPlan(plan, missing); err == nil {
+		t.Fatal("readback that dropped the requested specification was accepted")
+	}
+}
+
+func TestBuildCustomFormatPlanTreatsSpecificationReorderingAsNoOp(t *testing.T) {
+	existing := []json.RawMessage{json.RawMessage(`{
+		"id":7,"name":"Not English",
+		"specifications":[{"name":"Language","implementation":"LanguageSpecification",
+			"fields":[{"name":"exceptLanguage","value":false},{"name":"value","value":1}]}]
+	}`)}
+	payload := json.RawMessage(`{
+		"name":"Not English",
+		"specifications":[{"name":"Language","implementation":"LanguageSpecification",
+			"fields":[{"name":"value","value":1},{"name":"exceptLanguage","value":false}]}]
+	}`)
+	plan, err := buildCustomFormatUpsertPlan(existing, payload)
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if plan.Action != "unchanged" {
+		t.Fatalf("reordered equivalent plan action = %q, want unchanged", plan.Action)
 	}
 }

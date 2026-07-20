@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 const (
@@ -30,7 +32,7 @@ var arrProfileToolDefinitions = []Tool{
 		Name:          "preview_profile_change",
 		Permission:    auth.PermissionInstancesManage,
 		InAppChatOnly: true,
-		Description:   "Preview a narrow full-object quality-profile update for one Radarr/Sonarr/Chaptarr instance. Returns a one-use reference and exact confirmation command; it never writes. Available only in Cantinarr's in-app AI chat. Admin only",
+		Description:   "Prepare and show a narrow full-object quality-profile update for one Radarr/Sonarr/Chaptarr instance. Returns a one-use reference that apply_profile_change may consume only in this same authenticated chat turn; it never writes. Use only after an explicit admin request. In-app chat only, admin only",
 		InputSchema: map[string]interface{}{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -53,7 +55,7 @@ var arrProfileToolDefinitions = []Tool{
 		Name:          "apply_profile_change",
 		Permission:    auth.PermissionInstancesManage,
 		InAppChatOnly: true,
-		Description:   "Apply one previewed quality-profile update after the same admin, on the same device, sends the exact APPLY command as a separate in-app chat message. The one-use reference expires after 15 minutes and stale settings are refused. Admin only",
+		Description:   "Apply one same-turn previewed quality-profile update after an explicit admin request. Reauthorizes, refuses stale settings, verifies the complete result, and records a durable before/after history entry for safe review and revert. In-app chat only, admin only",
 		InputSchema: map[string]interface{}{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -116,6 +118,7 @@ type profileSettingsSnapshot struct {
 	ProfileName      string
 	CustomFormats    []json.RawMessage
 	Languages        []json.RawMessage
+	HasLanguages     bool
 	ProfileHash      [32]byte
 	CustomFormatHash [32]byte
 	LanguageHash     [32]byte
@@ -126,7 +129,7 @@ func (s *ToolServer) previewProfileChange(ctx context.Context, input json.RawMes
 	if err := decodeStrictToolInput(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	if callCtx.Origin != OriginInteractiveChat || callCtx.InteractiveTurnID == "" {
+	if callCtx.Origin != OriginInteractiveChat || callCtx.InteractiveTurnID == "" || strings.TrimSpace(callCtx.TrustedUserText) == "" {
 		return &ToolResult{Text: "Quality-profile changes are available only in Cantinarr's authenticated in-app AI chat."}, nil
 	}
 	if params.ProfileID <= 0 {
@@ -247,16 +250,15 @@ func (s *ToolServer) applyProfileChange(ctx context.Context, input json.RawMessa
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	reference := params.ChangeReference
-	if callCtx.Origin != OriginInteractiveChat || callCtx.InteractiveTurnID == "" ||
-		callCtx.TrustedUserText != "APPLY "+reference {
-		return &ToolResult{Text: "No profile change was applied. Send the exact APPLY command from a preview as the entire text of a new in-app chat message."}, nil
+	if callCtx.Origin != OriginInteractiveChat || callCtx.InteractiveTurnID == "" || strings.TrimSpace(callCtx.TrustedUserText) == "" {
+		return &ToolResult{Text: "Quality-profile changes are available only in Cantinarr's authenticated in-app AI chat."}, nil
 	}
 	if s.profileChanges == nil {
 		return &ToolResult{Text: "No valid profile change is pending. Run preview_profile_change again."}, nil
 	}
-	proposal, ok := s.profileChanges.claim(reference, callCtx.UserID, callCtx.DeviceID, callCtx.InteractiveTurnID, callCtx.TrustedUserText, callCtx.Origin)
+	proposal, ok := s.profileChanges.claimAutonomous(reference, callCtx.UserID, callCtx.DeviceID, callCtx.InteractiveTurnID, callCtx.Origin)
 	if !ok {
-		return &ToolResult{Text: "No valid profile change is pending for this user, device, and later chat turn. It may be expired, superseded, already used, or from the current turn. Run preview_profile_change again."}, nil
+		return &ToolResult{Text: "No valid same-turn profile change is pending for this user and device. It may be expired, superseded, already used, or from another chat turn. Run preview_profile_change again in response to the admin's current request."}, nil
 	}
 
 	unlock, err := s.lockArrSettingsMutation(ctx, proposal.Service, proposal.InstanceID)
@@ -284,7 +286,7 @@ func (s *ToolServer) applyProfileChange(ctx context.Context, input json.RawMessa
 		return &ToolResult{Text: "Quality-profile writes are no longer available for the selected instance. No write was attempted; preview again after fixing the instance."}, nil
 	}
 
-	snapshot, err := loadProfileSettingsSnapshot(ctx, mutator, proposal.ProfileID, proposal.HasLanguageHash)
+	snapshot, err := loadProfileSettingsSnapshot(ctx, mutator, proposal.ProfileID, proposal.HasLanguageHash || proposal.Service == "radarr")
 	if err != nil {
 		return nil, consumedProfileReferenceError(err)
 	}
@@ -298,6 +300,16 @@ func (s *ToolServer) applyProfileChange(ctx context.Context, input json.RawMessa
 	if err := verifyPreviewedProfileBody(proposal, body, diff); err != nil {
 		return staleProfileChangeResult(), nil
 	}
+	fields, err := profileSettingFieldChanges(snapshot.ProfileRaw, body, snapshot.CustomFormats, proposal.Plan)
+	if err != nil {
+		return nil, consumedProfileReferenceError(err)
+	}
+	dependencyHash := profileDependencyHash(snapshot)
+	instanceName := s.arrInstanceName(proposal.Service, proposal.InstanceID)
+	if instanceName == "" {
+		return &ToolResult{Text: "The selected arr instance no longer has a readable identity. No write was attempted; preview again after fixing the instance."}, nil
+	}
+	var historyChange storedSettingChange
 
 	beforeWrite := func(ctx context.Context) error {
 		var guardErr error
@@ -319,21 +331,46 @@ func (s *ToolServer) applyProfileChange(ctx context.Context, input json.RawMessa
 		if !ok {
 			return errProfileTargetChanged
 		}
-		latest, err := loadProfileSettingsSnapshot(ctx, freshMutator, proposal.ProfileID, proposal.HasLanguageHash)
+		latest, err := loadProfileSettingsSnapshot(ctx, freshMutator, proposal.ProfileID, proposal.HasLanguageHash || proposal.Service == "radarr")
 		if err != nil {
 			return err
 		}
 		if !latest.matches(proposal) {
 			return errProfilePreviewStale
 		}
+		if profileDependencyHash(latest) != dependencyHash {
+			return errProfilePreviewStale
+		}
 		latestBody, latestDiff, err := mutateProfileWithPlan(proposal.Service, latest.ProfileRaw, latest.CustomFormats, proposal.Plan)
 		if err != nil {
 			return err
 		}
-		return verifyPreviewedProfileBody(proposal, latestBody, latestDiff)
+		if err := verifyPreviewedProfileBody(proposal, latestBody, latestDiff); err != nil {
+			return err
+		}
+		historyChange, err = s.settingsChanges.create(newSettingChange{
+			ActorUserID: callCtx.UserID, ActorDeviceID: callCtx.DeviceID,
+			Source: "ai_chat", ServiceType: proposal.Service,
+			InstanceID: proposal.InstanceID, InstanceName: instanceName,
+			ResourceType: "quality_profile", ResourceID: strconv.Itoa(proposal.ProfileID),
+			ResourceName: proposal.ProfileName, Operation: "update",
+			Summary: settingChangeSummary("quality_profile", "update", proposal.ProfileName),
+			Changes: fields, BeforeRaw: latest.ProfileRaw, AfterRaw: latestBody,
+			BeforeHash: latest.ProfileHash, AfterHash: proposal.DesiredProfileHash,
+			DependencyHash: dependencyHash, InstanceBinding: proposal.InstanceBinding,
+		})
+		return err
 	}
 
 	if err := UpdateQualityProfileHelper(ctx, mutator, proposal.ProfileID, body, beforeWrite); err != nil {
+		if historyChange.ID != 0 {
+			status := settingChangeStatusFailed
+			var partial *PartialMutationError
+			if errors.As(err, &partial) {
+				status = settingChangeStatusOutcomeUnknown
+			}
+			_, _ = s.settingsChanges.finish(historyChange.ID, status, secrets.RedactText(err.Error()))
+		}
 		switch {
 		case errors.Is(err, errSettingsToolDisabled):
 			return &ToolResult{Text: "The apply tool was disabled immediately before the write. No write was attempted; the one-use reference was consumed. Preview again if it is re-enabled."}, nil
@@ -346,7 +383,19 @@ func (s *ToolServer) applyProfileChange(ctx context.Context, input json.RawMessa
 		}
 	}
 
-	return &ToolResult{Text: fmt.Sprintf("Applied the previewed change to quality profile %d (%q) on %s and verified the complete stored profile. The reference is now consumed. These settings affect future release selection for media using this profile; they do not remux files or set default playback audio/subtitle tracks.", proposal.ProfileID, proposal.ProfileName, label)}, nil
+	historyChange, err = s.settingsChanges.finish(historyChange.ID, settingChangeStatusApplied, "")
+	if err != nil {
+		return nil, &PartialMutationError{
+			Completed: "the quality profile update was applied and verified",
+			Pending:   "finalizing its durable change-history record",
+			Err:       err,
+		}
+	}
+
+	return &ToolResult{
+		Text:           fmt.Sprintf("Applied the requested change to quality profile %d (%q) on %s, verified the complete stored profile, and recorded change #%d. These settings affect future release selection for media using this profile; they do not remux files or set default playback audio/subtitle tracks.", proposal.ProfileID, proposal.ProfileName, label, historyChange.ID),
+		StructuredData: historyChange.ExternalSettingChange,
+	}, nil
 }
 
 func loadProfileSettingsSnapshot(ctx context.Context, mutator qualityProfileMutator, profileID int, includeLanguages bool) (profileSettingsSnapshot, error) {
@@ -438,6 +487,7 @@ func loadProfileSnapshotLanguages(ctx context.Context, mutator qualityProfileMut
 		return fmt.Errorf("hash languages: %w", err)
 	}
 	snapshot.Languages = cloneRawMessages(languages)
+	snapshot.HasLanguages = true
 	snapshot.LanguageHash = languageHash
 	return nil
 }
@@ -519,13 +569,12 @@ func profilePreviewDiffSize(diff []string) int {
 }
 
 func renderProfileChangePreview(proposal profileChangeProposal, label string) string {
-	command := "APPLY " + proposal.Reference
 	var out strings.Builder
-	fmt.Fprintf(&out, "Change reference: %s\nConfirmation command: %s\nExpires: %s\nTarget: %s quality profile %d (%q)\n\nProposed changes:\n", proposal.Reference, command, proposal.ExpiresAt.UTC().Format(time.RFC3339), label, proposal.ProfileID, proposal.ProfileName)
+	fmt.Fprintf(&out, "Change reference: %s\nExpires: %s\nTarget: %s quality profile %d (%q)\n\nProposed changes:\n", proposal.Reference, proposal.ExpiresAt.UTC().Format(time.RFC3339), label, proposal.ProfileID, proposal.ProfileName)
 	for _, line := range proposal.Diff {
 		fmt.Fprintf(&out, "- %s\n", line)
 	}
-	fmt.Fprintf(&out, "\nThis preview did not write anything. Show the admin the Target, Expires value, and every Proposed changes line exactly as returned above, then reproduce the confirmation command exactly and stop. The same admin must send it from this same device as the entire text of a new in-app chat message within 15 minutes. Cantinarr refuses profile, custom-format, relevant language-catalog, or instance connection/credential changes it observes at its final check; the resolved target stays pinned if the service default changes. That check is optimistic: neither the arr API nor Cantinarr's local authorization, tool-toggle, and instance-connection state can be atomically compared with the following full-object PUT.")
+	fmt.Fprintf(&out, "\nThis preview did not write anything. If and only if the admin explicitly requested this configuration change in the current message, call apply_profile_change now with the change reference. Do not ask the admin to copy or type the reference. Cantinarr will reauthorize, refuse observed profile/dependency/instance drift, verify the full stored object, and record durable before/after history. The final check is optimistic because the arr API cannot atomically compare-and-swap the following full-object PUT.")
 	return out.String()
 }
 

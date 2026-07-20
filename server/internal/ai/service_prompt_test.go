@@ -5,20 +5,17 @@ import (
 	"testing"
 )
 
-func TestSystemPromptPreservesPendingProfileApplyReference(t *testing.T) {
-	want := "call apply_profile_change directly with its reference and do not preview again; a new preview supersedes the pending reference"
-	if !strings.Contains(systemPrompt, want) {
-		t.Fatalf("system prompt does not tell the model to apply an exact later confirmation without replacing its preview")
-	}
-}
-
-func TestSystemPromptRequiresCompleteProfileDiffReview(t *testing.T) {
+func TestSystemPromptUsesExplicitIntentAndSameTurnProfileApply(t *testing.T) {
 	for _, want := range []string{
-		"Show the admin its Target, Expires value, and every Proposed changes line exactly as returned",
-		"never omit or summarize the diff",
+		"Quality-profile edits require an explicit admin request",
+		"never make the admin copy a command or capability string",
+		"In that same turn, call preview_profile_change",
+		"then call apply_profile_change with its reference",
+		"Do not apply when the user only asks for diagnosis, options, or a recommendation",
+		"records durable before/after history",
 	} {
 		if !strings.Contains(systemPrompt, want) {
-			t.Fatalf("system prompt does not require visible review of %q", want)
+			t.Fatalf("system prompt is missing same-turn profile safety guidance %q", want)
 		}
 	}
 }

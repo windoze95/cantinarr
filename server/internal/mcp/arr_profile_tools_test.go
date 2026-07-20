@@ -142,12 +142,12 @@ func previewX265ProfileChange(t *testing.T, server *ToolServer, turnID string) s
 		t.Fatalf("preview omitted reference:\n%s", result.Text)
 	}
 	reference := strings.SplitN(result.Text[start+len(marker):], "\n", 2)[0]
-	if !isProfileChangeReference(reference) || !strings.Contains(result.Text, "Confirmation command: APPLY "+reference) {
+	if !isProfileChangeReference(reference) || strings.Contains(result.Text, "APPLY ") {
 		t.Fatalf("invalid preview reference/instruction:\n%s", result.Text)
 	}
 	if !strings.Contains(result.Text, `custom format "x265" [4]: +0 -> +25`) ||
-		!strings.Contains(result.Text, "every Proposed changes line exactly as returned") ||
-		!strings.Contains(result.Text, "did not write anything") || !strings.Contains(result.Text, "same device") {
+		!strings.Contains(result.Text, "call apply_profile_change now") ||
+		!strings.Contains(result.Text, "did not write anything") || !strings.Contains(result.Text, "Do not ask the admin to copy") {
 		t.Fatalf("preview omitted complete diff/safety language:\n%s", result.Text)
 	}
 	return reference
@@ -174,7 +174,7 @@ func previewLanguageScoreProfileChange(t *testing.T, server *ToolServer, service
 	return reference
 }
 
-func TestProfileChangeRequiresExactLaterInAppConfirmationAndIsOneShot(t *testing.T) {
+func TestProfileChangeAppliesInSameExplicitRequestTurnAndIsOneShot(t *testing.T) {
 	fake := newProfileToolFakeArr()
 	server, _ := newProfileToolIntegrationServer(t, fake)
 	reference := previewX265ProfileChange(t, server, "turn-preview")
@@ -183,11 +183,15 @@ func TestProfileChangeRequiresExactLaterInAppConfirmationAndIsOneShot(t *testing
 	}
 
 	for name, callCtx := range map[string]CallContext{
-		"same turn":        profileToolCallContext("turn-preview", "APPLY "+reference),
-		"surrounding text": profileToolCallContext("turn-later", "Please APPLY "+reference),
+		"later turn":         profileToolCallContext("turn-later", "Please apply it"),
+		"empty user message": profileToolCallContext("turn-preview", ""),
+		"other device": {
+			UserID: 77, Role: auth.RoleAdmin, DeviceID: "device-other", Reauthorize: true,
+			Origin: OriginInteractiveChat, TrustedUserText: "Set x265 to 25", InteractiveTurnID: "turn-preview",
+		},
 		"external origin": {
 			UserID: 77, Role: auth.RoleAdmin, DeviceID: "device-77", Reauthorize: true,
-			Origin: OriginExternalMCP, TrustedUserText: "APPLY " + reference, InteractiveTurnID: "turn-later",
+			Origin: OriginExternalMCP, TrustedUserText: "Set x265 to 25", InteractiveTurnID: "turn-preview",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -195,18 +199,18 @@ func TestProfileChangeRequiresExactLaterInAppConfirmationAndIsOneShot(t *testing
 			if err != nil {
 				t.Fatalf("refusal: %v", err)
 			}
-			if strings.Contains(result.Text, "Applied the previewed change") || fake.putCount() != 0 {
-				t.Fatalf("unsafe confirmation wrote: %q", result.Text)
+			if strings.Contains(result.Text, "Applied the requested change") || fake.putCount() != 0 {
+				t.Fatalf("invalid same-turn claim wrote: %q", result.Text)
 			}
 		})
 	}
 
-	applyCtx := profileToolCallContext("turn-apply", "APPLY "+reference)
+	applyCtx := profileToolCallContext("turn-preview", "Set x265 to 25")
 	result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), applyCtx)
 	if err != nil {
 		t.Fatalf("apply_profile_change: %v", err)
 	}
-	if !strings.Contains(result.Text, "Applied the previewed change") || !strings.Contains(result.Text, "future release selection") || fake.putCount() != 1 {
+	if !strings.Contains(result.Text, "Applied the requested change") || !strings.Contains(result.Text, "recorded change #") || !strings.Contains(result.Text, "future release selection") || fake.putCount() != 1 || result.StructuredData == nil {
 		t.Fatalf("apply result=%q puts=%d", result.Text, fake.putCount())
 	}
 	fake.mu.Lock()
@@ -216,8 +220,8 @@ func TestProfileChangeRequiresExactLaterInAppConfirmationAndIsOneShot(t *testing
 		t.Fatalf("stored profile lost requested or unknown fields: %s", stored)
 	}
 
-	replay, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-replay", "APPLY "+reference))
-	if err != nil || !strings.Contains(replay.Text, "No valid profile change") || fake.putCount() != 1 {
+	replay, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-replay", "Set x265 to 25"))
+	if err != nil || !strings.Contains(replay.Text, "No valid same-turn profile change") || fake.putCount() != 1 {
 		t.Fatalf("replay result=%v err=%v puts=%d", replay, err, fake.putCount())
 	}
 }
@@ -228,15 +232,15 @@ func TestProfileChangeRefusesStaleProfileAndConsumesReference(t *testing.T) {
 	reference := previewX265ProfileChange(t, server, "turn-preview")
 	fake.setProfile(strings.Replace(settingsProfileHD, `"cutoffFormatScore":10000`, `"cutoffFormatScore":9999`, 1))
 
-	result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-apply", "APPLY "+reference))
+	result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-preview", "Set x265 to 25"))
 	if err != nil {
 		t.Fatalf("stale apply: %v", err)
 	}
 	if !strings.Contains(result.Text, "changed since preview") || fake.putCount() != 0 {
 		t.Fatalf("stale result=%q puts=%d", result.Text, fake.putCount())
 	}
-	replay, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-replay", "APPLY "+reference))
-	if err != nil || !strings.Contains(replay.Text, "No valid profile change") || fake.putCount() != 0 {
+	replay, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-replay", "Set x265 to 25"))
+	if err != nil || !strings.Contains(replay.Text, "No valid same-turn profile change") || fake.putCount() != 0 {
 		t.Fatalf("stale token replay result=%v err=%v puts=%d", replay, err, fake.putCount())
 	}
 }
@@ -248,7 +252,7 @@ func TestProfileChangeRefusesStaleCustomFormatsAndLanguageCatalogBeforeWrite(t *
 		reference := previewX265ProfileChange(t, server, "turn-preview")
 		fake.setFormats(strings.Replace(profileToolFormats, `"fields":[]`, `"fields":[{"name":"value","value":"x265"}]`, 1))
 
-		result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-apply", "APPLY "+reference))
+		result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-preview", "Set x265 to 25"))
 		if err != nil || !strings.Contains(result.Text, "changed since preview") || fake.putCount() != 0 {
 			t.Fatalf("stale custom-format result=%v err=%v puts=%d", result, err, fake.putCount())
 		}
@@ -272,7 +276,7 @@ func TestProfileChangeRefusesStaleCustomFormatsAndLanguageCatalogBeforeWrite(t *
 		reference := strings.SplitN(preview.Text[start+len(marker):], "\n", 2)[0]
 		fake.setLanguages(`[{"id":-1,"name":"Any"},{"id":1,"name":"English (US)"}]`)
 
-		result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-apply", "APPLY "+reference))
+		result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-preview", "Use English without a language score"))
 		if err != nil || !strings.Contains(result.Text, "changed since preview") || fake.putCount() != 0 {
 			t.Fatalf("stale language result=%v err=%v puts=%d", result, err, fake.putCount())
 		}
@@ -294,7 +298,7 @@ func TestLanguageSpecificationScoreBindsLiveCatalogForRadarrAndSonarr(t *testing
 			}
 
 			fake.setLanguages(`[{"id":-1,"name":"Any"},{"id":1,"name":"English (changed)"}]`)
-			result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-apply", "APPLY "+reference))
+			result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-preview", "Set Not English to -9000"))
 			if err != nil {
 				t.Fatalf("apply after language catalog change: %v", err)
 			}
@@ -319,13 +323,13 @@ func TestProfileChangeRefusesRevocationDisableAndInstanceRepointBeforeWrite(t *t
 			return auth.RoleAdmin, nil
 		})
 
-		_, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-apply", "APPLY "+reference))
+		_, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-preview", "Set x265 to 25"))
 		if !errors.Is(err, ErrToolAuthorization) || fake.putCount() != 0 {
 			t.Fatalf("revoked apply err=%v puts=%d", err, fake.putCount())
 		}
 		server.SetCallAuthorizer(func(context.Context, CallContext) (string, error) { return auth.RoleAdmin, nil })
-		replay, replayErr := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-replay", "APPLY "+reference))
-		if replayErr != nil || !strings.Contains(replay.Text, "No valid profile change") || fake.putCount() != 0 {
+		replay, replayErr := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-replay", "Set x265 to 25"))
+		if replayErr != nil || !strings.Contains(replay.Text, "No valid same-turn profile change") || fake.putCount() != 0 {
 			t.Fatalf("revoked replay=%v err=%v puts=%d", replay, replayErr, fake.putCount())
 		}
 	})
@@ -345,8 +349,8 @@ func TestProfileChangeRefusesRevocationDisableAndInstanceRepointBeforeWrite(t *t
 			return auth.RoleAdmin, nil
 		})
 
-		result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-apply", "APPLY "+reference))
-		if err != nil || !strings.Contains(result.Text, "disabled after confirmation") || fake.putCount() != 0 {
+		result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-preview", "Set x265 to 25"))
+		if err != nil || !strings.Contains(result.Text, "disabled after") || fake.putCount() != 0 {
 			t.Fatalf("disabled apply result=%v err=%v puts=%d", result, err, fake.putCount())
 		}
 	})
@@ -360,7 +364,7 @@ func TestProfileChangeRefusesRevocationDisableAndInstanceRepointBeforeWrite(t *t
 			t.Fatalf("rotate instance credential: %v", err)
 		}
 
-		result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-apply", "APPLY "+reference))
+		result, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-preview", "Set x265 to 25"))
 		if err != nil || !strings.Contains(result.Text, "instance changed since preview") || fake.putCount() != 0 {
 			t.Fatalf("repointed apply result=%v err=%v puts=%d", result, err, fake.putCount())
 		}
@@ -373,7 +377,7 @@ func TestProfileChangeSurfacesBoundedValidationAndConsumesReference(t *testing.T
 	reference := previewX265ProfileChange(t, server, "turn-preview")
 	fake.rejectPut()
 
-	_, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-apply", "APPLY "+reference))
+	_, err := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-preview", "Set x265 to 25"))
 	if err == nil || !strings.Contains(err.Error(), "cutoff: must be an allowed quality") {
 		t.Fatalf("validation error = %v", err)
 	}
@@ -385,8 +389,8 @@ func TestProfileChangeSurfacesBoundedValidationAndConsumesReference(t *testing.T
 	if fake.putCount() != 1 {
 		t.Fatalf("PUT count = %d, want one rejected write", fake.putCount())
 	}
-	replay, replayErr := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-replay", "APPLY "+reference))
-	if replayErr != nil || !strings.Contains(replay.Text, "No valid profile change") || fake.putCount() != 1 {
+	replay, replayErr := server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+reference+`"}`), profileToolCallContext("turn-replay", "Set x265 to 25"))
+	if replayErr != nil || !strings.Contains(replay.Text, "No valid same-turn profile change") || fake.putCount() != 1 {
 		t.Fatalf("validation token replay result=%v err=%v puts=%d", replay, replayErr, fake.putCount())
 	}
 }

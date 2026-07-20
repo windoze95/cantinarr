@@ -92,6 +92,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 ### AI assistant
 - **Multi-provider chat** with SSE streaming, visible tool activity, and a poster carousel for results. Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link OpenAI (OAuth) with a ChatGPT browser device code. Admins can configure the same choices as an included server profile and grant it per user. Personal overrides fail closed instead of silently spending shared quota.
 - **Server-side tools** -- the assistant searches, checks availability, and requests on your behalf; admins can triage queues conversationally.
+- **Configuration receipts** -- explicit admin requests can update supported connected-app settings in one turn, without copying a confirmation command back into chat. Supported profile and custom-format writes return a trusted review receipt; quality-profile receipts also lead to a guarded restore when the live state still matches. Assistant prose never creates controls.
 - **Persistent session** -- the focused `/assistant` workspace keeps one conversation alive across navigation (30-minute idle expiry).
 
 ### Notifications (iOS)
@@ -110,6 +111,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **AI Access** (self-service) -- choose included access when the admin grants it, or configure a personal Anthropic/OpenAI/Gemini key or OpenAI (OAuth) link at any time, with or without a grant. A personal provider need not match the server provider. Personal and included sources are labeled separately, keys are write-only, and a broken personal override is never replaced by surprise shared usage. Key and model are tested and saved together so a failure keeps the prior profile intact and shows the same safe actionable error category.
 - **OpenAI OAuth** -- personal and admin-shared device-code flows open ChatGPT sign-in in the browser, poll until approval, perform a small response test, show the owning account's current Codex usage windows, and support disconnecting it. The model picker includes OpenAI recommended and GPT-5.6 Sol, Terra, and Luna. Passwords and OAuth tokens never pass through the app; authorization is encrypted on the server. Only admins can see shared-account identity and usage metadata.
 - **AI tools** (admin) -- per-tool toggles for chat + MCP, and a one-hour debug-logging switch.
+- **Configuration history** (admin) -- a durable record of AI/MCP quality-profile and custom-format writes, with the initiating admin/source, exact instance and resource, and bounded before/recorded/current differences fetched from the live service. The recorded value is labeled as applied, attempted, or intended according to the outcome. Quality-profile detail offers a server-owned restore only while a successfully applied state still matches, and each restore creates a linked append-only record. Custom-format history supports live comparison but not restore; generic admin-proxy or managed-webhook writes are not represented.
 - **AI remediation** (admin) -- master switch, auto-dispatch, reporting affordance, mark-resolved-issues-as-read, `supervised`/`investigate_only` mode, an optional remediation-only model override, step/turn/time and daily-run budgets, reporter-reply timeout, and minimum-watch / arr-quiet / recovery-settle timers that delay investigation and alerts while Radarr or Sonarr can still recover on its own. This server-owned agent always follows the currently selected admin shared provider and credential, including the shared OpenAI OAuth connection; it never uses personal credentials or per-user included-access grants. The override must pass a small response test with that shared provider, and a later provider change safely falls back to the shared model until a new override is tested.
 - **Update Portal** (admin) -- optional link to your own container-management portal (e.g. an Unraid or Portainer page). When the server sees a newer published release, an admin-only banner appears app-wide and links here (or to the update guide when unset); it's dismissible per release. The About sheet also shows the running server version.
 - **Notifications, Passkeys, Password** -- self-service (passkey/password screens appear when admin-enabled).
@@ -155,6 +157,7 @@ Feature-first structure with data / logic / ui layers per feature. State is Rive
 | Arr management | Backend `/api/instances/{id}/api/v3` (credential-scrubbed proxy) | API keys never reach devices; reads allowed for users, writes admin-only |
 | Books | Backend proxy to Chaptarr (Readarr API v1) | Per-user grant enforced server-side |
 | AI chat | Backend `/api/ai/chat` (SSE) | Tool execution stays server-side; chat uses the resolved personal provider or a granted included provider |
+| Connected-app configuration history | Backend `/api/admin/external-settings-changes` | Durable AI/MCP profile/custom-format audit and live comparison; quality-profile restore payloads stay server-owned |
 | AI settings | Backend `/api/ai/settings` + write-only personal credential routes | The app sees provider/model, source, validation errors, and configured booleans, never secret values |
 | OpenAI OAuth | Personal `/api/ai/codex/*` or admin-shared `/api/admin/ai/codex/*` + explicit ChatGPT browser sign-in | Device code and scope-appropriate safe status reach the app; OAuth tokens remain encrypted on the server |
 | Realtime | Backend `/api/ws` | Queue snapshots, status pings, badges |
@@ -180,6 +183,7 @@ app/lib/
 │   ├── auth/                     # Auth screen (setup/login/connect), passkeys, session
 │   ├── ai_assistant/             # SSE chat, source-aware AI settings, media carousel, OpenAI OAuth
 │   ├── chaptarr/                 # Books module: library/queue/history/wanted + doctor
+│   ├── config_changes/           # Connected-app settings receipts, history, live diff + restore
 │   ├── dashboard/                # Movies/TV/Releases/Books home tabs
 │   ├── discover/                 # Discovery rows + multi-search (backend-proxied)
 │   ├── downloads/                # Unified download-client queue + history
@@ -212,7 +216,7 @@ One authenticated shell hosts both module pages and secondary work screens over 
 
 ¹ Books appears only with a Chaptarr grant.
 
-`/login` is the only route outside the authenticated shell. Secondary routes inside it include `/assistant`, `/detail/:type/:id` (movie/tv by TMDB id; `book` by Chaptarr foreign id, gated on the books grant — the target of book request-decision push taps), `/approvals`, `/issues`, `/issues/:id`, `/agent-actions`, `/agent-runs/:id`, `/settings/ai`, `/settings/chatgpt`, `/settings/...`, `/plex-guide`, and `/setup`.
+`/login` is the only route outside the authenticated shell. Secondary routes inside it include `/assistant`, `/detail/:type/:id` (movie/tv by TMDB id; `book` by Chaptarr foreign id, gated on the books grant — the target of book request-decision push taps), `/approvals`, `/issues`, `/issues/:id`, `/agent-actions`, `/agent-runs/:id`, `/settings/ai`, `/settings/chatgpt`, `/settings/change-history`, `/settings/change-history/:id`, `/settings/...`, `/plex-guide`, and `/setup`.
 
 The router guard redirects unauthenticated users to `/login`, remembers safe internal deep-link targets through sign-in, centrally bounces non-admins from admin routes, and gates Books on the user's Chaptarr grant. Modules with multiple instances get an instance selector in the drawer/app bar.
 

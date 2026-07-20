@@ -1,3 +1,5 @@
+import '../../config_changes/data/config_change_models.dart';
+
 /// A single message in the AI chat conversation.
 class ChatMessage {
   final String id;
@@ -5,6 +7,7 @@ class ChatMessage {
   final String content;
   final DateTime timestamp;
   final List<MediaResultItem> mediaResults;
+  final List<ConfigChange> configurationChanges;
   final bool isStreaming;
 
   /// Transient tool activity (populated while the assistant is streaming).
@@ -23,6 +26,7 @@ class ChatMessage {
     required this.content,
     required this.timestamp,
     this.mediaResults = const [],
+    this.configurationChanges = const [],
     this.isStreaming = false,
     this.toolActivity = const [],
     this.errorText,
@@ -32,6 +36,7 @@ class ChatMessage {
   ChatMessage copyWith({
     String? content,
     List<MediaResultItem>? mediaResults,
+    List<ConfigChange>? configurationChanges,
     bool? isStreaming,
     List<ToolActivity>? toolActivity,
     String? errorText,
@@ -43,6 +48,8 @@ class ChatMessage {
         content: content ?? this.content,
         timestamp: timestamp,
         mediaResults: mediaResults ?? this.mediaResults,
+        configurationChanges:
+            configurationChanges ?? this.configurationChanges,
         isStreaming: isStreaming ?? this.isStreaming,
         toolActivity: toolActivity ?? this.toolActivity,
         errorText: errorText ?? this.errorText,
@@ -122,6 +129,12 @@ class TextChunkEvent extends ChatStreamEvent {
 class MediaResultsEvent extends ChatStreamEvent {
   final List<MediaResultItem> items;
   MediaResultsEvent(this.items);
+}
+
+/// Durable server-authored receipt for a connected-app settings mutation.
+class ConfigurationChangeEvent extends ChatStreamEvent {
+  final ConfigChange change;
+  ConfigurationChangeEvent(this.change);
 }
 
 /// Server-assigned conversation ID; echo it back on subsequent turns so the

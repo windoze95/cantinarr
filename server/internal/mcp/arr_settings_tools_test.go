@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,7 +51,9 @@ func newSettingsToolServerWithStore(t *testing.T, instances []*instance.Instance
 			t.Fatalf("create instance %s: %v", inst.Name, err)
 		}
 	}
-	return NewToolServer(nil, nil, instance.NewRegistry(store), nil), store
+	server := NewToolServer(nil, nil, instance.NewRegistry(store), nil)
+	server.SetSettingsChangeDatabase(database)
+	return server, store
 }
 
 func settingsFakeArr(t *testing.T, recorder *callRecorder, routes map[string]string) *httptest.Server {
@@ -377,15 +380,21 @@ func TestSettingsToolsRefuseNonAdminRoles(t *testing.T) {
 
 func TestUpsertCustomFormatTargetsExactInstanceAndTransformsTrash(t *testing.T) {
 	targetCalls := &callRecorder{}
+	var created atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		targetCalls.record(r)
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/customformat":
-			_, _ = w.Write([]byte(`[]`))
+			if created.Load() {
+				_, _ = w.Write([]byte(`[{"id":13,"name":"Not English","trash_id":"abc","specifications":[{"name":"Not English","implementation":"LanguageSpecification","fields":[{"name":"exceptLanguage","value":false},{"name":"value","value":1}]}]}]`))
+			} else {
+				_, _ = w.Write([]byte(`[]`))
+			}
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/qualityprofile":
 			_, _ = w.Write([]byte(`[{"id":1,"formatItems":[{"format":13,"score":0}]}]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/customformat":
+			created.Store(true)
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"id":13,"name":"Not English"}`))
 		default:
@@ -521,8 +530,10 @@ func TestUpsertCustomFormatSerializesSameInstance(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(current))
 		case r.Method == http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
 			mu.Lock()
 			puts++
+			current = string(body)
 			mu.Unlock()
 			_, _ = w.Write([]byte(`{"id":5,"name":"x265"}`))
 		default:
@@ -533,6 +544,7 @@ func TestUpsertCustomFormatSerializesSameInstance(t *testing.T) {
 	inst := &instance.Instance{ServiceType: "radarr", Name: "Main", URL: arr.URL, APIKey: "key", IsDefault: true}
 	server := newSettingsToolServer(t, []*instance.Instance{inst})
 	input := json.RawMessage(`{"service":"radarr","custom_format":{"name":"x265","specifications":[]}}`)
+	updatedInput := json.RawMessage(`{"service":"radarr","custom_format":{"name":"x265","includeCustomFormatWhenRenaming":true,"specifications":[]}}`)
 
 	results := make(chan error, 2)
 	go func() {
@@ -547,7 +559,7 @@ func TestUpsertCustomFormatSerializesSameInstance(t *testing.T) {
 	secondStarted := make(chan struct{})
 	go func() {
 		close(secondStarted)
-		_, err := server.ExecuteTool(context.Background(), "upsert_custom_format", input, adminCallContext())
+		_, err := server.ExecuteTool(context.Background(), "upsert_custom_format", updatedInput, adminCallContext())
 		results <- err
 	}()
 	<-secondStarted
@@ -555,7 +567,7 @@ func TestUpsertCustomFormatSerializesSameInstance(t *testing.T) {
 	mu.Lock()
 	getsWhileBlocked := gets
 	mu.Unlock()
-	if getsWhileBlocked != 1 {
+	if getsWhileBlocked != 2 {
 		t.Fatalf("second upsert entered the GET→write critical section early; gets=%d", getsWhileBlocked)
 	}
 	close(releasePost)
@@ -566,20 +578,28 @@ func TestUpsertCustomFormatSerializesSameInstance(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if gets != 2 || posts != 1 || puts != 1 {
-		t.Fatalf("calls = GET %d POST %d PUT %d, want 2/1/1", gets, posts, puts)
+	if gets != 6 || posts != 1 || puts != 1 {
+		t.Fatalf("calls = GET %d POST %d PUT %d, want 6/1/1", gets, posts, puts)
 	}
 }
 
 func TestUpsertCustomFormatCancellationWhileQueuedDoesNotPoisonLock(t *testing.T) {
 	recorder := &callRecorder{}
+	var created atomic.Bool
 	arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recorder.record(r)
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
-			_, _ = w.Write([]byte(`[]`))
+			if r.URL.Path == "/api/v3/customformat" && created.Load() {
+				_, _ = w.Write([]byte(`[{"id":5,"name":"x265","specifications":[]}]`))
+			} else if r.URL.Path == "/api/v3/qualityprofile" {
+				_, _ = w.Write([]byte(`[{"id":1,"formatItems":[{"format":5,"score":0}]}]`))
+			} else {
+				_, _ = w.Write([]byte(`[]`))
+			}
 			return
 		}
+		created.Store(true)
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":5,"name":"x265"}`))
 	}))
@@ -802,12 +822,18 @@ func TestUpsertCustomFormatRefusesInstanceRepointBeforeWrite(t *testing.T) {
 
 func TestUpsertCustomFormatPreservesPartialStateWhenVerificationIsCanceled(t *testing.T) {
 	profileStarted := make(chan struct{})
+	var created atomic.Bool
 	arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/customformat":
-			_, _ = w.Write([]byte(`[]`))
+			if created.Load() {
+				_, _ = w.Write([]byte(`[{"id":5,"name":"x265","specifications":[]}]`))
+			} else {
+				_, _ = w.Write([]byte(`[]`))
+			}
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/customformat":
+			created.Store(true)
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"id":5,"name":"x265"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/qualityprofile":

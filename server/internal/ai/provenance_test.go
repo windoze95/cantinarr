@@ -12,7 +12,7 @@ import (
 )
 
 func TestSubmittedUserTextDoesNotScanBackward(t *testing.T) {
-	confirmation := "APPLY profile_change_previous"
+	request := "Set the x265 score to 25"
 	tests := []struct {
 		name     string
 		messages []Message
@@ -20,16 +20,16 @@ func TestSubmittedUserTextDoesNotScanBackward(t *testing.T) {
 	}{
 		{name: "empty submission"},
 		{
-			name: "replayed confirmation followed by assistant",
+			name: "prior request followed by assistant",
 			messages: []Message{
-				{Role: "user", Content: confirmation},
+				{Role: "user", Content: request},
 				{Role: "assistant", Content: "That earlier change was applied."},
 			},
 		},
 		{
-			name: "replayed confirmation followed by empty current user message",
+			name: "prior request followed by empty current user message",
 			messages: []Message{
-				{Role: "user", Content: confirmation},
+				{Role: "user", Content: request},
 				{Role: "assistant", Content: "Anything else?"},
 				{Role: "user", Content: ""},
 			},
@@ -39,9 +39,9 @@ func TestSubmittedUserTextDoesNotScanBackward(t *testing.T) {
 			messages: []Message{
 				{Role: "user", Content: "old text"},
 				{Role: "assistant", Content: "reply"},
-				{Role: "user", Content: confirmation},
+				{Role: "user", Content: request},
 			},
-			want: confirmation,
+			want: request,
 		},
 	}
 
@@ -60,7 +60,7 @@ func TestInteractiveProviderToolCallsCarryTrustedTurnProvenance(t *testing.T) {
 		Role:              auth.RoleAdmin,
 		DeviceID:          "device-17",
 		RequireSharedAI:   true,
-		TrustedUserText:   "APPLY profile_change_current",
+		TrustedUserText:   "Set the x265 score to 25",
 		InteractiveTurnID: "interactive-turn-17",
 	}
 
