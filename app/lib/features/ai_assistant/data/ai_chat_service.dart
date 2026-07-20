@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import '../../config_changes/data/config_change_models.dart';
 import 'ai_models.dart';
 
@@ -9,8 +10,11 @@ import 'ai_models.dart';
 /// Uses SSE streaming for real-time response delivery.
 class AiChatService {
   final Dio _backendDio;
+  final bool _isWeb;
 
-  AiChatService({required Dio backendDio}) : _backendDio = backendDio;
+  AiChatService({required Dio backendDio, bool? isWeb})
+      : _backendDio = backendDio,
+        _isWeb = isWeb ?? kIsWeb;
 
   /// Send messages and stream response events via SSE.
   ///
@@ -35,10 +39,16 @@ class AiChatService {
       },
       options: Options(
         responseType: ResponseType.stream,
-        // The base Dio's 15s receiveTimeout acts as an inter-chunk
-        // inactivity timeout on streams, but agent thinking and slow tools
-        // (indexer searches) legitimately go quiet for longer. The server
-        // sends keepalive comments; disable the local inactivity cap.
+        // Agent thinking and slow tools can legitimately run longer than the
+        // normal request timeout. dio_web_adapter implements XMLHttpRequest's
+        // whole-request timeout as connectTimeout + receiveTimeout, so leaving
+        // the inherited 15s connect timeout beside a zero receive timeout
+        // still aborts browser chat after 15s and reports a misleading zero
+        // receive timeout. Disable both browser XHR components; native keeps
+        // its bounded connection setup while the server's SSE keepalives cover
+        // inter-chunk inactivity.
+        connectTimeout:
+            _isWeb ? Duration.zero : _backendDio.options.connectTimeout,
         receiveTimeout: Duration.zero,
         headers: {'Accept': 'text/event-stream'},
       ),
