@@ -288,9 +288,21 @@ type ToolVerification struct {
 
 const VerificationQueueTarget = "queue_target"
 
-// ToolsWithUI is the set of tool names that have MCP App UI attached.
+// ToolsWithUI is the set of externally exposed MCP tools backed by the bundled
+// MCP App resource. Do not add in-app-only receipt payloads here: mcpserver
+// uses this map to attach the media-results resource URI to tool metadata.
 var ToolsWithUI = map[string]bool{
 	"display_media": true,
+}
+
+// ToolsWithStructuredResults is the set of tool results forwarded to
+// Cantinarr's native chat client for rich rendering. It is intentionally wider
+// than ToolsWithUI because configuration receipts are native Flutter UI, not
+// the external media-results MCP App.
+var ToolsWithStructuredResults = map[string]bool{
+	"display_media":        true,
+	"apply_profile_change": true,
+	"upsert_custom_format": true,
 }
 
 func toMediaResultItems(results []tmdb.SearchResult, limit int) []MediaResultItem {

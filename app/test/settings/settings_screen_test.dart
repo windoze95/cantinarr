@@ -35,6 +35,7 @@ void main() {
     expect(find.text('Included · OpenAI'), findsOneWidget);
     expect(find.byType(AttentionMenuVisibilitySwitch), findsNothing);
     expect(find.text('NEEDS ATTENTION MENU'), findsNothing);
+    expect(find.text('Configuration History'), findsNothing);
     await tester.scrollUntilVisible(
       find.text('AI Assistant'),
       200,
@@ -60,6 +61,21 @@ void main() {
 
     expect(find.text('AI Access'), findsOneWidget);
     expect(find.text('Add a personal provider'), findsOneWidget);
+  });
+
+  testWidgets('Configuration History is available from admin settings',
+      (tester) async {
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      isAdmin: true,
+    );
+    await _dragSettingsUntilFound(tester, find.text('Configuration History'));
+    expect(find.text('Configuration History'), findsOneWidget);
+    expect(
+      find.text('Review AI/MCP profile and custom-format changes'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('admin settings can restore every conditionally hidden menu item',

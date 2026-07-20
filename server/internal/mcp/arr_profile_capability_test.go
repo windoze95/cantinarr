@@ -158,7 +158,7 @@ func TestProfileChangeStoreTTLBoundary(t *testing.T) {
 		}
 
 		now = saved.ExpiresAt.Add(-time.Nanosecond)
-		if _, ok := store.claim(saved.Reference, saved.UserID, saved.DeviceID, "turn-apply", "APPLY "+saved.Reference, OriginInteractiveChat); !ok {
+		if _, ok := store.claimAutonomous(saved.Reference, saved.UserID, saved.DeviceID, saved.IssuedTurnID, OriginInteractiveChat); !ok {
 			t.Fatal("proposal was rejected immediately before expiry")
 		}
 	})
@@ -170,7 +170,7 @@ func TestProfileChangeStoreTTLBoundary(t *testing.T) {
 		saved := saveProfileCapability(t, store, profileCapabilityProposal(1))
 
 		now = saved.ExpiresAt
-		if _, ok := store.claim(saved.Reference, saved.UserID, saved.DeviceID, "turn-apply", "APPLY "+saved.Reference, OriginInteractiveChat); ok {
+		if _, ok := store.claimAutonomous(saved.Reference, saved.UserID, saved.DeviceID, saved.IssuedTurnID, OriginInteractiveChat); ok {
 			t.Fatal("proposal was accepted at its exact expiry boundary")
 		}
 		if _, exists := store.proposals[saved.Reference]; exists {
@@ -182,41 +182,29 @@ func TestProfileChangeStoreTTLBoundary(t *testing.T) {
 	})
 }
 
-func TestProfileChangeStoreRequiresExactTrustedLaterTurn(t *testing.T) {
+func TestProfileChangeStoreRequiresExactTrustedIssuingTurn(t *testing.T) {
 	store := newProfileChangeStore()
 	saved := saveProfileCapability(t, store, profileCapabilityProposal(1))
-	exactConfirmation := "APPLY " + saved.Reference
 
-	for name, attempt := range map[string]struct {
-		turnID string
-		text   string
-	}{
-		"missing turn id":     {turnID: "", text: exactConfirmation},
-		"preview turn reused": {turnID: saved.IssuedTurnID, text: exactConfirmation},
-		"missing apply":       {turnID: "turn-apply", text: saved.Reference},
-		"lowercase apply":     {turnID: "turn-apply", text: "apply " + saved.Reference},
-		"leading whitespace":  {turnID: "turn-apply", text: " " + exactConfirmation},
-		"trailing whitespace": {turnID: "turn-apply", text: exactConfirmation + " "},
-		"trailing newline":    {turnID: "turn-apply", text: exactConfirmation + "\n"},
-		"extra words":         {turnID: "turn-apply", text: exactConfirmation + " now"},
+	for name, turnID := range map[string]string{
+		"missing turn id": "",
+		"later turn":      "turn-apply",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, ok := store.claim(saved.Reference, saved.UserID, saved.DeviceID, attempt.turnID, attempt.text, OriginInteractiveChat); ok {
-				t.Fatal("inexact or same-turn confirmation was accepted")
+			if _, ok := store.claimAutonomous(saved.Reference, saved.UserID, saved.DeviceID, turnID, OriginInteractiveChat); ok {
+				t.Fatal("missing or later-turn claim was accepted")
 			}
 		})
 	}
 
-	if _, ok := store.claim(saved.Reference, saved.UserID, saved.DeviceID, "turn-apply", exactConfirmation, OriginInteractiveChat); !ok {
-		t.Fatal("exact trusted confirmation on a different turn was rejected after non-consuming refusals")
+	if _, ok := store.claimAutonomous(saved.Reference, saved.UserID, saved.DeviceID, saved.IssuedTurnID, OriginInteractiveChat); !ok {
+		t.Fatal("trusted issuing-turn claim was rejected after non-consuming refusals")
 	}
 }
 
 func TestProfileChangeStoreActorDeviceAndOriginRefusalsDoNotConsume(t *testing.T) {
 	store := newProfileChangeStore()
 	saved := saveProfileCapability(t, store, profileCapabilityProposal(1))
-	confirmation := "APPLY " + saved.Reference
-
 	for name, attempt := range map[string]struct {
 		userID   int64
 		deviceID string
@@ -230,13 +218,13 @@ func TestProfileChangeStoreActorDeviceAndOriginRefusalsDoNotConsume(t *testing.T
 		"missing origin":   {userID: saved.UserID, deviceID: saved.DeviceID, origin: ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, ok := store.claim(saved.Reference, attempt.userID, attempt.deviceID, "turn-apply", confirmation, attempt.origin); ok {
+			if _, ok := store.claimAutonomous(saved.Reference, attempt.userID, attempt.deviceID, saved.IssuedTurnID, attempt.origin); ok {
 				t.Fatal("wrong actor, device, or origin was accepted")
 			}
 		})
 	}
 
-	claimed, ok := store.claim(saved.Reference, saved.UserID, saved.DeviceID, "turn-apply", confirmation, OriginInteractiveChat)
+	claimed, ok := store.claimAutonomous(saved.Reference, saved.UserID, saved.DeviceID, saved.IssuedTurnID, OriginInteractiveChat)
 	if !ok || claimed.Reference != saved.Reference {
 		t.Fatalf("valid actor claim after refusals = (%q, %t), want %q", claimed.Reference, ok, saved.Reference)
 	}
@@ -246,7 +234,7 @@ func TestProfileChangeStoreClaimIsOneShot(t *testing.T) {
 	store := newProfileChangeStore()
 	saved := saveProfileCapability(t, store, profileCapabilityProposal(1))
 	claim := func() (profileChangeProposal, bool) {
-		return store.claim(saved.Reference, saved.UserID, saved.DeviceID, "turn-apply", "APPLY "+saved.Reference, OriginInteractiveChat)
+		return store.claimAutonomous(saved.Reference, saved.UserID, saved.DeviceID, saved.IssuedTurnID, OriginInteractiveChat)
 	}
 
 	claimed, ok := claim()
@@ -287,10 +275,10 @@ func TestProfileChangeStoreSupersedesSameActorTarget(t *testing.T) {
 	if got := store.targets[second.target()]; got != second.Reference {
 		t.Fatalf("target index = %q, want newest reference %q", got, second.Reference)
 	}
-	if _, ok := store.claim(first.Reference, first.UserID, first.DeviceID, "turn-apply", "APPLY "+first.Reference, OriginInteractiveChat); ok {
+	if _, ok := store.claimAutonomous(first.Reference, first.UserID, first.DeviceID, first.IssuedTurnID, OriginInteractiveChat); ok {
 		t.Fatal("superseded proposal could still be claimed")
 	}
-	if _, ok := store.claim(second.Reference, second.UserID, second.DeviceID, "turn-apply", "APPLY "+second.Reference, OriginInteractiveChat); !ok {
+	if _, ok := store.claimAutonomous(second.Reference, second.UserID, second.DeviceID, second.IssuedTurnID, OriginInteractiveChat); !ok {
 		t.Fatal("newest proposal could not be claimed")
 	}
 }
@@ -373,8 +361,6 @@ func TestProfileChangeStoreEvictsOldestAtGlobalCap(t *testing.T) {
 func TestProfileChangeStoreConcurrentClaimHasExactlyOneWinner(t *testing.T) {
 	store := newProfileChangeStore()
 	saved := saveProfileCapability(t, store, profileCapabilityProposal(1))
-	confirmation := "APPLY " + saved.Reference
-
 	const claimers = 64
 	start := make(chan struct{})
 	var ready sync.WaitGroup
@@ -387,7 +373,7 @@ func TestProfileChangeStoreConcurrentClaimHasExactlyOneWinner(t *testing.T) {
 			defer finished.Done()
 			ready.Done()
 			<-start
-			if claimed, ok := store.claim(saved.Reference, saved.UserID, saved.DeviceID, "turn-apply", confirmation, OriginInteractiveChat); ok {
+			if claimed, ok := store.claimAutonomous(saved.Reference, saved.UserID, saved.DeviceID, saved.IssuedTurnID, OriginInteractiveChat); ok {
 				if claimed.Reference != saved.Reference {
 					t.Errorf("claimed reference = %q, want %q", claimed.Reference, saved.Reference)
 				}

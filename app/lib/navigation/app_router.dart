@@ -15,6 +15,8 @@ import '../features/chaptarr/ui/chaptarr_home_screen.dart';
 import '../features/chaptarr/ui/chaptarr_module_shell.dart';
 import '../features/chaptarr/ui/chaptarr_queue_screen.dart';
 import '../features/chaptarr/ui/chaptarr_wanted_screen.dart';
+import '../features/config_changes/ui/config_change_detail_screen.dart';
+import '../features/config_changes/ui/config_change_history_screen.dart';
 import '../features/dashboard/ui/dashboard_books_tab.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_releases_tab.dart';
@@ -490,6 +492,32 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 const AppAmbientBackground(child: AiToolsScreen()),
           ),
           GoRoute(
+            path: '/settings/change-history',
+            builder: (_, __) => const AppAmbientBackground(
+              child: ConfigChangeHistoryScreen(),
+            ),
+          ),
+          GoRoute(
+            path: '/settings/change-history/:id',
+            redirect: (_, state) =>
+                _positiveIntParameter(state, 'id') == null
+                    ? '/settings/change-history'
+                    : null,
+            builder: (context, state) {
+              final id = _positiveIntParameter(state, 'id');
+              if (id == null) {
+                return const AppAmbientBackground(
+                  child: _InvalidRouteScreen(
+                    message: 'This change-history link is invalid.',
+                  ),
+                );
+              }
+              return AppAmbientBackground(
+                child: ConfigChangeDetailScreen(changeId: id),
+              );
+            },
+          ),
+          GoRoute(
             path: '/settings/users',
             builder: (_, __) =>
                 const AppAmbientBackground(child: UsersScreen()),
@@ -651,6 +679,7 @@ bool _isAdminOnlyRoute(String path) {
     '/setup',
     '/settings/credentials',
     '/settings/ai-tools',
+    '/settings/change-history',
     '/settings/users',
     '/settings/ai-remediation',
     '/settings/request-settings',

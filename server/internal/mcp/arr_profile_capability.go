@@ -51,7 +51,8 @@ type profileChangeTarget struct {
 // profileChangeStore is an in-memory, one-shot capability store. Restarting
 // Cantinarr intentionally invalidates every pending proposal. References are
 // random capabilities, but apply additionally requires the same authenticated
-// user/device and a later trusted user message containing the exact reference.
+// user, device, origin, and issuing chat turn. The identifier never becomes a
+// later-message confirmation mechanism.
 type profileChangeStore struct {
 	mu        sync.Mutex
 	proposals map[string]profileChangeProposal
@@ -113,10 +114,11 @@ func (s *profileChangeStore) save(proposal profileChangeProposal) (profileChange
 	return proposal, nil
 }
 
-// claim validates the exact trusted, later in-app confirmation and consumes a
-// valid proposal atomically before any remote I/O. A failed check does not burn
-// the proposal.
-func (s *profileChangeStore) claim(reference string, userID int64, deviceID, turnID, trustedUserText string, origin CallOrigin) (profileChangeProposal, bool) {
+// claimAutonomous consumes a preview only inside the same authenticated chat
+// turn that created it. The admin's explicit natural-language request is the
+// authority; the model may preview and apply without asking the person to copy
+// a capability string back into chat. A later turn cannot replay the reference.
+func (s *profileChangeStore) claimAutonomous(reference string, userID int64, deviceID, turnID string, origin CallOrigin) (profileChangeProposal, bool) {
 	if s == nil || !isProfileChangeReference(reference) {
 		return profileChangeProposal{}, false
 	}
@@ -125,8 +127,7 @@ func (s *profileChangeStore) claim(reference string, userID int64, deviceID, tur
 	s.cleanupExpiredLocked(s.now())
 	proposal, ok := s.proposals[reference]
 	if !ok || proposal.UserID != userID || proposal.DeviceID != deviceID ||
-		origin != OriginInteractiveChat || turnID == "" || turnID == proposal.IssuedTurnID ||
-		trustedUserText != "APPLY "+reference {
+		origin != OriginInteractiveChat || turnID == "" || turnID != proposal.IssuedTurnID {
 		return profileChangeProposal{}, false
 	}
 	delete(s.proposals, reference)

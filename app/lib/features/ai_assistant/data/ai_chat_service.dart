@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import '../../config_changes/data/config_change_models.dart';
 import 'ai_models.dart';
 
 /// Client for the Cantinarr backend AI chat endpoint.
@@ -90,6 +91,17 @@ class AiChatService {
                     .toList();
                 if (items.isNotEmpty) {
                   yield MediaResultsEvent(items);
+                }
+              } else if (json.containsKey('configuration_change')) {
+                final raw = json['configuration_change'];
+                if (raw is Map) {
+                  yield ConfigurationChangeEvent(
+                    ConfigChange.fromJson(
+                      raw.map(
+                        (key, value) => MapEntry(key.toString(), value),
+                      ),
+                    ),
+                  );
                 }
               } else if (json.containsKey('error')) {
                 final message = json['error'] as String?;

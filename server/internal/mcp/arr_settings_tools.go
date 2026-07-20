@@ -24,12 +24,14 @@ import (
 	"io"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
 
@@ -40,6 +42,7 @@ const maxLanguageCatalogOutputBytes = 20 << 10
 var (
 	errSettingsToolDisabled  = errors.New("the settings write tool was disabled before the write")
 	errSettingsTargetChanged = errors.New("the selected arr instance changed while the write was being prepared")
+	errCustomFormatChanged   = errors.New("the custom format changed while the write was being prepared")
 )
 
 // arrSettingsToolDefinitions are appended to toolDefinitions by the init in
@@ -121,7 +124,7 @@ var arrSettingsToolDefinitions = []Tool{
 	{
 		Name:        "upsert_custom_format",
 		Permission:  auth.PermissionInstancesManage,
-		Description: "Create or update one Radarr/Sonarr/Chaptarr custom format by exact name from native or TRaSH-style JSON. Caller-supplied ids are ignored. A create enters every existing quality profile at score 0; an update preserves the profile's numeric score but does not recompute stored file matches. This tool does not set profile scores. Admin only",
+		Description: "Create or update one Radarr/Sonarr/Chaptarr custom format by exact name from native or TRaSH-style JSON. Caller-supplied ids are ignored. A create enters every existing quality profile at score 0; an update preserves the profile's numeric score but does not recompute stored file matches. A successful write is read back and recorded in Configuration history for live comparison. This tool does not set profile scores. Admin only",
 		InputSchema: map[string]interface{}{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -328,15 +331,25 @@ func (s *ToolServer) instanceResolveFailureText(service, instanceID string) stri
 // its URL.
 func (s *ToolServer) arrInstanceLabel(service, instanceID string) string {
 	label := arrServiceLabel(service)
+	if name := s.arrInstanceName(service, instanceID); name != "" {
+		return fmt.Sprintf("%s instance %q", label, name)
+	}
+	return label
+}
+
+func (s *ToolServer) arrInstanceName(service, instanceID string) string {
+	if s.registry == nil {
+		return ""
+	}
 	summaries, err := s.registry.ListInstanceSummaries(service)
 	if err == nil {
 		for _, summary := range summaries {
 			if summary.ID == instanceID {
-				return fmt.Sprintf("%s instance %q", label, summary.Name)
+				return summary.Name
 			}
 		}
 	}
-	return label
+	return ""
 }
 
 // --- list_arr_instances ---
@@ -752,8 +765,13 @@ func (s *ToolServer) upsertCustomFormat(ctx context.Context, input json.RawMessa
 		return &ToolResult{Text: "The default instance changed repeatedly while this write was queued. Retry with an explicit instance_id."}, nil
 	}
 	defer unlock()
+	instanceName := s.arrInstanceName(params.Service, resolvedID)
+	if instanceName == "" {
+		return &ToolResult{Text: "The selected arr instance no longer has a readable identity. No custom format was changed."}, nil
+	}
+	var historyChange storedSettingChange
 
-	beforeWrite := func(ctx context.Context) error {
+	beforeWrite := func(ctx context.Context, planned customFormatUpsertPlan) error {
 		var guardErr error
 		callCtx, guardErr = s.authorizeCall(ctx, callCtx)
 		if guardErr != nil {
@@ -769,15 +787,63 @@ func (s *ToolServer) upsertCustomFormat(ctx context.Context, input json.RawMessa
 		if freshRefusal != "" || freshID != resolvedID || freshBinding != binding {
 			return errSettingsTargetChanged
 		}
-		if _, ok := freshReader.(CustomFormatMutator); !ok {
+		freshMutator, ok := freshReader.(CustomFormatMutator)
+		if !ok {
 			return errSettingsTargetChanged
 		}
-		return nil
+		currentFormats, guardErr := freshMutator.GetCustomFormatsRawContext(ctx)
+		if guardErr != nil {
+			return guardErr
+		}
+		latest, guardErr := buildCustomFormatUpsertPlan(currentFormats, params.CustomFormat)
+		if guardErr != nil {
+			return guardErr
+		}
+		if latest.Action != planned.Action || latest.ID != planned.ID || latest.Name != planned.Name ||
+			latest.BeforeHash != planned.BeforeHash || latest.AfterHash != planned.AfterHash {
+			return errCustomFormatChanged
+		}
+		fields, guardErr := customFormatSettingFieldChanges(latest)
+		if guardErr != nil {
+			return guardErr
+		}
+		resourceID := "name:" + latest.Name
+		operation := "create"
+		summary := settingChangeSummary("custom_format", "create", latest.Name)
+		if latest.ID > 0 {
+			resourceID = strconv.Itoa(latest.ID)
+			operation = "update"
+			summary = settingChangeSummary("custom_format", "update", latest.Name)
+		}
+		source := "external_mcp"
+		if callCtx.TrustedInternal {
+			source = "system"
+		} else if callCtx.Origin == OriginInteractiveChat {
+			source = "ai_chat"
+		}
+		historyChange, guardErr = s.settingsChanges.create(newSettingChange{
+			ActorUserID: callCtx.UserID, ActorDeviceID: callCtx.DeviceID,
+			Source: source, ServiceType: params.Service,
+			InstanceID: resolvedID, InstanceName: instanceName,
+			ResourceType: "custom_format", ResourceID: resourceID,
+			ResourceName: latest.Name, Operation: operation, Summary: summary,
+			Changes: fields, BeforeRaw: latest.BeforeRaw, AfterRaw: latest.AfterRaw,
+			BeforeHash: latest.BeforeHash, AfterHash: latest.AfterHash,
+			InstanceBinding: binding,
+		})
+		return guardErr
 	}
 
 	result, err := UpsertCustomFormatHelper(ctx, mutator, params.CustomFormat, beforeWrite)
 	if err != nil {
 		var partial *PartialMutationError
+		if historyChange.ID != 0 {
+			status := settingChangeStatusFailed
+			if errors.As(err, &partial) {
+				status = settingChangeStatusOutcomeUnknown
+			}
+			_, _ = s.settingsChanges.finish(historyChange.ID, status, secrets.RedactText(err.Error()))
+		}
 		if errors.As(err, &partial) {
 			return nil, err
 		}
@@ -787,16 +853,37 @@ func (s *ToolServer) upsertCustomFormat(ctx context.Context, input json.RawMessa
 		if errors.Is(err, errSettingsTargetChanged) {
 			return &ToolResult{Text: "The selected arr instance changed while this write was being prepared. No custom format was changed; review the current instance and try again."}, nil
 		}
+		if errors.Is(err, errCustomFormatChanged) {
+			return &ToolResult{Text: "The custom format changed while this write was being prepared. No write was attempted; review the live settings and try again."}, nil
+		}
 		if errors.Is(err, radarr.ErrCustomFormatsNotFound) || errors.Is(err, sonarr.ErrCustomFormatsNotFound) || errors.Is(err, chaptarr.ErrCustomFormatsNotFound) {
 			return &ToolResult{Text: customFormatsUnavailableText(params.Service, label)}, nil
 		}
 		return nil, err
 	}
+	if result.Action == "unchanged" {
+		return &ToolResult{Text: fmt.Sprintf("Custom format %d (%q) on %s already matches the requested settings. Nothing was changed, so no history entry was created.", result.ID, result.Name, label)}, nil
+	}
+	verifiedHash, err := canonicalJSONHash(result.VerifiedRaw)
+	if err != nil {
+		return nil, &PartialMutationError{Completed: "the custom format write was accepted and read back", Pending: "validating its change-history snapshot", Err: err}
+	}
+	verifiedFields, err := customFormatSettingFieldChanges(customFormatUpsertPlan{
+		Action: result.Action, BeforeRaw: historyChange.BeforeRaw, AfterRaw: result.VerifiedRaw,
+	})
+	if err != nil {
+		_, _ = s.settingsChanges.finish(historyChange.ID, settingChangeStatusFailed, "The service accepted the write but did not retain a configuration difference.")
+		return nil, &PartialMutationError{Completed: "the custom format write was accepted and read back", Pending: "confirming a stored configuration difference", Err: err}
+	}
+	historyChange, err = s.settingsChanges.finishAppliedVerified(historyChange.ID, strconv.Itoa(result.ID), result.Name, verifiedFields, result.VerifiedRaw, verifiedHash)
+	if err != nil {
+		return nil, &PartialMutationError{Completed: "the custom format write was applied and verified", Pending: "finalizing its durable change-history record", Err: err}
+	}
 
 	if result.Action == "created" {
-		return &ToolResult{Text: fmt.Sprintf("Created custom format %d (%q) on %s. The service added it to every existing quality profile at score 0; this tool did not change any profile scores.", result.ID, result.Name, label)}, nil
+		return &ToolResult{Text: fmt.Sprintf("Created custom format %d (%q) on %s and recorded change #%d. The service added it to every existing quality profile at score 0; this tool did not change any profile scores.", result.ID, result.Name, label, historyChange.ID), StructuredData: historyChange.ExternalSettingChange}, nil
 	}
-	return &ToolResult{Text: fmt.Sprintf("Updated custom format %d (%q) on %s. Profiles kept their existing numeric scores. The arr will use the new rules for future matching; this tool did not recompute stored file matches.", result.ID, result.Name, label)}, nil
+	return &ToolResult{Text: fmt.Sprintf("Updated custom format %d (%q) on %s and recorded change #%d. Profiles kept their existing numeric scores. The arr will use the new rules for future matching; this tool did not recompute stored file matches.", result.ID, result.Name, label, historyChange.ID), StructuredData: historyChange.ExternalSettingChange}, nil
 }
 
 func isCustomFormatsNotFound(err error) bool {

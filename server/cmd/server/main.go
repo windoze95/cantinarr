@@ -195,6 +195,7 @@ func main() {
 
 	// MCP tool server + AI handler
 	toolServer := mcp.NewToolServer(creds, requestService, registry, bridge)
+	toolServer.SetSettingsChangeDatabase(database)
 	toolServer.SetCallAuthorizer(func(ctx context.Context, callCtx mcp.CallContext) (string, error) {
 		return authService.AuthorizeInteractiveToolCall(
 			ctx,

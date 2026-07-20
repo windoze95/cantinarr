@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,9 +62,10 @@ type CustomFormatMutator interface {
 // CustomFormatUpsertResult identifies the one remote record changed by an
 // UpsertCustomFormatHelper call.
 type CustomFormatUpsertResult struct {
-	Action string
-	ID     int
-	Name   string
+	Action      string
+	ID          int
+	Name        string
+	VerifiedRaw json.RawMessage
 }
 
 // SettingsWriteGuard is called after the authoritative read/merge and
@@ -71,6 +73,18 @@ type CustomFormatUpsertResult struct {
 // re-check live authorization, enablement, and instance binding after any
 // slow preflight; gated executors can enforce their own approval binding.
 type SettingsWriteGuard func(context.Context) error
+
+type customFormatUpsertPlan struct {
+	Action     string
+	ID         int
+	Name       string
+	BeforeRaw  json.RawMessage
+	AfterRaw   json.RawMessage
+	BeforeHash [sha256.Size]byte
+	AfterHash  [sha256.Size]byte
+}
+
+type CustomFormatWriteGuard func(context.Context, customFormatUpsertPlan) error
 
 type customFormatHead struct {
 	ID   int    `json:"id"`
@@ -87,66 +101,71 @@ const (
 // updating a custom format. It matches live records by name, transforms the
 // TRaSH fields-object shape, and always GETs before a full-object PUT so fields
 // introduced by a newer arr are preserved.
-func UpsertCustomFormatHelper(ctx context.Context, client CustomFormatMutator, payload json.RawMessage, beforeWrite SettingsWriteGuard) (CustomFormatUpsertResult, error) {
+func UpsertCustomFormatHelper(ctx context.Context, client CustomFormatMutator, payload json.RawMessage, beforeWrite CustomFormatWriteGuard) (CustomFormatUpsertResult, error) {
 	if client == nil {
 		return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: "arr custom-format client is not configured"}
 	}
 	if err := ctx.Err(); err != nil {
 		return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: err.Error(), Cause: err}
 	}
-	incoming, name, err := normalizeCustomFormatPayload(payload)
-	if err != nil {
-		return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: err.Error()}
-	}
-
 	raws, err := client.GetCustomFormatsRawContext(ctx)
 	if err != nil {
 		return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: err.Error(), Cause: err}
 	}
-	target, err := findCustomFormatByName(raws, name)
+	plan, err := buildCustomFormatUpsertPlan(raws, payload)
 	if err != nil {
 		return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: err.Error()}
 	}
+	if plan.Action == "unchanged" {
+		return CustomFormatUpsertResult{
+			Action:      plan.Action,
+			ID:          plan.ID,
+			Name:        plan.Name,
+			VerifiedRaw: append(json.RawMessage(nil), plan.BeforeRaw...),
+		}, nil
+	}
 
-	if target == nil {
-		delete(incoming, "id")
-		body, err := json.Marshal(incoming)
-		if err != nil {
-			return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: "could not encode the custom format"}
-		}
+	if plan.Action == "created" {
 		if err := ctx.Err(); err != nil {
 			return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: err.Error(), Cause: err}
 		}
 		if beforeWrite != nil {
-			if err := beforeWrite(ctx); err != nil {
+			if err := beforeWrite(ctx, plan); err != nil {
 				return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: err.Error(), Cause: err}
 			}
 		}
-		createdRaw, err := client.CreateCustomFormatRawContext(ctx, body)
+		createdRaw, err := client.CreateCustomFormatRawContext(ctx, plan.AfterRaw)
 		if err != nil {
 			return CustomFormatUpsertResult{}, classifySettingsWriteOutcome("the custom format create may have been accepted", err)
 		}
 		created, parseErr := decodeCustomFormatHead(createdRaw)
-		if parseErr == nil && created.Name != name {
+		if parseErr == nil && created.Name != plan.Name {
 			parseErr = fmt.Errorf("create response named a different custom format")
 		}
-		if parseErr != nil {
-			// Some compatible builds return an empty/minimal 2xx response. Re-read
-			// the authoritative collection before telling the caller to retry a
-			// create that may already have succeeded.
-			current, getErr := client.GetCustomFormatsRawContext(ctx)
-			if getErr != nil {
-				return CustomFormatUpsertResult{}, &PartialMutationError{Completed: "the custom format create was accepted", Pending: "confirming the created record", Err: getErr}
-			}
-			confirmed, getErr := findCustomFormatByName(current, name)
-			if getErr != nil || confirmed == nil {
-				if getErr == nil {
-					getErr = parseErr
-				}
-				return CustomFormatUpsertResult{}, &PartialMutationError{Completed: "the custom format create was accepted", Pending: "confirming the created record", Err: getErr}
-			}
-			created = &confirmed.customFormatHead
+		// Always re-read the authoritative object. Compatible arr builds may
+		// normalize fields or return an empty/minimal 2xx body; request/response
+		// assumptions are not rollback material.
+		current, getErr := client.GetCustomFormatsRawContext(ctx)
+		if getErr != nil {
+			return CustomFormatUpsertResult{}, &PartialMutationError{Completed: "the custom format create was accepted", Pending: "confirming the created record", Err: getErr}
 		}
+		confirmed, getErr := findCustomFormatByName(current, plan.Name)
+		if getErr != nil || confirmed == nil {
+			if getErr == nil {
+				getErr = parseErr
+				if getErr == nil {
+					getErr = fmt.Errorf("the created custom format was not found on readback")
+				}
+			}
+			return CustomFormatUpsertResult{}, &PartialMutationError{Completed: "the custom format create was accepted", Pending: "confirming the created record", Err: getErr}
+		}
+		if parseErr == nil && created.ID != confirmed.ID {
+			return CustomFormatUpsertResult{}, &PartialMutationError{Completed: "the custom format create was accepted", Pending: "confirming the created record identity", Err: fmt.Errorf("create response and readback ids differ")}
+		}
+		if getErr = customFormatReadbackMatchesPlan(plan, confirmed.raw); getErr != nil {
+			return CustomFormatUpsertResult{}, &PartialMutationError{Completed: "the custom format create was accepted", Pending: "confirming the created settings", Err: getErr}
+		}
+		created = &confirmed.customFormatHead
 		profiles, profileErr := client.GetQualityProfilesRawContext(ctx)
 		if profileErr == nil {
 			profileErr = verifyCreatedCustomFormatProfileScores(profiles, created.ID)
@@ -158,33 +177,172 @@ func UpsertCustomFormatHelper(ctx context.Context, client CustomFormatMutator, p
 				Err:       profileErr,
 			}
 		}
-		return CustomFormatUpsertResult{Action: "created", ID: created.ID, Name: created.Name}, nil
+		return CustomFormatUpsertResult{Action: "created", ID: created.ID, Name: created.Name, VerifiedRaw: append(json.RawMessage(nil), confirmed.raw...)}, nil
 	}
 
-	live, err := decodeJSONObject(target.raw)
-	if err != nil {
-		return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: fmt.Sprintf("custom format %d (%q) could not be decoded safely", target.ID, target.Name)}
-	}
-	for key, value := range incoming {
-		live[key] = value
-	}
-	live["id"] = json.Number(strconv.Itoa(target.ID))
-	body, err := json.Marshal(live)
-	if err != nil {
-		return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: "could not encode the custom format update"}
-	}
 	if err := ctx.Err(); err != nil {
 		return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: err.Error(), Cause: err}
 	}
 	if beforeWrite != nil {
-		if err := beforeWrite(ctx); err != nil {
+		if err := beforeWrite(ctx, plan); err != nil {
 			return CustomFormatUpsertResult{}, &MutationNotStartedError{Detail: err.Error(), Cause: err}
 		}
 	}
-	if _, err := client.UpdateCustomFormatRawContext(ctx, target.ID, body); err != nil {
+	if _, err := client.UpdateCustomFormatRawContext(ctx, plan.ID, plan.AfterRaw); err != nil {
 		return CustomFormatUpsertResult{}, classifySettingsWriteOutcome("the custom format update may have been accepted", err)
 	}
-	return CustomFormatUpsertResult{Action: "updated", ID: target.ID, Name: name}, nil
+	current, err := client.GetCustomFormatsRawContext(ctx)
+	if err != nil {
+		return CustomFormatUpsertResult{}, &PartialMutationError{Completed: "the custom format update was accepted", Pending: "reading the updated record", Err: err}
+	}
+	confirmed, err := findCustomFormatByName(current, plan.Name)
+	if err != nil || confirmed == nil || confirmed.ID != plan.ID {
+		if err == nil {
+			err = fmt.Errorf("the updated custom format was not found with its original identity")
+		}
+		return CustomFormatUpsertResult{}, &PartialMutationError{Completed: "the custom format update was accepted", Pending: "confirming the updated record", Err: err}
+	}
+	if err := customFormatReadbackMatchesPlan(plan, confirmed.raw); err != nil {
+		return CustomFormatUpsertResult{}, &PartialMutationError{Completed: "the custom format update was accepted", Pending: "confirming the updated settings", Err: err}
+	}
+	return CustomFormatUpsertResult{Action: "updated", ID: plan.ID, Name: plan.Name, VerifiedRaw: append(json.RawMessage(nil), confirmed.raw...)}, nil
+}
+
+func buildCustomFormatUpsertPlan(raws []json.RawMessage, payload json.RawMessage) (customFormatUpsertPlan, error) {
+	incoming, name, err := normalizeCustomFormatPayload(payload)
+	if err != nil {
+		return customFormatUpsertPlan{}, err
+	}
+	target, err := findCustomFormatByName(raws, name)
+	if err != nil {
+		return customFormatUpsertPlan{}, err
+	}
+	plan := customFormatUpsertPlan{Action: "created", Name: name, BeforeRaw: json.RawMessage("null")}
+	if target == nil {
+		delete(incoming, "id")
+		plan.AfterRaw, err = json.Marshal(incoming)
+	} else {
+		plan.Action = "updated"
+		plan.ID = target.ID
+		plan.BeforeRaw = append(json.RawMessage(nil), target.raw...)
+		var live map[string]any
+		live, err = decodeJSONObject(target.raw)
+		if err == nil {
+			for key, value := range incoming {
+				live[key] = value
+			}
+			live["id"] = json.Number(strconv.Itoa(target.ID))
+			plan.AfterRaw, err = json.Marshal(live)
+		}
+	}
+	if err != nil {
+		return customFormatUpsertPlan{}, fmt.Errorf("could not encode the custom format update")
+	}
+	plan.BeforeHash, err = canonicalJSONHash(plan.BeforeRaw)
+	if err != nil {
+		return customFormatUpsertPlan{}, fmt.Errorf("could not hash the current custom format")
+	}
+	plan.AfterHash, err = canonicalJSONHash(plan.AfterRaw)
+	if err != nil {
+		return customFormatUpsertPlan{}, fmt.Errorf("could not hash the requested custom format")
+	}
+	if plan.Action == "updated" && customFormatObjectsEquivalent(plan.BeforeRaw, plan.AfterRaw) {
+		plan.Action = "unchanged"
+	}
+	return plan, nil
+}
+
+func customFormatObjectsEquivalent(leftRaw, rightRaw json.RawMessage) bool {
+	left, leftErr := decodeJSONObject(leftRaw)
+	right, rightErr := decodeJSONObject(rightRaw)
+	if leftErr != nil || rightErr != nil || len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		rightValue, exists := right[key]
+		if !exists || !customFormatValuesEquivalent(key, leftValue, rightValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func customFormatValuesEquivalent(key string, left, right any) bool {
+	if key == "specifications" {
+		return jsonValueContains(left, right) && jsonValueContains(right, left)
+	}
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
+}
+
+// customFormatReadbackMatchesPlan verifies the settings Cantinarr controls
+// while tolerating extra fields an arr may add during normalization. Nested
+// objects may gain server-owned fields, and compatible arr builds may reorder
+// specification/field arrays, but every requested value must survive the
+// authoritative readback.
+func customFormatReadbackMatchesPlan(plan customFormatUpsertPlan, raw json.RawMessage) error {
+	expected, err := decodeJSONObject(plan.AfterRaw)
+	if err != nil {
+		return fmt.Errorf("the requested custom format could not be decoded")
+	}
+	actual, err := decodeJSONObject(raw)
+	if err != nil {
+		return fmt.Errorf("the live custom format could not be decoded")
+	}
+	for _, key := range []string{"name", "specifications", "includeCustomFormatWhenRenaming"} {
+		want, required := expected[key]
+		if !required {
+			continue
+		}
+		got, exists := actual[key]
+		if !exists || !jsonValueContains(got, want) {
+			return fmt.Errorf("the live custom format did not retain %s", customFormatFieldLabel(key))
+		}
+	}
+	return nil
+}
+
+func jsonValueContains(actual, expected any) bool {
+	switch want := expected.(type) {
+	case map[string]any:
+		got, ok := actual.(map[string]any)
+		if !ok {
+			return false
+		}
+		for key, value := range want {
+			actualValue, exists := got[key]
+			if !exists || !jsonValueContains(actualValue, value) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		got, ok := actual.([]any)
+		if !ok || len(got) != len(want) {
+			return false
+		}
+		used := make([]bool, len(got))
+		for _, expectedValue := range want {
+			matched := false
+			for i, actualValue := range got {
+				if used[i] || !jsonValueContains(actualValue, expectedValue) {
+					continue
+				}
+				used[i] = true
+				matched = true
+				break
+			}
+			if !matched {
+				return false
+			}
+		}
+		return true
+	default:
+		wantJSON, wantErr := json.Marshal(want)
+		gotJSON, gotErr := json.Marshal(actual)
+		return wantErr == nil && gotErr == nil && bytes.Equal(wantJSON, gotJSON)
+	}
 }
 
 func verifyCreatedCustomFormatProfileScores(raws []json.RawMessage, formatID int) error {

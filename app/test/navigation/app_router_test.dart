@@ -113,6 +113,8 @@ void main() {
       '/setup',
       '/settings/credentials',
       '/settings/ai-tools',
+      '/settings/change-history',
+      '/settings/change-history/1',
       '/settings/users',
       '/settings/request-settings',
       '/settings/devices',
@@ -230,6 +232,13 @@ void main() {
     router.go('/settings/users/not-a-number/request-settings');
     await tester.pumpAndSettle();
     expect(router.routeInformationProvider.value.uri.path, '/settings/users');
+
+    router.go('/settings/change-history/not-a-number');
+    await tester.pumpAndSettle();
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/settings/change-history',
+    );
   });
 
   // Scaffolds are transparent by theme, so every routed page must paint its

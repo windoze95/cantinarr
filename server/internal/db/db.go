@@ -451,6 +451,45 @@ CREATE TABLE IF NOT EXISTS agent_actions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_actions_fingerprint ON agent_actions(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_agent_actions_status ON agent_actions(status);
 CREATE INDEX IF NOT EXISTS idx_agent_actions_issue ON agent_actions(issue_id);
+
+-- Durable ledger for supported settings mutations Cantinarr performs in an
+-- external application through the AI/MCP settings tools.
+-- The raw before/after snapshots are server-only rollback material; API
+-- handlers expose the bounded, human-readable changes_json projection instead.
+-- A row is inserted before remote I/O so a process loss can never leave an
+-- unrecorded write attempt. Startup repairs an interrupted 'executing' row to
+-- 'outcome_unknown' rather than guessing whether the remote service accepted it.
+CREATE TABLE IF NOT EXISTS external_setting_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER REFERENCES external_setting_changes(id),
+    actor_user_id INTEGER NOT NULL DEFAULT 0,
+    actor_device_id TEXT NOT NULL DEFAULT '',
+    actor_name TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL,                         -- ai_chat|external_mcp|system|admin_revert
+    service_type TEXT NOT NULL,                   -- radarr|sonarr|chaptarr
+    instance_id TEXT NOT NULL,
+    instance_name TEXT NOT NULL,
+    resource_type TEXT NOT NULL,                  -- quality_profile|custom_format
+    resource_id TEXT NOT NULL,
+    resource_name TEXT NOT NULL,
+    operation TEXT NOT NULL,                      -- update|create|revert
+    status TEXT NOT NULL DEFAULT 'executing',     -- executing|applied|failed|outcome_unknown
+    summary TEXT NOT NULL DEFAULT '',
+    changes_json TEXT NOT NULL DEFAULT '[]',
+    before_json TEXT NOT NULL DEFAULT '',          -- exact server-only snapshot
+    after_json TEXT NOT NULL DEFAULT '',           -- exact server-only snapshot
+    before_hash TEXT NOT NULL DEFAULT '',
+    after_hash TEXT NOT NULL DEFAULT '',
+    dependency_hash TEXT NOT NULL DEFAULT '',
+    instance_binding BLOB NOT NULL,
+    error_text TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_external_setting_changes_created
+    ON external_setting_changes(id DESC);
+CREATE INDEX IF NOT EXISTS idx_external_setting_changes_target
+    ON external_setting_changes(service_type, instance_id, resource_type, resource_id, id DESC);
 `
 
 type schemaMigration struct {
@@ -620,6 +659,12 @@ func Open(dbPath string) (*sql.DB, error) {
 	// retain live approvals or parked runs, and an action found mid-execution has
 	// an unknowable external outcome, so it is never retried blindly.
 	repairs := []string{
+		`UPDATE external_setting_changes
+		 SET status = 'outcome_unknown', completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+		     error_text = CASE WHEN error_text = ''
+		       THEN 'Cantinarr restarted while this settings change was executing; compare the live value before taking further action.'
+		       ELSE error_text END
+		 WHERE status = 'executing'`,
 		`UPDATE issues SET resolution_kind = CASE
 		   WHEN source = 'auto' AND COALESCE(resolution,'') LIKE 'Auto-resolved:%' THEN 'arr_state_cleared'
 		   WHEN resolution = 'user_unresponsive' THEN 'reporter_timeout'
