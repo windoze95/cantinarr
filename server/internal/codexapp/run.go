@@ -493,11 +493,12 @@ func (m *Manager) runWithAccount(
 	stateMu.Unlock()
 
 	if len(behavior.historyItems) > 0 {
-		var injected struct{}
+		// nil out: only the reply's success matters, so an empty result body
+		// from a future app-server must not force the flattened fallback.
 		if requestErr := session.request(runCtx, "thread/inject_items", map[string]any{
 			"threadId": threadStart.Thread.ID,
 			"items":    behavior.historyItems,
-		}, &injected); requestErr != nil {
+		}, nil); requestErr != nil {
 			classified := contextOrClassified(runCtx, requestErr)
 			if errors.Is(classified, ErrProvider) {
 				return ErrHistoryInject

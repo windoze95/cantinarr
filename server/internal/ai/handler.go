@@ -241,17 +241,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 				},
 			)
 		}
-		if items, prompt, nativeOK := codexNativeTurn(history); nativeOK {
-			err = runCodex(prompt, items)
-			if errors.Is(err, codexapp.ErrHistoryInject) {
-				// Injection fails closed to the flattened replay: no turn ran
-				// yet, so no callbacks fired and the builder is still empty.
-				log.Printf("ai: codex native history rejected; retrying with flattened replay")
-				err = runCodex(renderCodexPrompt(history), nil)
-			}
-		} else {
-			err = runCodex(renderCodexPrompt(history), nil)
-		}
+		err = runCodexConversation(history, runCodex)
 		if err == nil {
 			finalHistory = append(cloneTranscript(history), codexBuilder.Finish()...)
 		}
@@ -283,6 +273,21 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
 	writeMu.Unlock()
+}
+
+// runCodexConversation prefers native history replay and falls back to the
+// flattened rendering — exactly once — when the app-server rejects the items.
+// The retry is safe: injection fails before turn/start, so no callbacks fired
+// and no output reached the client.
+func runCodexConversation(history transcript, run func(prompt string, items []json.RawMessage) error) error {
+	if items, prompt, ok := codexNativeTurn(history); ok {
+		err := run(prompt, items)
+		if !errors.Is(err, codexapp.ErrHistoryInject) {
+			return err
+		}
+		log.Printf("ai: codex native history rejected; retrying with flattened replay")
+	}
+	return run(renderCodexPrompt(history), nil)
 }
 
 // renderCodexPrompt turns the provider-neutral transcript into one untrusted

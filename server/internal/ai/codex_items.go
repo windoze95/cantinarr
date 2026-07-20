@@ -37,7 +37,10 @@ type codexFunctionCallOutputItem struct {
 // codexNativeTurn splits a resolved conversation into the prior history as
 // native Responses items plus the closing user message as the turn prompt.
 // ok is false when the transcript does not end in a plain user text message,
-// in which case the caller keeps the flattened-replay path.
+// in which case the caller keeps the flattened-replay path. Client-supplied
+// fallback transcripts are text-only, so replaying them as native turns adds
+// no capability beyond what the base instructions' untrusted-data rule and
+// per-call tool reauthorization already govern.
 func codexNativeTurn(history transcript) (items []json.RawMessage, prompt string, ok bool) {
 	if len(history) == 0 {
 		return nil, "", false

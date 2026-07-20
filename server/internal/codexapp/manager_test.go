@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,6 +120,10 @@ func TestCodexAppHelperProcess(t *testing.T) {
 		case "thread/inject_items":
 			if slices.Contains(os.Args, "--fake-inject-error") {
 				send(map[string]any{"id": id, "error": map[string]any{"code": -32600, "message": "items[0] is not a valid response item"}})
+				continue
+			}
+			if slices.Contains(os.Args, "--fake-inject-auth-error") {
+				send(map[string]any{"id": id, "error": map[string]any{"code": -32000, "message": "unauthorized"}})
 				continue
 			}
 			send(map[string]any{"id": id, "result": map[string]any{}})
@@ -1671,16 +1676,13 @@ func assertAppServerCommandSurface(t *testing.T, path string, prefix []string) {
 	// Native history replay: the pinned binary must accept the exact raw
 	// Responses items the ai package serializes (message text plus a matched
 	// function_call / function_call_output pair) on a fresh ephemeral thread
-	// before any turn. Recording history runs no model turn.
+	// before any turn. The fixture is shared with the ai package, whose
+	// golden test pins it to the production serializer's output. Recording
+	// history runs no model turn.
 	if err := encoder.Encode(map[string]any{
 		"id": 3, "method": "thread/inject_items", "params": map[string]any{
 			"threadId": threadResult.Thread.ID,
-			"items": []json.RawMessage{
-				json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"find dune"}]}`),
-				json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Searching now."}]}`),
-				json.RawMessage(`{"type":"function_call","name":"search_movies","arguments":"{\"query\":\"dune\"}","call_id":"codex_smoke_1"}`),
-				json.RawMessage(`{"type":"function_call_output","call_id":"codex_smoke_1","output":"found 2 movies"}`),
-			},
+			"items":    nativeSmokeItems(t),
 		},
 	}); err != nil {
 		t.Fatalf("write thread/inject_items request: %v", err)
@@ -1689,6 +1691,48 @@ func assertAppServerCommandSurface(t *testing.T, path string, prefix []string) {
 	if inject.Error != nil {
 		t.Fatalf("app-server rejected native history items: code %d: %s", inject.Error.Code, inject.Error.Message)
 	}
+
+	// Ephemeral threads must not persist injected transcript content: prove
+	// no file under the isolated home/work/tmp dirs carries the sentinel
+	// call id, so a pinned-binary bump cannot silently start writing
+	// conversation state to CODEX_HOME.
+	sentinel := []byte("codex_smoke_1")
+	if err := filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if bytes.Contains(data, sentinel) {
+			t.Errorf("ephemeral thread persisted injected history to %s", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan isolated dirs: %v", err)
+	}
+}
+
+// nativeSmokeItems loads the shared native-item fixture that the ai package's
+// TestCodexResponseItemsMatchSmokeFixture pins to the production serializer.
+func nativeSmokeItems(t *testing.T) []json.RawMessage {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "ai", "testdata", "codex_native_smoke_items.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var items []json.RawMessage
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		items = append(items, json.RawMessage(line))
+	}
+	if len(items) == 0 {
+		t.Fatal("native smoke fixture is empty")
+	}
+	return items
 }
 
 func TestPrepareRuntimeScrubsOnlyStaleAdapterSessions(t *testing.T) {
@@ -2201,6 +2245,38 @@ func TestRunWithAccountSessionHistoryInjectFailureIsRecoverable(t *testing.T) {
 		if json.Unmarshal(entry.Value, &message) == nil && message["method"] == "turn/start" {
 			t.Fatal("turn started despite failed history injection")
 		}
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestRunWithAccountSessionAuthFailingInjectStillPurgesAccount(t *testing.T) {
+	manager, _, _, runtimeDir, _ := fakeManager(t)
+	if err := manager.saveAccount(
+		SharedAccount(),
+		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+		AccountStatus{Connected: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	manager.args = append(manager.args, "--fake-inject-auth-error")
+	items := []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`),
+	}
+	err := manager.RunWithAccountSession(
+		context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "",
+		"base", "context", "prompt", items, Callbacks{},
+	)
+	// An auth-classified failure during injection must keep its meaning: it
+	// may never soften into the recoverable ErrHistoryInject, and it purges
+	// the encrypted account row exactly like any other auth failure.
+	if !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("err = %v, want ErrNotConnected", err)
+	}
+	if errors.Is(err, ErrHistoryInject) {
+		t.Fatalf("auth failure softened into recoverable inject error: %v", err)
+	}
+	if found, err := manager.AccountExists(SharedAccount()); err != nil || found {
+		t.Fatalf("account exists=%t err=%v, want purged after auth failure", found, err)
 	}
 	assertRuntimeEmpty(t, runtimeDir)
 }

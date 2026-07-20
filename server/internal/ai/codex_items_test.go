@@ -2,7 +2,13 @@ package ai
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/windoze95/cantinarr-server/internal/codexapp"
 )
 
 // The golden strings pin the exact wire shapes the pinned codex-app-server
@@ -100,5 +106,102 @@ func TestCodexNativeTurnSplitsPromptFromHistory(t *testing.T) {
 	items, prompt, ok = codexNativeTurn(firstTurn)
 	if !ok || prompt != "first message" || len(items) != 0 {
 		t.Fatalf("first turn = (%d items, %q, %v), want native with no injection", len(items), prompt, ok)
+	}
+}
+
+// The pinned-app-server contract test (codexapp's assertAppServerCommandSurface)
+// injects testdata/codex_native_smoke_items.jsonl verbatim; this pins that the
+// fixture is exactly what the production serializer emits, so CI proves the
+// real wire shapes rather than a hand-copied snapshot.
+func TestCodexResponseItemsMatchSmokeFixture(t *testing.T) {
+	history := transcript{
+		textTranscriptMessage(agentRoleUser, "find dune"),
+		{Role: agentRoleAssistant, Content: []transcriptBlock{
+			{Type: blockTypeText, Text: "Searching now."},
+			{Type: blockTypeToolUse, ID: "codex_smoke_1", Name: "search_movies", Input: json.RawMessage(`{"query":"dune"}`)},
+		}},
+		{Role: agentRoleUser, Content: []transcriptBlock{
+			{Type: blockTypeToolResult, ToolUseID: "codex_smoke_1", Name: "search_movies", Content: "found 2 movies"},
+		}},
+	}
+	items := codexResponseItems(history)
+
+	raw, err := os.ReadFile(filepath.Join("testdata", "codex_native_smoke_items.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) != "" {
+			fixture = append(fixture, line)
+		}
+	}
+	if len(items) != len(fixture) {
+		t.Fatalf("serializer items = %d, fixture lines = %d", len(items), len(fixture))
+	}
+	for i := range fixture {
+		if string(items[i]) != fixture[i] {
+			t.Errorf("item %d = %s, fixture %s", i, items[i], fixture[i])
+		}
+	}
+}
+
+func TestRunCodexConversationFallsBackExactlyOnce(t *testing.T) {
+	history := transcript{
+		textTranscriptMessage(agentRoleUser, "hi"),
+		textTranscriptMessage(agentRoleAssistant, "Hello!"),
+		textTranscriptMessage(agentRoleUser, "what's downloading?"),
+	}
+	type call struct {
+		prompt string
+		items  int
+	}
+
+	var calls []call
+	record := func(result ...error) func(string, []json.RawMessage) error {
+		calls = nil
+		return func(prompt string, items []json.RawMessage) error {
+			calls = append(calls, call{prompt: prompt, items: len(items)})
+			if len(calls) <= len(result) {
+				return result[len(calls)-1]
+			}
+			return nil
+		}
+	}
+
+	if err := runCodexConversation(history, record()); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].prompt != "what's downloading?" || calls[0].items != 2 {
+		t.Fatalf("native call = %#v, want one run with two items and the bare prompt", calls)
+	}
+
+	if err := runCodexConversation(history, record(codexapp.ErrHistoryInject)); err != nil {
+		t.Fatalf("fallback should recover, got %v", err)
+	}
+	if len(calls) != 2 || calls[1].items != 0 || !strings.Contains(calls[1].prompt, "[USER]") {
+		t.Fatalf("fallback call = %#v, want a second flattened run with no items", calls)
+	}
+
+	if err := runCodexConversation(history, record(codexapp.ErrHistoryInject, codexapp.ErrHistoryInject)); !errors.Is(err, codexapp.ErrHistoryInject) {
+		t.Fatalf("err = %v, want the second failure surfaced without a third attempt", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d, want exactly two attempts", len(calls))
+	}
+
+	if err := runCodexConversation(history, record(codexapp.ErrUsageLimit)); !errors.Is(err, codexapp.ErrUsageLimit) {
+		t.Fatalf("err = %v, want non-inject errors surfaced without retry", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want no retry on non-inject errors", len(calls))
+	}
+
+	assistantFinal := transcript{textTranscriptMessage(agentRoleAssistant, "welcome")}
+	if err := runCodexConversation(assistantFinal, record()); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0].items != 0 || !strings.Contains(calls[0].prompt, "Continue the Cantinarr conversation") {
+		t.Fatalf("non-native call = %#v, want the flattened path directly", calls)
 	}
 }
