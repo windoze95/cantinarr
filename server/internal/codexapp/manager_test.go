@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,6 +117,16 @@ func TestCodexAppHelperProcess(t *testing.T) {
 			send(map[string]any{"id": id, "result": map[string]any{}})
 		case "thread/start":
 			send(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-1"}}})
+		case "thread/inject_items":
+			if slices.Contains(os.Args, "--fake-inject-error") {
+				send(map[string]any{"id": id, "error": map[string]any{"code": -32600, "message": "items[0] is not a valid response item"}})
+				continue
+			}
+			if slices.Contains(os.Args, "--fake-inject-auth-error") {
+				send(map[string]any{"id": id, "error": map[string]any{"code": -32000, "message": "unauthorized"}})
+				continue
+			}
+			send(map[string]any{"id": id, "result": map[string]any{}})
 		case "turn/start":
 			if slices.Contains(os.Args, "--fake-hang-turn") {
 				send(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-1", "status": "inProgress", "items": []any{}}}})
@@ -325,7 +336,7 @@ func TestSharedAccountIsIndependentAndToolsUseRequestingActor(t *testing.T) {
 		authorized = call
 		return auth.RoleUser, nil
 	})
-	if err := manager.RunWithAccountSession(context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "", "base", "context", "prompt", Callbacks{}); err != nil {
+	if err := manager.RunWithAccountSession(context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "", "base", "context", "prompt", nil, Callbacks{}); err != nil {
 		t.Fatal(err)
 	}
 	if observed.UserID != 2 || observed.Role != auth.RoleUser || observed.DeviceID != "device-2" || !observed.RequireSharedAI || !observed.Reauthorize {
@@ -374,6 +385,7 @@ func TestInteractiveAuthorizationRevocationTerminatesCodexTurn(t *testing.T) {
 	err := manager.RunWithAccountSession(
 		context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "",
 		"base", "context", "prompt",
+		nil,
 		Callbacks{
 			OnText:      func(delta string) { text += delta },
 			OnToolStart: func(name string) { starts = append(starts, name) },
@@ -1660,6 +1672,67 @@ func assertAppServerCommandSurface(t *testing.T, path string, prefix []string) {
 	if threadResult.Thread.ID == "" || threadResult.ApprovalPolicy != "never" || threadResult.Sandbox.Type != "readOnly" {
 		t.Fatalf("unsafe or incomplete thread/start response: %#v", threadResult)
 	}
+
+	// Native history replay: the pinned binary must accept the exact raw
+	// Responses items the ai package serializes (message text plus a matched
+	// function_call / function_call_output pair) on a fresh ephemeral thread
+	// before any turn. The fixture is shared with the ai package, whose
+	// golden test pins it to the production serializer's output. Recording
+	// history runs no model turn.
+	if err := encoder.Encode(map[string]any{
+		"id": 3, "method": "thread/inject_items", "params": map[string]any{
+			"threadId": threadResult.Thread.ID,
+			"items":    nativeSmokeItems(t),
+		},
+	}); err != nil {
+		t.Fatalf("write thread/inject_items request: %v", err)
+	}
+	inject := readReply("3")
+	if inject.Error != nil {
+		t.Fatalf("app-server rejected native history items: code %d: %s", inject.Error.Code, inject.Error.Message)
+	}
+
+	// Ephemeral threads must not persist injected transcript content: prove
+	// no file under the isolated home/work/tmp dirs carries the sentinel
+	// call id, so a pinned-binary bump cannot silently start writing
+	// conversation state to CODEX_HOME.
+	sentinel := []byte("codex_smoke_1")
+	if err := filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if bytes.Contains(data, sentinel) {
+			t.Errorf("ephemeral thread persisted injected history to %s", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan isolated dirs: %v", err)
+	}
+}
+
+// nativeSmokeItems loads the shared native-item fixture that the ai package's
+// TestCodexResponseItemsMatchSmokeFixture pins to the production serializer.
+func nativeSmokeItems(t *testing.T) []json.RawMessage {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "ai", "testdata", "codex_native_smoke_items.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var items []json.RawMessage
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		items = append(items, json.RawMessage(line))
+	}
+	if len(items) == 0 {
+		t.Fatal("native smoke fixture is empty")
+	}
+	return items
 }
 
 func TestPrepareRuntimeScrubsOnlyStaleAdapterSessions(t *testing.T) {
@@ -2050,4 +2123,160 @@ func (w *blockingWriteCloser) Write([]byte) (int, error) {
 func (w *blockingWriteCloser) Close() error {
 	w.once.Do(func() { close(w.closed) })
 	return nil
+}
+
+func TestRunWithAccountSessionInjectsNativeHistory(t *testing.T) {
+	manager, _, _, runtimeDir, logPath := fakeManager(t)
+	if err := manager.saveAccount(
+		SharedAccount(),
+		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+		AccountStatus{Connected: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	items := []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"find dune"}]}`),
+		json.RawMessage(`{"type":"function_call","name":"search_movies","arguments":"{}","call_id":"codex_1"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"codex_1","output":"found it"}`),
+	}
+	if err := manager.RunWithAccountSession(
+		context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "",
+		"base", "context", "prompt", items, Callbacks{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var received []map[string]any
+	for _, entry := range readFakeLog(t, logPath) {
+		if entry.Kind != "received" {
+			continue
+		}
+		var message map[string]any
+		if json.Unmarshal(entry.Value, &message) == nil {
+			received = append(received, message)
+		}
+	}
+	indexOf := func(method string) int {
+		for i, message := range received {
+			if message["method"] == method {
+				return i
+			}
+		}
+		t.Fatalf("protocol request %s not found", method)
+		return -1
+	}
+	threadIdx, injectIdx, turnIdx := indexOf("thread/start"), indexOf("thread/inject_items"), indexOf("turn/start")
+	if threadIdx > injectIdx || injectIdx > turnIdx {
+		t.Fatalf("order thread=%d inject=%d turn=%d, want injection between thread and turn start", threadIdx, injectIdx, turnIdx)
+	}
+
+	canon := func(raw []byte) string {
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			t.Fatal(err)
+		}
+		out, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	params, _ := received[injectIdx]["params"].(map[string]any)
+	if params["threadId"] != "thread-1" {
+		t.Fatalf("inject threadId = %v", params["threadId"])
+	}
+	sent, ok := params["items"].([]any)
+	if !ok || len(sent) != len(items) {
+		t.Fatalf("inject items = %#v, want %d items", params["items"], len(items))
+	}
+	for i := range items {
+		encoded, err := json.Marshal(sent[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if canon(encoded) != canon(items[i]) {
+			t.Fatalf("inject item %d = %s, want %s", i, encoded, items[i])
+		}
+	}
+
+	turnParams, _ := received[turnIdx]["params"].(map[string]any)
+	input, _ := turnParams["input"].([]any)
+	if len(input) != 1 {
+		t.Fatalf("turn input = %#v, want one text item", turnParams["input"])
+	}
+	if first, _ := input[0].(map[string]any); first["text"] != "prompt" {
+		t.Fatalf("turn text = %v, want the bare prompt", first["text"])
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestRunWithAccountSessionHistoryInjectFailureIsRecoverable(t *testing.T) {
+	manager, _, _, runtimeDir, logPath := fakeManager(t)
+	if err := manager.saveAccount(
+		SharedAccount(),
+		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+		AccountStatus{Connected: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	manager.args = append(manager.args, "--fake-inject-error")
+	items := []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`),
+	}
+	err := manager.RunWithAccountSession(
+		context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "",
+		"base", "context", "prompt", items, Callbacks{},
+	)
+	if !errors.Is(err, ErrHistoryInject) {
+		t.Fatalf("err = %v, want ErrHistoryInject", err)
+	}
+	if errors.Is(err, ErrNotConnected) || errors.Is(err, ErrUsageLimit) {
+		t.Fatalf("inject failure misclassified as auth or usage: %v", err)
+	}
+	// Only auth failures may purge the encrypted account row.
+	if found, err := manager.AccountExists(SharedAccount()); err != nil || !found {
+		t.Fatalf("account exists=%t err=%v, want retained after inject failure", found, err)
+	}
+	for _, entry := range readFakeLog(t, logPath) {
+		if entry.Kind != "received" {
+			continue
+		}
+		var message map[string]any
+		if json.Unmarshal(entry.Value, &message) == nil && message["method"] == "turn/start" {
+			t.Fatal("turn started despite failed history injection")
+		}
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestRunWithAccountSessionAuthFailingInjectStillPurgesAccount(t *testing.T) {
+	manager, _, _, runtimeDir, _ := fakeManager(t)
+	if err := manager.saveAccount(
+		SharedAccount(),
+		[]byte(`{"tokens":{"access_token":"shared-secret"}}`),
+		AccountStatus{Connected: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	manager.args = append(manager.args, "--fake-inject-auth-error")
+	items := []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`),
+	}
+	err := manager.RunWithAccountSession(
+		context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "",
+		"base", "context", "prompt", items, Callbacks{},
+	)
+	// An auth-classified failure during injection must keep its meaning: it
+	// may never soften into the recoverable ErrHistoryInject, and it purges
+	// the encrypted account row exactly like any other auth failure.
+	if !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("err = %v, want ErrNotConnected", err)
+	}
+	if errors.Is(err, ErrHistoryInject) {
+		t.Fatalf("auth failure softened into recoverable inject error: %v", err)
+	}
+	if found, err := manager.AccountExists(SharedAccount()); err != nil || found {
+		t.Fatalf("account exists=%t err=%v, want purged after auth failure", found, err)
+	}
+	assertRuntimeEmpty(t, runtimeDir)
 }
