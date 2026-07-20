@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -42,6 +43,18 @@ func TestCodexTranscriptBuilderInterleavesTurns(t *testing.T) {
 	if third := got[4]; len(third.Content) != 1 || third.Content[0].Type != blockTypeToolUse {
 		t.Errorf("no-text tool turn = %+v, want a lone tool_use", third)
 	}
+	seenIDs := map[string]bool{}
+	for _, message := range got {
+		for _, block := range message.Content {
+			if block.Type != blockTypeToolUse {
+				continue
+			}
+			if seenIDs[block.ID] {
+				t.Errorf("tool_use id %q reused across records", block.ID)
+			}
+			seenIDs[block.ID] = true
+		}
+	}
 	if errResult := got[5]; !errResult.Content[0].IsError {
 		t.Error("third tool_result lost its error flag")
 	}
@@ -78,13 +91,54 @@ func TestCodexTranscriptBuilderBoundsInputs(t *testing.T) {
 	got := b.Finish()
 	placeholder := `{"_cantinarr_truncated":true}`
 	if input := string(got[0].Content[len(got[0].Content)-1].Input); input != placeholder {
-		t.Errorf("oversized input stored as %q, want placeholder", input[:64])
+		t.Errorf("oversized input stored as %q, want placeholder", boundedString(input, 64))
 	}
 	if input := string(got[2].Content[len(got[2].Content)-1].Input); input != placeholder {
 		t.Errorf("invalid input stored as %q, want placeholder", input)
 	}
 	if result := got[5].Content[0].Content; len(result) > maxStoredToolResultBytes {
 		t.Errorf("result length = %d, want at most %d", len(result), maxStoredToolResultBytes)
+	}
+}
+
+// The builder promises safety for straggler tool-call goroutines racing the
+// handler's Finish; hammer that window under -race.
+func TestCodexTranscriptBuilderConcurrentUse(t *testing.T) {
+	b := &codexTranscriptBuilder{}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				b.Text("delta ")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				b.ToolRecord("search_movies", json.RawMessage(`{}`), "ok", false)
+			}
+		}()
+	}
+	done := make(chan transcript)
+	go func() { done <- b.Finish() }()
+	wg.Wait()
+	got := <-done
+
+	for i, message := range got {
+		for _, block := range message.Content {
+			switch block.Type {
+			case blockTypeToolUse:
+				if block.ID == "" {
+					t.Fatalf("message %d: tool_use with empty id", i)
+				}
+			case blockTypeToolResult:
+				if block.ToolUseID == "" {
+					t.Fatalf("message %d: tool_result with no linked id", i)
+				}
+			}
+		}
 	}
 }
 

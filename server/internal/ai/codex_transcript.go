@@ -10,9 +10,11 @@ import (
 // interleaved provider-neutral transcript. The app-server executes dynamic
 // tools strictly in sequence, so each tool record closes the assistant text
 // that preceded it: [assistant text+tool_use][user tool_result]... followed by
-// any trailing assistant text on Finish. Callbacks may arrive from the
-// app-server notification goroutine while the handler goroutine finishes, so
-// the builder is safe for concurrent use.
+// any trailing assistant text on Finish. ToolRecord runs on per-request
+// tool-call goroutines that can outlive the session's bounded shutdown drain
+// while the handler goroutine calls Finish, so the builder is safe for
+// concurrent use; text-segment attribution around a tool call is best-effort
+// under that concurrency, and the pair structure stays intact regardless.
 type codexTranscriptBuilder struct {
 	mu       sync.Mutex
 	messages transcript
