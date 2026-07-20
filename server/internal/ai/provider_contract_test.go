@@ -407,6 +407,43 @@ func TestOpenAIToolSchemasUseSupportedObjectRoots(t *testing.T) {
 	}
 }
 
+func TestAnthropicToolSchemasCarryFullRoots(t *testing.T) {
+	adminTools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
+	body, err := json.Marshal(toSDKTools(adminTools))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []struct {
+		Name        string         `json:"name"`
+		InputSchema map[string]any `json:"input_schema"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	seenGrabRelease := false
+	for _, tool := range decoded {
+		if tool.InputSchema["type"] != "object" {
+			t.Errorf("tool %q input_schema must have type object", tool.Name)
+		}
+		if tool.Name != "grab_release" {
+			continue
+		}
+		seenGrabRelease = true
+		if oneOf, ok := tool.InputSchema["oneOf"].([]any); !ok || len(oneOf) != 3 {
+			t.Errorf("grab_release input_schema oneOf = %#v, want the three media_type branches", tool.InputSchema["oneOf"])
+		}
+		if props, ok := tool.InputSchema["properties"].(map[string]any); !ok || len(props) == 0 {
+			t.Error("grab_release input_schema lost its properties")
+		}
+		if req, ok := tool.InputSchema["required"].([]any); !ok || len(req) == 0 {
+			t.Error("grab_release input_schema lost its required list")
+		}
+	}
+	if !seenGrabRelease {
+		t.Fatal("serialized Anthropic tools omitted grab_release")
+	}
+}
+
 func TestOpenAIValidationOmitsUnsupportedReasoningField(t *testing.T) {
 	params := openAINextTurnParams("gpt-4.1", TurnParams{
 		DisableReasoning: true,

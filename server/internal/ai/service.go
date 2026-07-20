@@ -433,6 +433,19 @@ func toSDKTools(tools []mcp.Tool) []anthropic.ToolUnionParam {
 				}
 			}
 		}
+		// The API takes full JSON Schema; carry root keywords beyond the
+		// typed fields (grab_release's oneOf) so the model sees the same
+		// constraints Gemini and Codex get.
+		for key, value := range t.InputSchema {
+			switch key {
+			case "type", "properties", "required":
+			default:
+				if schema.ExtraFields == nil {
+					schema.ExtraFields = map[string]any{}
+				}
+				schema.ExtraFields[key] = value
+			}
+		}
 		tp := anthropic.ToolParam{
 			Name:        t.Name,
 			Description: anthropic.String(t.Description),
