@@ -395,6 +395,9 @@ var arrToolDefinitions = []Tool{
 
 func init() {
 	toolDefinitions = append(toolDefinitions, arrToolDefinitions...)
+	// Appended here rather than in an init of their own file so tool ordering
+	// never depends on compilation file order.
+	toolDefinitions = append(toolDefinitions, arrSettingsToolDefinitions...)
 }
 
 // --- helpers ---

@@ -317,6 +317,12 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.remediateQueueItem(input)
 	case "rescan_media":
 		return s.rescanMedia(input)
+	case "list_arr_instances":
+		return s.listArrInstances(input)
+	case "get_quality_profiles":
+		return s.getQualityProfiles(input)
+	case "get_custom_formats":
+		return s.getCustomFormats(input)
 	default:
 		return nil, fmt.Errorf("unknown tool")
 	}

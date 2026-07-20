@@ -43,6 +43,42 @@ func NewRegistry(store *Store) *Registry {
 	}
 }
 
+// Summary is the tool-facing identity of an instance: never the URL, API
+// key, or credential material, so it can safely cross the AI tool boundary.
+type Summary struct {
+	ID          string
+	ServiceType string
+	Name        string
+	IsDefault   bool
+}
+
+// ListInstanceSummaries returns identity-only views of the configured
+// instances, optionally filtered to one service type.
+func (r *Registry) ListInstanceSummaries(serviceType string) ([]Summary, error) {
+	var (
+		instances []Instance
+		err       error
+	)
+	if serviceType == "" {
+		instances, err = r.store.ListAll()
+	} else {
+		instances, err = r.store.List(serviceType)
+	}
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]Summary, 0, len(instances))
+	for _, inst := range instances {
+		summaries = append(summaries, Summary{
+			ID:          inst.ID,
+			ServiceType: inst.ServiceType,
+			Name:        inst.Name,
+			IsDefault:   inst.IsDefault,
+		})
+	}
+	return summaries, nil
+}
+
 // GetRadarrClient returns a cached or new Radarr client for the given instance ID.
 func (r *Registry) GetRadarrClient(instanceID string) (*radarr.Client, error) {
 	r.mu.RLock()
