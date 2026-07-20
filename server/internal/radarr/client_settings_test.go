@@ -1,6 +1,8 @@
 package radarr
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -71,6 +73,55 @@ func TestCustomFormatRawWritesUseExpectedEndpointsAndBodies(t *testing.T) {
 	}
 	if raw, err := client.UpdateCustomFormatRaw(8, body); err != nil || string(raw) != `{"id":8,"name":"x265"}` {
 		t.Fatalf("update = %s, %v", raw, err)
+	}
+}
+
+func TestQualityProfileRawWriteUsesExpectedEndpointAndBody(t *testing.T) {
+	const body = `{"id":4,"name":"HD","upgradeAllowed":true,"futureField":{"keep":"me"}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v3/qualityprofile/4" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("X-Api-Key") != "key" || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("headers = key %q content-type %q", r.Header.Get("X-Api-Key"), r.Header.Get("Content-Type"))
+		}
+		got, _ := io.ReadAll(r.Body)
+		if string(got) != body {
+			t.Errorf("body = %s, want %s", got, body)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "key")
+	raw, err := client.UpdateQualityProfileRaw(4, json.RawMessage(body))
+	if err != nil || string(raw) != body {
+		t.Fatalf("UpdateQualityProfileRaw = %s, %v", raw, err)
+	}
+}
+
+func TestGetLanguagesRawContextReturnsRadarrCatalogUnchanged(t *testing.T) {
+	// This synthetic Hindi ID intentionally differs from the Sonarr fixture.
+	// Together the fixtures prove each client returns its own catalog unchanged;
+	// they do not claim that every pair of live instances must differ.
+	const catalog = `[{"id":1,"name":"English"},{"id":26,"name":"Hindi"}]`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/language" || r.Header.Get("X-Api-Key") != "key" {
+			t.Errorf("request = %s %s key=%q", r.Method, r.URL.Path, r.Header.Get("X-Api-Key"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(catalog))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "key")
+	languages, err := client.GetLanguagesRawContext(context.Background())
+	if err != nil {
+		t.Fatalf("GetLanguagesRawContext: %v", err)
+	}
+	if len(languages) != 2 || string(languages[1]) != `{"id":26,"name":"Hindi"}` {
+		t.Fatalf("languages = %s", languages)
 	}
 }
 

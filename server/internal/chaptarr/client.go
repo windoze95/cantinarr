@@ -640,6 +640,17 @@ func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMe
 	return profiles, nil
 }
 
+// UpdateQualityProfileRaw fully replaces one credential-free quality profile.
+func (c *Client) UpdateQualityProfileRaw(id int, body json.RawMessage) (json.RawMessage, error) {
+	return c.UpdateQualityProfileRawContext(context.Background(), id, body)
+}
+
+func (c *Client) UpdateQualityProfileRawContext(ctx context.Context, id int, body json.RawMessage) (json.RawMessage, error) {
+	path := fmt.Sprintf("/api/v1/qualityprofile/%d", id)
+	raw, _, err := arrcommon.DoSettingsWrite(ctx, c.httpClient, "chaptarr", c.baseURL, c.apiKey, http.MethodPut, path, body)
+	return raw, err
+}
+
 // GetCustomFormatsRaw returns every custom format exactly as Chaptarr sent
 // it, verbatim for the same round-trip reason as GetQualityProfilesRaw. A 404
 // maps to ErrCustomFormatsNotFound.

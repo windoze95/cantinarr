@@ -1,6 +1,7 @@
 package chaptarr
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -72,6 +73,31 @@ func TestCustomFormatRawWritesUseExpectedEndpointsAndBodies(t *testing.T) {
 	}
 	if raw, err := client.UpdateCustomFormatRaw(8, body); err != nil || string(raw) != `{"id":8,"name":"x265"}` {
 		t.Fatalf("update = %s, %v", raw, err)
+	}
+}
+
+func TestQualityProfileRawWriteUsesExpectedEndpointAndBody(t *testing.T) {
+	const body = `{"id":2,"name":"Audiobook","upgradeAllowed":true,"futureForkField":{"keep":"me"}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/qualityprofile/2" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("X-Api-Key") != "key" || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("headers = key %q content-type %q", r.Header.Get("X-Api-Key"), r.Header.Get("Content-Type"))
+		}
+		got, _ := io.ReadAll(r.Body)
+		if string(got) != body {
+			t.Errorf("body = %s, want %s", got, body)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "key")
+	raw, err := client.UpdateQualityProfileRaw(2, json.RawMessage(body))
+	if err != nil || string(raw) != body {
+		t.Fatalf("UpdateQualityProfileRaw = %s, %v", raw, err)
 	}
 }
 

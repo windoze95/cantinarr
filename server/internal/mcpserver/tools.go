@@ -57,7 +57,7 @@ func ToolListFilter(toolServer *internalmcp.ToolServer) server.ToolFilterFunc {
 				continue
 			}
 			def, ok := toolByName[t.Name]
-			if !ok || !def.AllowedForRole(role) {
+			if !ok || def.InAppChatOnly || !def.AllowedForRole(role) {
 				continue
 			}
 			filtered = append(filtered, t)
@@ -83,6 +83,7 @@ func makeToolHandler(toolServer *internalmcp.ToolServer, toolName string) server
 			Role:        GetRoleFromContext(ctx),
 			DeviceID:    GetDeviceIDFromContext(ctx),
 			Reauthorize: true,
+			Origin:      internalmcp.OriginExternalMCP,
 		}
 		result, err := toolServer.ExecuteTool(ctx, toolName, inputJSON, callCtx)
 		if err != nil {

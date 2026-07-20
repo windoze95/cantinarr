@@ -9,7 +9,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
   ┌───────────────────────────────────────────────────────────┐
   │  Auth (JWT/passkeys)   Requests + Approvals   AI Chat     │
   │        │                     │                   │        │
-  │        │              ┌──────┴──────┐      31 MCP Tools   │
+  │        │              ┌──────┴──────┐      33 AI Tools    │
   │        │              │  ID Bridge  │            │        │
   │        │              └──┬───────┬──┘     AI Remediation  │
   │        │                 │       │            Agent       │
@@ -31,7 +31,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 - **Availability computed live** -- Request status is derived from the arrs' real episode/file state (never from a stale snapshot or monitored-only stats), refreshed by queue polling and instant arr webhooks.
 - **Connect link auth, passwordless by default** -- Admins generate connect links; redeeming one starts a permanent device session (an opaque refresh token validated against the DB -- never expires, never rotates, independent of the JWT secret) that mints 15-minute access JWTs. Sessions end only by device revocation or user deletion. Passwords and passkeys (WebAuthn, incl. native iOS/Android/Windows) are admin-gated per user.
 - **AI assistant + remediation agent** -- Interactive chat resolves a personal Anthropic/OpenAI/Gemini key or OpenAI (OAuth) link first; that personal choice works without an included-access grant and need not match the server provider. An admin-funded provider is available only to users granted included access. A selected personal provider fails closed instead of silently consuming the shared account. The autonomous investigation agent is server-owned, always uses the admin shared API key or shared OpenAI OAuth connection without consulting user grants, may use a separately tested remediation model designation, and proposes fixes an admin approves.
-- **MCP server** -- The same 31 tools exposed at `/mcp` (Streamable HTTP) with full inbound Cantinarr OAuth: discovery metadata, dynamic client registration, PKCE, browser/passkey login, rotating refresh tokens. Admin settings tools inspect quality profiles and import or update native/TRaSH custom formats on Radarr, Sonarr, and Chaptarr; profile scores remain separate. This is separate from the outbound OpenAI OAuth account link used by Codex chat.
+- **MCP server** -- 31 of the 33 in-app AI tools are exposed at `/mcp` (Streamable HTTP) with full inbound Cantinarr OAuth: discovery metadata, dynamic client registration, PKCE, browser/passkey login, rotating refresh tokens. Admin settings tools inspect quality profiles and import or update native/TRaSH custom formats on Radarr, Sonarr, and Chaptarr. Profile preview/apply stays in-app-only because Cantinarr must verify the same admin's exact later chat message from the same device. This is separate from the outbound OpenAI OAuth account link used by Codex chat.
 - **Import Doctor** -- Plain-English diagnosis of stuck downloads with one-click fixes (manual/force import, remove+blocklist+re-search, category hand-off, rescan), shared by the app, the AI assistant, and MCP.
 - **Push notifications** -- APNs delivery through a self-hosted push gateway with zero-config auto-enrollment, per-user preference categories, and admin-scoped alerts.
 - **Real-time updates** -- WebSocket hub polls arr queues (30s) and download clients (15s) and pushes progress, queue snapshots, and change pings; arr webhooks make external changes (manual imports, deletes) land instantly.
@@ -434,7 +434,7 @@ The MCP server also publishes prompt templates and a `guide://cantinarr/agent-gu
 
 ### MCP tools
 
-The same 31 tools power the in-app AI assistant and `/mcp`; the remediation agent receives a constrained read-only subset plus issue-scoped human gates. Every shared tool can be disabled from Settings > AI Tools. Interactive execution reauthorizes the current device and role immediately before each tool and rechecks the included-AI grant when shared billing is in use. Tools marked **admin** require the admin role (either flagged directly or gated by a permission the user role doesn't hold):
+The registry contains 33 in-app AI tools; 31 are also exposed through `/mcp`. `preview_profile_change` and `apply_profile_change` are deliberately hidden from external MCP because their confirmation gate depends on trusted in-app chat-turn provenance. The remediation agent receives a constrained read-only subset plus issue-scoped human gates. Every shared tool can be disabled from Settings > AI Tools. Interactive execution reauthorizes the current device and role immediately before each tool and rechecks the included-AI grant when shared billing is in use. Tools marked **admin** require the admin role (either flagged directly or gated by a permission the user role doesn't hold):
 
 | Tool | Description |
 |---|---|
@@ -461,9 +461,11 @@ The same 31 tools power the in-app AI assistant and `/mcp`; the remediation agen
 | `get_disk_space` | Disk space across instances (admin) |
 | `get_arr_health` | Arr system health: download client, remote path mapping, indexers, disk, root folders (admin) |
 | `list_arr_instances` | Configured arr instances with the instance IDs the settings tools accept (admin) |
-| `get_quality_profiles` | Quality profile summaries, or one profile's full stored JSON by id (admin) |
+| `get_quality_profiles` | Quality profile summaries, one profile's full stored JSON by id, and optionally the live Radarr/Sonarr language catalog with IDs that may vary by service/version (admin) |
 | `get_custom_formats` | Custom format summaries, or one format's full stored JSON by id (admin) |
 | `upsert_custom_format` | Create/update a native or TRaSH custom format by exact name; creates enter profiles at score 0, updates preserve profile scores without recomputing stored file matches (admin) |
+| `preview_profile_change` | Build a read-only diff for one profile and mint a 15-minute one-use confirmation reference (in-app chat only, admin) |
+| `apply_profile_change` | Apply a preview only after the same admin/device sends its exact `APPLY …` command as a later message; detected stale state is refused (in-app chat only, admin) |
 | `diagnose_queue` | Import Doctor: explain stuck items + print the exact next call (admin) |
 | `get_manual_import_candidates` | List a stuck download's files, mappings, rejections (admin) |
 | `execute_manual_import` | Force a download's files into the library (admin) |
@@ -471,6 +473,12 @@ The same 31 tools power the in-app AI assistant and `/mcp`; the remediation agen
 | `rescan_media` | Rescan a movie/series on disk and run the import pass (admin) |
 
 Custom-format tools probe the configured instance's live collection endpoint rather than trusting a stored version. Sonarr requires v4 for custom formats; a collection-read 404 is reported as either an older/incompatible build or a stored instance URL missing its service URL base, because those cases are indistinguishable at that API boundary. Write-side 404s stay concrete so a concurrently deleted record is not misdiagnosed as an old service.
+
+Quality-profile mutation is intentionally narrow: one existing profile, one full-object `PUT`, and only upgrade policy, an already-allowed quality/group cutoff, score thresholds, existing custom-format scores, plus Radarr's profile language. It does not create/delete/rename profiles, toggle or reorder qualities, create custom formats, or batch profiles. Preview binds the actor, device, issuing chat turn, exact service instance and current URL/API-key fingerprint, profile, complete custom-format collection, relevant language catalog, and desired full object. The resolved instance remains pinned even if the service default changes. Apply consumes the random reference before remote I/O, reauthorizes, rebuilds from fresh JSON, checks the bound state immediately before writing, and verifies the complete stored profile afterward. Any detected stale state, expired/superseded/restarted/used reference, or ambiguous write outcome requires a new preview.
+
+The final guards are optimistic, not an atomic compare-and-swap: Cantinarr serializes its own settings writes, but a direct arr UI/API edit—or a local authorization, tool-toggle, URL, or API-key change—can still race the last check and `PUT`. A preview is not a rollback snapshot; reversing a change requires a new preview against current state. Typed arr HTTP 400 validation details are projected through a bounded, redacted exception used only for credential-free custom-format/profile endpoints; all other error bodies remain discarded.
+
+Language IDs may vary by service and version, so they are read live from each Radarr/Sonarr instance (`get_quality_profiles` with `include_languages`) instead of hardcoded or reused. Sonarr v4 language behavior comes from scoring an existing `LanguageSpecification` custom format; it has no persistent profile-language write. Radarr's profile-level language is a hard release filter and must be `Any` when a language custom format has a nonzero score. Chaptarr supports the scalar/cutoff/custom-format-score profile changes but no release-language specification. These settings influence future release selection for media assigned to the profile: they do not inspect or remux downloaded streams, change file-level default audio/subtitle flags, guarantee playback language, or retroactively replace files.
 
 ### Database
 
@@ -507,7 +515,7 @@ server/
 │   ├── discover/             # TMDB/Trakt discovery + media detail proxy handlers
 │   ├── downloads/            # Unified download-client queue API across all four clients
 │   ├── instance/             # Instance registry, defaults invariant, per-user pins, safe webhook rotation
-│   ├── mcp/                  # The 31 tools, toggles, tool server (chat + MCP + agent share it)
+│   ├── mcp/                  # 33 registered tools, toggles, tool server (31 also exposed through external MCP)
 │   ├── mcpserver/            # MCP Streamable HTTP endpoint, prompts, agent guide (mcp-go)
 │   ├── nzbget/               # NZBGet JSON-RPC client
 │   ├── plex/                 # plex.tv PIN link + shared_servers invites (one-tap & auto)

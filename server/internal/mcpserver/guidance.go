@@ -146,6 +146,9 @@ func agentGuideText(toolServer *internalmcp.ToolServer, role string) string {
 		tools := toolServer.GetToolsForRole(role)
 		names := make([]string, 0, len(tools))
 		for _, tool := range tools {
+			if tool.InAppChatOnly {
+				continue
+			}
 			names = append(names, tool.Name)
 		}
 		if len(names) == 0 {

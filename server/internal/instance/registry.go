@@ -56,8 +56,9 @@ type Summary struct {
 
 // ArrSettingsFingerprint is an internal-only binding between an arr instance
 // identity and its current connection configuration. It must never be logged
-// or returned to clients; settings mutations compare it to fail closed when an
-// admin repoints an instance or rotates its key during a read/modify/write.
+// or returned to clients; settings mutations compare it to refuse a repoint or
+// key rotation observed by their final guard. This is an optimistic check, not
+// an atomic lock shared with the following remote arr request.
 type ArrSettingsFingerprint [sha256.Size]byte
 
 type arrSettingsFingerprintInput struct {

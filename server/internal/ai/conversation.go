@@ -514,3 +514,14 @@ func newConversationID() string {
 	}
 	return hex.EncodeToString(b)
 }
+
+// newInteractiveTurnID is a security boundary for confirmation-gated tools.
+// Unlike conversation IDs, it must fail rather than fall back to predictable
+// material when the operating system CSPRNG is unavailable.
+func newInteractiveTurnID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}

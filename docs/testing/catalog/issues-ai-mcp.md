@@ -15,6 +15,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `AI-013` · P0 · LIVE/UI — Complete personal OAuth; verify account identity/usage windows, model validation, selected source, restart persistence, and chat.
 - [ ] `AI-014` · P0 · LIVE/UI — Repeat the device flow for admin-shared OAuth; verify only admins see shared identity/plan/usage and granted users learn only that access is included.
 - [ ] `AI-018` · P0 · UI/LIVE — Start chat and verify ordered SSE frames: conversation ID, text, tool start/end, media results, error if any, then `[DONE]`; app never leaves a permanent typing state.
+- [ ] `AI-019` · P0 · API/UI/LIVE — Against disposable current Radarr, Sonarr, and Chaptarr instances, preview then apply one scalar/cutoff/custom-format-score profile change from in-app chat; verify same-turn, different-device, and inexact confirmation cannot write, the exact later command from the same device writes once, a direct arr edit makes the pending preview stale at apply, validation detail is useful and redacted, and a new preview restores the original values. For Radarr/Sonarr, also verify language IDs are fetched from each live catalog rather than reused across services or versions, and language scoring affects future release selection only—not file default tracks or playback language.
 
 ## MCP with a real external client
 

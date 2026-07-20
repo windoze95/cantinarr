@@ -157,11 +157,14 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 	}
 
 	result, err := s.toolServer.ExecuteTool(ctx, name, input, mcp.CallContext{
-		UserID:          chatCtx.UserID,
-		DeviceID:        chatCtx.DeviceID,
-		Role:            chatCtx.Role,
-		RequireSharedAI: chatCtx.RequireSharedAI,
-		Reauthorize:     true,
+		UserID:            chatCtx.UserID,
+		DeviceID:          chatCtx.DeviceID,
+		Role:              chatCtx.Role,
+		RequireSharedAI:   chatCtx.RequireSharedAI,
+		Reauthorize:       true,
+		Origin:            mcp.OriginInteractiveChat,
+		TrustedUserText:   chatCtx.TrustedUserText,
+		InteractiveTurnID: chatCtx.InteractiveTurnID,
 	})
 	if err != nil {
 		if cb.OnToolEnd != nil {
@@ -663,11 +666,14 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionC
 	}
 
 	result, err := s.toolServer.ExecuteTool(ctx, call.Name, json.RawMessage(input), mcp.CallContext{
-		UserID:          chatCtx.UserID,
-		DeviceID:        chatCtx.DeviceID,
-		Role:            chatCtx.Role,
-		RequireSharedAI: chatCtx.RequireSharedAI,
-		Reauthorize:     true,
+		UserID:            chatCtx.UserID,
+		DeviceID:          chatCtx.DeviceID,
+		Role:              chatCtx.Role,
+		RequireSharedAI:   chatCtx.RequireSharedAI,
+		Reauthorize:       true,
+		Origin:            mcp.OriginInteractiveChat,
+		TrustedUserText:   chatCtx.TrustedUserText,
+		InteractiveTurnID: chatCtx.InteractiveTurnID,
 	})
 	if err != nil {
 		if cb.OnToolEnd != nil {

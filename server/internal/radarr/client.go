@@ -244,6 +244,38 @@ func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMe
 	return profiles, nil
 }
 
+// UpdateQualityProfileRaw fully replaces one credential-free quality profile.
+// The caller must start from a fresh GetQualityProfilesRawContext object so
+// fields introduced by newer Radarr builds survive the round trip.
+func (c *Client) UpdateQualityProfileRaw(id int, body json.RawMessage) (json.RawMessage, error) {
+	return c.UpdateQualityProfileRawContext(context.Background(), id, body)
+}
+
+func (c *Client) UpdateQualityProfileRawContext(ctx context.Context, id int, body json.RawMessage) (json.RawMessage, error) {
+	path := fmt.Sprintf("/api/v3/qualityprofile/%d", id)
+	raw, _, err := arrcommon.DoSettingsWrite(ctx, c.httpClient, "radarr", c.baseURL, c.apiKey, http.MethodPut, path, body)
+	return raw, err
+}
+
+// GetLanguagesRawContext returns Radarr's live language catalog. Language IDs
+// may vary by service and version, so callers resolve names from this catalog
+// instead of hardcoding or reusing an ID from another arr.
+func (c *Client) GetLanguagesRawContext(ctx context.Context) ([]json.RawMessage, error) {
+	resp, err := c.doRequestContext(ctx, http.MethodGet, "/api/v3/language")
+	if err != nil {
+		return nil, fmt.Errorf("radarr languages: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("radarr GET /api/v3/language returned status %d", resp.StatusCode)
+	}
+	var languages []json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&languages); err != nil {
+		return nil, fmt.Errorf("decode radarr languages: %w", err)
+	}
+	return languages, nil
+}
+
 // GetCustomFormatsRaw returns every custom format exactly as Radarr sent it,
 // verbatim for the same round-trip reason as GetQualityProfilesRaw. A 404
 // maps to ErrCustomFormatsNotFound.
