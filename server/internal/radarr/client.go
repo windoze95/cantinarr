@@ -3,6 +3,7 @@ package radarr
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,12 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/transporterr"
 )
+
+// ErrCustomFormatsNotFound reports a 404 from the custom format endpoint. It
+// is deliberately not called "unsupported": a build predating custom formats
+// and an instance URL missing the service's URL base are indistinguishable
+// from here, so callers must present both causes rather than diagnose one.
+var ErrCustomFormatsNotFound = errors.New("radarr: the custom format endpoint returned 404")
 
 type Client struct {
 	baseURL    string
@@ -205,6 +212,48 @@ func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
 		return nil, fmt.Errorf("decode quality profiles: %w", err)
 	}
 	return profiles, nil
+}
+
+// GetQualityProfilesRaw returns every quality profile exactly as Radarr sent
+// it. Settings objects must round-trip verbatim on a future PUT (modeling and
+// re-serializing them risks losing fields Radarr requires), so callers decode
+// only the fields they need from each raw object.
+func (c *Client) GetQualityProfilesRaw() ([]json.RawMessage, error) {
+	resp, err := c.doRequest("GET", "/api/v3/qualityprofile")
+	if err != nil {
+		return nil, fmt.Errorf("radarr quality profiles: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("radarr GET /api/v3/qualityprofile returned status %d", resp.StatusCode)
+	}
+	var profiles []json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
+		return nil, fmt.Errorf("decode quality profiles: %w", err)
+	}
+	return profiles, nil
+}
+
+// GetCustomFormatsRaw returns every custom format exactly as Radarr sent it,
+// verbatim for the same round-trip reason as GetQualityProfilesRaw. A 404
+// maps to ErrCustomFormatsNotFound.
+func (c *Client) GetCustomFormatsRaw() ([]json.RawMessage, error) {
+	resp, err := c.doRequest("GET", "/api/v3/customformat")
+	if err != nil {
+		return nil, fmt.Errorf("radarr custom formats: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrCustomFormatsNotFound
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("radarr GET /api/v3/customformat returned status %d", resp.StatusCode)
+	}
+	var formats []json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&formats); err != nil {
+		return nil, fmt.Errorf("decode custom formats: %w", err)
+	}
+	return formats, nil
 }
 
 func (c *Client) GetRootFolders() ([]RootFolder, error) {
