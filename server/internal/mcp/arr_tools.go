@@ -398,6 +398,7 @@ func init() {
 	// Appended here rather than in an init of their own file so tool ordering
 	// never depends on compilation file order.
 	toolDefinitions = append(toolDefinitions, arrSettingsToolDefinitions...)
+	toolDefinitions = append(toolDefinitions, arrProfileToolDefinitions...)
 }
 
 // --- helpers ---

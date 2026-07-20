@@ -26,7 +26,8 @@ var _ mcp.IssueStore = (*Service)(nil)
 // agent-only tools) to the model, AND its dispatch refuses any tool name not in
 // this set before ever calling ExecuteTool. Every one of these is read-only;
 // no mutating tool (grab_release, remove_queue_item, remediate_queue_item,
-// execute_manual_import, rescan_media, trigger_search, upsert_custom_format) is
+// execute_manual_import, rescan_media, trigger_search, upsert_custom_format,
+// preview_profile_change, apply_profile_change) is
 // reachable by any path.
 var readToolAllowList = []string{
 	"diagnose_queue",

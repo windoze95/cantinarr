@@ -152,6 +152,34 @@ func TestGetQualityProfilesSummaryAndFullViews(t *testing.T) {
 	}
 }
 
+func TestGetQualityProfilesCanIncludeCompleteLiveLanguageCatalog(t *testing.T) {
+	languages := make([]string, 0, 60)
+	for id := 1; id <= 60; id++ {
+		languages = append(languages, fmt.Sprintf(`{"id":%d,"name":"Language %d"}`, id, id))
+	}
+	arr := settingsFakeArr(t, nil, map[string]string{
+		"/api/v3/qualityprofile": `[` + settingsProfileHD + `]`,
+		"/api/v3/language":       `[{"id":-1,"name":"Any"},` + strings.Join(languages, ",") + `]`,
+	})
+	inst := &instance.Instance{ServiceType: "radarr", Name: "Main", URL: arr.URL, APIKey: "k", IsDefault: true}
+	server := newSettingsToolServer(t, []*instance.Instance{inst})
+
+	result, err := server.ExecuteTool(context.Background(), "get_quality_profiles", json.RawMessage(`{"service":"radarr","include_languages":true}`), adminCallContext())
+	if err != nil {
+		t.Fatalf("include live languages: %v", err)
+	}
+	for _, want := range []string{"Live release-language catalog", "Any [-1], Language 1 [1]", "Language 60 [60]", "IDs may vary by service version", "instead of reusing IDs"} {
+		if !strings.Contains(result.Text, want) {
+			t.Errorf("language catalog missing %q:\n%s", want, result.Text)
+		}
+	}
+
+	exact, err := server.ExecuteTool(context.Background(), "get_quality_profiles", json.RawMessage(`{"service":"radarr","language_name":"Language 60"}`), adminCallContext())
+	if err != nil || !strings.Contains(exact.Text, "Live release language for this instance: Language 60 [60]") {
+		t.Fatalf("exact language lookup result=%v err=%v", exact, err)
+	}
+}
+
 func TestGetQualityProfilesTargetsExactInstance(t *testing.T) {
 	defaultCalls := &callRecorder{}
 	defaultArr := settingsFakeArr(t, defaultCalls, map[string]string{

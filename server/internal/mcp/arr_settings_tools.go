@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
@@ -33,6 +34,8 @@ import (
 )
 
 var arrSettingsServices = []string{"radarr", "sonarr", "chaptarr"}
+
+const maxLanguageCatalogOutputBytes = 20 << 10
 
 var (
 	errSettingsToolDisabled  = errors.New("the settings write tool was disabled before the write")
@@ -60,7 +63,7 @@ var arrSettingsToolDefinitions = []Tool{
 	{
 		Name:        "get_quality_profiles",
 		Permission:  auth.PermissionInstancesManage,
-		Description: "Read the quality profiles of a Radarr/Sonarr/Chaptarr instance. Without profile_id: a summary of every profile (allowed qualities, cutoff, upgrade policy, custom-format scores, language). With profile_id: that one profile's full JSON exactly as the service stores it. Admin only",
+		Description: "Read the quality profiles of a Radarr/Sonarr/Chaptarr instance. Without profile_id: a summary of every profile (allowed qualities, cutoff, upgrade policy, custom-format scores, language); include_languages adds the complete bounded live Radarr/Sonarr language catalog, while language_name looks up one exact live name/ID. With profile_id: that one profile's full JSON exactly as the service stores it. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -76,6 +79,16 @@ var arrSettingsToolDefinitions = []Tool{
 				"profile_id": map[string]interface{}{
 					"type":        "integer",
 					"description": "Return this one profile's full stored JSON instead of the summary list",
+				},
+				"include_languages": map[string]interface{}{
+					"type":        "boolean",
+					"description": "With the summary view, include the live Radarr/Sonarr release-language catalog and IDs used by LanguageSpecification custom formats; IDs may vary by service/version",
+				},
+				"language_name": map[string]interface{}{
+					"type":        "string",
+					"minLength":   1,
+					"maxLength":   256,
+					"description": "With the summary view, look up one exact Radarr/Sonarr release-language name and its live ID; IDs may vary by service/version",
 				},
 			},
 			"required": []string{"service"},
@@ -394,7 +407,7 @@ type arrIDName struct {
 type arrProfileItemView struct {
 	ID      int                  `json:"id"`
 	Name    string               `json:"name"`
-	Allowed bool                 `json:"allowed"`
+	Allowed *bool                `json:"allowed"`
 	Quality *arrIDName           `json:"quality"`
 	Items   []arrProfileItemView `json:"items"`
 }
@@ -422,7 +435,7 @@ type arrQualityProfileView struct {
 func (v arrQualityProfileView) allowedNames() []string {
 	names := make([]string, 0, len(v.Items))
 	for _, item := range v.Items {
-		if !item.Allowed {
+		if item.Allowed == nil || !*item.Allowed {
 			continue
 		}
 		switch {
@@ -451,11 +464,13 @@ func (v arrQualityProfileView) cutoffName() string {
 	return ""
 }
 
-func (s *ToolServer) getQualityProfiles(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getQualityProfiles(ctx context.Context, input json.RawMessage) (*ToolResult, error) {
 	var params struct {
-		Service    string `json:"service"`
-		InstanceID string `json:"instance_id"`
-		ProfileID  int    `json:"profile_id"`
+		Service          string `json:"service"`
+		InstanceID       string `json:"instance_id"`
+		ProfileID        int    `json:"profile_id"`
+		IncludeLanguages bool   `json:"include_languages"`
+		LanguageName     string `json:"language_name"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -469,6 +484,9 @@ func (s *ToolServer) getQualityProfiles(input json.RawMessage) (*ToolResult, err
 		return nil, err
 	}
 	if params.ProfileID != 0 {
+		if params.IncludeLanguages || params.LanguageName != "" {
+			return nil, fmt.Errorf("include_languages and language_name are available only with the summary view (omit profile_id)")
+		}
 		if raw, head, ok := findRawByID(raws, params.ProfileID); ok {
 			text := fmt.Sprintf("Quality profile %d (%q) on %s — full stored JSON:\n%s", head.ID, head.Name, label, string(raw))
 			return &ToolResult{Text: text}, nil
@@ -493,6 +511,42 @@ func (s *ToolServer) getQualityProfiles(input json.RawMessage) (*ToolResult, err
 			continue
 		}
 		renderQualityProfileSummary(&sb, view)
+	}
+	if params.IncludeLanguages || params.LanguageName != "" {
+		if params.Service == "chaptarr" {
+			sb.WriteString("\nChaptarr does not expose release-language specifications; book metadata language is configured separately.\n")
+		} else if languageReader, ok := reader.(arrLanguageReader); ok {
+			languages, languageErr := languageReader.GetLanguagesRawContext(ctx)
+			if languageErr != nil {
+				return nil, languageErr
+			}
+			catalog, languageErr := resolveProfileLanguageCatalog(languages)
+			if languageErr != nil {
+				return nil, languageErr
+			}
+			sort.Slice(catalog, func(i, j int) bool { return catalog[i].ID < catalog[j].ID })
+			if params.LanguageName != "" {
+				if strings.TrimSpace(params.LanguageName) == "" || len(params.LanguageName) > maxCustomFormatNameBytes {
+					return nil, fmt.Errorf("language_name must be a nonblank exact name of at most 256 bytes")
+				}
+				for _, language := range catalog {
+					if language.Name == params.LanguageName {
+						fmt.Fprintf(&sb, "\nLive release language for this instance: %s [%d]. IDs may vary by service version; use this live result instead of reusing an ID from another service or instance.\n", language.Name, language.ID)
+						return &ToolResult{Text: sb.String()}, nil
+					}
+				}
+				return nil, fmt.Errorf("no live release language is named exactly %q on this instance", params.LanguageName)
+			}
+			values := make([]string, 0, len(catalog))
+			for _, language := range catalog {
+				values = append(values, fmt.Sprintf("%s [%d]", language.Name, language.ID))
+			}
+			rendered := strings.Join(values, ", ")
+			if len(rendered) > maxLanguageCatalogOutputBytes {
+				return nil, fmt.Errorf("the complete language catalog exceeds the safe output limit; use language_name to look up one exact name")
+			}
+			fmt.Fprintf(&sb, "\nLive release-language catalog for this instance: %s. IDs may vary by service version; use this live catalog instead of reusing IDs from another service or instance.\n", rendered)
+		}
 	}
 	sb.WriteString("\nPass profile_id for one profile's full stored JSON.")
 	return &ToolResult{Text: sb.String()}, nil

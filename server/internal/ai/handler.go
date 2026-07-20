@@ -89,6 +89,12 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"messages required"}`, http.StatusBadRequest)
 		return
 	}
+	interactiveTurnID, turnErr := newInteractiveTurnID()
+	if turnErr != nil {
+		http.Error(w, `{"error":"could not establish a secure chat turn"}`, http.StatusInternalServerError)
+		return
+	}
+	trustedUserText := submittedUserText(req.Messages)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -157,12 +163,14 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	codexBuilder := &codexTranscriptBuilder{}
 
 	chatCtx := ChatContext{
-		UserID:          claims.UserID,
-		Username:        claims.Username,
-		Role:            claims.Role,
-		DeviceID:        claims.DeviceID,
-		RequireSharedAI: resolved.Source == aiSourceShared,
-		Services:        h.configuredServices(),
+		UserID:            claims.UserID,
+		Username:          claims.Username,
+		Role:              claims.Role,
+		DeviceID:          claims.DeviceID,
+		RequireSharedAI:   resolved.Source == aiSourceShared,
+		Services:          h.configuredServices(),
+		TrustedUserText:   trustedUserText,
+		InteractiveTurnID: interactiveTurnID,
 	}
 	if h.toolServer.IsAIDebugEnabled() {
 		log.Printf("ai debug: chat start source=%s provider=%s model=%s user_id=%d role=%s requested_conversation_id=%s messages=%d latest_user=%q",
@@ -214,7 +222,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 			model = ""
 		}
 		runCodex := func(prompt string, historyItems []json.RawMessage) error {
-			return h.codex.RunWithAccountSession(
+			return h.codex.RunWithAccountSessionProvenance(
 				r.Context(),
 				resolved.Account,
 				claims.UserID,
@@ -225,6 +233,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 				dynamicContext(chatCtx),
 				prompt,
 				historyItems,
+				mcp.CallContext{
+					Origin:            mcp.OriginInteractiveChat,
+					TrustedUserText:   chatCtx.TrustedUserText,
+					InteractiveTurnID: chatCtx.InteractiveTurnID,
+				},
 				codexapp.Callbacks{
 					OnText: func(value string) {
 						codexBuilder.Text(value)

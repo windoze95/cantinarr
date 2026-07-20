@@ -306,6 +306,36 @@ func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMe
 	return profiles, nil
 }
 
+// UpdateQualityProfileRaw fully replaces one credential-free quality profile.
+func (c *Client) UpdateQualityProfileRaw(id int, body json.RawMessage) (json.RawMessage, error) {
+	return c.UpdateQualityProfileRawContext(context.Background(), id, body)
+}
+
+func (c *Client) UpdateQualityProfileRawContext(ctx context.Context, id int, body json.RawMessage) (json.RawMessage, error) {
+	path := fmt.Sprintf("/api/v3/qualityprofile/%d", id)
+	raw, _, err := arrcommon.DoSettingsWrite(ctx, c.httpClient, "sonarr", c.baseURL, c.apiKey, http.MethodPut, path, body)
+	return raw, err
+}
+
+// GetLanguagesRawContext returns Sonarr's live language catalog. Language IDs
+// may vary by service and version, so callers resolve names from this catalog
+// instead of hardcoding or reusing an ID from another arr.
+func (c *Client) GetLanguagesRawContext(ctx context.Context) ([]json.RawMessage, error) {
+	resp, err := c.doRequestContext(ctx, http.MethodGet, "/api/v3/language")
+	if err != nil {
+		return nil, fmt.Errorf("sonarr languages: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("sonarr GET /api/v3/language returned status %d", resp.StatusCode)
+	}
+	var languages []json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&languages); err != nil {
+		return nil, fmt.Errorf("decode sonarr languages: %w", err)
+	}
+	return languages, nil
+}
+
 // GetCustomFormatsRaw returns every custom format exactly as Sonarr sent it,
 // verbatim for the same round-trip reason as GetQualityProfilesRaw. A 404
 // maps to ErrCustomFormatsNotFound.

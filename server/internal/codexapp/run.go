@@ -126,7 +126,8 @@ type runBehavior struct {
 	// historyItems are raw Responses API items injected into the fresh thread
 	// via thread/inject_items before the turn starts, so the model sees prior
 	// turns natively instead of a flattened text replay.
-	historyItems []json.RawMessage
+	historyItems   []json.RawMessage
+	callProvenance mcp.CallContext
 }
 
 // Run executes one ephemeral, dynamic-tools-only Codex turn. baseInstructions
@@ -173,6 +174,22 @@ func (m *Manager) RunWithAccountSession(
 	historyItems []json.RawMessage,
 	callbacks Callbacks,
 ) (err error) {
+	return m.RunWithAccountSessionProvenance(ctx, account, actorID, deviceID, role, model, baseInstructions, developerInstructions, prompt, historyItems, mcp.CallContext{}, callbacks)
+}
+
+// RunWithAccountSessionProvenance carries server-authored in-app turn
+// provenance into every dynamic tool call. Compatibility callers use the
+// method above and therefore cannot satisfy confirmation-gated tools.
+func (m *Manager) RunWithAccountSessionProvenance(
+	ctx context.Context,
+	account AccountRef,
+	actorID int64,
+	deviceID string,
+	role, model, baseInstructions, developerInstructions, prompt string,
+	historyItems []json.RawMessage,
+	provenance mcp.CallContext,
+	callbacks Callbacks,
+) (err error) {
 	return m.runWithAccount(ctx, account, model, baseInstructions, developerInstructions, prompt, runBehavior{
 		actorKey:        "user:" + strconv.FormatInt(actorID, 10),
 		actorID:         actorID,
@@ -183,6 +200,7 @@ func (m *Manager) RunWithAccountSession(
 		executeTools:    true,
 		callbacks:       callbacks,
 		historyItems:    historyItems,
+		callProvenance:  provenance,
 	})
 }
 
@@ -414,11 +432,14 @@ func (m *Manager) runWithAccount(
 
 		sink.toolStart(call.Tool)
 		callContext := mcp.CallContext{
-			UserID:          behavior.actorID,
-			Role:            behavior.role,
-			DeviceID:        behavior.deviceID,
-			RequireSharedAI: behavior.requireSharedAI,
-			Reauthorize:     behavior.reauthorize,
+			UserID:            behavior.actorID,
+			Role:              behavior.role,
+			DeviceID:          behavior.deviceID,
+			RequireSharedAI:   behavior.requireSharedAI,
+			Reauthorize:       behavior.reauthorize,
+			Origin:            behavior.callProvenance.Origin,
+			TrustedUserText:   behavior.callProvenance.TrustedUserText,
+			InteractiveTurnID: behavior.callProvenance.InteractiveTurnID,
 		}
 		if m.toolCallObserver != nil {
 			m.toolCallObserver(callContext)

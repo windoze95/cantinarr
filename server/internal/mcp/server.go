@@ -33,7 +33,18 @@ type Tool struct {
 	AdminOnly bool `json:"-"`
 	// Permission is the RBAC capability required to list and execute this tool.
 	Permission auth.Permission `json:"-"`
+	// InAppChatOnly keeps tools whose safety depends on trusted chat-turn
+	// provenance out of external MCP discovery. Direct external calls still
+	// fail closed in the handler.
+	InAppChatOnly bool `json:"-"`
 }
+
+type CallOrigin string
+
+const (
+	OriginInteractiveChat CallOrigin = "interactive_chat"
+	OriginExternalMCP     CallOrigin = "external_mcp"
+)
 
 // CallContext carries per-call user identity into tool execution.
 type CallContext struct {
@@ -50,6 +61,12 @@ type CallContext struct {
 	// or model input; nonzero user/device identity makes the bypass invalid.
 	TrustedInternal bool
 	InstanceID      string // authoritative arr instance for scoped remediation reads
+	// Origin and the trusted turn fields are server-authored provenance. They
+	// must never be populated from model arguments, provider transcripts, or
+	// external MCP payloads.
+	Origin            CallOrigin
+	TrustedUserText   string
+	InteractiveTurnID string
 }
 
 // CallAuthorizer returns the actor's current role after re-checking the
@@ -79,6 +96,7 @@ type ToolServer struct {
 
 	settingsMutationMu    sync.Mutex
 	settingsMutationLocks map[string]chan struct{}
+	profileChanges        *profileChangeStore
 }
 
 // SetCallAuthorizer wires the live account/device authorization check used by
@@ -95,6 +113,7 @@ func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, reg
 		registry:              registry,
 		bridge:                bridge,
 		settingsMutationLocks: make(map[string]chan struct{}),
+		profileChanges:        newProfileChangeStore(),
 	}
 }
 
@@ -352,11 +371,15 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "list_arr_instances":
 		return s.listArrInstances(input)
 	case "get_quality_profiles":
-		return s.getQualityProfiles(input)
+		return s.getQualityProfiles(ctx, input)
 	case "get_custom_formats":
 		return s.getCustomFormats(input)
 	case "upsert_custom_format":
 		return s.upsertCustomFormat(ctx, input, callCtx)
+	case "preview_profile_change":
+		return s.previewProfileChange(ctx, input, callCtx)
+	case "apply_profile_change":
+		return s.applyProfileChange(ctx, input, callCtx)
 	default:
 		return nil, fmt.Errorf("unknown tool")
 	}

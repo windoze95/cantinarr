@@ -25,6 +25,8 @@ var mutatingTools = []string{
 	"rescan_media",
 	"trigger_search",
 	"upsert_custom_format",
+	"preview_profile_change",
+	"apply_profile_change",
 }
 
 // fakeToolHost is a stand-in for *mcp.ToolServer that records every ExecuteTool
