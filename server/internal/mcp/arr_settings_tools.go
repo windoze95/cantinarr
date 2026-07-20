@@ -1,10 +1,10 @@
 package mcp
 
-// The arr settings read tools: instance discovery plus quality-profile and
-// custom-format inspection. Settings objects are fetched verbatim
-// (json.RawMessage) so a future write wave can round-trip them without
-// dropping fields; the summary views here exist to keep full profile JSON out
-// of model context unless one object is explicitly requested.
+// The arr settings tools: instance discovery, quality-profile/custom-format
+// inspection, and custom-format upserts. Settings objects are fetched verbatim
+// (json.RawMessage) so full-object writes can merge onto the service's live
+// object without dropping unknown fields; summary views keep full profile JSON
+// out of model context unless one object is explicitly requested.
 //
 // The full views embed that raw JSON after a prose header. That is safe for
 // quality profiles and custom formats specifically: neither carries a
@@ -16,19 +16,28 @@ package mcp
 // Read those endpoints through a structurally redacted view instead.
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
 
 var arrSettingsServices = []string{"radarr", "sonarr", "chaptarr"}
+
+var (
+	errSettingsToolDisabled  = errors.New("the settings write tool was disabled before the write")
+	errSettingsTargetChanged = errors.New("the selected arr instance changed while the write was being prepared")
+)
 
 // arrSettingsToolDefinitions are appended to toolDefinitions by the init in
 // arr_tools.go.
@@ -96,6 +105,43 @@ var arrSettingsToolDefinitions = []Tool{
 			"required": []string{"service"},
 		},
 	},
+	{
+		Name:        "upsert_custom_format",
+		Permission:  auth.PermissionInstancesManage,
+		Description: "Create or update one Radarr/Sonarr/Chaptarr custom format by exact name from native or TRaSH-style JSON. Caller-supplied ids are ignored. A create enters every existing quality profile at score 0; an update preserves the profile's numeric score but does not recompute stored file matches. This tool does not set profile scores. Admin only",
+		InputSchema: map[string]interface{}{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]interface{}{
+				"service": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"radarr", "sonarr", "chaptarr"},
+					"description": "Which service owns the custom format",
+				},
+				"instance_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Instance ID from list_arr_instances (default: the service's default instance)",
+				},
+				"custom_format": map[string]interface{}{
+					"type":        "object",
+					"description": "One native arr or TRaSH custom-format object. Identity is its name; specifications[].fields may be the native array or TRaSH object form.",
+					"properties": map[string]interface{}{
+						"name": map[string]interface{}{
+							"type":      "string",
+							"minLength": 1,
+							"maxLength": 256,
+						},
+						"specifications": map[string]interface{}{
+							"type":     "array",
+							"maxItems": 256,
+						},
+					},
+					"required": []string{"name", "specifications"},
+				},
+			},
+			"required": []string{"service", "custom_format"},
+		},
+	},
 }
 
 // settingsReader is the read surface the settings tools need from an arr
@@ -117,17 +163,17 @@ func arrServiceLabel(service string) string {
 	return service
 }
 
-// settingsReaderFor resolves the client and display label a settings tool
-// targets. A non-empty refusal is a complete user-facing answer; it keeps "no
-// instance with that ID" distinct from "service not configured" so a mistyped
-// instance_id never reads as an unconfigured service.
-func (s *ToolServer) settingsReaderFor(service, instanceID string) (settingsReader, string, string) {
+// settingsTargetFor resolves the client, stable instance ID, and display label
+// a settings tool targets. A non-empty refusal is a complete user-facing
+// answer; it keeps "no instance with that ID" distinct from "service not
+// configured" so a mistyped instance_id never reads as an unconfigured service.
+func (s *ToolServer) settingsTargetFor(service, instanceID string) (settingsReader, string, string, string) {
 	label := arrServiceLabel(service)
 	if !slices.Contains(arrSettingsServices, service) {
-		return nil, "", "Unknown service — expected radarr, sonarr, or chaptarr."
+		return nil, "", "", "Unknown service — expected radarr, sonarr, or chaptarr."
 	}
 	if s.registry == nil {
-		return nil, "", label + " is not configured."
+		return nil, "", "", label + " is not configured."
 	}
 	var (
 		reader     settingsReader
@@ -138,13 +184,13 @@ func (s *ToolServer) settingsReaderFor(service, instanceID string) (settingsRead
 		if instanceID != "" {
 			client, err := s.registry.GetRadarrClient(instanceID)
 			if err != nil {
-				return nil, "", s.instanceResolveFailureText(service, instanceID)
+				return nil, "", "", s.instanceResolveFailureText(service, instanceID)
 			}
 			reader, resolvedID = client, instanceID
 		} else {
 			client, id, err := s.registry.GetDefaultRadarrClient()
 			if err != nil || client == nil {
-				return nil, "", label + " is not configured."
+				return nil, "", "", label + " is not configured."
 			}
 			reader, resolvedID = client, id
 		}
@@ -152,13 +198,13 @@ func (s *ToolServer) settingsReaderFor(service, instanceID string) (settingsRead
 		if instanceID != "" {
 			client, err := s.registry.GetSonarrClient(instanceID)
 			if err != nil {
-				return nil, "", s.instanceResolveFailureText(service, instanceID)
+				return nil, "", "", s.instanceResolveFailureText(service, instanceID)
 			}
 			reader, resolvedID = client, instanceID
 		} else {
 			client, id, err := s.registry.GetDefaultSonarrClient()
 			if err != nil || client == nil {
-				return nil, "", label + " is not configured."
+				return nil, "", "", label + " is not configured."
 			}
 			reader, resolvedID = client, id
 		}
@@ -166,18 +212,86 @@ func (s *ToolServer) settingsReaderFor(service, instanceID string) (settingsRead
 		if instanceID != "" {
 			client, err := s.registry.GetChaptarrClient(instanceID)
 			if err != nil {
-				return nil, "", s.instanceResolveFailureText(service, instanceID)
+				return nil, "", "", s.instanceResolveFailureText(service, instanceID)
 			}
 			reader, resolvedID = client, instanceID
 		} else {
 			client, id, err := s.registry.GetDefaultChaptarrClient()
 			if err != nil || client == nil {
-				return nil, "", label + " is not configured."
+				return nil, "", "", label + " is not configured."
 			}
 			reader, resolvedID = client, id
 		}
 	}
-	return reader, s.arrInstanceLabel(service, resolvedID), ""
+	return reader, resolvedID, s.arrInstanceLabel(service, resolvedID), ""
+}
+
+func (s *ToolServer) settingsReaderFor(service, instanceID string) (settingsReader, string, string) {
+	reader, _, label, refusal := s.settingsTargetFor(service, instanceID)
+	return reader, label, refusal
+}
+
+// freshSettingsTargetFor bypasses the registry client cache and binds the
+// returned client to a fingerprint computed from the same authoritative store
+// row. Consequential read/modify/write paths use it after their lock.
+func (s *ToolServer) freshSettingsTargetFor(service, requestedID string) (settingsReader, string, string, instance.ArrSettingsFingerprint, string) {
+	label := arrServiceLabel(service)
+	if s.registry == nil {
+		return nil, "", "", instance.ArrSettingsFingerprint{}, label + " is not configured."
+	}
+	resolvedID := requestedID
+	if resolvedID == "" {
+		var err error
+		resolvedID, err = s.registry.GetDefaultInstanceID(service)
+		if err != nil || resolvedID == "" {
+			return nil, "", "", instance.ArrSettingsFingerprint{}, label + " is not configured."
+		}
+	}
+
+	var (
+		reader      settingsReader
+		fingerprint instance.ArrSettingsFingerprint
+		err         error
+	)
+	switch service {
+	case "radarr":
+		reader, fingerprint, err = s.registry.GetFreshRadarrClient(resolvedID)
+	case "sonarr":
+		reader, fingerprint, err = s.registry.GetFreshSonarrClient(resolvedID)
+	case "chaptarr":
+		reader, fingerprint, err = s.registry.GetFreshChaptarrClient(resolvedID)
+	default:
+		return nil, "", "", instance.ArrSettingsFingerprint{}, "service must be radarr, sonarr, or chaptarr."
+	}
+	if err != nil || reader == nil {
+		return nil, "", "", instance.ArrSettingsFingerprint{}, s.instanceResolveFailureText(service, resolvedID)
+	}
+	return reader, resolvedID, s.arrInstanceLabel(service, resolvedID), fingerprint, ""
+}
+
+// lockArrSettingsMutation serializes full-object settings writes per resolved
+// service instance. Wave 2 custom-format writes and Wave 3 profile writes share
+// this lock because creating a custom format also mutates every profile.
+func (s *ToolServer) lockArrSettingsMutation(ctx context.Context, service, instanceID string) (func(), error) {
+	key := service + "\x00" + instanceID
+	s.settingsMutationMu.Lock()
+	lock := s.settingsMutationLocks[key]
+	if lock == nil {
+		lock = make(chan struct{}, 1)
+		lock <- struct{}{}
+		s.settingsMutationLocks[key] = lock
+	}
+	s.settingsMutationMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-lock:
+		if err := ctx.Err(); err != nil {
+			lock <- struct{}{}
+			return nil, err
+		}
+		return func() { lock <- struct{}{} }, nil
+	}
 }
 
 // instanceResolveFailureText separates a mistyped or wrong-service
@@ -447,13 +561,7 @@ func (s *ToolServer) getCustomFormats(input json.RawMessage) (*ToolResult, error
 		// diagnosing one — asserting "unsupported" would bury a fixable
 		// misconfiguration behind a version claim.
 		if isCustomFormatsNotFound(err) {
-			version := "this build may predate custom formats"
-			if params.Service == "sonarr" {
-				version = "Sonarr gained custom formats in v4, so a v3 instance has no such endpoint"
-			}
-			return &ToolResult{Text: fmt.Sprintf(
-				"%s returned 404 for the custom format endpoint: %s, or the stored instance URL is missing the service's URL base.",
-				label, version)}, nil
+			return &ToolResult{Text: customFormatsUnavailableText(params.Service, label)}, nil
 		}
 		return nil, err
 	}
@@ -511,10 +619,144 @@ func (s *ToolServer) getCustomFormats(input json.RawMessage) (*ToolResult, error
 	return &ToolResult{Text: sb.String()}, nil
 }
 
+// --- upsert_custom_format ---
+
+type upsertCustomFormatParams struct {
+	Service      string          `json:"service"`
+	InstanceID   string          `json:"instance_id"`
+	CustomFormat json.RawMessage `json:"custom_format"`
+}
+
+func (s *ToolServer) upsertCustomFormat(ctx context.Context, input json.RawMessage, callCtx CallContext) (*ToolResult, error) {
+	var params upsertCustomFormatParams
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&params); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("parse input: trailing JSON value")
+	}
+
+	_, resolvedID, _, refusal := s.settingsTargetFor(params.Service, params.InstanceID)
+	if refusal != "" {
+		return &ToolResult{Text: refusal}, nil
+	}
+
+	// Re-resolve after acquiring the lock: an omitted default may change while
+	// queued, and an explicit instance may be deleted or reconfigured. If the
+	// effective default moved, release the old instance lock and acquire the new
+	// one before touching either service.
+	var (
+		mutator CustomFormatMutator
+		label   string
+		unlock  func()
+		err     error
+		binding instance.ArrSettingsFingerprint
+	)
+	for attempts := 0; attempts < 3; attempts++ {
+		unlock, err = s.lockArrSettingsMutation(ctx, params.Service, resolvedID)
+		if err != nil {
+			return nil, err
+		}
+		callCtx, err = s.authorizeCall(ctx, callCtx)
+		if err != nil {
+			unlock()
+			return nil, err
+		}
+		if !s.IsToolEnabled("upsert_custom_format") {
+			unlock()
+			return &ToolResult{Text: "This tool is disabled by the administrator."}, nil
+		}
+		if !auth.HasPermission(callCtx.Role, auth.PermissionInstancesManage) {
+			unlock()
+			return nil, ErrToolAuthorization
+		}
+
+		reader, freshID, freshLabel, freshBinding, freshRefusal := s.freshSettingsTargetFor(params.Service, params.InstanceID)
+		if freshRefusal != "" {
+			unlock()
+			return &ToolResult{Text: freshRefusal}, nil
+		}
+		if freshID != resolvedID {
+			unlock()
+			resolvedID = freshID
+			continue
+		}
+		var ok bool
+		mutator, ok = reader.(CustomFormatMutator)
+		if !ok {
+			unlock()
+			return &ToolResult{Text: arrServiceLabel(params.Service) + " custom-format writes are not available on this server build."}, nil
+		}
+		label = freshLabel
+		binding = freshBinding
+		break
+	}
+	if unlock == nil || mutator == nil {
+		return &ToolResult{Text: "The default instance changed repeatedly while this write was queued. Retry with an explicit instance_id."}, nil
+	}
+	defer unlock()
+
+	beforeWrite := func(ctx context.Context) error {
+		var guardErr error
+		callCtx, guardErr = s.authorizeCall(ctx, callCtx)
+		if guardErr != nil {
+			return guardErr
+		}
+		if !auth.HasPermission(callCtx.Role, auth.PermissionInstancesManage) {
+			return ErrToolAuthorization
+		}
+		if !s.IsToolEnabled("upsert_custom_format") {
+			return errSettingsToolDisabled
+		}
+		freshReader, freshID, _, freshBinding, freshRefusal := s.freshSettingsTargetFor(params.Service, params.InstanceID)
+		if freshRefusal != "" || freshID != resolvedID || freshBinding != binding {
+			return errSettingsTargetChanged
+		}
+		if _, ok := freshReader.(CustomFormatMutator); !ok {
+			return errSettingsTargetChanged
+		}
+		return nil
+	}
+
+	result, err := UpsertCustomFormatHelper(ctx, mutator, params.CustomFormat, beforeWrite)
+	if err != nil {
+		var partial *PartialMutationError
+		if errors.As(err, &partial) {
+			return nil, err
+		}
+		if errors.Is(err, errSettingsToolDisabled) {
+			return &ToolResult{Text: "This tool was disabled by the administrator before the write. No custom format was changed."}, nil
+		}
+		if errors.Is(err, errSettingsTargetChanged) {
+			return &ToolResult{Text: "The selected arr instance changed while this write was being prepared. No custom format was changed; review the current instance and try again."}, nil
+		}
+		if errors.Is(err, radarr.ErrCustomFormatsNotFound) || errors.Is(err, sonarr.ErrCustomFormatsNotFound) || errors.Is(err, chaptarr.ErrCustomFormatsNotFound) {
+			return &ToolResult{Text: customFormatsUnavailableText(params.Service, label)}, nil
+		}
+		return nil, err
+	}
+
+	if result.Action == "created" {
+		return &ToolResult{Text: fmt.Sprintf("Created custom format %d (%q) on %s. The service added it to every existing quality profile at score 0; this tool did not change any profile scores.", result.ID, result.Name, label)}, nil
+	}
+	return &ToolResult{Text: fmt.Sprintf("Updated custom format %d (%q) on %s. Profiles kept their existing numeric scores. The arr will use the new rules for future matching; this tool did not recompute stored file matches.", result.ID, result.Name, label)}, nil
+}
+
 func isCustomFormatsNotFound(err error) bool {
 	return errors.Is(err, radarr.ErrCustomFormatsNotFound) ||
 		errors.Is(err, sonarr.ErrCustomFormatsNotFound) ||
 		errors.Is(err, chaptarr.ErrCustomFormatsNotFound)
+}
+
+func customFormatsUnavailableText(service, label string) string {
+	version := "this build may predate custom formats"
+	if service == "sonarr" {
+		version = "Sonarr gained custom formats in v4, so a v3 instance has no such endpoint"
+	}
+	return fmt.Sprintf("%s returned 404 for the custom format endpoint: %s, or the stored instance URL is missing the service's URL base.", label, version)
 }
 
 // --- shared helpers ---

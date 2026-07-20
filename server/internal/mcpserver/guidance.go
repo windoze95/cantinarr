@@ -207,6 +207,6 @@ Tools may be hidden or disabled by RBAC and administrator settings. If a tool re
 - For downloads that are stuck, failed, or stuck importing, run diagnose_queue (the Import Doctor). It explains each problem and prints the exact next tool call to run on each item's "→ next:" line, then use get_manual_import_candidates / execute_manual_import to force a correct file in, remediate_queue_item to remove / blocklist+search / change category, or rescan_media after fixing a disk, path, or permissions issue.
 - When diagnose_queue reports a path, permission, or download-client problem, call get_arr_health to confirm the config-level root cause (download client unreachable, remote path mapping wrong, indexers down, no root folder) that per-item diagnosis can only guess at.
 - For manual control, call search_releases before grab_release so the user can choose quality, release group, or a specific release.
-- Only call destructive or state-changing tools such as grab_release, remove_queue_item, execute_manual_import, and remediate_queue_item when the user explicitly asks for that action.
+- Only call destructive, state-changing, or configuration-changing tools such as grab_release, remove_queue_item, execute_manual_import, remediate_queue_item, and upsert_custom_format when the user explicitly asks for that action.
 `, role, toolList)
 }
