@@ -11,6 +11,40 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
+func TestRequestMediaSchemaOffersQualityProfileChoiceOnlyOnRequest(t *testing.T) {
+	requestTool := findToolDefinition("request_media")
+	if requestTool == nil {
+		t.Fatal("request_media definition not found")
+	}
+	requestProperties, ok := requestTool.InputSchema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("request_media properties = %#v", requestTool.InputSchema["properties"])
+	}
+	if _, ok := requestProperties["quality_profile_id"]; !ok {
+		t.Fatal("request_media schema is missing quality_profile_id")
+	}
+
+	recommendationTool := findToolDefinition("get_recommendations")
+	if recommendationTool == nil {
+		t.Fatal("get_recommendations definition not found")
+	}
+	recommendationProperties, ok := recommendationTool.InputSchema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("get_recommendations properties = %#v", recommendationTool.InputSchema["properties"])
+	}
+	if _, ok := recommendationProperties["quality_profile_id"]; ok {
+		t.Fatal("get_recommendations schema unexpectedly exposes quality_profile_id")
+	}
+
+	optionsTool := findToolDefinition("get_request_options")
+	if optionsTool == nil {
+		t.Fatal("get_request_options definition not found")
+	}
+	if optionsTool.RequiredPermission() != auth.PermissionMediaRequest {
+		t.Fatalf("get_request_options permission = %q", optionsTool.RequiredPermission())
+	}
+}
+
 func TestDisplayMediaMismatch(t *testing.T) {
 	if got := displayMediaMismatch("Toy Story 5", "2026", "Toy Story 5", "2026"); got != "" {
 		t.Fatalf("matching item rejected: %s", got)

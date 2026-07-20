@@ -149,9 +149,25 @@ var toolDefinitions = []Tool{
 		},
 	},
 	{
+		Name:        "get_request_options",
+		Permission:  auth.PermissionMediaRequest,
+		Description: "Show whether the current user may choose request options and list the quality profiles available for a movie or TV request",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"movie", "tv"},
+					"description": "Whether the planned request is a movie or TV show",
+				},
+			},
+			"required": []string{"media_type"},
+		},
+	},
+	{
 		Name:        "request_media",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Request a movie or TV show to be added to the media server",
+		Description: "Request a movie or TV show, optionally selecting a quality_profile_id returned by get_request_options when the current user may choose quality",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -163,6 +179,11 @@ var toolDefinitions = []Tool{
 					"type":        "string",
 					"enum":        []string{"movie", "tv"},
 					"description": "Whether this is a movie or TV show",
+				},
+				"quality_profile_id": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     1,
+					"description": "Optional Radarr/Sonarr quality profile ID. Honored only when the requester is allowed to choose quality; otherwise their configured default is used.",
 				},
 			},
 			"required": []string{"tmdb_id", "media_type"},
@@ -563,17 +584,37 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 	return &ToolResult{Text: string(data)}, nil
 }
 
-func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
+func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role string) (*ToolResult, error) {
 	var params struct {
-		TmdbID    int    `json:"tmdb_id"`
 		MediaType string `json:"media_type"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
+	if params.MediaType != "movie" && params.MediaType != "tv" {
+		return &ToolResult{Text: "Request options require media_type movie or tv."}, nil
+	}
+	opts, err := s.request.GetRequestOptions(userID, auth.HasPermission(role, auth.PermissionAdmin), params.MediaType)
+	if err != nil {
+		return nil, err
+	}
+	data, _ := json.Marshal(opts)
+	return &ToolResult{Text: string(data)}, nil
+}
+
+func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
+	var params struct {
+		TmdbID           int    `json:"tmdb_id"`
+		MediaType        string `json:"media_type"`
+		QualityProfileID int    `json:"quality_profile_id"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
 	resp, err := s.request.CreateMediaRequest(userID, &request.CreateRequest{
-		TmdbID:    params.TmdbID,
-		MediaType: params.MediaType,
+		TmdbID:           params.TmdbID,
+		MediaType:        params.MediaType,
+		QualityProfileID: params.QualityProfileID,
 	})
 	if err != nil {
 		return &ToolResult{Text: fmt.Sprintf("Request failed: %s", err.Error())}, nil

@@ -134,7 +134,7 @@ func TestRequestMediaRoutesToCallersInstanceAndLogsAttribution(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup":
 			_, _ = w.Write([]byte(`[{"title":"Fight Club","tmdbId":550,"year":1999}]`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/qualityprofile":
-			_, _ = w.Write([]byte(`[{"id":1,"name":"Any"}]`))
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Any"},{"id":7,"name":"HD-1080p"}]`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/rootfolder":
 			_, _ = w.Write([]byte(`[{"id":1,"path":"/movies"}]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/movie":
@@ -184,16 +184,34 @@ func TestRequestMediaRoutesToCallersInstanceAndLogsAttribution(t *testing.T) {
 
 	registry := instance.NewRegistry(store)
 	service := requestsvc.NewService(database, registry, nil, nil)
+	allowQualityChoice := true
+	if err := service.SetUserSettings(uid, requestsvc.UserSettingsDTO{AllowQualityChoice: &allowQualityChoice}); err != nil {
+		t.Fatalf("allow quality choice: %v", err)
+	}
 	server := NewToolServer(nil, service, registry, nil)
 	server.SetCallAuthorizer(func(context.Context, CallContext) (string, error) {
 		return auth.RoleUser, nil
 	})
 	callCtx := CallContext{UserID: uid, Role: auth.RoleUser, DeviceID: "device-1", Reauthorize: true}
 
+	options, err := server.ExecuteTool(
+		context.Background(),
+		"get_request_options",
+		json.RawMessage(`{"media_type":"movie"}`),
+		callCtx,
+	)
+	if err != nil {
+		t.Fatalf("get_request_options: %v", err)
+	}
+	if !strings.Contains(options.Text, `"can_choose_quality":true`) ||
+		!strings.Contains(options.Text, `{"id":7,"name":"HD-1080p"}`) {
+		t.Fatalf("request options = %q, want allowed profile 7", options.Text)
+	}
+
 	result, err := server.ExecuteTool(
 		context.Background(),
 		"request_media",
-		json.RawMessage(`{"tmdb_id":550,"media_type":"movie"}`),
+		json.RawMessage(`{"tmdb_id":550,"media_type":"movie","quality_profile_id":7}`),
 		callCtx,
 	)
 	if err != nil {
@@ -216,6 +234,9 @@ func TestRequestMediaRoutesToCallersInstanceAndLogsAttribution(t *testing.T) {
 	}
 	if body["monitored"] != true {
 		t.Errorf("monitored = %v, want true", body["monitored"])
+	}
+	if body["qualityProfileId"] != float64(7) {
+		t.Errorf("qualityProfileId = %v, want requested profile 7", body["qualityProfileId"])
 	}
 	addOptions, _ := body["addOptions"].(map[string]any)
 	if addOptions["searchForMovie"] != true {
