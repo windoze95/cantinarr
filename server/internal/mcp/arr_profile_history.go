@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,24 @@ func profileDependencyHash(snapshot profileSettingsSnapshot) [sha256.Size]byte {
 		material = append(material, 0)
 	}
 	return sha256.Sum256(material)
+}
+
+// profileDependencyMatchesStored preserves the dependency scope captured when
+// the change was applied. Sonarr includes its language catalog only when a
+// changed custom format uses LanguageSpecification, while Radarr always
+// includes it. Trying the base snapshot first keeps non-language Sonarr and
+// Chaptarr history independent from unrelated language-catalog changes.
+func profileDependencyMatchesStored(ctx context.Context, mutator qualityProfileMutator, service string, snapshot *profileSettingsSnapshot, expected string) (bool, error) {
+	if hashString(profileDependencyHash(*snapshot)) == expected {
+		return true, nil
+	}
+	if snapshot.HasLanguages || (service != "radarr" && service != "sonarr") {
+		return false, nil
+	}
+	if err := loadProfileSnapshotLanguages(ctx, mutator, snapshot); err != nil {
+		return false, err
+	}
+	return hashString(profileDependencyHash(*snapshot)) == expected, nil
 }
 
 func profileSettingFieldChanges(beforeRaw, afterRaw json.RawMessage, customFormats []json.RawMessage, plan profileChangePlan) ([]SettingFieldChange, error) {

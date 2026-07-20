@@ -53,6 +53,27 @@ func testExternalSettingChange(t *testing.T, resourceID string) newSettingChange
 	}
 }
 
+func applyProfileChangeForHistoryTest(t *testing.T, server *ToolServer, reference, turnID, trustedText string) ExternalSettingChange {
+	t.Helper()
+	result, err := server.ExecuteTool(
+		context.Background(),
+		"apply_profile_change",
+		json.RawMessage(`{"change_reference":"`+reference+`"}`),
+		profileToolCallContext(turnID, trustedText),
+	)
+	if err != nil {
+		t.Fatalf("apply profile change: %v", err)
+	}
+	if !strings.Contains(result.Text, "Applied the requested change") {
+		t.Fatalf("apply result = %q", result.Text)
+	}
+	changes, err := server.settingsChanges.list(1, 0)
+	if err != nil || len(changes) != 1 {
+		t.Fatalf("applied history = %#v, %v", changes, err)
+	}
+	return changes[0]
+}
+
 func TestSettingChangeSummaryNeverClaimsAnUnknownRemoteOutcome(t *testing.T) {
 	tests := []struct {
 		resourceType string
@@ -309,6 +330,109 @@ func TestSettingChangeProfileRestoreRefusesDriftThenRestoresExactAppliedImage(t 
 	if restoredHash != before.ProfileHash {
 		t.Fatalf("restored profile differs from before snapshot:\nwant %s\n got %s", before.ProfileRaw, restoredRaw)
 	}
+}
+
+func TestSettingChangeSonarrDependencyScopeControlsRestore(t *testing.T) {
+	t.Run("language score restores while the catalog matches", func(t *testing.T) {
+		fake := newProfileToolFakeArr()
+		server, _, _, _ := newProfileToolIntegrationServerWithStoreForService(t, fake, "sonarr")
+		reference := previewLanguageScoreProfileChange(t, server, "sonarr", "sonarr-language-match")
+		applied := applyProfileChangeForHistoryTest(t, server, reference, "sonarr-language-match", "Set Not English to -9000")
+		if fake.putCount() != 1 {
+			t.Fatalf("apply wrote %d times, want one", fake.putCount())
+		}
+
+		detail, err := server.settingChangeDetail(context.Background(), applied.ID)
+		if err != nil {
+			t.Fatalf("detail at exact applied language state: %v", err)
+		}
+		if detail.CurrentStatus != "matches_applied" || !detail.CanRevert || detail.CurrentError != "" ||
+			len(detail.Changes) != 1 || detail.Changes[0].Key != "custom_format_score:3" ||
+			detail.Changes[0].Current == nil || *detail.Changes[0].Current != "-9000" ||
+			detail.Changes[0].CurrentState != "matches_applied" {
+			t.Fatalf("matching Sonarr language detail = %#v", detail)
+		}
+
+		reverted, err := server.revertSettingChange(context.Background(), applied.ID, profileToolCallContext("restore-sonarr-language", "Restore the previous profile"))
+		if err != nil {
+			t.Fatalf("restore matching Sonarr language profile: %v", err)
+		}
+		if fake.putCount() != 2 || reverted.ParentID == nil || *reverted.ParentID != applied.ID ||
+			reverted.Operation != "revert" || reverted.Status != settingChangeStatusApplied ||
+			reverted.CurrentStatus != "matches_applied" || !reverted.CanRevert {
+			t.Fatalf("Sonarr language restore = %#v puts=%d", reverted, fake.putCount())
+		}
+		fake.mu.Lock()
+		restoredRaw := append(json.RawMessage(nil), fake.profile...)
+		fake.mu.Unlock()
+		restoredHash, err := canonicalProfileJSONHash(restoredRaw)
+		if err != nil {
+			t.Fatalf("hash restored Sonarr profile: %v", err)
+		}
+		beforeHash, err := canonicalProfileJSONHash(json.RawMessage(settingsProfileHD))
+		if err != nil {
+			t.Fatalf("hash original Sonarr profile: %v", err)
+		}
+		if restoredHash != beforeHash {
+			t.Fatalf("restored Sonarr profile differs from original:\nwant %s\n got %s", settingsProfileHD, restoredRaw)
+		}
+		revertedDetail, err := server.settingChangeDetail(context.Background(), reverted.ID)
+		if err != nil {
+			t.Fatalf("detail for Sonarr restore record: %v", err)
+		}
+		if revertedDetail.CurrentStatus != "matches_applied" || !revertedDetail.CanRevert {
+			t.Fatalf("Sonarr restore detail = %#v", revertedDetail)
+		}
+	})
+
+	t.Run("language score refuses real catalog drift", func(t *testing.T) {
+		fake := newProfileToolFakeArr()
+		server, _, _, _ := newProfileToolIntegrationServerWithStoreForService(t, fake, "sonarr")
+		reference := previewLanguageScoreProfileChange(t, server, "sonarr", "sonarr-language-drift")
+		applied := applyProfileChangeForHistoryTest(t, server, reference, "sonarr-language-drift", "Set Not English to -9000")
+		fake.setLanguages(`[{"id":-1,"name":"Any"},{"id":1,"name":"English (changed)"}]`)
+
+		detail, err := server.settingChangeDetail(context.Background(), applied.ID)
+		if err != nil {
+			t.Fatalf("detail after Sonarr language catalog drift: %v", err)
+		}
+		if detail.CurrentStatus != "different" || detail.CanRevert ||
+			detail.CurrentError != "Other settings or dependencies on this profile changed after this entry." ||
+			len(detail.Changes) != 1 || detail.Changes[0].Current == nil ||
+			*detail.Changes[0].Current != "-9000" || detail.Changes[0].CurrentState != "matches_applied" {
+			t.Fatalf("drifted Sonarr language detail = %#v", detail)
+		}
+		if _, err := server.revertSettingChange(context.Background(), applied.ID, profileToolCallContext("restore-sonarr-language-drift", "Restore the previous profile")); !errors.Is(err, errSettingChangeConflict) {
+			t.Fatalf("drifted Sonarr language restore error = %v", err)
+		}
+		if fake.putCount() != 1 {
+			t.Fatalf("drifted Sonarr language restore wrote %d times", fake.putCount()-1)
+		}
+	})
+
+	t.Run("non-language score ignores unrelated catalog drift", func(t *testing.T) {
+		fake := newProfileToolFakeArr()
+		server, _, _, _ := newProfileToolIntegrationServerWithStoreForService(t, fake, "sonarr")
+		reference := previewX265ProfileChangeForService(t, server, "sonarr", "sonarr-non-language")
+		applied := applyProfileChangeForHistoryTest(t, server, reference, "sonarr-non-language", "Set x265 to 25")
+		fake.setLanguages(`[{"id":-1,"name":"Any"},{"id":1,"name":"English (changed)"}]`)
+
+		detail, err := server.settingChangeDetail(context.Background(), applied.ID)
+		if err != nil {
+			t.Fatalf("detail after unrelated Sonarr language catalog drift: %v", err)
+		}
+		if detail.CurrentStatus != "matches_applied" || !detail.CanRevert || detail.CurrentError != "" ||
+			len(detail.Changes) != 1 || detail.Changes[0].Current == nil ||
+			*detail.Changes[0].Current != "+25" || detail.Changes[0].CurrentState != "matches_applied" {
+			t.Fatalf("matching Sonarr non-language detail = %#v", detail)
+		}
+		if _, err := server.revertSettingChange(context.Background(), applied.ID, profileToolCallContext("restore-sonarr-non-language", "Restore the previous profile")); err != nil {
+			t.Fatalf("restore Sonarr non-language profile: %v", err)
+		}
+		if fake.putCount() != 2 {
+			t.Fatalf("Sonarr non-language apply and restore wrote %d times, want two", fake.putCount())
+		}
+	})
 }
 
 func TestSettingChangeCustomFormatDetailComparesLiveStateWithoutOfferingRestore(t *testing.T) {

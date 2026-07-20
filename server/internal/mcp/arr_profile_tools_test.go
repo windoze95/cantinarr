@@ -129,8 +129,13 @@ func profileToolCallContext(turnID, trustedText string) CallContext {
 
 func previewX265ProfileChange(t *testing.T, server *ToolServer, turnID string) string {
 	t.Helper()
+	return previewX265ProfileChangeForService(t, server, "radarr", turnID)
+}
+
+func previewX265ProfileChangeForService(t *testing.T, server *ToolServer, service, turnID string) string {
+	t.Helper()
 	result, err := server.ExecuteTool(context.Background(), "preview_profile_change", json.RawMessage(`{
-		"service":"radarr","profile_id":1,
+		"service":"`+service+`","profile_id":1,
 		"changes":{"custom_format_scores":[{"format_name":"x265","score":25}]}
 	}`), profileToolCallContext(turnID, "Set x265 to 25"))
 	if err != nil {

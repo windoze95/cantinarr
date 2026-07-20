@@ -129,7 +129,7 @@ func (s *ToolServer) settingChangeDetail(ctx context.Context, id int64) (Externa
 		detail.CurrentError = "This server build cannot read the selected quality profile."
 		return detail, nil
 	}
-	snapshot, err := loadProfileSettingsSnapshot(ctx, mutator, profileID, stored.ServiceType == "radarr")
+	snapshot, err := loadProfileSettingsSnapshot(ctx, mutator, profileID, false)
 	if err != nil {
 		detail.CurrentStatus = "unavailable"
 		detail.CurrentError = "Cantinarr could not read the current profile."
@@ -142,7 +142,17 @@ func (s *ToolServer) settingChangeDetail(ctx context.Context, id int64) (Externa
 		return detail, nil
 	}
 	detail.Changes = withCurrentSettingValues(stored.Changes, values, nil)
-	if hashString(snapshot.ProfileHash) == stored.AfterHash && hashString(profileDependencyHash(snapshot)) == stored.DependencyHash {
+	profileMatches := hashString(snapshot.ProfileHash) == stored.AfterHash
+	dependenciesMatch := false
+	if profileMatches {
+		dependenciesMatch, err = profileDependencyMatchesStored(ctx, mutator, stored.ServiceType, &snapshot, stored.DependencyHash)
+		if err != nil {
+			detail.CurrentStatus = "unavailable"
+			detail.CurrentError = "Cantinarr could not verify the current profile dependencies."
+			return detail, nil
+		}
+	}
+	if profileMatches && dependenciesMatch {
 		detail.CurrentStatus = "matches_applied"
 		detail.CanRevert = stored.Status == settingChangeStatusApplied
 	} else {
@@ -296,11 +306,18 @@ func (s *ToolServer) revertSettingChange(ctx context.Context, id int64, callCtx 
 	if !ok {
 		return ExternalSettingChange{}, errSettingChangeUnavailable
 	}
-	current, err := loadProfileSettingsSnapshot(ctx, mutator, profileID, stored.ServiceType == "radarr")
+	current, err := loadProfileSettingsSnapshot(ctx, mutator, profileID, false)
 	if err != nil {
 		return ExternalSettingChange{}, errSettingChangeUnavailable
 	}
-	if current.ProfileHash != afterHash || hashString(profileDependencyHash(current)) != stored.DependencyHash {
+	if current.ProfileHash != afterHash {
+		return ExternalSettingChange{}, errSettingChangeConflict
+	}
+	dependenciesMatch, err := profileDependencyMatchesStored(ctx, mutator, stored.ServiceType, &current, stored.DependencyHash)
+	if err != nil {
+		return ExternalSettingChange{}, errSettingChangeUnavailable
+	}
+	if !dependenciesMatch {
 		return ExternalSettingChange{}, errSettingChangeConflict
 	}
 	if calculated, hashErr := canonicalProfileJSONHash(stored.BeforeRaw); hashErr != nil || calculated != beforeHash {
@@ -333,11 +350,18 @@ func (s *ToolServer) revertSettingChange(ctx context.Context, id int64, callCtx 
 		if !ok {
 			return errSettingChangeUnavailable
 		}
-		latest, loadErr := loadProfileSettingsSnapshot(ctx, freshMutator, profileID, stored.ServiceType == "radarr")
+		latest, loadErr := loadProfileSettingsSnapshot(ctx, freshMutator, profileID, false)
 		if loadErr != nil {
 			return errSettingChangeUnavailable
 		}
-		if latest.ProfileHash != afterHash || hashString(profileDependencyHash(latest)) != stored.DependencyHash {
+		if latest.ProfileHash != afterHash {
+			return errSettingChangeConflict
+		}
+		dependenciesMatch, loadErr := profileDependencyMatchesStored(ctx, freshMutator, stored.ServiceType, &latest, stored.DependencyHash)
+		if loadErr != nil {
+			return errSettingChangeUnavailable
+		}
+		if !dependenciesMatch {
 			return errSettingChangeConflict
 		}
 		historyChange, guardErr = s.settingsChanges.create(newSettingChange{
