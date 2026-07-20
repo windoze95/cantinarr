@@ -76,6 +76,9 @@ type ToolServer struct {
 	toggleMu      sync.RWMutex
 	disabledTools map[string]bool
 	togglesLoaded bool
+
+	settingsMutationMu    sync.Mutex
+	settingsMutationLocks map[string]chan struct{}
 }
 
 // SetCallAuthorizer wires the live account/device authorization check used by
@@ -87,11 +90,37 @@ func (s *ToolServer) SetCallAuthorizer(authorizer CallAuthorizer) {
 
 func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, registry *instance.Registry, bridge *tmdb.Bridge) *ToolServer {
 	return &ToolServer{
-		creds:    creds,
-		request:  requestSvc,
-		registry: registry,
-		bridge:   bridge,
+		creds:                 creds,
+		request:               requestSvc,
+		registry:              registry,
+		bridge:                bridge,
+		settingsMutationLocks: make(map[string]chan struct{}),
 	}
+}
+
+// authorizeCall re-checks the current device-bound role for an interactive
+// call. Consequential handlers may call it again after waiting for a mutation
+// lock so a queued request cannot outlive a revocation.
+func (s *ToolServer) authorizeCall(ctx context.Context, callCtx CallContext) (CallContext, error) {
+	if err := ctx.Err(); err != nil {
+		return CallContext{}, err
+	}
+	trustedInternal := callCtx.TrustedInternal && callCtx.UserID == 0 && callCtx.DeviceID == "" && !callCtx.RequireSharedAI
+	if callCtx.TrustedInternal && !trustedInternal {
+		return CallContext{}, ErrToolAuthorization
+	}
+	if trustedInternal {
+		return callCtx, nil
+	}
+	if s.callAuthorizer == nil {
+		return CallContext{}, ErrToolAuthorization
+	}
+	currentRole, err := s.callAuthorizer(ctx, callCtx)
+	if err != nil {
+		return CallContext{}, ErrToolAuthorization
+	}
+	callCtx.Role = currentRole
+	return callCtx, nil
 }
 
 // GetRadarr returns the default Radarr client.
@@ -213,19 +242,9 @@ func (t Tool) IsAdminOnly() bool {
 
 // ExecuteTool runs the named tool with the given JSON input.
 func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.RawMessage, callCtx CallContext) (result *ToolResult, err error) {
-	trustedInternal := callCtx.TrustedInternal && callCtx.UserID == 0 && callCtx.DeviceID == "" && !callCtx.RequireSharedAI
-	if callCtx.TrustedInternal && !trustedInternal {
-		return nil, ErrToolAuthorization
-	}
-	if !trustedInternal {
-		if s.callAuthorizer == nil {
-			return nil, ErrToolAuthorization
-		}
-		currentRole, authErr := s.callAuthorizer(ctx, callCtx)
-		if authErr != nil {
-			return nil, ErrToolAuthorization
-		}
-		callCtx.Role = currentRole
+	callCtx, err = s.authorizeCall(ctx, callCtx)
+	if err != nil {
+		return nil, err
 	}
 
 	debug := s.IsAIDebugEnabled()
@@ -242,7 +261,18 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 			errorType = fmt.Sprintf("%T", err)
 		}
 		structuredDropped := sanitizeToolResult(result)
-		err = secrets.RedactError(err)
+		switch {
+		case errors.Is(err, ErrToolAuthorization):
+			err = ErrToolAuthorization
+		case isPartialMutationError(err):
+			err = secrets.RedactError(err)
+		case errors.Is(err, context.Canceled):
+			err = context.Canceled
+		case errors.Is(err, context.DeadlineExceeded):
+			err = context.DeadlineExceeded
+		case err != nil:
+			err = secrets.RedactError(err)
+		}
 		if debug {
 			status := "ok"
 			if err != nil {
@@ -325,9 +355,16 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.getQualityProfiles(input)
 	case "get_custom_formats":
 		return s.getCustomFormats(input)
+	case "upsert_custom_format":
+		return s.upsertCustomFormat(ctx, input, callCtx)
 	default:
 		return nil, fmt.Errorf("unknown tool")
 	}
+}
+
+func isPartialMutationError(err error) bool {
+	var partial interface{ PartialMutation() bool }
+	return errors.As(err, &partial) && partial.PartialMutation()
 }
 
 // sanitizeToolResult is the single output boundary for every ordinary MCP tool.

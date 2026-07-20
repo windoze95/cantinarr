@@ -1,6 +1,8 @@
 package instance
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -52,6 +54,70 @@ type Summary struct {
 	IsDefault   bool
 }
 
+// ArrSettingsFingerprint is an internal-only binding between an arr instance
+// identity and its current connection configuration. It must never be logged
+// or returned to clients; settings mutations compare it to fail closed when an
+// admin repoints an instance or rotates its key during a read/modify/write.
+type ArrSettingsFingerprint [sha256.Size]byte
+
+type arrSettingsFingerprintInput struct {
+	ServiceType string `json:"service_type"`
+	ID          string `json:"id"`
+	URL         string `json:"url"`
+	APIKey      string `json:"api_key"`
+}
+
+func fingerprintArrSettings(inst *Instance) ArrSettingsFingerprint {
+	encoded, _ := json.Marshal(arrSettingsFingerprintInput{
+		ServiceType: inst.ServiceType,
+		ID:          inst.ID,
+		URL:         inst.URL,
+		APIKey:      inst.APIKey,
+	})
+	return sha256.Sum256(encoded)
+}
+
+// GetDefaultInstanceID resolves the current effective default directly from
+// the store without consulting or populating the client cache.
+func (r *Registry) GetDefaultInstanceID(serviceType string) (string, error) {
+	inst, err := r.store.GetDefault(serviceType)
+	if err != nil {
+		return "", err
+	}
+	if inst == nil {
+		return "", nil
+	}
+	return inst.ID, nil
+}
+
+// GetFresh*Client methods deliberately bypass the registry cache. Settings
+// writes use them after their per-instance lock so the client and fingerprint
+// come from the same authoritative Store.Get result, closing the
+// Store.Update-before-cache-invalidation window.
+func (r *Registry) GetFreshRadarrClient(instanceID string) (*radarr.Client, ArrSettingsFingerprint, error) {
+	inst, err := r.getInstanceOfType(instanceID, "radarr")
+	if err != nil {
+		return nil, ArrSettingsFingerprint{}, err
+	}
+	return radarr.NewClient(inst.URL, inst.APIKey), fingerprintArrSettings(inst), nil
+}
+
+func (r *Registry) GetFreshSonarrClient(instanceID string) (*sonarr.Client, ArrSettingsFingerprint, error) {
+	inst, err := r.getInstanceOfType(instanceID, "sonarr")
+	if err != nil {
+		return nil, ArrSettingsFingerprint{}, err
+	}
+	return sonarr.NewClient(inst.URL, inst.APIKey), fingerprintArrSettings(inst), nil
+}
+
+func (r *Registry) GetFreshChaptarrClient(instanceID string) (*chaptarr.Client, ArrSettingsFingerprint, error) {
+	inst, err := r.getInstanceOfType(instanceID, "chaptarr")
+	if err != nil {
+		return nil, ArrSettingsFingerprint{}, err
+	}
+	return chaptarr.NewClient(inst.URL, inst.APIKey), fingerprintArrSettings(inst), nil
+}
+
 // ListInstanceSummaries returns identity-only views of the configured
 // instances, optionally filtered to one service type.
 func (r *Registry) ListInstanceSummaries(serviceType string) ([]Summary, error) {
@@ -87,6 +153,11 @@ func (r *Registry) GetRadarrClient(instanceID string) (*radarr.Client, error) {
 		return client, nil
 	}
 	r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if client, ok := r.radarrClients[instanceID]; ok {
+		return client, nil
+	}
 
 	inst, err := r.getInstanceOfType(instanceID, "radarr")
 	if err != nil {
@@ -95,9 +166,7 @@ func (r *Registry) GetRadarrClient(instanceID string) (*radarr.Client, error) {
 
 	client := radarr.NewClient(inst.URL, inst.APIKey)
 
-	r.mu.Lock()
 	r.radarrClients[instanceID] = client
-	r.mu.Unlock()
 
 	return client, nil
 }
@@ -110,6 +179,11 @@ func (r *Registry) GetSonarrClient(instanceID string) (*sonarr.Client, error) {
 		return client, nil
 	}
 	r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if client, ok := r.sonarrClients[instanceID]; ok {
+		return client, nil
+	}
 
 	inst, err := r.getInstanceOfType(instanceID, "sonarr")
 	if err != nil {
@@ -118,9 +192,7 @@ func (r *Registry) GetSonarrClient(instanceID string) (*sonarr.Client, error) {
 
 	client := sonarr.NewClient(inst.URL, inst.APIKey)
 
-	r.mu.Lock()
 	r.sonarrClients[instanceID] = client
-	r.mu.Unlock()
 
 	return client, nil
 }
@@ -133,6 +205,11 @@ func (r *Registry) GetChaptarrClient(instanceID string) (*chaptarr.Client, error
 		return client, nil
 	}
 	r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if client, ok := r.chaptarrClients[instanceID]; ok {
+		return client, nil
+	}
 
 	inst, err := r.getInstanceOfType(instanceID, "chaptarr")
 	if err != nil {
@@ -141,9 +218,7 @@ func (r *Registry) GetChaptarrClient(instanceID string) (*chaptarr.Client, error
 
 	client := chaptarr.NewClient(inst.URL, inst.APIKey)
 
-	r.mu.Lock()
 	r.chaptarrClients[instanceID] = client
-	r.mu.Unlock()
 
 	return client, nil
 }

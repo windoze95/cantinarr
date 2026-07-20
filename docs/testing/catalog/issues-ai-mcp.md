@@ -20,3 +20,4 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 - [ ] `MCP-006` · P0 · SEC/LIVE — Complete authorization-code flow with S256 PKCE, state, exact redirect/resource/scope, and password; verify code is one-time/short-lived and wrong verifier/redirect/resource fails.
 - [ ] `MCP-007` · P0 · LIVE — Complete secure-browser passkey authorization and create a first passkey from MCP login for a connect-link-only user; verify correct Cantinarr identity/device.
+- [ ] `MCP-008` · P1 · API/LIVE — On disposable current Radarr, Sonarr, and Chaptarr instances, use `upsert_custom_format` to create one native/TRaSH format and repeat by the same exact name with changed rules; verify one record exists, create added it to every profile at score 0, and update preserved profile scores and changed the format definition (stored file matches need not recompute), then remove the disposable format directly in the arr UI/API.

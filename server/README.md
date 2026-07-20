@@ -9,7 +9,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
   ┌───────────────────────────────────────────────────────────┐
   │  Auth (JWT/passkeys)   Requests + Approvals   AI Chat     │
   │        │                     │                   │        │
-  │        │              ┌──────┴──────┐      30 MCP Tools   │
+  │        │              ┌──────┴──────┐      31 MCP Tools   │
   │        │              │  ID Bridge  │            │        │
   │        │              └──┬───────┬──┘     AI Remediation  │
   │        │                 │       │            Agent       │
@@ -31,7 +31,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 - **Availability computed live** -- Request status is derived from the arrs' real episode/file state (never from a stale snapshot or monitored-only stats), refreshed by queue polling and instant arr webhooks.
 - **Connect link auth, passwordless by default** -- Admins generate connect links; redeeming one starts a permanent device session (an opaque refresh token validated against the DB -- never expires, never rotates, independent of the JWT secret) that mints 15-minute access JWTs. Sessions end only by device revocation or user deletion. Passwords and passkeys (WebAuthn, incl. native iOS/Android/Windows) are admin-gated per user.
 - **AI assistant + remediation agent** -- Interactive chat resolves a personal Anthropic/OpenAI/Gemini key or OpenAI (OAuth) link first; that personal choice works without an included-access grant and need not match the server provider. An admin-funded provider is available only to users granted included access. A selected personal provider fails closed instead of silently consuming the shared account. The autonomous investigation agent is server-owned, always uses the admin shared API key or shared OpenAI OAuth connection without consulting user grants, may use a separately tested remediation model designation, and proposes fixes an admin approves.
-- **MCP server** -- The same 30 tools exposed at `/mcp` (Streamable HTTP) with full inbound Cantinarr OAuth: discovery metadata, dynamic client registration, PKCE, browser/passkey login, rotating refresh tokens. This is separate from the outbound OpenAI OAuth account link used by Codex chat.
+- **MCP server** -- The same 31 tools exposed at `/mcp` (Streamable HTTP) with full inbound Cantinarr OAuth: discovery metadata, dynamic client registration, PKCE, browser/passkey login, rotating refresh tokens. Admin settings tools inspect quality profiles and import or update native/TRaSH custom formats on Radarr, Sonarr, and Chaptarr; profile scores remain separate. This is separate from the outbound OpenAI OAuth account link used by Codex chat.
 - **Import Doctor** -- Plain-English diagnosis of stuck downloads with one-click fixes (manual/force import, remove+blocklist+re-search, category hand-off, rescan), shared by the app, the AI assistant, and MCP.
 - **Push notifications** -- APNs delivery through a self-hosted push gateway with zero-config auto-enrollment, per-user preference categories, and admin-scoped alerts.
 - **Real-time updates** -- WebSocket hub polls arr queues (30s) and download clients (15s) and pushes progress, queue snapshots, and change pings; arr webhooks make external changes (manual imports, deletes) land instantly.
@@ -434,7 +434,7 @@ The MCP server also publishes prompt templates and a `guide://cantinarr/agent-gu
 
 ### MCP tools
 
-The same 30 tools power the in-app AI assistant and `/mcp`; the remediation agent receives a constrained read-only subset plus issue-scoped human gates. Every shared tool can be disabled from Settings > AI Tools. Interactive execution reauthorizes the current device and role immediately before each tool and rechecks the included-AI grant when shared billing is in use. Tools marked **admin** require the admin role (either flagged directly or gated by a permission the user role doesn't hold):
+The same 31 tools power the in-app AI assistant and `/mcp`; the remediation agent receives a constrained read-only subset plus issue-scoped human gates. Every shared tool can be disabled from Settings > AI Tools. Interactive execution reauthorizes the current device and role immediately before each tool and rechecks the included-AI grant when shared billing is in use. Tools marked **admin** require the admin role (either flagged directly or gated by a permission the user role doesn't hold):
 
 | Tool | Description |
 |---|---|
@@ -463,11 +463,14 @@ The same 30 tools power the in-app AI assistant and `/mcp`; the remediation agen
 | `list_arr_instances` | Configured arr instances with the instance IDs the settings tools accept (admin) |
 | `get_quality_profiles` | Quality profile summaries, or one profile's full stored JSON by id (admin) |
 | `get_custom_formats` | Custom format summaries, or one format's full stored JSON by id (admin) |
+| `upsert_custom_format` | Create/update a native or TRaSH custom format by exact name; creates enter profiles at score 0, updates preserve profile scores without recomputing stored file matches (admin) |
 | `diagnose_queue` | Import Doctor: explain stuck items + print the exact next call (admin) |
 | `get_manual_import_candidates` | List a stuck download's files, mappings, rejections (admin) |
 | `execute_manual_import` | Force a download's files into the library (admin) |
 | `remediate_queue_item` | One-click queue fix: remove, blocklist+search, change category (admin) |
 | `rescan_media` | Rescan a movie/series on disk and run the import pass (admin) |
+
+Custom-format tools probe the configured instance's live collection endpoint rather than trusting a stored version. Sonarr requires v4 for custom formats; a collection-read 404 is reported as either an older/incompatible build or a stored instance URL missing its service URL base, because those cases are indistinguishable at that API boundary. Write-side 404s stay concrete so a concurrently deleted record is not misdiagnosed as an old service.
 
 ### Database
 
@@ -493,7 +496,7 @@ server/
 │   ├── ai/                   # Multi-provider chat: SSE handler, API-key providers
 │   │                         #   provider-neutral streaming + conversation store
 │   ├── api/router.go         # Chi router: routes, CORS, permissions, /api/config payload
-│   ├── arr/doctor.go         # Shared Import Doctor classifier (app + AI + MCP agree)
+│   ├── arr/                  # Import Doctor plus safe settings HTTP/validation boundaries
 │   ├── auth/                 # JWT, connect links, users/devices, WebAuthn, OAuth AS, RBAC
 │   ├── cache/                # Small TTL cache used by request-side digests
 │   ├── chaptarr/             # Chaptarr (Readarr v1) client for the books module
@@ -504,7 +507,7 @@ server/
 │   ├── discover/             # TMDB/Trakt discovery + media detail proxy handlers
 │   ├── downloads/            # Unified download-client queue API across all four clients
 │   ├── instance/             # Instance registry, defaults invariant, per-user pins, safe webhook rotation
-│   ├── mcp/                  # The 30 tools, toggles, tool server (chat + MCP + agent share it)
+│   ├── mcp/                  # The 31 tools, toggles, tool server (chat + MCP + agent share it)
 │   ├── mcpserver/            # MCP Streamable HTTP endpoint, prompts, agent guide (mcp-go)
 │   ├── nzbget/               # NZBGet JSON-RPC client
 │   ├── plex/                 # plex.tv PIN link + shared_servers invites (one-tap & auto)

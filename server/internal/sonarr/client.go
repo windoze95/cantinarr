@@ -2,6 +2,7 @@ package sonarr
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	arrcommon "github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/transporterr"
 )
 
@@ -183,7 +185,11 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 }
 
 func (c *Client) doRequest(method, path string) (*http.Response, error) {
-	req, err := http.NewRequest(method, c.baseURL+path, nil)
+	return c.doRequestContext(context.Background(), method, path)
+}
+
+func (c *Client) doRequestContext(ctx context.Context, method, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +287,11 @@ func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
 // re-serializing them risks losing fields Sonarr requires), so callers decode
 // only the fields they need from each raw object.
 func (c *Client) GetQualityProfilesRaw() ([]json.RawMessage, error) {
-	resp, err := c.doRequest("GET", "/api/v3/qualityprofile")
+	return c.GetQualityProfilesRawContext(context.Background())
+}
+
+func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMessage, error) {
+	resp, err := c.doRequestContext(ctx, "GET", "/api/v3/qualityprofile")
 	if err != nil {
 		return nil, fmt.Errorf("sonarr quality profiles: %w", err)
 	}
@@ -300,7 +310,12 @@ func (c *Client) GetQualityProfilesRaw() ([]json.RawMessage, error) {
 // verbatim for the same round-trip reason as GetQualityProfilesRaw. A 404
 // maps to ErrCustomFormatsNotFound.
 func (c *Client) GetCustomFormatsRaw() ([]json.RawMessage, error) {
-	resp, err := c.doRequest("GET", "/api/v3/customformat")
+	return c.GetCustomFormatsRawContext(context.Background())
+}
+
+// GetCustomFormatsRawContext is the cancellation-aware mutation preflight.
+func (c *Client) GetCustomFormatsRawContext(ctx context.Context) ([]json.RawMessage, error) {
+	resp, err := c.doRequestContext(ctx, "GET", "/api/v3/customformat")
 	if err != nil {
 		return nil, fmt.Errorf("sonarr custom formats: %w", err)
 	}
@@ -316,6 +331,29 @@ func (c *Client) GetCustomFormatsRaw() ([]json.RawMessage, error) {
 		return nil, fmt.Errorf("decode custom formats: %w", err)
 	}
 	return formats, nil
+}
+
+// CreateCustomFormatRaw creates one credential-free custom-format object. Its
+// dedicated write path is the only Sonarr client path allowed to surface the
+// typed, redacted validation details from an HTTP 400 response.
+func (c *Client) CreateCustomFormatRaw(body json.RawMessage) (json.RawMessage, error) {
+	return c.CreateCustomFormatRawContext(context.Background(), body)
+}
+
+func (c *Client) CreateCustomFormatRawContext(ctx context.Context, body json.RawMessage) (json.RawMessage, error) {
+	raw, _, err := arrcommon.DoSettingsWrite(ctx, c.httpClient, "sonarr", c.baseURL, c.apiKey, http.MethodPost, "/api/v3/customformat", body)
+	return raw, err
+}
+
+// UpdateCustomFormatRaw fully replaces one custom-format object.
+func (c *Client) UpdateCustomFormatRaw(id int, body json.RawMessage) (json.RawMessage, error) {
+	return c.UpdateCustomFormatRawContext(context.Background(), id, body)
+}
+
+func (c *Client) UpdateCustomFormatRawContext(ctx context.Context, id int, body json.RawMessage) (json.RawMessage, error) {
+	path := fmt.Sprintf("/api/v3/customformat/%d", id)
+	raw, _, err := arrcommon.DoSettingsWrite(ctx, c.httpClient, "sonarr", c.baseURL, c.apiKey, http.MethodPut, path, body)
+	return raw, err
 }
 
 func (c *Client) GetRootFolders() ([]RootFolder, error) {
