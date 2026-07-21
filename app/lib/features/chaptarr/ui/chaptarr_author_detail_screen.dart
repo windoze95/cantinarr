@@ -5,6 +5,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
+import '../../../core/widgets/section_header.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/chaptarr_add_payload.dart';
 import '../data/chaptarr_api_service.dart';
@@ -89,11 +90,27 @@ class _ChaptarrAuthorDetailScreenState
       await _service.setBookMonitored([book.id], target);
       if (!mounted) return;
       // Reflect the change locally without a full reload.
+      var movedSections = false;
       setState(() {
+        final wasMonitored = _books.any((candidate) =>
+            candidate.groupKey == book.groupKey && candidate.monitored);
         _books = _books
             .map((b) => b.id == book.id ? _withMonitored(b, target) : b)
             .toList();
+        final isMonitored = _books.any((candidate) =>
+            candidate.groupKey == book.groupKey && candidate.monitored);
+        movedSections = wasMonitored != isMonitored;
       });
+      final format = chaptarrFormatLabel(book.format);
+      final message = movedSections
+          ? target
+              ? '${book.title} moved to Monitored books'
+              : '${book.title} moved out of Monitored books'
+          : target
+              ? 'Monitoring $format for ${book.title}'
+              : 'Stopped monitoring $format for ${book.title}';
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -129,6 +146,18 @@ class _ChaptarrAuthorDetailScreenState
     }
     return groups.values.toList();
   }
+
+  Widget _bookCard(List<ChaptarrBook> records) => _BookCard(
+        key: ValueKey('book:${records.first.groupKey}'),
+        records: records,
+        cover: chaptarrImageSource(
+            ref, records.first.coverUrl, widget.instanceId),
+        togglingIds: _togglingBooks,
+        addingKeys: _addingFormats,
+        onTap: () => _openBookGroup(records),
+        onToggleRecord: _toggleBookMonitored,
+        onAddFormat: (format) => _addFormat(records, format),
+      );
 
   String _addKey(List<ChaptarrBook> records, BookFormat format) =>
       '${records.first.groupKey}:${format.index}';
@@ -182,6 +211,18 @@ class _ChaptarrAuthorDetailScreenState
   @override
   Widget build(BuildContext context) {
     final title = _author?.authorName ?? widget.authorName ?? 'Author';
+    final groupedBooks = _groupedBooks();
+    final monitoredBooks = <List<ChaptarrBook>>[];
+    final otherBooks = <List<ChaptarrBook>>[];
+    // A title belongs up top when either of its format records is monitored.
+    // Append into each bucket so the existing newest-first order stays stable.
+    for (final records in groupedBooks) {
+      if (records.any((book) => book.monitored)) {
+        monitoredBooks.add(records);
+      } else {
+        otherBooks.add(records);
+      }
+    }
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -209,17 +250,15 @@ class _ChaptarrAuthorDetailScreenState
                         ErrorBanner(message: _error!, onRetry: _load),
                       if (_author != null) _AuthorSummaryCard(author: _author!),
                       const SizedBox(height: 4),
-                      ..._groupedBooks().map((records) => _BookCard(
-                            records: records,
-                            cover: chaptarrImageSource(
-                                ref, records.first.coverUrl, widget.instanceId),
-                            togglingIds: _togglingBooks,
-                            addingKeys: _addingFormats,
-                            onTap: () => _openBookGroup(records),
-                            onToggleRecord: _toggleBookMonitored,
-                            onAddFormat: (format) =>
-                                _addFormat(records, format),
-                          )),
+                      if (monitoredBooks.isNotEmpty) ...[
+                        const _BookSectionHeading(title: 'Monitored books'),
+                        ...monitoredBooks.map(_bookCard),
+                      ],
+                      if (otherBooks.isNotEmpty) ...[
+                        if (monitoredBooks.isNotEmpty)
+                          const _BookSectionHeading(title: 'Other books'),
+                        ...otherBooks.map(_bookCard),
+                      ],
                       if (_books.isEmpty && !_isLoading)
                         const Padding(
                           padding: EdgeInsets.all(32),
@@ -232,6 +271,23 @@ class _ChaptarrAuthorDetailScreenState
                     ],
                   ),
                 )),
+    );
+  }
+}
+
+class _BookSectionHeading extends StatelessWidget {
+  final String title;
+
+  const _BookSectionHeading({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      header: true,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+        child: SectionHeader(title: title),
+      ),
     );
   }
 }
@@ -339,6 +395,7 @@ class _BookCard extends StatelessWidget {
   final void Function(BookFormat format) onAddFormat;
 
   const _BookCard({
+    super.key,
     required this.records,
     required this.cover,
     required this.togglingIds,
