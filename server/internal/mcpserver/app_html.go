@@ -291,7 +291,8 @@ body{padding:12px 0}
     method: 'ui/initialize',
     params: {
       appInfo: { name: 'Cantinarr Media Results', version: '1.0.0' },
-      capabilities: {}
+      appCapabilities: {},
+      protocolVersion: '2026-01-26'
     }
   });
 })();

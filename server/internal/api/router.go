@@ -64,7 +64,7 @@ func NewRouter(
 	r.Use(safeRequestLogger)
 	r.Use(middleware.Recoverer)
 
-	oauthHandler := auth.NewOAuthHandler(authService)
+	oauthHandler := auth.NewOAuthHandler(authService, cfg.OAuthIssuer)
 	r.Get("/.well-known/oauth-protected-resource", oauthHandler.ProtectedResourceMetadata)
 	r.Get("/.well-known/oauth-protected-resource/mcp", oauthHandler.ProtectedResourceMetadata)
 	r.Get("/.well-known/oauth-authorization-server", oauthHandler.AuthorizationServerMetadata)
@@ -85,7 +85,7 @@ func NewRouter(
 		// the web build is served from this same origin, native apps and MCP
 		// clients don't use CORS, and emitting no Access-Control-* headers
 		// leaves the browser's default same-origin policy in force. (The /mcp
-		// mount below configures its own explicit allow-all for external MCP
+		// mount below has a separate configured-origin policy for browser MCP
 		// clients.) Previously an empty go-chi/cors allowlist sat here, which
 		// that library treats as allow-all — the opposite of this intent.
 		r.Use(middleware.SetHeader("Content-Type", "application/json"))
@@ -406,15 +406,26 @@ func NewRouter(
 	// MCP endpoint (authenticated, separate CORS for external MCP clients)
 	mcpHandler := mcpserver.NewMCPHandler(toolServer)
 	r.Route("/mcp", func(r chi.Router) {
+		r.Use(requireValidMCPOrigin(cfg))
 		r.Use(cors.Handler(cors.Options{
-			AllowedOrigins:   []string{"*"},
-			AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
-			AllowedHeaders:   []string{"Authorization", "Content-Type", "Mcp-Session-Id"},
+			AllowedMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
+			AllowedHeaders: []string{
+				"Authorization",
+				"Content-Type",
+				"Mcp-Method",
+				"Mcp-Name",
+				"MCP-Protocol-Version",
+				"Mcp-Session-Id",
+			},
+			AllowOriginFunc: func(_ *http.Request, origin string) bool {
+				return mcpOriginAllowed(cfg, origin)
+			},
 			ExposedHeaders:   []string{"Mcp-Session-Id"},
 			AllowCredentials: false,
 		}))
 		r.Use(oauthHandler.MCPAuthMiddleware)
 		r.Use(auth.RequirePermission(auth.PermissionMCPAccess))
+		r.Use(mcpRequestObserver)
 		r.Handle("/", mcpHandler)
 		r.Handle("/*", mcpHandler)
 	})

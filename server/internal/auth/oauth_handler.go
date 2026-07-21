@@ -13,16 +13,17 @@ import (
 
 type OAuthHandler struct {
 	service *Service
+	issuer  string
 }
 
-func NewOAuthHandler(service *Service) *OAuthHandler {
-	return &OAuthHandler{service: service}
+func NewOAuthHandler(service *Service, issuer string) *OAuthHandler {
+	return &OAuthHandler{service: service, issuer: strings.TrimRight(issuer, "/")}
 }
 
 func (h *OAuthHandler) ProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
-	base := publicBaseURL(r)
+	base := h.baseURL(r)
 	writeOAuthJSON(w, http.StatusOK, map[string]any{
-		"resource":                 mcpResourceURL(r),
+		"resource":                 h.mcpResourceURL(r),
 		"resource_name":            "Cantinarr MCP",
 		"authorization_servers":    []string{base},
 		"bearer_methods_supported": []string{"header"},
@@ -31,8 +32,8 @@ func (h *OAuthHandler) ProtectedResourceMetadata(w http.ResponseWriter, r *http.
 }
 
 func (h *OAuthHandler) AuthorizationServerMetadata(w http.ResponseWriter, r *http.Request) {
-	base := publicBaseURL(r)
-	writeOAuthJSON(w, http.StatusOK, map[string]any{
+	base := h.baseURL(r)
+	metadata := map[string]any{
 		"issuer":                                base,
 		"authorization_endpoint":                base + "/oauth/authorize",
 		"token_endpoint":                        base + "/oauth/token",
@@ -42,7 +43,11 @@ func (h *OAuthHandler) AuthorizationServerMetadata(w http.ResponseWriter, r *htt
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
 		"scopes_supported":                      []string{defaultOAuthScope},
-	})
+	}
+	if h.issuer != "" {
+		metadata["authorization_response_iss_parameter_supported"] = true
+	}
+	writeOAuthJSON(w, http.StatusOK, metadata)
 }
 
 func (h *OAuthHandler) RegisterClient(w http.ResponseWriter, r *http.Request) {
@@ -53,9 +58,19 @@ func (h *OAuthHandler) RegisterClient(w http.ResponseWriter, r *http.Request) {
 		ResponseTypes           []string `json:"response_types"`
 		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 		Scope                   string   `json:"scope"`
+		ApplicationType         string   `json:"application_type"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata", "invalid registration request")
+		return
+	}
+	applicationType, ok := oauthApplicationType(req.ApplicationType)
+	if !ok {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata", "application_type must be native or web")
+		return
+	}
+	if req.ApplicationType != "" && applicationType == "web" && hasLoopbackHTTPRedirect(req.RedirectURIs) {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_redirect_uri", "web application_type requires HTTPS redirect_uris")
 		return
 	}
 	client, err := h.service.RegisterOAuthClient(req.ClientName, req.RedirectURIs)
@@ -73,6 +88,7 @@ func (h *OAuthHandler) RegisterClient(w http.ResponseWriter, r *http.Request) {
 		"response_types":             client.ResponseTypes,
 		"token_endpoint_auth_method": "none",
 		"scope":                      client.Scope,
+		"application_type":           applicationType,
 	})
 }
 
@@ -103,7 +119,7 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resource := requestedMCPResource(r)
+	resource := h.requestedMCPResource(r)
 	scope := normalizeOAuthScope(r.Form.Get("scope"))
 	code, err := h.service.CreateOAuthAuthorizationCode(
 		client,
@@ -118,7 +134,7 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURI, err := oauthCodeRedirect(r.Form.Get("redirect_uri"), code, r.Form.Get("state"))
+	redirectURI, err := oauthCodeRedirect(r.Form.Get("redirect_uri"), code, r.Form.Get("state"), h.issuer)
 	if err != nil {
 		http.Error(w, "invalid redirect uri", http.StatusBadRequest)
 		return
@@ -142,7 +158,7 @@ func (h *OAuthHandler) Token(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client", "client_id is required")
 		return
 	}
-	resource := requestedMCPResource(r)
+	resource := h.requestedMCPResource(r)
 
 	var (
 		resp *OAuthTokenResponse
@@ -210,7 +226,7 @@ func (h *OAuthHandler) FinishOAuthPasskeyLogin(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	resource := requestedMCPResource(r)
+	resource := h.requestedMCPResource(r)
 	scope := normalizeOAuthScope(r.Form.Get("scope"))
 	code, err := h.service.CreateOAuthAuthorizationCode(
 		client,
@@ -225,7 +241,7 @@ func (h *OAuthHandler) FinishOAuthPasskeyLogin(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	redirectURI, err := oauthCodeRedirect(r.Form.Get("redirect_uri"), code, r.Form.Get("state"))
+	redirectURI, err := oauthCodeRedirect(r.Form.Get("redirect_uri"), code, r.Form.Get("state"), h.issuer)
 	if err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "invalid redirect_uri")
 		return
@@ -237,18 +253,18 @@ func (h *OAuthHandler) MCPAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			writeMCPUnauthorized(w, r)
+			h.writeMCPUnauthorized(w, r)
 			return
 		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		if token == authHeader {
-			writeMCPUnauthorized(w, r)
+			h.writeMCPUnauthorized(w, r)
 			return
 		}
 
-		claims, user, err := h.service.AuthenticateTokenForAudience(token, mcpResourceURL(r))
+		claims, user, err := h.service.AuthenticateTokenForAudience(token, h.mcpResourceURL(r))
 		if err != nil {
-			writeMCPUnauthorized(w, r)
+			h.writeMCPUnauthorized(w, r)
 			return
 		}
 
@@ -265,7 +281,7 @@ func (h *OAuthHandler) PasskeySetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	returnTo := r.URL.Query().Get("return")
-	base := publicBaseURL(r)
+	base := h.baseURL(r)
 	appURL := "cantinarr://passkeys?server=" + url.QueryEscape(base)
 	if returnTo != "" {
 		appURL += "&return=" + url.QueryEscape(returnTo)
@@ -318,7 +334,7 @@ func (h *OAuthHandler) validateAuthorizeRequest(r *http.Request) (*OAuthClient, 
 	if r.Form.Get("code_challenge") == "" {
 		return nil, ErrOAuthInvalidPKCE
 	}
-	if !validRequestedMCPResource(r) {
+	if !h.validRequestedMCPResource(r) {
 		return nil, ErrOAuthInvalidResource
 	}
 	return client, nil
@@ -343,8 +359,8 @@ func (h *OAuthHandler) renderAuthorizeForm(w http.ResponseWriter, r *http.Reques
 		"State":               r.Form.Get("state"),
 		"CodeChallenge":       r.Form.Get("code_challenge"),
 		"CodeChallengeMethod": r.Form.Get("code_challenge_method"),
-		"Resource":            requestedMCPResource(r),
-		"PasskeySetupURL":     passkeySetupURL(r),
+		"Resource":            h.requestedMCPResource(r),
+		"PasskeySetupURL":     h.passkeySetupURL(r),
 	})
 }
 
@@ -612,24 +628,27 @@ var passkeyCreateTemplate = template.Must(template.New("passkey-create").Parse(`
 </body>
 </html>`))
 
-func requestedMCPResource(r *http.Request) string {
+func (h *OAuthHandler) requestedMCPResource(r *http.Request) string {
 	resource := r.Form.Get("resource")
 	if resource == "" {
 		resource = r.URL.Query().Get("resource")
 	}
 	if resource == "" {
-		return mcpResourceURL(r)
+		return h.mcpResourceURL(r)
 	}
 	return resource
 }
 
-func oauthCodeRedirect(rawRedirectURI, code, state string) (string, error) {
+func oauthCodeRedirect(rawRedirectURI, code, state, issuer string) (string, error) {
 	redirectURL, err := url.Parse(rawRedirectURI)
 	if err != nil {
 		return "", err
 	}
 	q := redirectURL.Query()
 	q.Set("code", code)
+	if issuer != "" {
+		q.Set("iss", issuer)
+	}
 	if state != "" {
 		q.Set("state", state)
 	}
@@ -637,19 +656,44 @@ func oauthCodeRedirect(rawRedirectURI, code, state string) (string, error) {
 	return redirectURL.String(), nil
 }
 
-func passkeySetupURL(r *http.Request) string {
-	returnTo := authorizeReturnURL(r)
+func oauthApplicationType(applicationType string) (string, bool) {
+	switch applicationType {
+	case "", "web":
+		return "web", true
+	case "native":
+		return "native", true
+	default:
+		return "", false
+	}
+}
+
+func hasLoopbackHTTPRedirect(redirectURIs []string) bool {
+	for _, raw := range redirectURIs {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "http" {
+			continue
+		}
+		host := strings.ToLower(u.Hostname())
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *OAuthHandler) passkeySetupURL(r *http.Request) string {
+	returnTo := h.authorizeReturnURL(r)
 	values := url.Values{}
 	if returnTo != "" {
 		values.Set("return", returnTo)
 	}
 	if encoded := values.Encode(); encoded != "" {
-		return publicBaseURL(r) + "/passkeys/setup?" + encoded
+		return h.baseURL(r) + "/passkeys/setup?" + encoded
 	}
-	return publicBaseURL(r) + "/passkeys/setup"
+	return h.baseURL(r) + "/passkeys/setup"
 }
 
-func authorizeReturnURL(r *http.Request) string {
+func (h *OAuthHandler) authorizeReturnURL(r *http.Request) string {
 	values := url.Values{}
 	for _, key := range []string{
 		"response_type",
@@ -668,15 +712,22 @@ func authorizeReturnURL(r *http.Request) string {
 	if len(values) == 0 {
 		return ""
 	}
-	return publicBaseURL(r) + "/oauth/authorize?" + values.Encode()
+	return h.baseURL(r) + "/oauth/authorize?" + values.Encode()
 }
 
-func validRequestedMCPResource(r *http.Request) bool {
-	return requestedMCPResource(r) == mcpResourceURL(r)
+func (h *OAuthHandler) validRequestedMCPResource(r *http.Request) bool {
+	return h.requestedMCPResource(r) == h.mcpResourceURL(r)
 }
 
-func mcpResourceURL(r *http.Request) string {
-	return publicBaseURL(r) + "/mcp"
+func (h *OAuthHandler) mcpResourceURL(r *http.Request) string {
+	return h.baseURL(r) + "/mcp"
+}
+
+func (h *OAuthHandler) baseURL(r *http.Request) string {
+	if h.issuer != "" {
+		return h.issuer
+	}
+	return publicBaseURL(r)
 }
 
 func publicBaseURL(r *http.Request) string {
@@ -694,8 +745,8 @@ func publicBaseURL(r *http.Request) string {
 	return strings.TrimRight(proto+"://"+host, "/")
 }
 
-func writeMCPUnauthorized(w http.ResponseWriter, r *http.Request) {
-	metadataURL := publicBaseURL(r) + "/.well-known/oauth-protected-resource/mcp"
+func (h *OAuthHandler) writeMCPUnauthorized(w http.ResponseWriter, r *http.Request) {
+	metadataURL := h.baseURL(r) + "/.well-known/oauth-protected-resource/mcp"
 	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s"`, metadataURL))
 	writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "authorization required")
 }

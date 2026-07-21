@@ -420,6 +420,8 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 
 	cfg := &config.Config{
 		PublicURL:          "http://cantinarr.test",
+		OAuthIssuer:        "https://cantinarr.test",
+		MCPAllowedOrigins:  []string{"https://mcp-client.example"},
 		ServerName:         "RBAC Test",
 		DisableUpdateCheck: true,
 	}

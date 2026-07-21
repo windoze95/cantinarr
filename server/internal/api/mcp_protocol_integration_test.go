@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/windoze95/cantinarr-server/internal/version"
 )
 
 // These tests drive the MCP protocol layer (internal/mcpserver) over the wire
@@ -19,7 +22,18 @@ import (
 // must not leak identity into each other, and unauthenticated or wrong-audience
 // tokens must never reach the tool layer.
 
-const mcpTestResource = "http://cantinarr.test/mcp"
+const mcpTestResource = "https://cantinarr.test/mcp"
+
+type trackingMCPRequestBody struct {
+	read bool
+}
+
+func (body *trackingMCPRequestBody) Read(_ []byte) (int, error) {
+	body.read = true
+	return 0, io.EOF
+}
+
+func (*trackingMCPRequestBody) Close() error { return nil }
 
 // mintMCPAccessToken walks the real OAuth machinery (client registration,
 // PKCE-bound authorization code, code exchange) to obtain an access token whose
@@ -98,14 +112,33 @@ func jsonRPCResult(t *testing.T, recorder *httptest.ResponseRecorder) map[string
 
 func initializeMCPSession(t *testing.T, router http.Handler, token string) string {
 	t.Helper()
-	recorder := postMCP(router, token, "", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"protocol-test","version":"0.0.0"}}}`)
+	recorder := postMCP(router, token, "", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"protocol-test","version":"0.0.0"}}}`)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("initialize status = %d, body=%s", recorder.Code, recorder.Body.String())
 	}
 	result := jsonRPCResult(t, recorder)
+	if result["protocolVersion"] != "2025-11-25" {
+		t.Fatalf("negotiated protocol version = %v, want 2025-11-25", result["protocolVersion"])
+	}
 	serverInfo, _ := result["serverInfo"].(map[string]any)
 	if serverInfo["name"] != "cantinarr" {
 		t.Fatalf("serverInfo = %v", result["serverInfo"])
+	}
+	if serverInfo["version"] != version.Version {
+		t.Fatalf("serverInfo version = %v, want %q", serverInfo["version"], version.Version)
+	}
+	if instructions, _ := result["instructions"].(string); !strings.Contains(instructions, "guide://cantinarr/agent-guide.md") {
+		t.Fatalf("initialize instructions = %q", instructions)
+	}
+	capabilities, _ := result["capabilities"].(map[string]any)
+	for _, capability := range []string{"tools", "resources", "prompts"} {
+		declared, ok := capabilities[capability].(map[string]any)
+		if !ok {
+			t.Fatalf("initialize capability %q = %#v", capability, capabilities[capability])
+		}
+		if len(declared) != 0 {
+			t.Fatalf("initialize capability %q overstates change/subscription support: %#v", capability, declared)
+		}
 	}
 	sessionID := recorder.Header().Get("Mcp-Session-Id")
 	if sessionID == "" {
@@ -161,7 +194,7 @@ func seedRequestLogRow(t *testing.T, harness *rbacRouterHarness, userID int64, t
 
 func TestMCPEndpointRejectsMissingAndWrongAudienceTokens(t *testing.T) {
 	harness := newRBACRouterHarness(t, false)
-	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
 
 	if recorder := postMCP(harness.router, "", "", initialize); recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous /mcp status = %d, want 401; body=%s", recorder.Code, recorder.Body.String())
@@ -189,6 +222,68 @@ func TestMCPEndpointRejectsMissingAndWrongAudienceTokens(t *testing.T) {
 	sessionID := initializeMCPSession(t, harness.router, adminMCP)
 	if recorder := postMCP(harness.router, "", sessionID, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`); recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("tokenless call on live session status = %d, want 401; body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestMCPEndpointRejectsUnauthenticatedBeforeReadingBody(t *testing.T) {
+	harness := newRBACRouterHarness(t, false)
+	body := &trackingMCPRequestBody{}
+	request := httptest.NewRequest(http.MethodPost, mcpTestResource, nil)
+	request.Body = body
+	request.ContentLength = 32
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	harness.router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /mcp status = %d, want 401", recorder.Code)
+	}
+	if body.read {
+		t.Fatal("unauthenticated MCP request body was read before the OAuth rejection")
+	}
+}
+
+func TestMCPLegacyLifecycleSupportsObservableModernFallback(t *testing.T) {
+	harness := newRBACRouterHarness(t, false)
+	token := mintMCPAccessToken(t, harness, harness.adminID)
+	logs := captureMCPObservationLogs(t)
+
+	modernBody := `{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"fallback-test","version":"1.0.0"},"io.modelcontextprotocol/clientCapabilities":{}}}}`
+	request := httptest.NewRequest(http.MethodPost, mcpTestResource, strings.NewReader(modernBody))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("MCP-Protocol-Version", "2026-07-28")
+	request.Header.Set("Mcp-Method", "server/discover")
+	recorder := httptest.NewRecorder()
+	harness.router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("modern discovery probe status = %d, want 404 legacy indicator; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Mcp-Session-Id"); got != "" {
+		t.Fatalf("modern discovery probe unexpectedly created session %q", got)
+	}
+
+	sessionID := initializeMCPSession(t, harness.router, token)
+	if sessionID == "" {
+		t.Fatal("legacy fallback did not initialize a session")
+	}
+	observed := logs.String()
+	for _, want := range []string{
+		`method="server/discover"`,
+		`protocol="2026-07-28"`,
+		`lifecycle="discovery"`,
+		`status=404`,
+		`method="initialize"`,
+		`protocol="2025-11-25"`,
+		`lifecycle="initialization"`,
+		`status=200`,
+	} {
+		if !strings.Contains(observed, want) {
+			t.Errorf("fallback observation missing %q: %s", want, observed)
+		}
 	}
 }
 
