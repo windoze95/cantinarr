@@ -73,7 +73,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Import Doctor** -- any stuck queue item explains itself in plain English with the raw arr messages shown for transparency, then offers ordered one-click fixes (manual/force import with candidates preview, remove, blocklist + re-search, category hand-off, rescan). One shared rule engine drives Sonarr, Radarr, and Chaptarr, mirrored from the server's classifier.
 
 ### Books (Chaptarr)
-- **Per-format everything** -- a title's ebook and audiobook are separate records; the author page shows two bookmark toggles per book (tap an empty one to add + search the missing format).
+- **Per-format everything** -- a title's ebook and audiobook are separate records; the author page groups monitored titles first and shows two bookmark toggles per book (tap an empty one to add + search the missing format).
 - **Owned-aware search** -- library titles are injected into lookup results and floated to the top with Downloaded / In Library chips; distinct records are never merged.
 - **Full module** -- library with author drill-down, queue with Import Doctor, history, and wanted (missing / cutoff unmet).
 
