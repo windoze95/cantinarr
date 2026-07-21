@@ -49,6 +49,23 @@ class _ConfigChangeDetailScreenState
   }
 
   @override
+  void didUpdateWidget(ConfigChangeDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.changeId == widget.changeId) return;
+    _loadEpoch++;
+
+    // GoRouter can retain this State when replacing one detail ID with
+    // another. Preserve a restore response that already matches the new ID;
+    // otherwise avoid showing the previous record while the new one loads.
+    if (_change?.id != widget.changeId) {
+      _change = null;
+      _loading = true;
+      _error = null;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -98,6 +115,11 @@ class _ConfigChangeDetailScreenState
       if (!confirmed || !mounted) return;
       final restored = await service.revertChange(fresh.id);
       if (!mounted) return;
+      setState(() {
+        _change = restored;
+        _loading = false;
+        _error = null;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Previous settings restored.')),
       );
@@ -175,12 +197,12 @@ class _ConfigChangeDetailScreenState
                             ),
                         const SizedBox(height: 20),
                         _ChangeMetadata(change: change),
-                        if (change.status == ConfigChangeStatus.applied &&
-                            change.resourceType == 'quality_profile') ...[
+                        if (change.supportsRestore ||
+                            change.isAppliedRestore) ...[
                           const SizedBox(height: 20),
                           SizedBox(
                             width: double.infinity,
-                            child: change.canRevert == true
+                            child: change.canRestore
                                 ? ElevatedButton.icon(
                                     onPressed: _restoring ? null : _restore,
                                     icon: _restoring
@@ -197,13 +219,24 @@ class _ConfigChangeDetailScreenState
                                       'Restore previous settings',
                                     ),
                                   )
-                                : OutlinedButton.icon(
-                                    onPressed: _restoring ? null : _restore,
-                                    icon: const Icon(Icons.lock_outline),
-                                    label: const Text(
-                                      'Why restore is unavailable',
-                                    ),
-                                  ),
+                                : change.isAppliedRestore
+                                    ? ElevatedButton.icon(
+                                        onPressed: null,
+                                        icon: const Icon(
+                                          Icons.history_rounded,
+                                        ),
+                                        label: const Text(
+                                          'Previous settings restored',
+                                        ),
+                                      )
+                                    : OutlinedButton.icon(
+                                        onPressed:
+                                            _restoring ? null : _restore,
+                                        icon: const Icon(Icons.lock_outline),
+                                        label: const Text(
+                                          'Why restore is unavailable',
+                                        ),
+                                      ),
                           ),
                         ],
                       ],

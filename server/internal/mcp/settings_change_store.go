@@ -124,28 +124,63 @@ func (s *settingChangeStore) create(change newSettingChange) (storedSettingChang
 			resource_name, operation, status, summary, changes_json,
 			before_json, after_json, before_hash, after_hash, dependency_hash,
 			instance_binding
-		) VALUES (
+		) SELECT
 			?, ?, ?, COALESCE((SELECT username FROM users WHERE id = ?), CASE WHEN ? = 0 THEN 'Cantinarr' ELSE 'Administrator' END), ?,
 			?, ?, ?, ?, ?,
 			?, ?, 'executing', ?, ?,
 			?, ?, ?, ?, ?,
 			?
+		WHERE ? != 'revert' OR ? IS NULL OR NOT EXISTS (
+			SELECT 1 FROM external_setting_changes
+			WHERE parent_id = ? AND operation = 'revert'
+			  AND status IN ('executing', 'applied', 'outcome_unknown')
 		)`,
 		parent, change.ActorUserID, change.ActorDeviceID, change.ActorUserID, change.ActorUserID, change.Source,
 		change.ServiceType, change.InstanceID, change.InstanceName, change.ResourceType, change.ResourceID,
 		change.ResourceName, change.Operation, change.Summary, string(changesJSON),
 		string(change.BeforeRaw), string(change.AfterRaw), hex.EncodeToString(change.BeforeHash[:]),
 		hex.EncodeToString(change.AfterHash[:]), hex.EncodeToString(change.DependencyHash[:]),
-		change.InstanceBinding[:],
+		change.InstanceBinding[:], change.Operation, parent, parent,
 	)
 	if err != nil {
 		return storedSettingChange{}, fmt.Errorf("record external settings change before write: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return storedSettingChange{}, fmt.Errorf("confirm external settings change record: %w", err)
+	}
+	if rows != 1 {
+		if change.Operation == "revert" && change.ParentID != nil {
+			return storedSettingChange{}, errSettingChangeAlreadyRestored
+		}
+		return storedSettingChange{}, fmt.Errorf("external settings change was not recorded")
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
 		return storedSettingChange{}, fmt.Errorf("read external settings change id: %w", err)
 	}
 	return s.get(id)
+}
+
+// hasBlockingRevert keeps restore eligibility append-only: a successful or
+// uncertain restore remains attached to its source entry instead of making the
+// generated reverse entry eligible for another write. Failed attempts may be
+// retried because they have a definite no-change outcome.
+func (s *settingChangeStore) hasBlockingRevert(parentID int64) (bool, error) {
+	if s == nil || s.db == nil || parentID <= 0 {
+		return false, fmt.Errorf("external settings change history is unavailable")
+	}
+	var exists bool
+	err := s.db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM external_setting_changes
+			WHERE parent_id = ? AND operation = 'revert'
+			  AND status IN ('executing', 'applied', 'outcome_unknown')
+		)`, parentID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check prior settings restore: %w", err)
+	}
+	return exists, nil
 }
 
 func validateNewSettingChange(change newSettingChange) error {
@@ -166,6 +201,13 @@ func validateNewSettingChange(change newSettingChange) error {
 	if change.ActorUserID < 0 || (change.ActorUserID == 0 && change.Source != "system") ||
 		(change.ActorUserID > 0 && strings.TrimSpace(change.ActorDeviceID) == "") {
 		return fmt.Errorf("settings change actor is required")
+	}
+	if change.Operation == "revert" {
+		if change.ParentID == nil || *change.ParentID <= 0 {
+			return fmt.Errorf("settings change restore parent is required")
+		}
+	} else if change.ParentID != nil {
+		return fmt.Errorf("settings change parent is only valid for a restore")
 	}
 	if err := validateSettingFieldChanges(change.Changes); err != nil {
 		return err

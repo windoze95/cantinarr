@@ -227,6 +227,23 @@ class ConfigChange {
 
   bool get isApplied => status == ConfigChangeStatus.applied;
   bool get isLive => status == ConfigChangeStatus.executing;
+
+  /// Whether this record is the kind of durable change the server can inspect
+  /// for a safe restore.
+  ///
+  /// Summary receipts do not carry a live [canRevert] decision, so they may
+  /// still offer to fetch the detail for this supported source operation.
+  bool get supportsRestore =>
+      status == ConfigChangeStatus.applied &&
+      resourceType == 'quality_profile' &&
+      operation == ConfigChangeOperation.update;
+
+  /// Whether the latest server-authored detail allows a restore right now.
+  bool get canRestore => supportsRestore && canRevert == true;
+
+  bool get isAppliedRestore =>
+      status == ConfigChangeStatus.applied &&
+      operation == ConfigChangeOperation.revert;
 }
 
 ConfigChangeSource _sourceFromRaw(String value) => switch (value) {

@@ -134,7 +134,7 @@ void main() {
     );
   });
 
-  testWidgets('an applied restore record can restore its previous state again',
+  testWidgets('an applied restore record never offers another restore action',
       (tester) async {
     await tester.pumpWidget(
       ProviderScope(
@@ -158,7 +158,7 @@ void main() {
 
     expect(
       find.widgetWithText(TextButton, 'Restore previous settings'),
-      findsOneWidget,
+      findsNothing,
     );
   });
 }

@@ -16,6 +16,9 @@ void main() {
     expect(change.status, ConfigChangeStatus.applied);
     expect(change.currentStatus, ConfigCurrentStatus.matchesApplied);
     expect(change.canRevert, isTrue);
+    expect(change.supportsRestore, isTrue);
+    expect(change.canRestore, isTrue);
+    expect(change.isAppliedRestore, isFalse);
     expect(change.changes, hasLength(3));
     expect(change.changes[0].before, '0');
     expect(change.changes[0].after, '+100');
@@ -51,6 +54,22 @@ void main() {
     expect(change.sourceLabel, 'System');
     expect(change.operation, ConfigChangeOperation.create);
     expect(change.canRevert, isFalse);
+    expect(change.supportsRestore, isFalse);
+    expect(change.canRestore, isFalse);
+  });
+
+  test('an applied restore record can never be restored again', () {
+    final change = ConfigChange.fromJson({
+      ..._changeJson(),
+      'source': 'admin_revert',
+      'operation': 'revert',
+      // Operation remains a defense even against a stale server projection.
+      'can_revert': true,
+    });
+
+    expect(change.isAppliedRestore, isTrue);
+    expect(change.supportsRestore, isFalse);
+    expect(change.canRestore, isFalse);
   });
 
   test('uses status-aware language for the recorded after projection', () {
@@ -109,6 +128,8 @@ void main() {
     expect(listed.single.changes, isEmpty);
     expect(detail.currentStatus, ConfigCurrentStatus.matchesApplied);
     expect(restored.operation, ConfigChangeOperation.revert);
+    expect(restored.canRevert, isFalse);
+    expect(restored.canRestore, isFalse);
     expect(adapter.requests, [
       ('GET', '/api/admin/external-settings-changes'),
       ('GET', '/api/admin/external-settings-changes/42'),
@@ -195,6 +216,7 @@ class _ConfigChangesAdapter implements HttpClientAdapter {
                 'source': 'admin_revert',
                 'operation': 'revert',
                 'summary': 'Restored previous settings',
+                'can_revert': false,
               }
             : change;
     return ResponseBody.fromString(

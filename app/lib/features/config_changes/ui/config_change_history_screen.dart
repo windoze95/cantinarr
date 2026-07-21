@@ -203,7 +203,7 @@ class _ConfigChangeHistoryScreenState
                                     ),
                                     SizedBox(height: 4),
                                     Text(
-                                      'AI and MCP quality-profile and custom-format writes are recorded here for review, live comparison, and troubleshooting. Profile changes can also be safely restored while nothing has drifted.',
+                                      'AI and MCP quality-profile and custom-format writes are recorded here for review, live comparison, and troubleshooting. Applied profile updates can also be safely restored once while nothing has drifted.',
                                       style: TextStyle(
                                         color: AppTheme.textSecondary,
                                         fontSize: 13,
