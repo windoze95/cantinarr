@@ -87,6 +87,58 @@ func TestExternalMCPDirectCallHasNoTrustedInteractiveProvenance(t *testing.T) {
 	}
 }
 
+func TestMCPToolAnnotationsCoverRegistry(t *testing.T) {
+	toolServer := internalmcp.NewToolServer(nil, nil, nil, nil)
+	for _, tool := range toolServer.AllTools() {
+		if _, ok := mcpToolBehaviors[tool.Name]; !ok {
+			t.Errorf("tool %q has no MCP behavior classification", tool.Name)
+		}
+	}
+	for name := range mcpToolBehaviors {
+		found := false
+		for _, tool := range toolServer.AllTools() {
+			if tool.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("MCP behavior classification references unknown tool %q", name)
+		}
+	}
+}
+
+func TestMCPToolAnnotationsDescribeReadAndMutationBehavior(t *testing.T) {
+	readOnly := mcpToolAnnotations("search_movies")
+	if readOnly.Title != "Search Movies" || readOnly.ReadOnlyHint == nil || !*readOnly.ReadOnlyHint ||
+		readOnly.DestructiveHint == nil || *readOnly.DestructiveHint ||
+		readOnly.IdempotentHint == nil || !*readOnly.IdempotentHint ||
+		readOnly.OpenWorldHint == nil || !*readOnly.OpenWorldHint {
+		t.Fatalf("search annotation = %#v", readOnly)
+	}
+
+	destructive := mcpToolAnnotations("remove_queue_item")
+	if destructive.Title != "Remove Queue Item" || destructive.ReadOnlyHint == nil || *destructive.ReadOnlyHint ||
+		destructive.DestructiveHint == nil || !*destructive.DestructiveHint ||
+		destructive.IdempotentHint == nil || *destructive.IdempotentHint {
+		t.Fatalf("remove annotation = %#v", destructive)
+	}
+
+	unknown := mcpToolAnnotations("future_tool")
+	if unknown.DestructiveHint == nil || !*unknown.DestructiveHint || unknown.ReadOnlyHint == nil || *unknown.ReadOnlyHint {
+		t.Fatalf("unknown annotation = %#v", unknown)
+	}
+
+	rescan := mcpToolAnnotations("rescan_media")
+	if rescan.DestructiveHint == nil || !*rescan.DestructiveHint {
+		t.Fatalf("rescan annotation = %#v, want conservative destructive hint", rescan)
+	}
+	localRead := mcpToolAnnotations("list_my_requests")
+	if localRead.OpenWorldHint == nil || *localRead.OpenWorldHint {
+		t.Fatalf("local request-list annotation = %#v, want closed-world hint", localRead)
+	}
+}
+
 func toolNames(tools []mcplib.Tool) []string {
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {

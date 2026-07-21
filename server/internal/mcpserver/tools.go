@@ -35,6 +35,7 @@ func RegisterTools(mcpServer *server.MCPServer, toolServer *internalmcp.ToolServ
 		}
 
 		mcpTool := mcp.NewToolWithRawSchema(tool.Name, tool.Description, schemaJSON)
+		mcpTool.Annotations = mcpToolAnnotations(tool.Name)
 		if internalmcp.ToolsWithUI[tool.Name] {
 			mcpTool.Meta = mcpAppUIMeta()
 		}

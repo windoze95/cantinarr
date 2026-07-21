@@ -63,11 +63,61 @@ func TestLoadValidatesPublicURL(t *testing.T) {
 		"https://user:password@example.com",
 		"https://example.com/subpath",
 		"https://example.com?token=secret",
+		"https://:443",
 	} {
 		t.Run(invalid, func(t *testing.T) {
 			t.Setenv("CANTINARR_PUBLIC_URL", invalid)
 			if _, err := Load(); err == nil {
 				t.Fatal("Load() error = nil, want invalid public URL error")
+			}
+		})
+	}
+}
+
+func TestLoadValidatesMCPOriginConfig(t *testing.T) {
+	t.Setenv("CANTINARR_OAUTH_ISSUER", "https://Media.Example.com:8443/")
+	t.Setenv("CANTINARR_MCP_ALLOWED_ORIGINS", " https://Chat.Example.com, http://localhost:3000/ ")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.OAuthIssuer != "https://media.example.com:8443" {
+		t.Fatalf("OAuthIssuer = %q", cfg.OAuthIssuer)
+	}
+	wantOrigins := []string{"https://chat.example.com", "http://localhost:3000"}
+	if len(cfg.MCPAllowedOrigins) != len(wantOrigins) {
+		t.Fatalf("MCPAllowedOrigins = %#v", cfg.MCPAllowedOrigins)
+	}
+	for i, want := range wantOrigins {
+		if cfg.MCPAllowedOrigins[i] != want {
+			t.Fatalf("MCPAllowedOrigins[%d] = %q, want %q", i, cfg.MCPAllowedOrigins[i], want)
+		}
+	}
+
+	for name, value := range map[string]string{
+		"origin query":      "https://chat.example.com?token=secret",
+		"origin scheme":     "javascript://chat.example.com",
+		"origin empty host": "https://:443",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CANTINARR_OAUTH_ISSUER", "")
+			t.Setenv("CANTINARR_MCP_ALLOWED_ORIGINS", value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want invalid MCP origin error")
+			}
+		})
+	}
+
+	for name, issuer := range map[string]string{
+		"path":       "https://media.example.com/oauth",
+		"insecure":   "http://media.example.com",
+		"empty host": "https://:443",
+	} {
+		t.Run("issuer "+name, func(t *testing.T) {
+			t.Setenv("CANTINARR_OAUTH_ISSUER", issuer)
+			t.Setenv("CANTINARR_MCP_ALLOWED_ORIGINS", "")
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want invalid OAuth issuer error")
 			}
 		})
 	}

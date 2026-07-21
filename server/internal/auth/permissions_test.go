@@ -303,7 +303,7 @@ func TestPasskeySetupTokenRespectsDeviceRevocation(t *testing.T) {
 
 func TestMCPAuthMiddlewareAdvertisesOAuthMetadata(t *testing.T) {
 	svc := setupTestService(t)
-	handler := NewOAuthHandler(svc).MCPAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := NewOAuthHandler(svc, "").MCPAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
 

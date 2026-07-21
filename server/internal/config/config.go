@@ -26,6 +26,13 @@ type Config struct {
 	// and often correct). Empty falls back to the direct request origin;
 	// forwarded headers are never trusted for callback credentials.
 	PublicURL string
+	// OAuthIssuer is the canonical external origin for inbound MCP OAuth.
+	// When set, OAuth metadata, authorization responses, resource audiences,
+	// and MCP browser origin checks use it instead of request headers.
+	OAuthIssuer string
+	// MCPAllowedOrigins are additional browser origins allowed to call /mcp.
+	// Requests without Origin (native/server MCP clients) are unaffected.
+	MCPAllowedOrigins []string
 	// EncryptionKeyFile backs secrets-at-rest when CANTINARR_ENCRYPTION_KEY
 	// is not set; it lives next to the database.
 	EncryptionKeyFile string
@@ -69,6 +76,8 @@ func Load() (*Config, error) {
 		DBPath:            "/config/cantinarr.db",
 		ServerName:        os.Getenv("CANTINARR_SERVER_NAME"),
 		PublicURL:         strings.TrimRight(os.Getenv("CANTINARR_PUBLIC_URL"), "/"),
+		OAuthIssuer:       strings.TrimRight(strings.TrimSpace(os.Getenv("CANTINARR_OAUTH_ISSUER")), "/"),
+		MCPAllowedOrigins: splitEnvList(os.Getenv("CANTINARR_MCP_ALLOWED_ORIGINS")),
 		EncryptionKeyFile: "/config/encryption.key",
 		WebAuthnExtraOrigins: splitEnvList(
 			os.Getenv("CANTINARR_WEBAUTHN_EXTRA_ORIGINS"),
@@ -92,6 +101,24 @@ func Load() (*Config, error) {
 	}
 	if err := validatePublicURL(cfg.PublicURL); err != nil {
 		return nil, fmt.Errorf("invalid CANTINARR_PUBLIC_URL: %w", err)
+	}
+	if cfg.OAuthIssuer != "" {
+		normalized, err := normalizeHTTPOrigin(cfg.OAuthIssuer)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CANTINARR_OAUTH_ISSUER: %w", err)
+		}
+		issuerURL, err := url.Parse(normalized)
+		if err != nil || issuerURL.Scheme != "https" {
+			return nil, fmt.Errorf("invalid CANTINARR_OAUTH_ISSUER: must use https")
+		}
+		cfg.OAuthIssuer = normalized
+	}
+	for i, origin := range cfg.MCPAllowedOrigins {
+		normalized, err := normalizeHTTPOrigin(origin)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CANTINARR_MCP_ALLOWED_ORIGINS entry %q: %w", origin, err)
+		}
+		cfg.MCPAllowedOrigins[i] = normalized
 	}
 	if cfg.CodexRuntimeDir != "" && !filepath.IsAbs(cfg.CodexRuntimeDir) {
 		return nil, fmt.Errorf("invalid CANTINARR_CODEX_RUNTIME_DIR: must be an absolute path")
@@ -159,13 +186,28 @@ func validatePublicURL(value string) error {
 	if err != nil {
 		return err
 	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" {
 		return fmt.Errorf("must be an absolute http or https origin")
 	}
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return fmt.Errorf("must contain only a scheme and host")
 	}
 	return nil
+}
+
+func normalizeHTTPOrigin(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if err := validatePublicURL(value); err != nil {
+		return "", err
+	}
+	u, err := url.Parse(value)
+	if err != nil {
+		return "", err
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Path = ""
+	return strings.TrimRight(u.String(), "/"), nil
 }
 
 func splitEnvList(value string) []string {
