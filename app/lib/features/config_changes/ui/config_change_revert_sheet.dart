@@ -51,14 +51,14 @@ Future<bool> showConfigChangeRevertConfirmation(
                   ),
                   const SizedBox(height: 18),
                   Text(
-                    change.canRevert == true
+                    change.canRestore
                         ? 'Restore previous settings?'
                         : 'Restore unavailable',
                     style: Theme.of(sheetContext).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    change.canRevert == true
+                    change.canRestore
                         ? 'Cantinarr will restore only the settings recorded below. '
                             'The restore will be added to change history.'
                         : _unavailableReason(change),
@@ -98,7 +98,7 @@ Future<bool> showConfigChangeRevertConfirmation(
                       _ReverseDiffRow(field: field),
                   ],
                   const SizedBox(height: 20),
-                  if (change.canRevert == true)
+                  if (change.canRestore)
                     LayoutBuilder(builder: (context, constraints) {
                       final narrow = constraints.maxWidth < 390;
                       final cancel = OutlinedButton(
@@ -142,6 +142,10 @@ Future<bool> showConfigChangeRevertConfirmation(
 
 String _unavailableReason(ConfigChange change) {
   if (change.currentError != null) return change.currentError!;
+  if (change.isAppliedRestore) {
+    return 'This record is the completed restore. It stays in change history '
+        'and cannot be restored again.';
+  }
   return switch (change.currentStatus) {
     ConfigCurrentStatus.different =>
       'These settings changed after Cantinarr applied them. Review the live '

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 )
@@ -74,6 +75,20 @@ func applyProfileChangeForHistoryTest(t *testing.T, server *ToolServer, referenc
 	return changes[0]
 }
 
+func restoreSettingChangeThroughAPI(t *testing.T, server *ToolServer, id int64) *httptest.ResponseRecorder {
+	t.Helper()
+	handler := NewSettingsChangeHandler(server)
+	router := chi.NewRouter()
+	router.Post("/external-settings-changes/{id}/revert", handler.Revert)
+	request := httptest.NewRequest(http.MethodPost, "/external-settings-changes/"+strconv.FormatInt(id, 10)+"/revert", nil)
+	request = request.WithContext(context.WithValue(request.Context(), auth.ClaimsKey, &auth.Claims{
+		UserID: 77, Role: auth.RoleAdmin, DeviceID: "device-77",
+	}))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
 func TestSettingChangeSummaryNeverClaimsAnUnknownRemoteOutcome(t *testing.T) {
 	tests := []struct {
 		resourceType string
@@ -91,6 +106,34 @@ func TestSettingChangeSummaryNeverClaimsAnUnknownRemoteOutcome(t *testing.T) {
 				t.Errorf("%s %s %s summary = %q, want %q", status, test.resourceType, test.operation, got, test.want)
 			}
 		}
+	}
+}
+
+func TestSettingChangeValidationRequiresRestoreParentLink(t *testing.T) {
+	positiveParent := int64(1)
+	zeroParent := int64(0)
+	tests := []struct {
+		name      string
+		operation string
+		parentID  *int64
+		wantError bool
+	}{
+		{name: "root update", operation: "update"},
+		{name: "linked restore", operation: "revert", parentID: &positiveParent},
+		{name: "unlinked restore", operation: "revert", wantError: true},
+		{name: "invalid restore parent", operation: "revert", parentID: &zeroParent, wantError: true},
+		{name: "linked non-restore", operation: "update", parentID: &positiveParent, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			change := testExternalSettingChange(t, "1")
+			change.Operation = test.operation
+			change.ParentID = test.parentID
+			err := validateNewSettingChange(change)
+			if (err != nil) != test.wantError {
+				t.Fatalf("validateNewSettingChange() error = %v, wantError=%t", err, test.wantError)
+			}
+		})
 	}
 }
 
@@ -194,6 +237,133 @@ func TestSettingChangeStorePersistsFinalizedHistoryAndServesBoundedList(t *testi
 	}
 	if strings.Contains(recorder.Body.String(), "history-secret") || strings.Contains(recorder.Body.String(), "before_json") || strings.Contains(recorder.Body.String(), "after_json") {
 		t.Fatalf("list leaked server-only snapshots: %s", recorder.Body.String())
+	}
+}
+
+func TestSettingChangeStoreRecordsOnlyOneSuccessfulRestorePerSource(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "cantinarr.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	store := newSettingChangeStore(database)
+
+	source, err := store.create(testExternalSettingChange(t, "1"))
+	if err != nil {
+		t.Fatalf("create source change: %v", err)
+	}
+	source, err = store.finish(source.ID, settingChangeStatusApplied, "")
+	if err != nil {
+		t.Fatalf("finish source change: %v", err)
+	}
+	restore := testExternalSettingChange(t, "1")
+	restore.ParentID = &source.ID
+	restore.Source = "admin_revert"
+	restore.Operation = "revert"
+	restore.Summary = settingChangeSummary("quality_profile", "revert", restore.ResourceName)
+
+	type createResult struct {
+		change storedSettingChange
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan createResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			change, err := store.create(restore)
+			results <- createResult{change: change, err: err}
+		}()
+	}
+	close(start)
+	var first storedSettingChange
+	succeeded := 0
+	blocked := 0
+	for range 2 {
+		result := <-results
+		switch {
+		case result.err == nil:
+			succeeded++
+			first = result.change
+		case errors.Is(result.err, errSettingChangeAlreadyRestored):
+			blocked++
+		default:
+			t.Fatalf("concurrent restore reservation error = %v", result.err)
+		}
+	}
+	if succeeded != 1 || blocked != 1 {
+		t.Fatalf("concurrent restore reservations succeeded=%d blocked=%d", succeeded, blocked)
+	}
+	if _, err := store.finish(first.ID, settingChangeStatusApplied, ""); err != nil {
+		t.Fatalf("finish first restore: %v", err)
+	}
+	if blocked, err := store.hasBlockingRevert(source.ID); err != nil || !blocked {
+		t.Fatalf("blocking restore = %t, %v", blocked, err)
+	}
+	changes, err := store.list(10, 0)
+	if err != nil {
+		t.Fatalf("list history: %v", err)
+	}
+	if len(changes) != 2 || changes[0].ID != first.ID || changes[1].ID != source.ID {
+		t.Fatalf("append-only history = %#v", changes)
+	}
+}
+
+func TestSettingChangeStoreBlocksUncertainRestoreButPermitsFailedRetry(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "cantinarr.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	store := newSettingChangeStore(database)
+
+	source, err := store.create(testExternalSettingChange(t, "1"))
+	if err != nil {
+		t.Fatalf("create source change: %v", err)
+	}
+	source, err = store.finish(source.ID, settingChangeStatusApplied, "")
+	if err != nil {
+		t.Fatalf("finish source change: %v", err)
+	}
+	restore := testExternalSettingChange(t, "1")
+	restore.ParentID = &source.ID
+	restore.Source = "admin_revert"
+	restore.Operation = "revert"
+	restore.Summary = settingChangeSummary("quality_profile", "revert", restore.ResourceName)
+
+	failed, err := store.create(restore)
+	if err != nil {
+		t.Fatalf("create failed restore attempt: %v", err)
+	}
+	if _, err := store.create(restore); !errors.Is(err, errSettingChangeAlreadyRestored) {
+		t.Fatalf("restore while first attempt executes error = %v", err)
+	}
+	if _, err := store.finish(failed.ID, settingChangeStatusFailed, "write was rejected"); err != nil {
+		t.Fatalf("finish failed restore attempt: %v", err)
+	}
+	if blocked, err := store.hasBlockingRevert(source.ID); err != nil || blocked {
+		t.Fatalf("failed restore blocked=%t, err=%v", blocked, err)
+	}
+
+	unknown, err := store.create(restore)
+	if err != nil {
+		t.Fatalf("retry after definite failure: %v", err)
+	}
+	if _, err := store.finish(unknown.ID, settingChangeStatusOutcomeUnknown, "connection ended during confirmation"); err != nil {
+		t.Fatalf("finish uncertain restore attempt: %v", err)
+	}
+	if blocked, err := store.hasBlockingRevert(source.ID); err != nil || !blocked {
+		t.Fatalf("uncertain restore blocked=%t, err=%v", blocked, err)
+	}
+	if _, err := store.create(restore); !errors.Is(err, errSettingChangeAlreadyRestored) {
+		t.Fatalf("restore after uncertain outcome error = %v", err)
+	}
+	changes, err := store.list(10, 0)
+	if err != nil {
+		t.Fatalf("list append-only attempts: %v", err)
+	}
+	if len(changes) != 3 || changes[0].ID != unknown.ID || changes[1].ID != failed.ID || changes[2].ID != source.ID {
+		t.Fatalf("append-only restore attempts = %#v", changes)
 	}
 }
 
@@ -317,7 +487,7 @@ func TestSettingChangeProfileRestoreRefusesDriftThenRestoresExactAppliedImage(t 
 	if err != nil {
 		t.Fatalf("restore exact applied image: %v", err)
 	}
-	if fake.putCount() != 1 || reverted.ParentID == nil || *reverted.ParentID != created.ID || reverted.Operation != "revert" || reverted.Status != settingChangeStatusApplied || reverted.CurrentStatus != "matches_applied" || !reverted.CanRevert {
+	if fake.putCount() != 1 || reverted.ParentID == nil || *reverted.ParentID != created.ID || reverted.Operation != "revert" || reverted.Status != settingChangeStatusApplied || reverted.CurrentStatus != "matches_applied" || reverted.CanRevert {
 		t.Fatalf("reverted change = %#v puts=%d", reverted, fake.putCount())
 	}
 	fake.mu.Lock()
@@ -329,6 +499,113 @@ func TestSettingChangeProfileRestoreRefusesDriftThenRestoresExactAppliedImage(t 
 	}
 	if restoredHash != before.ProfileHash {
 		t.Fatalf("restored profile differs from before snapshot:\nwant %s\n got %s", before.ProfileRaw, restoredRaw)
+	}
+	revertedDetail, err := server.settingChangeDetail(context.Background(), reverted.ID)
+	if err != nil {
+		t.Fatalf("detail for restore record: %v", err)
+	}
+	if revertedDetail.CurrentStatus != "matches_applied" || revertedDetail.CanRevert || revertedDetail.CurrentError != "" {
+		t.Fatalf("restore detail = %#v", revertedDetail)
+	}
+	if _, err := server.revertSettingChange(context.Background(), reverted.ID, profileToolCallContext("revert-restore", "Restore the restore record")); !errors.Is(err, errSettingChangeNotRestorable) {
+		t.Fatalf("restore-record restore error = %v", err)
+	}
+	response := restoreSettingChangeThroughAPI(t, server, reverted.ID)
+	if response.Code != http.StatusConflict ||
+		response.Body.String() != "{\"error\":\"This history entry cannot be restored.\"}\n" {
+		t.Fatalf("restore-record API status=%d body=%s", response.Code, response.Body.String())
+	}
+	if fake.putCount() != 1 {
+		t.Fatalf("restore-record restore wrote %d extra times", fake.putCount()-1)
+	}
+
+	// Even if an administrator later puts the live profile back at this source
+	// record's applied image, its successful restore remains one-shot history.
+	fake.setProfile(string(afterRaw))
+	detail, err = server.settingChangeDetail(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("detail for already-restored source: %v", err)
+	}
+	if detail.CurrentStatus != "matches_applied" || detail.CanRevert ||
+		detail.CurrentError != "This change already has a restore record, so it cannot be restored again." {
+		t.Fatalf("already-restored source detail = %#v", detail)
+	}
+	if _, err := server.revertSettingChange(context.Background(), created.ID, profileToolCallContext("revert-again", "Restore the previous profile again")); !errors.Is(err, errSettingChangeAlreadyRestored) {
+		t.Fatalf("second source restore error = %v", err)
+	}
+	response = restoreSettingChangeThroughAPI(t, server, created.ID)
+	if response.Code != http.StatusConflict ||
+		response.Body.String() != "{\"error\":\"Previous settings were already restored or a restore requires review.\"}\n" {
+		t.Fatalf("already-restored API status=%d body=%s", response.Code, response.Body.String())
+	}
+	if fake.putCount() != 1 {
+		t.Fatalf("second source restore wrote %d extra times", fake.putCount()-1)
+	}
+}
+
+func TestSettingChangeConcurrentRestoreCreatesOneChildAndOneWrite(t *testing.T) {
+	fake := newProfileToolFakeArr()
+	firstServer, _, _, _ := newProfileToolIntegrationServerWithStoreForService(t, fake, "radarr")
+	reference := previewX265ProfileChange(t, firstServer, "concurrent-restore-apply")
+	applied := applyProfileChangeForHistoryTest(t, firstServer, reference, "concurrent-restore-apply", "Set x265 to 25")
+	if fake.putCount() != 1 {
+		t.Fatalf("apply wrote %d times, want one", fake.putCount())
+	}
+
+	// A second ToolServer intentionally has a distinct in-memory mutation lock.
+	// The conditional history insert must still reserve this parent atomically.
+	secondServer := NewToolServer(nil, nil, firstServer.registry, nil)
+	secondServer.SetSettingsChangeDatabase(firstServer.settingsChanges.db)
+	secondServer.SetCallAuthorizer(func(context.Context, CallContext) (string, error) {
+		return auth.RoleAdmin, nil
+	})
+	type restoreResult struct {
+		change ExternalSettingChange
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan restoreResult, 2)
+	servers := []*ToolServer{firstServer, secondServer}
+	for i, server := range servers {
+		go func(index int, candidate *ToolServer) {
+			<-start
+			change, err := candidate.revertSettingChange(
+				context.Background(), applied.ID,
+				profileToolCallContext(fmt.Sprintf("concurrent-restore-%d", index), "Restore the previous profile"),
+			)
+			results <- restoreResult{change: change, err: err}
+		}(i, server)
+	}
+	close(start)
+
+	succeeded := 0
+	blocked := 0
+	var restored ExternalSettingChange
+	for range servers {
+		result := <-results
+		switch {
+		case result.err == nil:
+			succeeded++
+			restored = result.change
+		case errors.Is(result.err, errSettingChangeAlreadyRestored), errors.Is(result.err, errSettingChangeConflict):
+			blocked++
+		default:
+			t.Fatalf("concurrent restore error = %v", result.err)
+		}
+	}
+	if succeeded != 1 || blocked != 1 || fake.putCount() != 2 {
+		t.Fatalf("concurrent restores succeeded=%d blocked=%d total puts=%d", succeeded, blocked, fake.putCount())
+	}
+	if restored.ParentID == nil || *restored.ParentID != applied.ID || restored.CanRevert {
+		t.Fatalf("successful concurrent restore = %#v", restored)
+	}
+	changes, err := firstServer.settingsChanges.list(10, 0)
+	if err != nil {
+		t.Fatalf("list concurrent restore history: %v", err)
+	}
+	if len(changes) != 2 || changes[0].Operation != "revert" || changes[0].ParentID == nil ||
+		*changes[0].ParentID != applied.ID || changes[1].ID != applied.ID {
+		t.Fatalf("concurrent restore history = %#v", changes)
 	}
 }
 
@@ -359,7 +636,7 @@ func TestSettingChangeSonarrDependencyScopeControlsRestore(t *testing.T) {
 		}
 		if fake.putCount() != 2 || reverted.ParentID == nil || *reverted.ParentID != applied.ID ||
 			reverted.Operation != "revert" || reverted.Status != settingChangeStatusApplied ||
-			reverted.CurrentStatus != "matches_applied" || !reverted.CanRevert {
+			reverted.CurrentStatus != "matches_applied" || reverted.CanRevert {
 			t.Fatalf("Sonarr language restore = %#v puts=%d", reverted, fake.putCount())
 		}
 		fake.mu.Lock()
@@ -380,7 +657,7 @@ func TestSettingChangeSonarrDependencyScopeControlsRestore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("detail for Sonarr restore record: %v", err)
 		}
-		if revertedDetail.CurrentStatus != "matches_applied" || !revertedDetail.CanRevert {
+		if revertedDetail.CurrentStatus != "matches_applied" || revertedDetail.CanRevert {
 			t.Fatalf("Sonarr restore detail = %#v", revertedDetail)
 		}
 	})

@@ -18,8 +18,10 @@ import (
 )
 
 var (
-	errSettingChangeConflict    = errors.New("the live settings no longer match this change")
-	errSettingChangeUnavailable = errors.New("the live settings are unavailable")
+	errSettingChangeConflict        = errors.New("the live settings no longer match this change")
+	errSettingChangeUnavailable     = errors.New("the live settings are unavailable")
+	errSettingChangeNotRestorable   = errors.New("this settings change cannot be restored")
+	errSettingChangeAlreadyRestored = errors.New("this settings change already has a restore")
 )
 
 // SettingsChangeHandler exposes the admin-only external settings ledger.
@@ -81,6 +83,10 @@ func (h *SettingsChangeHandler) Revert(w http.ResponseWriter, r *http.Request) {
 		writeSettingsChangeJSON(w, http.StatusNotFound, map[string]string{"error": "change not found"})
 	case errors.Is(err, errSettingChangeConflict):
 		writeSettingsChangeJSON(w, http.StatusConflict, map[string]string{"error": "Current settings changed after this history entry. Refresh and compare before restoring."})
+	case errors.Is(err, errSettingChangeAlreadyRestored):
+		writeSettingsChangeJSON(w, http.StatusConflict, map[string]string{"error": "Previous settings were already restored or a restore requires review."})
+	case errors.Is(err, errSettingChangeNotRestorable):
+		writeSettingsChangeJSON(w, http.StatusConflict, map[string]string{"error": "This history entry cannot be restored."})
 	case errors.Is(err, errSettingChangeUnavailable):
 		writeSettingsChangeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Current settings could not be verified. Nothing was restored."})
 	case errors.Is(err, ErrToolAuthorization):
@@ -112,6 +118,14 @@ func (s *ToolServer) settingChangeDetail(ctx context.Context, id int64) (Externa
 		detail.CurrentStatus = "unavailable"
 		detail.CurrentError = "Live comparison is not available for this resource type yet."
 		return detail, nil
+	}
+	canRevertRecord := restorableSettingChangeRecord(stored)
+	alreadyRestored := false
+	if canRevertRecord {
+		alreadyRestored, err = s.settingsChanges.hasBlockingRevert(stored.ID)
+		if err != nil {
+			return ExternalSettingChange{}, err
+		}
 	}
 	profileID, err := strconv.Atoi(stored.ResourceID)
 	if err != nil || profileID <= 0 {
@@ -154,14 +168,23 @@ func (s *ToolServer) settingChangeDetail(ctx context.Context, id int64) (Externa
 	}
 	if profileMatches && dependenciesMatch {
 		detail.CurrentStatus = "matches_applied"
-		detail.CanRevert = stored.Status == settingChangeStatusApplied
+		detail.CanRevert = canRevertRecord && !alreadyRestored
 	} else {
 		detail.CurrentStatus = "different"
 		if allCurrentFieldsMatchApplied(detail.Changes) {
 			detail.CurrentError = "Other settings or dependencies on this profile changed after this entry."
 		}
 	}
+	if alreadyRestored {
+		detail.CurrentError = "This change already has a restore record, so it cannot be restored again."
+	}
 	return detail, nil
+}
+
+func restorableSettingChangeRecord(stored storedSettingChange) bool {
+	return stored.Status == settingChangeStatusApplied &&
+		stored.ResourceType == "quality_profile" &&
+		stored.Operation == "update" && stored.ParentID == nil
 }
 
 func (s *ToolServer) customFormatSettingChangeDetail(ctx context.Context, stored storedSettingChange, detail ExternalSettingChange) (ExternalSettingChange, error) {
@@ -273,8 +296,8 @@ func (s *ToolServer) revertSettingChange(ctx context.Context, id int64, callCtx 
 	if err != nil {
 		return ExternalSettingChange{}, err
 	}
-	if stored.Status != settingChangeStatusApplied || stored.ResourceType != "quality_profile" {
-		return ExternalSettingChange{}, errSettingChangeConflict
+	if !restorableSettingChangeRecord(stored) {
+		return ExternalSettingChange{}, errSettingChangeNotRestorable
 	}
 	profileID, err := strconv.Atoi(stored.ResourceID)
 	if err != nil || profileID <= 0 {
@@ -297,6 +320,13 @@ func (s *ToolServer) revertSettingChange(ctx context.Context, id int64, callCtx 
 	callCtx, err = s.authorizeCall(ctx, callCtx)
 	if err != nil || !auth.HasPermission(callCtx.Role, auth.PermissionInstancesManage) {
 		return ExternalSettingChange{}, ErrToolAuthorization
+	}
+	alreadyRestored, err := s.settingsChanges.hasBlockingRevert(stored.ID)
+	if err != nil {
+		return ExternalSettingChange{}, err
+	}
+	if alreadyRestored {
+		return ExternalSettingChange{}, errSettingChangeAlreadyRestored
 	}
 	reader, freshID, _, binding, refusal := s.freshSettingsTargetFor(stored.ServiceType, stored.InstanceID)
 	if refusal != "" || freshID != stored.InstanceID || binding != stored.InstanceBinding {
@@ -341,6 +371,13 @@ func (s *ToolServer) revertSettingChange(ctx context.Context, id int64, callCtx 
 		callCtx, guardErr = s.authorizeCall(ctx, callCtx)
 		if guardErr != nil || !auth.HasPermission(callCtx.Role, auth.PermissionInstancesManage) {
 			return ErrToolAuthorization
+		}
+		alreadyRestored, guardErr := s.settingsChanges.hasBlockingRevert(stored.ID)
+		if guardErr != nil {
+			return guardErr
+		}
+		if alreadyRestored {
+			return errSettingChangeAlreadyRestored
 		}
 		freshReader, currentID, _, currentBinding, currentRefusal := s.freshSettingsTargetFor(stored.ServiceType, stored.InstanceID)
 		if currentRefusal != "" || currentID != stored.InstanceID || currentBinding != stored.InstanceBinding {
@@ -387,7 +424,8 @@ func (s *ToolServer) revertSettingChange(ctx context.Context, id int64, callCtx 
 			}
 			_, _ = s.settingsChanges.finish(historyChange.ID, status, secrets.RedactText(err.Error()))
 		}
-		if errors.Is(err, errSettingChangeConflict) || errors.Is(err, errSettingChangeUnavailable) || errors.Is(err, ErrToolAuthorization) {
+		if errors.Is(err, errSettingChangeConflict) || errors.Is(err, errSettingChangeUnavailable) ||
+			errors.Is(err, errSettingChangeAlreadyRestored) || errors.Is(err, ErrToolAuthorization) {
 			return ExternalSettingChange{}, err
 		}
 		return ExternalSettingChange{}, secrets.RedactError(err)
@@ -398,7 +436,7 @@ func (s *ToolServer) revertSettingChange(ctx context.Context, id int64, callCtx 
 	}
 	result := historyChange.ExternalSettingChange
 	result.CurrentStatus = "matches_applied"
-	result.CanRevert = true
+	result.CanRevert = false
 	values := make(map[string]string, len(result.Changes))
 	for _, field := range result.Changes {
 		values[field.Key] = field.After

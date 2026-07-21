@@ -85,10 +85,10 @@ class _ConfigChangeReceiptCardState
   Widget build(BuildContext context) {
     final change = _change;
     final color = configChangeStatusColor(change);
-    final canOfferRestore = change.status == ConfigChangeStatus.applied &&
-        change.resourceType == 'quality_profile' &&
-        (change.operation == ConfigChangeOperation.update ||
-            change.canRevert == true);
+    // Streamed receipts may not include a live can_revert decision. Supported
+    // update records can fetch detail before confirmation; restore records are
+    // permanent history and must never become a flip-flop control.
+    final canOfferRestore = change.supportsRestore;
     return Semantics(
       container: true,
       label:
