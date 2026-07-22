@@ -22,6 +22,17 @@ List<T> _modelList<T>(
         .map(fromJson)
         .toList();
 
+DateTime? _bookReleaseDate(Map<String, dynamic> json) {
+  final releaseDate =
+      DateTime.tryParse(json['releaseDate'] as String? ?? '');
+  if (releaseDate != null) return releaseDate;
+  final rawYear = json['year'];
+  final year = rawYear is num
+      ? rawYear.toInt()
+      : int.tryParse(rawYear?.toString() ?? '') ?? 0;
+  return year > 0 ? DateTime(year) : null;
+}
+
 List<String> _stringList(dynamic value, {bool splitCommaString = false}) {
   if (value is List) {
     return value
@@ -390,7 +401,10 @@ class ChaptarrBook {
         foreignBookId: json['foreignBookId'] as String?,
         titleSlug: json['titleSlug'] as String?,
         overview: json['overview'] as String?,
-        releaseDate: DateTime.tryParse(json['releaseDate'] as String? ?? ''),
+        // Library records carry releaseDate; metadata lookup rows commonly
+        // carry only year. Normalize both so requester detail can present the
+        // publication year without inventing a second model.
+        releaseDate: _bookReleaseDate(json),
         monitored: json['monitored'] as bool? ?? true,
         mediaType: json['mediaType'] as String?,
         anyEditionOk: json['anyEditionOk'] as bool? ?? true,
@@ -426,6 +440,41 @@ class ChaptarrBook {
       };
 
   String? get coverUrl => _pickCoverUrl(images);
+
+  /// External metadata-provider artwork suitable for a requester client.
+  /// Unlike `url`, `remoteUrl` never points at the private Chaptarr origin.
+  String? get remoteCoverUrl {
+    bool hasRemote(ChaptarrImage image) =>
+        image.remoteUrl != null && image.remoteUrl!.isNotEmpty;
+    for (final type in ['cover', 'poster']) {
+      final matches =
+          images.where((i) => i.coverType == type && hasRemote(i));
+      if (matches.isNotEmpty) return matches.first.remoteUrl;
+    }
+    final matches = images.where(hasRemote);
+    return matches.isNotEmpty ? matches.first.remoteUrl : null;
+  }
+
+  /// Best available synopsis, falling back to edition metadata when the book
+  /// lookup itself leaves `overview` empty.
+  String? get displayOverview {
+    final value = overview?.trim() ?? '';
+    if (value.isNotEmpty) return value;
+    for (final edition in editions) {
+      final editionOverview = edition.overview?.trim() ?? '';
+      if (editionOverview.isNotEmpty) return editionOverview;
+    }
+    return null;
+  }
+
+  /// Best available print length across the book and its editions.
+  int get displayPageCount {
+    if (pageCount > 0) return pageCount;
+    for (final edition in editions) {
+      if (edition.pageCount > 0) return edition.pageCount;
+    }
+    return 0;
+  }
 
   double get percentComplete {
     if (statistics == null || statistics!.bookCount == 0) return 0;

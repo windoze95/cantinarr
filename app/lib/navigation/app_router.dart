@@ -10,6 +10,7 @@ import '../features/auth/ui/auth_screen.dart';
 import '../features/auth/ui/passkey_create_screen.dart';
 import '../features/auth/ui/passkey_management_screen.dart';
 import '../features/auth/ui/set_password_screen.dart';
+import '../features/chaptarr/data/chaptarr_models.dart';
 import '../features/chaptarr/ui/chaptarr_history_screen.dart';
 import '../features/chaptarr/ui/chaptarr_home_screen.dart';
 import '../features/chaptarr/ui/chaptarr_module_shell.dart';
@@ -712,6 +713,9 @@ Widget _mediaDetailChild(GoRouterState state) {
     return RequesterBookDetailScreen(
       foreignId: foreignId,
       titleHint: state.uri.queryParameters['title'],
+      initialBook: state.extra is ChaptarrBook
+          ? state.extra! as ChaptarrBook
+          : null,
     );
   }
   final id = _positiveIntParameter(state, 'id');

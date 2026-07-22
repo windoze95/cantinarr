@@ -13,6 +13,8 @@ class BookRequestButton extends StatefulWidget {
   final String title;
   final RequestService service;
   final BookOwnership? ownership;
+  final ValueChanged<BookRequestStatusDetail>? onDetailChanged;
+  final VoidCallback? onRequestCompleted;
 
   const BookRequestButton({
     super.key,
@@ -20,6 +22,8 @@ class BookRequestButton extends StatefulWidget {
     required this.title,
     required this.service,
     this.ownership,
+    this.onDetailChanged,
+    this.onRequestCompleted,
   });
 
   @override
@@ -36,6 +40,7 @@ class _BookRequestButtonState extends State<BookRequestButton> {
   RequestStatus _status = RequestStatus.unavailable;
   bool _loading = true;
   bool _busy = false;
+  int _checkGeneration = 0;
 
   BookRequestStatusDetail get _detail =>
       _serverDetail.withOwnership(widget.ownership);
@@ -51,18 +56,32 @@ class _BookRequestButtonState extends State<BookRequestButton> {
     super.didUpdateWidget(oldWidget);
     // If this row got reused for a different book, re-fetch its request state.
     if (oldWidget.foreignId != widget.foreignId) {
+      _loading = true;
+      _serverDetail = const BookRequestStatusDetail();
+      _status = RequestStatus.unavailable;
       _check();
+    } else if (oldWidget.ownership != widget.ownership) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onDetailChanged?.call(_detail);
+      });
     }
   }
 
   Future<void> _check() async {
-    final detail = await widget.service.checkBookStatusDetail(widget.foreignId);
-    if (!mounted) return;
+    final foreignId = widget.foreignId;
+    final generation = ++_checkGeneration;
+    final detail = await widget.service.checkBookStatusDetail(foreignId);
+    if (!mounted ||
+        generation != _checkGeneration ||
+        foreignId != widget.foreignId) {
+      return;
+    }
     setState(() {
       _serverDetail = detail;
       _status = detail.status;
       _loading = false;
     });
+    widget.onDetailChanged?.call(_detail);
   }
 
   Future<void> _request() async {
@@ -98,6 +117,7 @@ class _BookRequestButtonState extends State<BookRequestButton> {
     }
     // Re-pull per-format coverage so the button reflects the still-open format.
     await _check();
+    if (mounted) widget.onRequestCompleted?.call();
   }
 
   bool _isCovered(BookRequestFormat f) => _detail.isCovered(f);
