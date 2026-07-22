@@ -54,6 +54,15 @@ type Movie struct {
 	RootFolderPath string `json:"rootFolderPath,omitempty"`
 }
 
+// MovieFile is Radarr's metadata for one completed movie file on disk.
+type MovieFile struct {
+	ID           int    `json:"id"`
+	MovieID      int    `json:"movieId"`
+	RelativePath string `json:"relativePath"`
+	Path         string `json:"path"`
+	Size         int64  `json:"size"`
+}
+
 type QualityProfile struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
@@ -187,6 +196,16 @@ func (c *Client) GetMovie(id int) (*Movie, error) {
 		return nil, fmt.Errorf("decode radarr movie: %w", err)
 	}
 	return &movie, nil
+}
+
+// GetMovieFile returns live metadata for one completed file in Radarr.
+func (c *Client) GetMovieFile(id int) (*MovieFile, error) {
+	var file MovieFile
+	path := fmt.Sprintf("/api/v3/moviefile/%d", id)
+	if err := c.do(http.MethodGet, path, nil, &file); err != nil {
+		return nil, fmt.Errorf("radarr movie file: %w", err)
+	}
+	return &file, nil
 }
 
 func (c *Client) GetMovieByTMDB(tmdbID int) (*Movie, error) {

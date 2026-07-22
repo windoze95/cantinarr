@@ -17,7 +17,10 @@ import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../issues/ui/report_problem_sheet.dart';
+import '../../media_download/data/media_download_models.dart';
+import '../../media_download/ui/media_download_button.dart';
 import '../../radarr/data/radarr_api_service.dart';
+import '../../radarr/data/radarr_models.dart';
 import '../../radarr/ui/radarr_movie_detail_screen.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/request_provider.dart';
@@ -25,6 +28,7 @@ import '../../request/ui/request_button.dart';
 import '../../request/ui/request_options_sheet.dart';
 import '../../request/ui/request_status_sheet.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
+import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/ui/sonarr_series_detail_screen.dart';
 import '../logic/arr_deep_link.dart';
 import '../logic/media_detail_provider.dart';
@@ -66,6 +70,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// for non-admins, or when the title has no destination in the arr yet — the
   /// "Open in …" affordance is shown only when this is non-null.
   ArrDeepLink? _arrLink;
+
+  /// Exact live files exposed as requester downloads. These are resolved from
+  /// the active arr instead of inferred from request status, since admins may
+  /// change or replace files directly in Radarr/Sonarr at any time.
+  RadarrMovieFile? _downloadMovieFile;
+  List<SonarrEpisode> _downloadEpisodes = const [];
+  String? _downloadInstanceId;
+  int _arrResolveGeneration = 0;
 
   @override
   void initState() {
@@ -122,6 +134,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     // Resolve (or re-resolve) the admin link once auth settles — covers auth
     // landing after the initial detail load (e.g. an optimistic reconnect).
     ref.listen(authProvider, (_, __) => _resolveArrLink());
+    ref.listen(
+      instanceProvider.select((s) => s.activeRadarrInstanceId),
+      (_, __) => _resolveArrLink(),
+    );
+    ref.listen(
+      instanceProvider.select((s) => s.activeSonarrInstanceId),
+      (_, __) => _resolveArrLink(),
+    );
     return ListenableBuilder(
       listenable: _detailNotifier,
       builder: (context, _) {
@@ -248,6 +268,17 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                               label: const Text(
                                                 'Report a problem',
                                               ),
+                                            ),
+                                          if (widget.mediaType ==
+                                                  MediaType.movie &&
+                                              _downloadInstanceId != null &&
+                                              _downloadMovieFile != null)
+                                            MediaDownloadButton(
+                                              instanceId:
+                                                  _downloadInstanceId!,
+                                              fileId:
+                                                  _downloadMovieFile!.id,
+                                              label: 'Download movie',
                                             ),
                                           if (_arrLink != null)
                                             TextButton.icon(
@@ -398,6 +429,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                               tvdbId: state.tvDetail?.externalIds?.tvdbId,
                               canRequest: _canChooseSeasons,
                               onRequested: _bumpLibraryRefresh,
+                              downloadInstanceId: _downloadInstanceId,
+                              downloadChoicesBySeason:
+                                  _episodeDownloadChoicesBySeason,
                             ),
                           ],
 
@@ -507,57 +541,127 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     ref.read(libraryRefreshTickProvider.notifier).state++;
   }
 
-  /// For admins, resolve whether this title already exists in the backing arr
-  /// (Radarr for movies, Sonarr for TV) and, when it does, capture the matched
-  /// library object + instance id so the "Open in …" affordance can push the
-  /// arr detail screen. Runs on load and again after a request (via
-  /// [libraryRefreshTickProvider]). Non-admins never resolve a link, and any
-  /// fetch error leaves the current link untouched (quietly hidden) rather than
-  /// surfacing — the affordance appears only when there's a real destination.
+  /// Resolves this title against the active arr. Admins get a deep link into
+  /// the matched record; any user gets exact live file downloads when the
+  /// server advertises that capability. Runs again after requests, auth
+  /// changes, and instance switches so stale files are never offered.
   Future<void> _resolveArrLink() async {
-    final isAdmin = ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
-    if (!isAdmin) return;
-
+    final generation = ++_arrResolveGeneration;
+    final auth = ref.read(authProvider).valueOrNull;
+    final isAdmin = auth?.user?.isAdmin ?? false;
+    final downloadsEnabled = auth?.connection?.services.mediaDownloads ?? false;
     final backendDio = ref.read(backendClientProvider);
     final instances = ref.read(instanceProvider);
-    final connection = ref.read(authProvider).valueOrNull?.connection;
+    final connection = auth?.connection;
+
+    if (mounted) {
+      setState(() {
+        _arrLink = null;
+        _downloadMovieFile = null;
+        _downloadEpisodes = const [];
+        _downloadInstanceId = null;
+      });
+    }
+    if (!isAdmin && !downloadsEnabled) return;
 
     try {
       if (widget.mediaType == MediaType.movie) {
         final instanceId = instances.activeRadarrInstance?.id ??
             connection?.defaultRadarrInstance?.id;
         if (instanceId == null) return;
-        final movies = await RadarrApiService(
+        final service = RadarrApiService(
           backendDio: backendDio,
           instanceId: instanceId,
-        ).getMovies();
-        if (!mounted) return;
-        final match = matchRadarrMovie(movies, widget.id);
-        setState(() => _arrLink = match == null
-            ? null
-            : ArrDeepLink(instanceId: instanceId, movie: match));
+        );
+        final movies = await service.getMovies();
+        var match = matchRadarrMovie(movies, widget.id);
+        if (downloadsEnabled && match != null && match.id > 0) {
+          try {
+            final detail = await service.getMovieById(match.id);
+            if (detail.id == match.id) match = detail;
+          } catch (_) {
+            // The live list may already carry movieFile. Keep that exact
+            // response as a fallback when Radarr's detail endpoint is down.
+          }
+        }
+        if (!mounted || generation != _arrResolveGeneration) return;
+        final file = match?.movieFile;
+        setState(() {
+          _arrLink = isAdmin && match != null
+              ? ArrDeepLink(instanceId: instanceId, movie: match)
+              : null;
+          if (downloadsEnabled && file != null && file.id > 0) {
+            _downloadMovieFile = file;
+            _downloadInstanceId = instanceId;
+          }
+        });
       } else {
         final instanceId = instances.activeSonarrInstance?.id ??
             connection?.defaultSonarrInstance?.id;
         if (instanceId == null) return;
-        final series = await SonarrApiService(
+        final service = SonarrApiService(
           backendDio: backendDio,
           instanceId: instanceId,
-        ).getSeries();
-        if (!mounted) return;
+        );
+        final series = await service.getSeries();
         final match = matchSonarrSeries(
           series,
           tvdbId: _detailNotifier.state.tvDetail?.externalIds?.tvdbId,
           title: _detailNotifier.state.title,
         );
-        setState(() => _arrLink = match == null
-            ? null
-            : ArrDeepLink(instanceId: instanceId, series: match));
+        var episodes = const <SonarrEpisode>[];
+        if (downloadsEnabled && match != null && match.id > 0) {
+          episodes = (await service.getEpisodes(
+            match.id,
+            includeEpisodeFile: true,
+          ))
+              .where((episode) =>
+                  episode.hasFile && episode.episodeFileId > 0)
+              .toList()
+            ..sort((left, right) {
+              final season =
+                  left.seasonNumber.compareTo(right.seasonNumber);
+              return season != 0
+                  ? season
+                  : left.episodeNumber.compareTo(right.episodeNumber);
+            });
+        }
+        if (!mounted || generation != _arrResolveGeneration) return;
+        setState(() {
+          _arrLink = isAdmin && match != null
+              ? ArrDeepLink(instanceId: instanceId, series: match)
+              : null;
+          if (downloadsEnabled && episodes.isNotEmpty) {
+            _downloadEpisodes = episodes;
+            _downloadInstanceId = instanceId;
+          }
+        });
       }
     } catch (_) {
-      // Leave any existing link as-is; a transient fetch failure shouldn't
-      // yank a working affordance.
+      // File/link discovery is an optional affordance. Keep the safely-cleared
+      // state when the active arr is unavailable instead of exposing stale IDs.
     }
+  }
+
+  Map<int, List<MediaDownloadChoice>> get
+      _episodeDownloadChoicesBySeason {
+    final result = <int, List<MediaDownloadChoice>>{};
+    for (final episode in _downloadEpisodes) {
+      final title = episode.title?.trim();
+      final file = episode.episodeFile;
+      final details = <String>[
+        if (file?.quality?.trim().isNotEmpty ?? false) file!.quality!.trim(),
+        if (file != null && file.size > 0) file.sizeFormatted,
+      ];
+      (result[episode.seasonNumber] ??= []).add(MediaDownloadChoice(
+        fileId: episode.episodeFileId,
+        label: title == null || title.isEmpty
+            ? episode.seasonEpisodeLabel
+            : '${episode.seasonEpisodeLabel} · $title',
+        subtitle: details.isEmpty ? null : details.join(' · '),
+      ));
+    }
+    return result;
   }
 
   /// Pushes the matched arr detail screen (movie → Radarr, TV → Sonarr) over

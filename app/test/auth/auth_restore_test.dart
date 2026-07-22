@@ -26,8 +26,10 @@ void main() {
     user: user,
     deviceId: 'dev-1',
   );
-  const config =
-      ServerConfig(serverName: 'Home', services: AvailableServices(radarr: true));
+  const config = ServerConfig(
+    serverName: 'Home',
+    services: AvailableServices(radarr: true, mediaDownloads: true),
+  );
 
   final connectionError = DioException(
     requestOptions: RequestOptions(path: '/api/auth/refresh'),
@@ -54,7 +56,10 @@ void main() {
         StorageKeys.sessionUser: jsonEncode(user.toJson()),
         StorageKeys.sessionConnection: jsonEncode({
           'server_name': 'Home',
-          'services': const AvailableServices(radarr: true).toJson(),
+          'services': const AvailableServices(
+            radarr: true,
+            mediaDownloads: true,
+          ).toJson(),
           'instances': const <Map<String, dynamic>>[],
         }),
       };
@@ -86,6 +91,7 @@ void main() {
       expect(optimistic.isReconnecting, isTrue);
       expect(optimistic.user?.username, 'tester');
       expect(optimistic.connection?.services.radarr, isTrue);
+      expect(optimistic.connection?.services.mediaDownloads, isTrue);
 
       // Background validation then refreshes and clears the reconnecting flag.
       await _pumpUntil(() {

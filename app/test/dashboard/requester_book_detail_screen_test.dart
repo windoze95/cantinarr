@@ -147,6 +147,51 @@ void main() {
         orderedEquals(['ebook', 'audiobook']));
   });
 
+  testWidgets('a requester can download each exact available book format',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      authState: _downloadBooksState,
+      adapter: _BooksAdapter(bookFiles: true),
+    );
+
+    router.go('/detail/book/29749107?title=Ahsoka');
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byTooltip('Download eBook'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.byTooltip('Download eBook'), findsOneWidget);
+    expect(find.byTooltip('Download audiobook'), findsOneWidget);
+    expect(find.textContaining('/library/'), findsNothing);
+    expect(find.textContaining(r'Z:\'), findsNothing);
+  });
+
+  testWidgets('admin Chaptarr detail has the same per-format downloads',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      authState: _adminDownloadBooksState,
+      adapter: _BooksAdapter(bookFiles: true),
+    );
+
+    router.go('/detail/book/29749107?title=Ahsoka');
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Manage book'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    await tester.tap(find.text('Manage book'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ChaptarrBookScreen), findsOneWidget);
+    expect(find.byTooltip('Download eBook'), findsOneWidget);
+    expect(find.byTooltip('Download Audiobook'), findsOneWidget);
+  });
+
   testWidgets('an absolute owned cover origin is never sent to the client',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(
@@ -269,6 +314,42 @@ const _adminBooksState = AuthState(
   user: UserProfile(id: 1, username: 'admin', role: 'admin'),
 );
 
+const _downloadBooksState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(chaptarr: true, mediaDownloads: true),
+    instances: [
+      ServiceInstance(
+        id: 'books',
+        serviceType: 'chaptarr',
+        name: 'Books',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
+const _adminDownloadBooksState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(chaptarr: true, mediaDownloads: true),
+    instances: [
+      ServiceInstance(
+        id: 'books',
+        serviceType: 'chaptarr',
+        name: 'Books',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'admin', role: 'admin'),
+);
+
 Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
   WidgetTester tester, {
   AuthState authState = _booksState,
@@ -329,6 +410,7 @@ class _BooksAdapter implements HttpClientAdapter {
   final bool mismatchedLookupId;
   final bool mismatchedLookupAuthor;
   final bool partiallyUnknownStatus;
+  final bool bookFiles;
   final libraryInstanceIds = <String>[];
   final statusInstanceIds = <String>[];
 
@@ -338,6 +420,7 @@ class _BooksAdapter implements HttpClientAdapter {
     this.mismatchedLookupId = false,
     this.mismatchedLookupAuthor = false,
     this.partiallyUnknownStatus = false,
+    this.bookFiles = false,
   });
 
   @override
@@ -430,13 +513,32 @@ class _BooksAdapter implements HttpClientAdapter {
           },
         },
       ];
+    } else if (options.path.endsWith('/api/v1/book/42')) {
+      body = _liveBook(id: 42, mediaType: 'ebook');
+    } else if (options.path.endsWith('/api/v1/book/43')) {
+      body = _liveBook(id: 43, mediaType: 'audiobook');
     } else if (options.path.endsWith('/api/v1/book')) {
       body = [
         _liveBook(id: 42, mediaType: 'ebook'),
         _liveBook(id: 43, mediaType: 'audiobook'),
       ];
     } else if (options.path.endsWith('/api/v1/bookfile')) {
-      body = <Object>[];
+      final bookId = options.queryParameters['bookId'] as int?;
+      body = bookFiles && (bookId == 42 || bookId == 43)
+          ? [
+              {
+                'id': bookId! + 100,
+                'bookId': bookId,
+                'path': bookId == 42
+                    ? '/library/E. K. Johnston/Ahsoka.epub'
+                    : r'Z:\Audiobooks\E. K. Johnston\Ahsoka.m4b',
+                'size': bookId == 42 ? 4200000 : 420000000,
+                'quality': {
+                  'quality': {'name': bookId == 42 ? 'EPUB' : 'M4B'},
+                },
+              },
+            ]
+          : <Object>[];
     } else if (options.path == '/api/trakt/anticipated') {
       body = <Object>[];
     } else {

@@ -16,6 +16,8 @@ import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
 import '../../chaptarr/ui/chaptarr_book_screen.dart';
+import '../../media_download/data/media_download_models.dart';
+import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
 import '../../request/data/request_service.dart';
 import '../../request/ui/book_request_button.dart';
@@ -52,6 +54,7 @@ class _RequesterBookDetailScreenState
   late final RequestService _requestService;
   ChaptarrBook? _metadata;
   List<ChaptarrBook> _chaptarrRecords = const [];
+  Map<int, List<ChaptarrBookFile>> _filesByBook = const {};
   BookRequestStatusDetail? _requestDetail;
   bool _metadataLoading = false;
   int _loadGeneration = 0;
@@ -96,6 +99,7 @@ class _RequesterBookDetailScreenState
         ref.read(instanceProvider).activeChaptarrInstance?.id;
     _metadata = widget.initialBook;
     _chaptarrRecords = const [];
+    _filesByBook = const {};
     _requestDetail = null;
     _metadataLoading = widget.initialBook == null &&
         (widget.titleHint?.trim().isNotEmpty ?? false);
@@ -171,12 +175,15 @@ class _RequesterBookDetailScreenState
     });
   }
 
-  /// Resolve an exact live Chaptarr destination for admins. Lookup records and
-  /// the requester digest intentionally lack trustworthy numeric library ids,
-  /// so only the live library list may back this link.
+  /// Resolve exact live Chaptarr records. Lookup records and the requester
+  /// digest intentionally lack trustworthy numeric library/file ids, so only
+  /// this live list may back admin navigation or requester downloads.
   Future<void> _resolveChaptarrRecords(int generation) async {
-    final isAdmin = ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
-    if (!isAdmin) return;
+    final auth = ref.read(authProvider).valueOrNull;
+    final isAdmin = auth?.user?.isAdmin ?? false;
+    final downloadsEnabled =
+        auth?.connection?.services.mediaDownloads ?? false;
+    if (!isAdmin && !downloadsEnabled) return;
     final service = _chaptarrService();
     if (service == null) return;
     final recordsGeneration = ++_recordsLoadGeneration;
@@ -187,12 +194,30 @@ class _RequesterBookDetailScreenState
               book.id > 0 && book.foreignBookId == widget.foreignId)
           .toList(growable: false)
         ..sort((a, b) => a.format.index.compareTo(b.format.index));
+      final filesByBook = <int, List<ChaptarrBookFile>>{};
+      if (downloadsEnabled) {
+        final results = await Future.wait(matches.map((book) async {
+          try {
+            return await service.getBookFiles(bookId: book.id);
+          } catch (_) {
+            return const <ChaptarrBookFile>[];
+          }
+        }));
+        for (var i = 0; i < matches.length; i++) {
+          filesByBook[matches[i].id] = results[i]
+              .where((file) => file.id > 0)
+              .toList(growable: false);
+        }
+      }
       if (!mounted ||
           generation != _loadGeneration ||
           recordsGeneration != _recordsLoadGeneration) {
         return;
       }
-      setState(() => _chaptarrRecords = matches);
+      setState(() {
+        _chaptarrRecords = matches;
+        _filesByBook = filesByBook;
+      });
     } catch (_) {
       // A transient Chaptarr failure keeps the optional link hidden.
     }
@@ -306,6 +331,11 @@ class _RequesterBookDetailScreenState
           ownership,
           ownershipStatusKnown: owned?.statusKnown ?? true,
         );
+    final auth = ref.watch(authProvider).valueOrNull;
+    final downloadsEnabled = auth?.connection?.services.mediaDownloads ?? false;
+    final ebookFiles = _downloadChoicesFor(BookFormat.ebook);
+    final audiobookFiles = _downloadChoicesFor(BookFormat.audiobook);
+    final isAdmin = auth?.user?.isAdmin ?? false;
 
     final instanceId = _instanceId;
     final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
@@ -387,6 +417,10 @@ class _RequesterBookDetailScreenState
           _FormatStatusPanel(
             detail: detail,
             statusLoaded: _requestDetail != null,
+            instanceId: instanceId,
+            ebookFiles: downloadsEnabled ? ebookFiles : const [],
+            audiobookFiles:
+                downloadsEnabled ? audiobookFiles : const [],
           ),
           const SizedBox(height: 18),
           Wrap(
@@ -407,7 +441,7 @@ class _RequesterBookDetailScreenState
                 onDetailChanged: _onRequestDetailChanged,
                 onRequestCompleted: _onRequestCompleted,
               ),
-              if (_chaptarrRecords.isNotEmpty)
+              if (isAdmin && _chaptarrRecords.isNotEmpty)
                 OutlinedButton.icon(
                   onPressed: _openInChaptarr,
                   icon: const Icon(Icons.open_in_new_rounded, size: 17),
@@ -449,6 +483,27 @@ class _RequesterBookDetailScreenState
     );
   }
 
+  List<MediaDownloadChoice> _downloadChoicesFor(BookFormat format) {
+    final choices = <MediaDownloadChoice>[];
+    for (final record in _chaptarrRecords) {
+      if (record.format != format) continue;
+      final files = _filesByBook[record.id] ?? const [];
+      for (var i = 0; i < files.length; i++) {
+        final file = files[i];
+        final details = [
+          if (file.qualityName?.isNotEmpty ?? false) file.qualityName!,
+          if (file.size > 0) file.sizeFormatted,
+        ].join(' · ');
+        choices.add(MediaDownloadChoice(
+          fileId: file.id,
+          label: _bookFileLabel(file, i),
+          subtitle: details.isEmpty ? null : details,
+        ));
+      }
+    }
+    return choices;
+  }
+
   Widget _notFound() {
     return Center(
       child: Padding(
@@ -480,10 +535,16 @@ class _RequesterBookDetailScreenState
 class _FormatStatusPanel extends StatelessWidget {
   final BookRequestStatusDetail detail;
   final bool statusLoaded;
+  final String? instanceId;
+  final List<MediaDownloadChoice> ebookFiles;
+  final List<MediaDownloadChoice> audiobookFiles;
 
   const _FormatStatusPanel({
     required this.detail,
     required this.statusLoaded,
+    required this.instanceId,
+    required this.ebookFiles,
+    required this.audiobookFiles,
   });
 
   @override
@@ -511,6 +572,15 @@ class _FormatStatusPanel extends StatelessWidget {
               BookRequestFormat.ebook,
               statusLoaded,
             ),
+            download: instanceId == null || ebookFiles.isEmpty
+                ? null
+                : MediaDownloadChoiceButton(
+                    instanceId: instanceId!,
+                    choices: ebookFiles,
+                    label: 'Download eBook',
+                    sheetTitle: 'Download eBook',
+                    iconOnly: true,
+                  ),
           ),
           const Divider(height: 1, indent: 52, color: AppTheme.border),
           _FormatStatusRow(
@@ -521,6 +591,15 @@ class _FormatStatusPanel extends StatelessWidget {
               BookRequestFormat.audiobook,
               statusLoaded,
             ),
+            download: instanceId == null || audiobookFiles.isEmpty
+                ? null
+                : MediaDownloadChoiceButton(
+                    instanceId: instanceId!,
+                    choices: audiobookFiles,
+                    label: 'Download audiobook',
+                    sheetTitle: 'Download audiobook',
+                    iconOnly: true,
+                  ),
           ),
         ],
       ),
@@ -532,11 +611,13 @@ class _FormatStatusRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final ({String label, Color color}) state;
+  final Widget? download;
 
   const _FormatStatusRow({
     required this.icon,
     required this.label,
     required this.state,
+    this.download,
   });
 
   @override
@@ -562,8 +643,24 @@ class _FormatStatusRow extends StatelessWidget {
                 heading,
                 const SizedBox(height: 8),
                 Padding(
-                  padding: const EdgeInsets.only(left: 32),
-                  child: StatusPill(text: state.label, color: state.color),
+                  padding: const EdgeInsets.only(left: 28),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: StatusPill(
+                            text: state.label,
+                            color: state.color,
+                          ),
+                        ),
+                      ),
+                      if (download != null) ...[
+                        const SizedBox(width: 4),
+                        download!,
+                      ],
+                    ],
+                  ),
                 ),
               ],
             )
@@ -571,10 +668,20 @@ class _FormatStatusRow extends StatelessWidget {
               children: [
                 Expanded(child: heading),
                 StatusPill(text: state.label, color: state.color),
+                if (download != null) ...[
+                  const SizedBox(width: 4),
+                  download!,
+                ],
               ],
             ),
     );
   }
+}
+
+String _bookFileLabel(ChaptarrBookFile file, int index) {
+  final path = file.path?.replaceAll('\\', '/') ?? '';
+  final parts = path.split('/').where((part) => part.isNotEmpty).toList();
+  return parts.isEmpty ? 'File ${index + 1}' : parts.last;
 }
 
 ({String label, Color color}) _formatState(

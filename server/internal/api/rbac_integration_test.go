@@ -31,6 +31,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/mediafiles"
 	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
@@ -110,6 +111,49 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 			if recorder.Code != route.want {
 				t.Errorf("%s %s status = %d, want %d; body=%s", route.method, route.path, recorder.Code, route.want, recorder.Body.String())
 			}
+		}
+	}
+}
+
+func TestMediaFileRouterTicketAuthAndPublicDownloadRoutes(t *testing.T) {
+	harness := newRBACRouterHarness(t, false)
+
+	anonymousIssue := serveRBACRequestWithBody(
+		harness.router,
+		http.MethodPost,
+		"/api/media-files/tickets",
+		"",
+		`{"instance_id":"radarr-main","file_id":1}`,
+	)
+	if anonymousIssue.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous ticket status = %d, body = %s", anonymousIssue.Code, anonymousIssue.Body.String())
+	}
+
+	// A normal requester owns media:download and passes both middleware layers;
+	// the empty-root handler's 503 proves the request reached the feature rather
+	// than being rejected by role middleware.
+	requesterIssue := serveRBACRequestWithBody(
+		harness.router,
+		http.MethodPost,
+		"/api/media-files/tickets",
+		harness.requesterToken,
+		`{"instance_id":"radarr-main","file_id":1}`,
+	)
+	if requesterIssue.Code != http.StatusServiceUnavailable {
+		t.Fatalf("requester ticket status = %d, body = %s", requesterIssue.Code, requesterIssue.Body.String())
+	}
+
+	invalidCapability := strings.Repeat("A", 43)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		response := serveRBACRequest(harness.router, method, "/api/media-files/download/"+invalidCapability, "")
+		if response.Code != http.StatusNotFound {
+			t.Errorf("public %s status = %d, body = %s", method, response.Code, response.Body.String())
+		}
+		if method == http.MethodHead && response.Body.Len() != 0 {
+			t.Errorf("public HEAD body = %q", response.Body.String())
+		}
+		if got := response.Header().Get("Cache-Control"); got != "private, no-store" {
+			t.Errorf("public %s Cache-Control = %q", method, got)
 		}
 	}
 }
@@ -406,6 +450,15 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	credentialHandler.SetSharedAIValidator(aiHandler.ValidateSharedAISettings, aiHandler.SharedAISettingsValidated)
 	instanceHandler := instance.NewHandler(store, instanceRegistry, "http://cantinarr.test")
 	downloadsHandler := downloads.NewHandler(store, instanceRegistry)
+	mediaFilesHandler, err := mediafiles.NewHandler(store, instanceRegistry, authService, nil)
+	if err != nil {
+		t.Fatalf("create media files handler: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := mediaFilesHandler.Close(); err != nil {
+			t.Errorf("close media files handler: %v", err)
+		}
+	})
 	tautulliHandler := tautulli.NewHandler(store, instanceRegistry)
 	proxyHandler := proxy.NewHandler(store)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -439,6 +492,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		instanceHandler,
 		store,
 		downloadsHandler,
+		mediaFilesHandler,
 		tautulliHandler,
 		registry,
 		credentialHandler,

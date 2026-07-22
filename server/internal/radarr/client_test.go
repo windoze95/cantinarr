@@ -13,6 +13,43 @@ type failingTransport struct{ err error }
 
 func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
 
+func TestGetMovieFileUsesExactAuthenticatedEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/moviefile/73" || r.URL.RawQuery != "" {
+			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if got := r.Header.Get("X-Api-Key"); got != "movie-key" {
+			t.Errorf("X-Api-Key = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"id":73,"movieId":8,"relativePath":"Movie.mkv","path":"/library/Movie.mkv","size":123456}`))
+	}))
+	t.Cleanup(server.Close)
+
+	file, err := NewClient(server.URL, "movie-key").GetMovieFile(73)
+	if err != nil {
+		t.Fatalf("GetMovieFile() error = %v", err)
+	}
+	if file.ID != 73 || file.MovieID != 8 || file.Path != "/library/Movie.mkv" || file.RelativePath != "Movie.mkv" || file.Size != 123456 {
+		t.Fatalf("file = %#v", file)
+	}
+}
+
+func TestGetMovieFileOmitsUpstreamErrorBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`secret path /library/private and signed-token`))
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := NewClient(server.URL, "key").GetMovieFile(73)
+	if err == nil {
+		t.Fatal("GetMovieFile() error = nil")
+	}
+	if message := err.Error(); strings.Contains(message, "/library/private") || strings.Contains(message, "signed-token") {
+		t.Fatalf("error leaked upstream body: %q", message)
+	}
+}
+
 // TestTransportErrorOmitsHost pins the topology-privacy property: transport
 // failures embed the full request URL (and DNS errors repeat the hostname),
 // and these errors surface to requesters through request failures — so the

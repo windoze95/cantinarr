@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../discover/data/tmdb_models.dart';
+import '../../media_download/data/media_download_models.dart';
+import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/request_provider.dart';
 
@@ -31,6 +33,12 @@ class SeasonTable extends StatefulWidget {
   /// stale-by-design surfaces (the shell's search-chip snapshot).
   final VoidCallback? onRequested;
 
+  /// Exact episode files currently present in Sonarr, grouped per season.
+  /// A season with multiple files opens a picker so one browser gesture starts
+  /// one download instead of attempting a blocked batch launch.
+  final String? downloadInstanceId;
+  final Map<int, List<MediaDownloadChoice>> downloadChoicesBySeason;
+
   const SeasonTable({
     super.key,
     required this.seasons,
@@ -39,6 +47,9 @@ class SeasonTable extends StatefulWidget {
     this.tvdbId,
     this.canRequest = true,
     this.onRequested,
+    this.downloadInstanceId,
+    this.downloadChoicesBySeason =
+        const <int, List<MediaDownloadChoice>>{},
   });
 
   @override
@@ -159,6 +170,10 @@ class _SeasonTableState extends State<SeasonTable> {
                         available: _isAvailable(seasons[i].seasonNumber),
                         selectable: widget.canRequest,
                         onChanged: (v) => _toggle(seasons[i].seasonNumber, v),
+                        downloadInstanceId: widget.downloadInstanceId,
+                        downloadChoices: widget.downloadChoicesBySeason[
+                                seasons[i].seasonNumber] ??
+                            const [],
                       ),
                     ],
                   ],
@@ -215,6 +230,8 @@ class _SeasonRow extends StatelessWidget {
   final bool available;
   final bool selectable;
   final ValueChanged<bool?> onChanged;
+  final String? downloadInstanceId;
+  final List<MediaDownloadChoice> downloadChoices;
 
   const _SeasonRow({
     required this.season,
@@ -223,6 +240,8 @@ class _SeasonRow extends StatelessWidget {
     required this.available,
     required this.selectable,
     required this.onChanged,
+    required this.downloadInstanceId,
+    required this.downloadChoices,
   });
 
   @override
@@ -271,6 +290,16 @@ class _SeasonRow extends StatelessWidget {
               ),
             ),
             _SeasonStatusBadge(status: status?.status),
+            if (downloadInstanceId != null && downloadChoices.isNotEmpty) ...[
+              const SizedBox(width: 4),
+              MediaDownloadChoiceButton(
+                instanceId: downloadInstanceId!,
+                choices: downloadChoices,
+                label: 'Download Season ${season.seasonNumber} episodes',
+                sheetTitle: 'Download Season ${season.seasonNumber}',
+                iconOnly: true,
+              ),
+            ],
           ],
         ),
       ),

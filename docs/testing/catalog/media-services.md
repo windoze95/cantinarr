@@ -19,6 +19,10 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `BOOK-003` · P0 · UI/LIVE — From the selected Chaptarr instance, request both formats; verify exactly one ebook record and one audiobook record share the foreignBookId/group as one logical title, each moves Requested → Downloading → Available independently, returning from Chaptarr refreshes immediately, and repeating or approving concurrently cannot create a duplicate same-format record in that or another instance.
 - [ ] `BOOK-014` · P0 · LIVE — Run supported Import Doctor classifications/fixes for Chaptarr, including exact queue/manual-import scope; verify no title-level mutation occurs without a durable book ID.
 
+## Completed media files
+
+- [ ] `FILE-001` · P1 · UI/LIVE — With exact-path read-only library mounts and `CANTINARR_MEDIA_ROOTS` configured, download an ebook, one file from a multi-file audiobook, a movie, and an episode from their live detail surfaces. Verify names and bytes match the arr records, a movie/episode transfer can resume with HTTP Range, each requester is limited to their effective or granted instance, and every download action disappears when the roots setting is removed.
+
 ## Download clients and unified downloads
 
 Run client-specific cases once for **each** of SABnzbd, qBittorrent, NZBGet, and Transmission; do not accept one client as proof for the other adapters.

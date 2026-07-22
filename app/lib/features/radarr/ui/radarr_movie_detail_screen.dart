@@ -10,6 +10,7 @@ import '../../../core/widgets/status_pill.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
+import '../../media_download/ui/media_download_button.dart';
 import '../data/radarr_api_service.dart';
 import '../data/radarr_models.dart';
 import 'radarr_import_doctor_sheet.dart';
@@ -178,7 +179,10 @@ class _RadarrMovieDetailScreenState
           ],
           if (_movie.movieFile != null) ...[
             const SizedBox(height: 16),
-            _FileCard(file: _movie.movieFile!),
+            _FileCard(
+              instanceId: widget.instanceId,
+              file: _movie.movieFile!,
+            ),
           ],
           if (_queueItem != null) ...[
             const SizedBox(height: 16),
@@ -329,13 +333,16 @@ class _Header extends StatelessWidget {
 
 /// The downloaded file's quality + size line — Radarr's analogue of the Sonarr
 /// per-episode "WEBDL-1080p — 4.3 GB" status.
-class _FileCard extends StatelessWidget {
+class _FileCard extends ConsumerWidget {
+  final String instanceId;
   final RadarrMovieFile file;
-  const _FileCard({required this.file});
+  const _FileCard({required this.instanceId, required this.file});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final cutoffMet = !file.qualityCutoffNotMet;
+    final connection = ref.watch(authProvider).valueOrNull?.connection;
+    final downloadsEnabled = connection?.services.mediaDownloads ?? false;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -390,6 +397,13 @@ class _FileCard extends StatelessWidget {
               ],
             ),
           ),
+          if (downloadsEnabled && file.id > 0)
+            MediaDownloadButton(
+              instanceId: instanceId,
+              fileId: file.id,
+              label: 'Download movie file',
+              iconOnly: true,
+            ),
         ],
       ),
     );

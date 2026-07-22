@@ -6,3 +6,11 @@ services:
       - "8585:8585"
     volumes:
       - ./config:/config
+      # Optional completed-media downloads. Mount each library read-only at
+      # the same absolute path its arr reports, then list those container paths
+      # in CANTINARR_MEDIA_ROOTS below. Example:
+      # - /mnt/nas/media:/data/media:ro
+    environment:
+      # Comma-separated, absolute container paths. Empty keeps completed-media
+      # downloads disabled.
+      - CANTINARR_MEDIA_ROOTS=${CANTINARR_MEDIA_ROOTS:-}
