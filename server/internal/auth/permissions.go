@@ -22,6 +22,7 @@ const (
 	PermissionAdmin             Permission = "admin:*"
 	PermissionMediaDiscover     Permission = "media:discover"
 	PermissionMediaRequest      Permission = "media:request"
+	PermissionMediaDownload     Permission = "media:download"
 	PermissionAIChat            Permission = "ai:chat"
 	PermissionMCPAccess         Permission = "mcp:access"
 	PermissionUsersManage       Permission = "users:manage"
@@ -46,6 +47,7 @@ var rolePermissions = map[string]map[Permission]bool{
 	RoleUser: {
 		PermissionMediaDiscover: true,
 		PermissionMediaRequest:  true,
+		PermissionMediaDownload: true,
 		PermissionAIChat:        true,
 		PermissionMCPAccess:     true,
 		// Read-only Radarr/Sonarr browsing through the app's REST instance
@@ -95,6 +97,7 @@ func allPermissions() map[Permission]bool {
 		PermissionAdmin:             true,
 		PermissionMediaDiscover:     true,
 		PermissionMediaRequest:      true,
+		PermissionMediaDownload:     true,
 		PermissionAIChat:            true,
 		PermissionMCPAccess:         true,
 		PermissionUsersManage:       true,

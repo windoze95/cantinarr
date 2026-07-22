@@ -44,6 +44,7 @@ Discover and request movies, TV shows, and books. Get push notifications. Manage
 - **TMDB + Trakt for discovery** -- The best metadata, images, and trending data, proxied through the server so keys stay off devices. Sonarr's TVDB dependency is invisible.
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
 - **Books too** -- A Chaptarr (Readarr-API) module with per-format smarts: request the ebook, the audiobook, or both; monitored formats read **Requested** until they download; owned-aware search and plain per-format controls stay pinned to the selected, authorized Chaptarr instance. Access is granted per user.
+- **Take available files with you** -- Optional, resumable downloads let signed-in users save exact ebook, audiobook, movie, and episode files from their authorized library. Cantinarr re-checks the live arr file record before issuing a short-lived, file-scoped link without putting arr credentials in the URL.
 - **Request approvals** -- Optional approval queue, globally or per user. Admins also control per-user season choice, quality choice, and default quality profiles. Approve/deny lands as a push notification for the requester.
 - **AI assistant** -- "What should I watch tonight?" Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link OpenAI (OAuth) with a one-time ChatGPT browser code—even without included access, and their choice never has to match the server's provider. Admins can configure the same providers as an included server profile and grant that shared access per user. A personal provider is an explicit override; Cantinarr never silently spends the shared account when that override needs attention. The assistant searches your library, checks availability, requests for you, and gives admins conversational queue and release control.
 - **AI remediation agent** -- Users tap "Report a problem" (or Cantinarr detects one in the queue); each report is bound to the exact Radarr/Sonarr instance and begins with a quiet observation window. Cantinarr gives Sonarr/Radarr time to retry or replace a download before it alerts anyone or starts the agent; a persistent quiet problem then enters the supervised workflow. Recovery cancels stale proposals before dispatch. Automatic resolution requires an exact changed file plus a matching post-incident import record—not queue disappearance or a file that was already there. Remediation is server-owned: it always uses the admin's shared API key or shared OpenAI OAuth connection and never a reporter's personal provider or per-user included-access grant. Admins may give remediation its own tested model designation while keeping that global provider and credential.
@@ -95,7 +96,7 @@ cantinarr/
 │   ├── cmd/server/         # Entry point
 │   └── internal/           # ai, api, arr, auth, cache, chaptarr, codexapp,
 │                           # config, credentials, db, discover, downloads, instance,
-│                           # mcp, mcpserver, nzbget, proxy, push, qbittorrent,
+│                           # mcp, mcpserver, mediafiles, nzbget, proxy, push, qbittorrent,
 │                           # radarr, remediation, request, sabnzbd, secrets,
 │                           # sonarr, tautulli, tmdb, trakt, transmission,
 │                           # web, webhooks, websocket
@@ -104,7 +105,7 @@ cantinarr/
 │   ├── lib/
 │   │   ├── core/           # Models, networking, realtime, theme, widgets
 │   │   ├── features/       # auth, discover, request, dashboard, sonarr,
-│   │   │                   # radarr, chaptarr, downloads, tautulli, issues,
+│   │   │                   # radarr, chaptarr, downloads, media_download, tautulli, issues,
 │   │   │                   # ai_assistant, notifications, settings, ...
 │   │   └── navigation/     # GoRouter with auth guard
 │   └── test/
@@ -136,6 +137,8 @@ Included AI is an explicit per-user entitlement for new accounts; the initial ad
 
 **Instance URLs are dialed only by the Cantinarr server** -- phones and browsers never contact them, so cluster-internal names (Docker service names like `http://radarr:7878`, Kubernetes cluster DNS, Tailscale MagicDNS) are the recommended form, and the arrs never need to be exposed outside their network. The in-app **Test Connection** button runs from the server too, so it tells the truth about these URLs. Plain `http` is fully supported on a trusted network; `https` needs a certificate the server's container trusts (mount an internal CA into the image trust store -- a self-signed cert otherwise fails the connection test with an x509 error). Two service-specific notes: SABnzbd's hostname verification rejects service names it doesn't know, so add the name to its `host_whitelist` (Config > Special) or set the container's hostname to match; for Transmission enter just `scheme://host:port` -- Cantinarr appends `/transmission/rpc`. Poster and fanart images load on devices straight from the TMDB/TVDB CDNs, so client devices still need internet egress to those hosts.
 
+Completed-media downloads are deliberately opt-in because Radarr, Sonarr, and Chaptarr report server filesystem paths but do not serve those file bytes through their APIs. Mount each wanted library read-only at the same path inside Cantinarr and allowlist the container path. For example, if Radarr reports `/data/media/movies/...`, add `- /mnt/nas/media:/data/media:ro` under the Cantinarr service's `volumes` and set `CANTINARR_MEDIA_ROOTS=/data/media`. Multiple roots are comma-separated. Cantinarr accepts only live file IDs from a user's effective Radarr/Sonarr instance or granted Chaptarr instance, refuses paths outside those roots, and gives the app a short-lived file-scoped link so large files stream through the browser or operating system without buffering in Flutter.
+
 Optional server env vars for deployment tuning:
 
 | Variable | Default | Description |
@@ -151,6 +154,7 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_AI_MODEL` | provider default | Fallback model for the included server AI profile when none is saved in the admin UI |
 | `CANTINARR_CODEX_BIN` | auto-discovered | Optional path to `codex-app-server` or the full `codex` CLI; container images bundle the tested 0.144.3 app-server at `/usr/local/bin/codex-app-server` |
 | `CANTINARR_CODEX_RUNTIME_DIR` | `/dev/shm/cantinarr-codex` | Absolute Linux tmpfs/ramfs directory used for server-owned, ephemeral per-session Codex state; if it already exists, it must be owned by the server user with mode `0700` |
+| `CANTINARR_MEDIA_ROOTS` | unset | Comma-separated absolute paths from which Cantinarr may serve completed media. Empty disables file downloads. Each library must be mounted read-only into the Cantinarr container at the same absolute path its arr reports; `/` is refused |
 | `CANTINARR_PUSH_GATEWAY_URL` | unset | Push gateway origin -- setting it enables push notifications (auto-enrolls on first start) |
 | `CANTINARR_PUSH_API_KEY` | unset | Optional pinned gateway key (blank = auto-enroll) |
 | `CANTINARR_PUSH_ENROLL_TOKEN` | unset | Only for gateways with gated enrollment |

@@ -31,6 +31,7 @@ func TestRolePermissionMatrixIsExact(t *testing.T) {
 		PermissionAdmin,
 		PermissionMediaDiscover,
 		PermissionMediaRequest,
+		PermissionMediaDownload,
 		PermissionAIChat,
 		PermissionMCPAccess,
 		PermissionUsersManage,
@@ -54,6 +55,7 @@ func TestRolePermissionMatrixIsExact(t *testing.T) {
 	userAllowed := map[Permission]bool{
 		PermissionMediaDiscover: true,
 		PermissionMediaRequest:  true,
+		PermissionMediaDownload: true,
 		PermissionAIChat:        true,
 		PermissionMCPAccess:     true,
 		PermissionArrBrowse:     true,

@@ -62,10 +62,12 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **One-tap requesting** with status-aware labels: Request → Pending (awaiting approval) → Requested → Downloading → **Available**; partially-available shows get **Request More**, which jumps to the season picker. The ready state stays provider-neutral rather than assuming a particular playback app.
 - **Season-level choice** -- per-season availability, multi-select, "Request N seasons"; shown only to users the admin has allowed to choose (others inherit the default scope).
 - **Book formats** -- request the eBook, the Audiobook, or both; each format continuously translates live Chaptarr truth into Available / Downloading / Requested / Pending approval / Request denied / Not requested. A monitored format is already Requested, failures stay unknown instead of becoming requestable, and only the still-open format actions are shown.
+- **Available-file downloads** -- when enabled by the server, an exact live movie, eBook, or audiobook file can be downloaded from its requester detail; TV seasons present their available episodes as individual choices so each tap starts only one download.
 - **Live status** -- request state and download progress update in real time over WebSocket, including changes made directly in the arrs (webhooks).
 
 ### Media management (admin)
 - **Drill-down** -- library → movie detail, or series → season → episode, with per-item download progress, quality/size, history, and messages, proxied from Radarr/Sonarr API v3 with credential fields scrubbed server-side.
+- **File delivery parity** -- the Radarr movie, Sonarr episode, and Chaptarr format details expose the same server-enabled download actions as requester details, backed by short-lived same-origin tickets rather than arr URLs or credentials.
 - **Open in Radarr/Sonarr/Chaptarr** -- on a requester detail page, admins get a jump into the exact matching arr item, shown only once the title actually exists there (it appears right after a request adds it). Movies link to Radarr, TV to Sonarr, and books link to their grouped eBook/Audiobook records in Chaptarr.
 - **Explicit safe removal** -- destructive library actions live in each row's labeled overflow menu rather than behind a swipe gesture; confirmation is mandatory and deleting files from disk is always opt-in.
 - **Sonarr episode power tools** -- long-press action menus, episode **multi-select with batch search** (quick-select All / Undownloaded), batch **delete files**, an **All Seasons** view, per-season/series monitor toggles, **Edit Series** (profile, type, path, tags, season folders), and external links (IMDb/TheTVDB/TMDB/Trakt).
@@ -157,6 +159,7 @@ Feature-first structure with data / logic / ui layers per feature. State is Rive
 | Requests & approvals | Backend `/api/requests`, `/api/admin/requests` | ID bridging + policy live server-side |
 | Arr management | Backend `/api/instances/{id}/api/v3` (credential-scrubbed proxy) | API keys never reach devices; reads allowed for users, writes admin-only |
 | Books | Backend proxy to Chaptarr (Readarr API v1) | Per-user grant enforced server-side |
+| Media file downloads | Backend `/api/media-files/tickets` | The short-lived same-origin URL contains no arr host, filesystem path, or credentials |
 | AI chat | Backend `/api/ai/chat` (SSE) | Tool execution stays server-side; chat uses the resolved personal provider or a granted included provider |
 | Connected-app configuration history | Backend `/api/admin/external-settings-changes` | Durable AI/MCP profile/custom-format audit and live comparison; quality-profile restore payloads stay server-owned |
 | AI settings | Backend `/api/ai/settings` + write-only personal credential routes | The app sees provider/model, source, validation errors, and configured booleans, never secret values |
@@ -190,6 +193,7 @@ app/lib/
 │   ├── downloads/                # Unified download-client queue + history
 │   ├── issues/                   # Report-a-problem, threads, agent approvals + audit
 │   ├── media_detail/             # Detail screens, season table, request surface
+│   ├── media_download/           # Short-lived ticket model/service + shared download controls
 │   ├── notifications/            # APNs registration, prefs, deep-link routing
 │   ├── person/                   # Cast/crew detail sheet
 │   ├── radarr/                   # Movie management: library/queue/history/wanted/calendar

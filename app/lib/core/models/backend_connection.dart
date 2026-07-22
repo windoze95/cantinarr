@@ -140,6 +140,7 @@ class AvailableServices {
   final bool ai;
   final bool tmdb;
   final bool trakt;
+  final bool mediaDownloads;
 
   const AvailableServices({
     this.radarr = false,
@@ -148,6 +149,7 @@ class AvailableServices {
     this.ai = false,
     this.tmdb = false,
     this.trakt = false,
+    this.mediaDownloads = false,
   });
 
   factory AvailableServices.fromJson(Map<String, dynamic> json) =>
@@ -158,6 +160,7 @@ class AvailableServices {
         ai: json['ai'] as bool? ?? false,
         tmdb: json['tmdb'] as bool? ?? false,
         trakt: json['trakt'] as bool? ?? false,
+        mediaDownloads: json['media_downloads'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -167,5 +170,6 @@ class AvailableServices {
         'ai': ai,
         'tmdb': tmdb,
         'trakt': trakt,
+        'media_downloads': mediaDownloads,
       };
 }

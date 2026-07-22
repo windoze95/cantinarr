@@ -722,6 +722,16 @@ func (c *Client) GetBookFiles(authorID int) ([]BookFile, error) {
 	return files, nil
 }
 
+// GetBookFile returns live metadata for one completed file in Chaptarr.
+func (c *Client) GetBookFile(id int) (*BookFile, error) {
+	var file BookFile
+	path := fmt.Sprintf("/api/v1/bookfile/%d", id)
+	if err := c.do(http.MethodGet, path, nil, &file); err != nil {
+		return nil, fmt.Errorf("chaptarr book file: %w", err)
+	}
+	return &file, nil
+}
+
 func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
 	resp, err := c.doRequest("GET", "/api/v1/qualityprofile")
 	if err != nil {

@@ -6,6 +6,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
+import '../../media_download/ui/media_download_button.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import 'import_doctor_sheet.dart';
@@ -109,6 +110,8 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
   Widget build(BuildContext context) {
     final e = widget.episode;
     final status = _shortStatus;
+    final connection = ref.watch(authProvider).valueOrNull?.connection;
+    final downloadsEnabled = connection?.services.mediaDownloads ?? false;
     final airDate = e.airDateUtc?.toLocal() ??
         (e.airDate != null ? DateTime.tryParse(e.airDate!) : null);
 
@@ -158,11 +161,25 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
               StatusPill(text: status.label, color: status.color),
               if (e.overview != null && e.overview!.isNotEmpty) ...[
                 const SizedBox(height: 14),
-                Text(e.overview!,
-                    style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 14,
-                        height: 1.4)),
+                Text(
+                  e.overview!,
+                  style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 14,
+                      height: 1.4),
+                ),
+              ],
+              if (downloadsEnabled && e.hasFile && e.episodeFileId > 0) ...[
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: MediaDownloadButton(
+                    instanceId: widget.instanceId,
+                    fileId: e.episodeFileId,
+                    label: 'Download episode',
+                    outlined: true,
+                  ),
+                ),
               ],
               if (widget.queueItem != null) ...[
                 const SizedBox(height: 16),

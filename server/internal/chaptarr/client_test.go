@@ -16,6 +16,43 @@ type failingTransport struct{ err error }
 
 func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
 
+func TestGetBookFileUsesExactAuthenticatedEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/bookfile/55" || r.URL.RawQuery != "" {
+			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if got := r.Header.Get("X-Api-Key"); got != "book-key" {
+			t.Errorf("X-Api-Key = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"id":55,"authorId":3,"bookId":9,"editionId":12,"path":"/library/Book.epub","size":98765}`))
+	}))
+	t.Cleanup(server.Close)
+
+	file, err := NewClient(server.URL, "book-key").GetBookFile(55)
+	if err != nil {
+		t.Fatalf("GetBookFile() error = %v", err)
+	}
+	if file.ID != 55 || file.AuthorID != 3 || file.BookID != 9 || file.EditionID != 12 || file.Path != "/library/Book.epub" || file.Size != 98765 {
+		t.Fatalf("file = %#v", file)
+	}
+}
+
+func TestGetBookFileOmitsUpstreamErrorBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`secret path /library/private and signed-token`))
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := NewClient(server.URL, "key").GetBookFile(55)
+	if err == nil {
+		t.Fatal("GetBookFile() error = nil")
+	}
+	if message := err.Error(); strings.Contains(message, "/library/private") || strings.Contains(message, "signed-token") {
+		t.Fatalf("error leaked upstream body: %q", message)
+	}
+}
+
 // TestTransportErrorOmitsHost pins the topology-privacy property: transport
 // failures embed the full request URL (and DNS errors repeat the hostname),
 // and these errors surface to requesters through book-request failures — so

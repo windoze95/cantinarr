@@ -844,6 +844,26 @@ type Episode struct {
 	Monitored     bool       `json:"monitored"`
 }
 
+// EpisodeFile is Sonarr's metadata for one completed episode file on disk.
+type EpisodeFile struct {
+	ID           int    `json:"id"`
+	SeriesID     int    `json:"seriesId"`
+	SeasonNumber int    `json:"seasonNumber"`
+	RelativePath string `json:"relativePath"`
+	Path         string `json:"path"`
+	Size         int64  `json:"size"`
+}
+
+// GetEpisodeFile returns live metadata for one completed file in Sonarr.
+func (c *Client) GetEpisodeFile(id int) (*EpisodeFile, error) {
+	var file EpisodeFile
+	path := fmt.Sprintf("/api/v3/episodefile/%d", id)
+	if err := c.do(http.MethodGet, path, nil, &file); err != nil {
+		return nil, fmt.Errorf("sonarr episode file: %w", err)
+	}
+	return &file, nil
+}
+
 // GetEpisodes lists the episodes of one season of a series.
 func (c *Client) GetEpisodes(seriesID, seasonNumber int) ([]Episode, error) {
 	var episodes []Episode

@@ -6,6 +6,9 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../navigation/ambient_page_route.dart';
+import '../../auth/logic/auth_provider.dart';
+import '../../media_download/data/media_download_models.dart';
+import '../../media_download/ui/media_download_button.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
 import 'chaptarr_book_detail_sheet.dart';
@@ -189,6 +192,7 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
           const Divider(color: AppTheme.border, height: 1),
           for (final r in _records)
             _FormatSection(
+              instanceId: widget.instanceId,
               record: r,
               files: _filesByBook[r.id] ?? const [],
               loading: _isLoading,
@@ -257,13 +261,15 @@ class _BookHeader extends StatelessWidget {
 /// One format (ebook or audiobook) of a title: a format badge, this record's
 /// availability/file line, and a read-only monitor indicator (the toggle lives
 /// on the author screen's card).
-class _FormatSection extends StatelessWidget {
+class _FormatSection extends ConsumerWidget {
+  final String instanceId;
   final ChaptarrBook record;
   final List<ChaptarrBookFile> files;
   final bool loading;
   final VoidCallback onTap;
 
   const _FormatSection({
+    required this.instanceId,
     required this.record,
     required this.files,
     required this.loading,
@@ -271,13 +277,24 @@ class _FormatSection extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final status = bookFileStatusLine(record);
     final file = files.isNotEmpty ? files.first : null;
     final hasFile = file != null;
     final line = hasFile
         ? '${file.qualityName ?? 'Downloaded'} — ${file.sizeFormatted}'
         : (loading ? 'Checking…' : status.text);
+    final connection = ref.watch(authProvider).valueOrNull?.connection;
+    final downloadsEnabled = connection?.services.mediaDownloads ?? false;
+    final choices = [
+      for (var i = 0; i < files.length; i++)
+        if (files[i].id > 0)
+          MediaDownloadChoice(
+            fileId: files[i].id,
+            label: _chaptarrFileLabel(files[i], i),
+            subtitle: _chaptarrFileSubtitle(files[i]),
+          ),
+    ];
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -313,6 +330,16 @@ class _FormatSection extends StatelessWidget {
                 ],
               ),
             ),
+            if (downloadsEnabled && choices.isNotEmpty)
+              MediaDownloadChoiceButton(
+                instanceId: instanceId,
+                choices: choices,
+                label:
+                    'Download ${chaptarrFormatLabel(record.format)}',
+                sheetTitle:
+                    'Download ${chaptarrFormatLabel(record.format)}',
+                iconOnly: true,
+              ),
             Tooltip(
               message: record.monitored
                   ? 'Tracked ${chaptarrFormatLabel(record.format)}'
@@ -334,6 +361,20 @@ class _FormatSection extends StatelessWidget {
       ),
     );
   }
+}
+
+String _chaptarrFileLabel(ChaptarrBookFile file, int index) {
+  final path = file.path?.replaceAll('\\', '/') ?? '';
+  final parts = path.split('/').where((part) => part.isNotEmpty).toList();
+  return parts.isEmpty ? 'File ${index + 1}' : parts.last;
+}
+
+String? _chaptarrFileSubtitle(ChaptarrBookFile file) {
+  final details = [
+    if (file.qualityName?.isNotEmpty ?? false) file.qualityName!,
+    if (file.size > 0) file.sizeFormatted,
+  ];
+  return details.isEmpty ? null : details.join(' · ');
 }
 
 class _ActionBar extends StatelessWidget {

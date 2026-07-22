@@ -63,6 +63,11 @@ type Config struct {
 	// Codex auth state may exist while an app-server process is running. Empty
 	// lets the adapter use /dev/shm/cantinarr-codex when available.
 	CodexRuntimeDir string
+	// MediaDownloadRoots are the explicit read-only filesystem boundaries from
+	// which authenticated users may download completed arr media. Empty keeps
+	// media delivery disabled. Arr-reported paths outside these roots are never
+	// opened, even for administrators.
+	MediaDownloadRoots []string
 }
 
 func Load() (*Config, error) {
@@ -89,6 +94,7 @@ func Load() (*Config, error) {
 		PushEnrollToken:    os.Getenv("CANTINARR_PUSH_ENROLL_TOKEN"),
 		CodexBin:           strings.TrimSpace(os.Getenv("CANTINARR_CODEX_BIN")),
 		CodexRuntimeDir:    strings.TrimSpace(os.Getenv("CANTINARR_CODEX_RUNTIME_DIR")),
+		MediaDownloadRoots: splitEnvList(os.Getenv("CANTINARR_MEDIA_ROOTS")),
 	}
 
 	cfg.DisableUpdateCheck = envBool(os.Getenv("CANTINARR_DISABLE_UPDATE_CHECK"))
@@ -123,12 +129,16 @@ func Load() (*Config, error) {
 	if cfg.CodexRuntimeDir != "" && !filepath.IsAbs(cfg.CodexRuntimeDir) {
 		return nil, fmt.Errorf("invalid CANTINARR_CODEX_RUNTIME_DIR: must be an absolute path")
 	}
+	var err error
+	cfg.MediaDownloadRoots, err = normalizeMediaDownloadRoots(cfg.MediaDownloadRoots)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CANTINARR_MEDIA_ROOTS: %w", err)
+	}
 
 	androidFingerprints := os.Getenv("CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS")
 	if androidFingerprints == "" {
 		androidFingerprints = os.Getenv("CANTINARR_ANDROID_CERT_SHA256")
 	}
-	var err error
 	cfg.AndroidCertFingerprints, err = normalizeAndroidFingerprints(
 		splitEnvList(androidFingerprints),
 	)
@@ -159,6 +169,48 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func normalizeMediaDownloadRoots(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		if !filepath.IsAbs(value) {
+			return nil, fmt.Errorf("entry %q must be an absolute path", value)
+		}
+		cleaned := filepath.Clean(value)
+		if filepath.Dir(cleaned) == cleaned {
+			return nil, fmt.Errorf("filesystem root is too broad")
+		}
+		resolved, err := filepath.EvalSymlinks(cleaned)
+		if err != nil {
+			return nil, fmt.Errorf("entry %q is not accessible: %w", value, err)
+		}
+		if filepath.Dir(resolved) == resolved {
+			return nil, fmt.Errorf("entry %q resolves to the filesystem root", value)
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("entry %q is not accessible: %w", value, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("entry %q is not a directory", value)
+		}
+		// Retain the cleaned lexical path. Arr file records refer to the path
+		// mounted in their container, and resolving aliases here (notably macOS
+		// /var -> /private/var) would make an otherwise exact shared mount stop
+		// matching. The resolved path above is used only to validate the target
+		// and reject aliases of the filesystem root.
+		if seen[cleaned] {
+			continue
+		}
+		seen[cleaned] = true
+		result = append(result, cleaned)
+	}
+	return result, nil
 }
 
 func isKubernetesServiceLinkPort(value string) bool {

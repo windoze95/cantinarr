@@ -17,6 +17,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
+	"github.com/windoze95/cantinarr-server/internal/mediafiles"
 	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
@@ -45,6 +46,7 @@ func NewRouter(
 	instanceHandler *instance.Handler,
 	instanceStore *instance.Store,
 	downloadsHandler *downloads.Handler,
+	mediaFilesHandler *mediafiles.Handler,
 	tautulliHandler *tautulli.Handler,
 	creds *credentials.Registry,
 	credHandler *credentials.Handler,
@@ -98,6 +100,13 @@ func NewRouter(
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		})
+
+		// Media bytes use a short-lived opaque capability in the path so browser
+		// downloads and Range resumes need not expose the session JWT. Ticket
+		// issuance below is authenticated; an unknown or expired capability is a
+		// generic 404. HEAD is explicit because browsers commonly probe first.
+		r.Get("/media-files/download/{ticket}", mediaFilesHandler.Download)
+		r.Head("/media-files/download/{ticket}", mediaFilesHandler.Download)
 
 		// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook). No session:
 		// the server-only per-instance credential is supplied through Basic Auth;
@@ -241,6 +250,14 @@ func NewRouter(
 			r.Use(authService.AuthMiddleware)
 			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService))
 		})
+
+		// Completed-media ticket issuance (authenticated requester/admin). The
+		// handler additionally enforces the requester's exact effective instance
+		// and accepts only a live arr file ID, never a client-supplied path.
+		r.With(
+			authService.AuthMiddleware,
+			auth.RequirePermission(auth.PermissionMediaDownload),
+		).Post("/media-files/tickets", mediaFilesHandler.IssueTicket)
 
 		// Device push-token + notification preference routes (authenticated).
 		// Any signed-in user may register/clear the APNs token for one of their
@@ -547,12 +564,13 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			aiAvailable = aiHandler.AvailableForUser(userID)
 		}
 		services := map[string]bool{
-			"radarr":   false,
-			"sonarr":   false,
-			"chaptarr": false,
-			"ai":       aiAvailable,
-			"tmdb":     creds.IsConfigured(credentials.KeyTMDBAccessToken),
-			"trakt":    creds.IsConfigured(credentials.KeyTraktClientID),
+			"radarr":          false,
+			"sonarr":          false,
+			"chaptarr":        false,
+			"media_downloads": len(cfg.MediaDownloadRoots) > 0,
+			"ai":              aiAvailable,
+			"tmdb":            creds.IsConfigured(credentials.KeyTMDBAccessToken),
+			"trakt":           creds.IsConfigured(credentials.KeyTraktClientID),
 		}
 		for _, inst := range instances {
 			switch inst.ServiceType {

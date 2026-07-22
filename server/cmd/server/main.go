@@ -25,6 +25,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/mediafiles"
 	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
@@ -107,6 +108,15 @@ func main() {
 	instanceStore := instance.NewStore(database, cipher)
 	registry := instance.NewRegistry(instanceStore)
 	instanceHandler := instance.NewHandler(instanceStore, registry, cfg.PublicURL)
+	mediaFilesHandler, err := mediafiles.NewHandler(instanceStore, registry, authService, cfg.MediaDownloadRoots)
+	if err != nil {
+		log.Fatalf("Failed to initialize media downloads: %v", err)
+	}
+	defer func() {
+		if err := mediaFilesHandler.Close(); err != nil {
+			log.Printf("Failed to close media download roots: %v", err)
+		}
+	}()
 
 	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission queue management)
 	downloadsHandler := downloads.NewHandler(instanceStore, registry)
@@ -262,7 +272,7 @@ func main() {
 	serverSettings := serversettings.NewService(database)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService, updateChecker, serverSettings)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService, updateChecker, serverSettings)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

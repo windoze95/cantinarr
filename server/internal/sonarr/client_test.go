@@ -16,6 +16,43 @@ type failingTransport struct{ err error }
 
 func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
 
+func TestGetEpisodeFileUsesExactAuthenticatedEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/episodefile/91" || r.URL.RawQuery != "" {
+			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if got := r.Header.Get("X-Api-Key"); got != "episode-key" {
+			t.Errorf("X-Api-Key = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"id":91,"seriesId":4,"seasonNumber":2,"relativePath":"Season 02/Episode.mkv","path":"/library/Season 02/Episode.mkv","size":654321}`))
+	}))
+	t.Cleanup(server.Close)
+
+	file, err := NewClient(server.URL, "episode-key").GetEpisodeFile(91)
+	if err != nil {
+		t.Fatalf("GetEpisodeFile() error = %v", err)
+	}
+	if file.ID != 91 || file.SeriesID != 4 || file.SeasonNumber != 2 || file.Path != "/library/Season 02/Episode.mkv" || file.RelativePath != "Season 02/Episode.mkv" || file.Size != 654321 {
+		t.Fatalf("file = %#v", file)
+	}
+}
+
+func TestGetEpisodeFileOmitsUpstreamErrorBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`secret path /library/private and signed-token`))
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := NewClient(server.URL, "key").GetEpisodeFile(91)
+	if err == nil {
+		t.Fatal("GetEpisodeFile() error = nil")
+	}
+	if message := err.Error(); strings.Contains(message, "/library/private") || strings.Contains(message, "signed-token") {
+		t.Fatalf("error leaked upstream body: %q", message)
+	}
+}
+
 // TestTransportErrorOmitsHost pins the topology-privacy property: transport
 // failures embed the full request URL (and DNS errors repeat the hostname),
 // and these errors surface to requesters through request failures — so the

@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -141,6 +143,56 @@ func TestLoadCodexRuntimeConfig(t *testing.T) {
 	t.Setenv("CANTINARR_CODEX_RUNTIME_DIR", "relative/codex")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want relative Codex runtime dir rejection")
+	}
+}
+
+func TestLoadMediaDownloadRoots(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "media-link")
+	if err := os.Symlink(first, alias); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	t.Setenv("CANTINARR_MEDIA_ROOTS", first+", "+second+", "+alias)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.MediaDownloadRoots) != 3 {
+		t.Fatalf("MediaDownloadRoots = %#v, want three lexical roots", cfg.MediaDownloadRoots)
+	}
+	if cfg.MediaDownloadRoots[0] != filepath.Clean(first) ||
+		cfg.MediaDownloadRoots[1] != filepath.Clean(second) ||
+		cfg.MediaDownloadRoots[2] != filepath.Clean(alias) {
+		t.Fatalf("MediaDownloadRoots = %#v, want lexical paths [%q %q %q]", cfg.MediaDownloadRoots, first, second, alias)
+	}
+}
+
+func TestLoadRejectsUnsafeMediaDownloadRoots(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(file, []byte("x"), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	rootAlias := filepath.Join(t.TempDir(), "root-link")
+	if err := os.Symlink(string(filepath.Separator), rootAlias); err != nil {
+		t.Fatalf("Symlink(root) error = %v", err)
+	}
+
+	for name, value := range map[string]string{
+		"relative":        "media",
+		"filesystem root": string(filepath.Separator),
+		"root symlink":    rootAlias,
+		"regular file":    file,
+		"missing":         missing,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CANTINARR_MEDIA_ROOTS", value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want invalid media root error")
+			}
+		})
 	}
 }
 

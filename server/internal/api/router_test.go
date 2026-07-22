@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
@@ -220,6 +221,33 @@ func TestConfigHandlerFailsClosedWhenUserDefaultsUnavailable(t *testing.T) {
 	}
 }
 
+func TestConfigHandlerReportsMediaDownloadCapabilityWithoutExposingRoots(t *testing.T) {
+	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
+	rootSentinel := "/private/library/path-must-not-cross-api"
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{
+		UserID: userID,
+		Role:   auth.RoleUser,
+	}))
+	rec := httptest.NewRecorder()
+
+	configHandler(&config.Config{MediaDownloadRoots: []string{rootSentinel}}, store, creds, nil, remediationSvc)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response configHandlerResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	if !response.Services["media_downloads"] {
+		t.Fatalf("services = %#v, want media_downloads capability", response.Services)
+	}
+	if strings.Contains(rec.Body.String(), rootSentinel) {
+		t.Fatalf("config exposed media root: %s", rec.Body.String())
+	}
+}
+
 // SEC-018: requester and admin config responses expose only effective, non-secret configuration.
 func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
@@ -376,11 +404,14 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			if err := json.Unmarshal(payload["services"], &services); err != nil {
 				t.Fatalf("decode services: %v", err)
 			}
-			assertExactMapKeys(t, services, "radarr", "sonarr", "chaptarr", "ai", "tmdb", "trakt")
+			assertExactMapKeys(t, services, "radarr", "sonarr", "chaptarr", "media_downloads", "ai", "tmdb", "trakt")
 			for _, serviceType := range []string{"radarr", "sonarr", "chaptarr", "ai", "tmdb", "trakt"} {
 				if !services[serviceType] {
 					t.Errorf("services[%q] = false, want true", serviceType)
 				}
+			}
+			if services["media_downloads"] {
+				t.Error("services[\"media_downloads\"] = true with no configured roots")
 			}
 
 			var gotInstances []map[string]json.RawMessage
