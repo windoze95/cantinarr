@@ -278,31 +278,37 @@ class _FormatChoiceTile extends StatelessWidget {
       BookRequestFormat.audiobook => Icons.headphones,
       BookRequestFormat.both => Icons.library_books,
     };
-    return ListTile(
-      enabled: !covered,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-      leading:
-          Icon(icon, color: covered ? AppTheme.textSecondary : AppTheme.accent),
-      title: Text(
-        choice.label,
-        style: TextStyle(
-          color: covered ? AppTheme.textSecondary : AppTheme.textPrimary,
-          fontWeight: FontWeight.w600,
+    // Give the tile its own ink surface. The sheet's rounded background is a
+    // DecoratedBox, which otherwise sits between ListTile and the modal's
+    // Material and can hide taps/splashes (and trips Flutter's debug check).
+    return Material(
+      color: Colors.transparent,
+      child: ListTile(
+        enabled: !covered,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+        leading: Icon(icon,
+            color: covered ? AppTheme.textSecondary : AppTheme.accent),
+        title: Text(
+          choice.label,
+          style: TextStyle(
+            color: covered ? AppTheme.textSecondary : AppTheme.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
         ),
+        subtitle: covered && statusLabel != null
+            ? Text(statusLabel!,
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 12))
+            : null,
+        trailing: covered
+            ? const Icon(Icons.check, color: AppTheme.available, size: 18)
+            : null,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: AppTheme.border),
+        ),
+        onTap: covered ? null : () => Navigator.of(context).pop(choice),
       ),
-      subtitle: covered && statusLabel != null
-          ? Text(statusLabel!,
-              style:
-                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12))
-          : null,
-      trailing: covered
-          ? const Icon(Icons.check, color: AppTheme.available, size: 18)
-          : null,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: AppTheme.border),
-      ),
-      onTap: covered ? null : () => Navigator.of(context).pop(choice),
     );
   }
 }
