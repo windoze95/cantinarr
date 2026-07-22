@@ -56,17 +56,17 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Movies / TV tabs** -- discovery rows plus live library rows from the user's default instances: Downloading Soon, Recently Downloaded, Airing Next.
 - **Cinematic title pages** -- movie/show detail opens under a full-bleed, unblurred backdrop hero: the image parallaxes at half scroll speed (with an iOS overscroll stretch-zoom and a settle-in on load), then hands off to a pinned marquee bar carrying the title and back control. Titles without artwork get a warm ambient-glow stage instead.
 - **Releases tab** -- a unified movie + episode release timeline with list and month-calendar views.
-- **Books tab** -- appears only for users with a Chaptarr grant: owned-aware book search with per-format request buttons (see Books).
+- **Books tab** -- appears only for users with a Chaptarr grant: owned-aware book search with per-format request buttons and tappable results that open a richer book detail (see Books).
 
 ### Requests
 - **One-tap requesting** with status-aware labels: Request → Pending (awaiting approval) → Requested → Downloading → **Available**; partially-available shows get **Request More**, which jumps to the season picker. The ready state stays provider-neutral rather than assuming a particular playback app.
 - **Season-level choice** -- per-season availability, multi-select, "Request N seasons"; shown only to users the admin has allowed to choose (others inherit the default scope).
-- **Book formats** -- request the eBook, the Audiobook, or both; formats already owned or requested are disabled with their status shown.
+- **Book formats** -- request the eBook, the Audiobook, or both; the book detail keeps separate eBook and Audiobook states visible, and formats already owned or requested are disabled with their status shown.
 - **Live status** -- request state and download progress update in real time over WebSocket, including changes made directly in the arrs (webhooks).
 
-### Movies & TV management (admin)
+### Media management (admin)
 - **Drill-down** -- library → movie detail, or series → season → episode, with per-item download progress, quality/size, history, and messages, proxied from Radarr/Sonarr API v3 with credential fields scrubbed server-side.
-- **Open in Radarr/Sonarr** -- on a discovery detail page, admins get a jump into the matching arr item, shown only once the title actually exists there (it appears right after a request adds it). Movies link to Radarr, TV to Sonarr; books are out of scope.
+- **Open in Radarr/Sonarr/Chaptarr** -- on a requester detail page, admins get a jump into the exact matching arr item, shown only once the title actually exists there (it appears right after a request adds it). Movies link to Radarr, TV to Sonarr, and books link to their grouped eBook/Audiobook records in Chaptarr.
 - **Explicit safe removal** -- destructive library actions live in each row's labeled overflow menu rather than behind a swipe gesture; confirmation is mandatory and deleting files from disk is always opt-in.
 - **Sonarr episode power tools** -- long-press action menus, episode **multi-select with batch search** (quick-select All / Undownloaded), batch **delete files**, an **All Seasons** view, per-season/series monitor toggles, **Edit Series** (profile, type, path, tags, season folders), and external links (IMDb/TheTVDB/TMDB/Trakt).
 - **Interactive release search** -- per-episode, per-season, per-movie, and per-book: live indexer results with smart sorting, seeders/leechers, and rejection reasons; tap to grab.
@@ -74,6 +74,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 
 ### Books (Chaptarr)
 - **Per-format everything** -- a title's ebook and audiobook are separate records; the author page groups monitored titles first and shows two bookmark toggles per book (tap an empty one to add + search the missing format).
+- **Requester book detail** -- search results stay navigable before and after a request, with author, publication metadata, synopsis, genres, and separate eBook/Audiobook request states; admins can continue into the exact live Chaptarr title.
 - **Owned-aware search** -- library titles are injected into lookup results and floated to the top with Downloaded / In Library chips; distinct records are never merged.
 - **Full module** -- library with author drill-down, queue with Import Doctor, history, and wanted (missing / cutoff unmet).
 

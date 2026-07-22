@@ -3,9 +3,12 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
+import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
@@ -235,6 +238,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
     // backend's /requests endpoint, not the Chaptarr proxy).
     final requestService =
         RequestService(backendDio: ref.read(backendClientProvider));
+    final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
     final instanceId = ref.read(instanceProvider).activeChaptarrInstance?.id;
     // Full-width scroll surface; the result column is capped and centered so
     // rows stay readable on desktop widths.
@@ -255,6 +259,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
               ? null
               : chaptarrImageSource(ref, ordered[i].$3, instanceId),
           requestService: requestService,
+          requestRefreshTick: requestRefreshTick,
         ),
       );
     });
@@ -266,12 +271,14 @@ class _BookResultTile extends StatelessWidget {
   final BookOwnership? ownership;
   final ChaptarrImageSource? cover;
   final RequestService requestService;
+  final int requestRefreshTick;
 
   const _BookResultTile({
     required this.book,
     this.ownership,
     this.cover,
     required this.requestService,
+    required this.requestRefreshTick,
   });
 
   @override
@@ -290,8 +297,10 @@ class _BookResultTile extends StatelessWidget {
     final bothDownloaded =
         o != null && o.ebook.downloaded && o.audiobook.downloaded;
     final chip = _ownershipChip(o);
+    final canOpen = fid != null && fid.isNotEmpty;
 
     return ListTile(
+      key: ValueKey('book-result:$fid'),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(4),
@@ -331,18 +340,33 @@ class _BookResultTile extends StatelessWidget {
                 ],
               ),
             ),
-      // Both files present → just the chip; otherwise offer Request / Request
-      // more for the format(s) without a file (the button gates per format).
-      trailing: bothDownloaded
-          ? null
-          : (fid != null && fid.isNotEmpty)
-              ? BookRequestButton(
-                  foreignId: fid,
-                  title: book.title,
-                  service: requestService,
-                  ownership: o,
-                )
-              : null,
+      // The whole row remains an entry point before and after requesting. The
+      // chevron makes that destination visible even while the trailing request
+      // control is disabled because both formats are already covered.
+      trailing: canOpen
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!bothDownloaded)
+                  BookRequestButton(
+                    key: ValueKey('book-request:$fid:$requestRefreshTick'),
+                    foreignId: fid,
+                    title: book.title,
+                    service: requestService,
+                    ownership: o,
+                  ),
+                const Icon(Icons.chevron_right,
+                    color: AppTheme.textSecondary),
+              ],
+            )
+          : null,
+      onTap: canOpen
+          ? () => context.push(
+                '/detail/book/${Uri.encodeComponent(fid)}'
+                '?title=${Uri.encodeQueryComponent(book.title)}',
+                extra: book,
+              )
+          : null,
     );
   }
 }

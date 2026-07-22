@@ -4,7 +4,10 @@ import 'dart:typed_data';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/providers/instance_provider.dart';
+import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/chaptarr/ui/chaptarr_book_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
@@ -27,15 +30,23 @@ void main() {
 
     expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
     expect(find.text('Ahsoka'), findsOneWidget);
-    expect(find.text('E. K. Johnston · 2016'), findsOneWidget);
-    // The ebook is monitored (not downloaded) → In Library, and its open
-    // audiobook keeps the requester affordance available: an already-requested
-    // ebook plus an open audiobook reads "Request more".
-    expect(find.text('In Library'), findsOneWidget);
+    expect(find.text('E. K. Johnston'), findsOneWidget);
+    expect(find.text('2016'), findsOneWidget);
+    expect(find.text('eBook'), findsOneWidget);
+    expect(find.text('Audiobook'), findsOneWidget);
+    expect(find.text('Requested'), findsOneWidget);
+    expect(find.text('Not requested'), findsOneWidget);
+    // The requested ebook plus an open audiobook reads "Request more".
+    await tester.scrollUntilVisible(
+      find.text('Request more'),
+      250,
+      scrollable: _detailScrollable(),
+    );
     expect(find.text('Request more'), findsOneWidget);
+    expect(find.text('Open in Chaptarr'), findsNothing);
   });
 
-  testWidgets('the deep-link title names a book the library cannot resolve',
+  testWidgets('a deep link resolves rich metadata and both requested formats',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester);
 
@@ -43,8 +54,76 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Dune Messiah'), findsOneWidget);
-    // No request rows and no ownership → a plain Request affordance.
-    expect(find.text('Request'), findsOneWidget);
+    expect(find.text('Frank Herbert'), findsOneWidget);
+    expect(find.text('1969 · 336 pages'), findsOneWidget);
+    expect(find.text('The desert planet has a new emperor.'), findsOneWidget);
+    expect(find.text('Science Fiction'), findsOneWidget);
+    expect(find.text('Requested'), findsNWidgets(3));
+  });
+
+  testWidgets('an admin can open both exact-format records in Chaptarr',
+      (tester) async {
+    final (:router, :container) =
+        await _pumpRouter(tester, authState: _adminBooksState);
+
+    router.go('/detail/book/29749107?title=Ahsoka');
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('Open in Chaptarr'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.text('Open in Chaptarr'), findsOneWidget);
+    // The destination stays bound to the instance that supplied the records,
+    // even if the drawer selection changes before the admin taps through.
+    container
+        .read(instanceProvider.notifier)
+        .setActiveChaptarrInstance('books-two');
+    await tester.pump();
+    await tester.tap(find.text('Open in Chaptarr'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ChaptarrBookScreen), findsOneWidget);
+    final screen = tester.widget<ChaptarrBookScreen>(
+      find.byType(ChaptarrBookScreen),
+    );
+    expect(screen.instanceId, 'books');
+    expect(screen.records, hasLength(2));
+    expect(screen.records.map((book) => book.mediaType),
+        orderedEquals(['ebook', 'audiobook']));
+  });
+
+  testWidgets('an absolute owned cover origin is never sent to the client',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      ownedCover: 'http://chaptarr:8787/MediaCover/Books/42/cover.jpg',
+    );
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    final cover = tester.widget<CachedImage>(
+      find.descendant(
+        of: find.byType(RequesterBookDetailScreen),
+        matching: find.byType(CachedImage),
+      ),
+    );
+    expect(cover.url, isNull);
+  });
+
+  testWidgets('an admin link requires an exact live foreign id match',
+      (tester) async {
+    final (:router, container: _) =
+        await _pumpRouter(tester, authState: _adminBooksState);
+
+    router.go('/detail/book/555?title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+
+    // The live list contains Ahsoka, but not this metadata-only Dune result.
+    expect(find.text('Dune Messiah'), findsOneWidget);
+    expect(find.text('Open in Chaptarr'), findsNothing);
   });
 
   testWidgets('an unresolvable id shows a graceful state with a Books tab exit',
@@ -86,12 +165,44 @@ const _booksState = AuthState(
   user: UserProfile(id: 1, username: 'tester', role: 'user'),
 );
 
+const _adminBooksState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(chaptarr: true),
+    instances: [
+      ServiceInstance(
+        id: 'books',
+        serviceType: 'chaptarr',
+        name: 'Books',
+        isDefault: true,
+      ),
+      ServiceInstance(
+        id: 'books-two',
+        serviceType: 'chaptarr',
+        name: 'Other Books',
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'admin', role: 'admin'),
+);
+
 Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
-    WidgetTester tester) async {
+  WidgetTester tester, {
+  AuthState authState = _booksState,
+  String ownedCover = '',
+}) async {
+  tester.view.physicalSize = const Size(390, 844);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(() {
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(() => _FakeAuthNotifier(_booksState)),
-      backendClientProvider.overrideWithValue(_fakeDio()),
+      authProvider.overrideWith(() => _FakeAuthNotifier(authState)),
+      backendClientProvider.overrideWithValue(_fakeDio(ownedCover: ownedCover)),
     ],
   );
   addTearDown(container.dispose);
@@ -118,16 +229,19 @@ class _FakeAuthNotifier extends AuthNotifier {
   Future<AuthState> build() async => _initial;
 }
 
-Dio _fakeDio() {
+Dio _fakeDio({String ownedCover = ''}) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
-  dio.httpClientAdapter = _BooksAdapter();
+  dio.httpClientAdapter = _BooksAdapter(ownedCover: ownedCover);
   return dio;
 }
 
-/// Serves the two endpoints the detail surface reads — the owned-books digest
-/// and the per-user book request status — plus empty generic payloads for the
-/// dashboard feeds behind the initial route.
+/// Serves requester metadata/status plus the live Chaptarr records an admin
+/// resolves before showing the internal module link.
 class _BooksAdapter implements HttpClientAdapter {
+  final String ownedCover;
+
+  const _BooksAdapter({this.ownedCover = ''});
+
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
@@ -142,9 +256,8 @@ class _BooksAdapter implements HttpClientAdapter {
             'title': 'Ahsoka',
             'author': 'E. K. Johnston',
             'year': 2016,
-            // Empty on purpose: a non-empty cover would start a real image
-            // fetch inside the test.
-            'cover': '',
+            // Empty by default so most tests never start a real image fetch.
+            'cover': ownedCover,
             'foreign_book_id': '29749107',
             'ebook': {'monitored': true, 'downloaded': false},
             'audiobook': {'monitored': false, 'downloaded': false},
@@ -152,12 +265,43 @@ class _BooksAdapter implements HttpClientAdapter {
         ],
       };
     } else if (options.path == '/api/requests/book-status') {
-      body = options.queryParameters['foreign_id'] == '29749107'
-          ? {
-              'status': 'requested',
-              'book_formats': {'ebook': 'requested'},
-            }
-          : {'status': 'unavailable'};
+      body = switch (options.queryParameters['foreign_id']) {
+        '29749107' => {
+            'status': 'requested',
+            'book_formats': {'ebook': 'requested'},
+          },
+        '555' => {
+            'status': 'requested',
+            'book_formats': {
+              'ebook': 'requested',
+              'audiobook': 'requested',
+            },
+          },
+        _ => {'status': 'unavailable'},
+      };
+    } else if (options.path.endsWith('/api/v1/book/lookup')) {
+      body = [
+        {
+          'title': 'Dune Messiah',
+          'foreignBookId': '555',
+          'year': 1969,
+          'pageCount': 336,
+          'overview': 'The desert planet has a new emperor.',
+          'genres': ['Science Fiction'],
+          'author': {
+            'id': 0,
+            'authorName': 'Frank Herbert',
+            'foreignAuthorId': 'author-2',
+          },
+        },
+      ];
+    } else if (options.path.endsWith('/api/v1/book')) {
+      body = [
+        _liveBook(id: 42, mediaType: 'ebook'),
+        _liveBook(id: 43, mediaType: 'audiobook'),
+      ];
+    } else if (options.path.endsWith('/api/v1/bookfile')) {
+      body = <Object>[];
     } else if (options.path == '/api/trakt/anticipated') {
       body = <Object>[];
     } else {
@@ -180,3 +324,28 @@ class _BooksAdapter implements HttpClientAdapter {
   @override
   void close({bool force = false}) {}
 }
+
+Map<String, dynamic> _liveBook({
+  required int id,
+  required String mediaType,
+}) =>
+    {
+      'id': id,
+      'title': 'Ahsoka',
+      'foreignBookId': '29749107',
+      'mediaType': mediaType,
+      'monitored': true,
+      'releaseDate': '2016-10-11T00:00:00Z',
+      'overview': 'A former Jedi searches for a new path.',
+      'author': {
+        'id': 7,
+        'authorName': 'E. K. Johnston',
+        'foreignAuthorId': 'author-1',
+      },
+      'statistics': {'bookFileCount': 0, 'bookCount': 1},
+    };
+
+Finder _detailScrollable() => find.descendant(
+      of: find.byType(RequesterBookDetailScreen),
+      matching: find.byType(Scrollable),
+    );
