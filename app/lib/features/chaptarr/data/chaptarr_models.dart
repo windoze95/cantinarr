@@ -1,3 +1,5 @@
+import '../../../core/utils/plain_text_metadata.dart';
+
 /// The medium a book file is stored in. Mirrors the Go `FormatOf` helper:
 /// ebook formats (EPUB/MOBI/…) vs audiobook formats (MP3/M4B/…).
 enum BookFormat { ebook, audiobook, unknown }
@@ -458,10 +460,10 @@ class ChaptarrBook {
   /// Best available synopsis, falling back to edition metadata when the book
   /// lookup itself leaves `overview` empty.
   String? get displayOverview {
-    final value = overview?.trim() ?? '';
+    final value = metadataPlainText(overview);
     if (value.isNotEmpty) return value;
     for (final edition in editions) {
-      final editionOverview = edition.overview?.trim() ?? '';
+      final editionOverview = metadataPlainText(edition.overview);
       if (editionOverview.isNotEmpty) return editionOverview;
     }
     return null;
@@ -706,6 +708,7 @@ class ChaptarrQueueItem {
   final List<ChaptarrStatusMessage> statusMessageGroups;
   final String? downloadId;
   final String? quality;
+  final String? mediaType;
 
   const ChaptarrQueueItem({
     required this.id,
@@ -728,6 +731,7 @@ class ChaptarrQueueItem {
     this.statusMessageGroups = const [],
     this.downloadId,
     this.quality,
+    this.mediaType,
   });
 
   factory ChaptarrQueueItem.fromJson(Map<String, dynamic> json) {
@@ -771,7 +775,18 @@ class ChaptarrQueueItem {
       downloadId: json['downloadId'] as String?,
       quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
           as String?,
+      mediaType: book?['mediaType'] as String?,
     );
+  }
+
+  BookFormat get format {
+    switch (mediaType) {
+      case 'ebook':
+        return BookFormat.ebook;
+      case 'audiobook':
+        return BookFormat.audiobook;
+    }
+    return bookFormatFromQuality(quality ?? title);
   }
 
   double get progress =>
@@ -839,6 +854,13 @@ class ChaptarrHistoryRecord {
 
   /// Release group parsed from the grab, when present.
   String? get releaseGroup => data['releaseGroup'];
+
+  BookFormat get format {
+    final mediaType = data['mediaType']?.toLowerCase();
+    if (mediaType == 'ebook') return BookFormat.ebook;
+    if (mediaType == 'audiobook') return BookFormat.audiobook;
+    return bookFormatFromQuality(quality ?? sourceTitle);
+  }
 }
 
 /// Paged envelope for Chaptarr history.
@@ -864,6 +886,7 @@ class ChaptarrWantedRecord {
   final DateTime? releaseDate;
   final bool monitored;
   final String? authorTitle;
+  final String? mediaType;
 
   const ChaptarrWantedRecord({
     required this.id,
@@ -873,6 +896,7 @@ class ChaptarrWantedRecord {
     this.releaseDate,
     this.monitored = true,
     this.authorTitle,
+    this.mediaType,
   });
 
   factory ChaptarrWantedRecord.fromJson(Map<String, dynamic> json) =>
@@ -885,7 +909,14 @@ class ChaptarrWantedRecord {
         monitored: json['monitored'] as bool? ?? true,
         authorTitle:
             (json['author'] as Map<String, dynamic>?)?['authorName'] as String?,
+        mediaType: json['mediaType'] as String?,
       );
+
+  BookFormat get format {
+    if (mediaType == 'ebook') return BookFormat.ebook;
+    if (mediaType == 'audiobook') return BookFormat.audiobook;
+    return BookFormat.unknown;
+  }
 }
 
 /// Paged envelope for Chaptarr wanted books (missing / cutoff unmet).

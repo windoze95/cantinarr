@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
+import 'widgets/format_badge.dart';
 
 enum _WantedView { missing, cutoff }
 
@@ -296,9 +297,12 @@ class _WantedTile extends StatelessWidget {
       ),
       trailing: IconButton(
         icon: const Icon(Icons.search, color: AppTheme.accent, size: 22),
-        tooltip: 'Automatic search',
+        tooltip: 'Find automatically',
         onPressed: onAutomaticSearch,
       ),
+      leading: record.format == BookFormat.unknown
+          ? null
+          : ChaptarrFormatBadge(format: record.format),
     );
   }
 }

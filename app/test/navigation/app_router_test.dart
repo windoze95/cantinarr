@@ -200,6 +200,20 @@ void main() {
     expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
   });
 
+  testWidgets('book detail route preserves a pinned Chaptarr instance',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _booksState);
+
+    router.go('/detail/book/29749107?instance_id=books-two');
+    await tester.pumpAndSettle();
+
+    final screen = tester.widget<RequesterBookDetailScreen>(
+      find.byType(RequesterBookDetailScreen),
+    );
+    expect(screen.foreignId, '29749107');
+    expect(screen.instanceId, 'books-two');
+  });
+
   testWidgets('a blank book detail id degrades to the Books tab',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester, _booksState);

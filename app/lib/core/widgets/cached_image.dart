@@ -55,11 +55,9 @@ class CachedImage extends StatelessWidget {
       width: width,
       height: height,
       fadeInDuration: const Duration(milliseconds: 200),
-      placeholder: (_, __) => Container(
-        width: width,
-        height: height,
-        color: AppTheme.surfaceVariant,
-      ),
+      // Keep the same fallback visible while the network image resolves. A
+      // blank rectangle briefly reads as a missing cover on slower devices.
+      placeholder: (_, __) => _fallback(),
       errorWidget: (_, __, ___) => _fallback(),
     );
   }

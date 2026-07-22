@@ -205,7 +205,7 @@ class _AuthorTile extends StatelessWidget {
                         Icon(Icons.search,
                             size: 18, color: AppTheme.textSecondary),
                         SizedBox(width: 10),
-                        Text('Automatic search'),
+                        Text('Find books automatically'),
                       ],
                     ),
                   ),

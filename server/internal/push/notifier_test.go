@@ -132,9 +132,9 @@ func TestNotifyUserRequestDecision(t *testing.T) {
 	}
 }
 
-// A book decision's payload carries the Chaptarr foreignBookId (books store
-// tmdb_id 0), so the app can deep-link the tap to the right book.
-func TestNotifyUserBookRequestDecisionCarriesForeignID(t *testing.T) {
+// A book decision carries its canonical identity and selected Chaptarr
+// instance, and its visible copy names only the format that actually succeeded.
+func TestNotifyUserBookRequestDecisionCarriesPinnedFormatScope(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -146,12 +146,14 @@ func TestNotifyUserBookRequestDecisionCarriesForeignID(t *testing.T) {
 	n := NewNotifier(database, mgr, nil)
 
 	n.NotifyUser(42, "request_decision", map[string]interface{}{
-		"decision":   "approved",
-		"tmdb_id":    0,
-		"media_type": "book",
-		"foreign_id": "29749107",
-		"title":      "Ahsoka (Star Wars)",
-		"status":     "requested",
+		"decision":    "approved",
+		"tmdb_id":     0,
+		"media_type":  "book",
+		"foreign_id":  "29749107",
+		"instance_id": "family-books",
+		"book_format": "ebook",
+		"title":       "Ahsoka (Star Wars)",
+		"status":      "requested",
 	})
 
 	body := cap.waitForNotification(t)
@@ -161,6 +163,36 @@ func TestNotifyUserBookRequestDecisionCarriesForeignID(t *testing.T) {
 	}
 	if data["foreign_id"] != "29749107" {
 		t.Errorf("data.foreign_id = %v, want 29749107", data["foreign_id"])
+	}
+	if data["instance_id"] != "family-books" || data["title"] != "Ahsoka (Star Wars)" || data["book_format"] != "ebook" {
+		t.Errorf("book deep-link data = %v, want pinned instance/title/ebook scope", data)
+	}
+	notification, _ := body["notification"].(map[string]any)
+	if notification["body"] != "Ahsoka (Star Wars) eBook is on the way" {
+		t.Errorf("notification body = %q, want format-scoped approval", notification["body"])
+	}
+}
+
+func TestDecisionMessageScopesBookDenialAndBothApproval(t *testing.T) {
+	_, denied := decisionMessage(map[string]interface{}{
+		"decision": "denied", "media_type": "book", "title": "Flock",
+		"book_format": "audiobook", "reason": "not available",
+	})
+	if denied != "Flock Audiobook was denied: not available" {
+		t.Fatalf("denied body = %q", denied)
+	}
+	_, approved := decisionMessage(map[string]interface{}{
+		"decision": "approved", "media_type": "book", "title": "Flock",
+		"book_format": "both",
+	})
+	if approved != "Flock eBook and Audiobook are on the way" {
+		t.Fatalf("approved body = %q", approved)
+	}
+	_, movie := decisionMessage(map[string]interface{}{
+		"decision": "approved", "media_type": "movie", "title": "The Matrix",
+	})
+	if movie != "The Matrix is on the way" {
+		t.Fatalf("movie body changed = %q", movie)
 	}
 }
 

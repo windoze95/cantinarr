@@ -69,6 +69,12 @@ class OwnedTitle {
   final String foreignBookId;
   final BookOwnership ownership;
 
+  /// Whether Chaptarr could resolve format truth for this title. Older
+  /// servers omit the field, which means their rows retain the historical
+  /// known-good behavior. A false value must fail closed: the canonical record
+  /// still identifies the book, but no format may be offered as requestable.
+  final bool statusKnown;
+
   const OwnedTitle({
     required this.title,
     required this.author,
@@ -76,6 +82,7 @@ class OwnedTitle {
     this.cover = '',
     this.foreignBookId = '',
     required this.ownership,
+    this.statusKnown = true,
   });
 
   /// Parses one digest entry: `title`/`author`/`year`/`cover`/`foreign_book_id`
@@ -92,5 +99,6 @@ class OwnedTitle {
           audiobook: FormatOwnership.fromJson(
               json['audiobook'] as Map<String, dynamic>?),
         ),
+        statusKnown: json['status_known'] as bool? ?? true,
       );
 }

@@ -10,18 +10,19 @@ void main() {
       );
       expect(d.isCovered(BookRequestFormat.ebook), isTrue);
       expect(d.isCovered(BookRequestFormat.audiobook), isFalse);
-      expect(d.coverageLabel(BookRequestFormat.ebook), 'Downloaded');
+      expect(d.coverageLabel(BookRequestFormat.ebook), 'Available');
     });
 
-    test('a monitored-only ebook (no file) stays requestable', () {
+    test('a monitored-only ebook is requested and cannot be requested again', () {
       const d = BookRequestStatusDetail(
         ownership: BookOwnership(ebook: FormatOwnership(monitored: true)),
       );
-      expect(d.isCovered(BookRequestFormat.ebook), isFalse);
-      expect(d.coverageLabel(BookRequestFormat.ebook), isNull);
+      expect(d.isCovered(BookRequestFormat.ebook), isTrue);
+      expect(d.isRequestable(BookRequestFormat.ebook), isFalse);
+      expect(d.coverageLabel(BookRequestFormat.ebook), 'Requested');
     });
 
-    test('downloaded ebook + monitored-only audiobook keeps audiobook open', () {
+    test('available ebook + monitored audiobook covers both formats', () {
       const d = BookRequestStatusDetail(
         ownership: BookOwnership(
           ebook: FormatOwnership(downloaded: true),
@@ -29,9 +30,10 @@ void main() {
         ),
       );
       expect(d.isCovered(BookRequestFormat.ebook), isTrue); // file present
-      expect(d.isCovered(BookRequestFormat.audiobook), isFalse); // no file yet
-      expect(d.isCovered(BookRequestFormat.both), isFalse);
-      expect(d.coverageLabel(BookRequestFormat.ebook), 'Downloaded');
+      expect(d.isCovered(BookRequestFormat.audiobook), isTrue);
+      expect(d.isCovered(BookRequestFormat.both), isTrue);
+      expect(d.coverageLabel(BookRequestFormat.ebook), 'Available');
+      expect(d.coverageLabel(BookRequestFormat.audiobook), 'Requested');
     });
 
     test('owned ebook + requested audiobook → both covered, labels distinct',
@@ -43,7 +45,7 @@ void main() {
       expect(d.isCovered(BookRequestFormat.ebook), isTrue); // owned
       expect(d.isCovered(BookRequestFormat.audiobook), isTrue); // requested
       expect(d.isCovered(BookRequestFormat.both), isTrue);
-      expect(d.coverageLabel(BookRequestFormat.ebook), 'Downloaded');
+      expect(d.coverageLabel(BookRequestFormat.ebook), 'Available');
       expect(d.coverageLabel(BookRequestFormat.audiobook),
           RequestStatus.requested.label);
     });
@@ -62,6 +64,47 @@ void main() {
       );
       expect(d.isCovered(BookRequestFormat.ebook), isFalse);
       expect(d.coverageLabel(BookRequestFormat.ebook), isNull);
+    });
+
+    test('an unknown lookup blocks every request action', () {
+      const d = BookRequestStatusDetail(isKnown: false);
+      expect(d.statusFor(BookRequestFormat.ebook), isNull);
+      expect(d.isRequestable(BookRequestFormat.ebook), isFalse);
+      expect(d.isRequestable(BookRequestFormat.audiobook), isFalse);
+    });
+
+    test('an unresolved digest row keeps its id but fails format truth closed',
+        () {
+      final row = OwnedTitle.fromJson({
+        'title': 'Flock',
+        'foreign_book_id': 'library-flock',
+        'status_known': false,
+        'ebook': {'monitored': false, 'downloaded': false},
+        'audiobook': {'monitored': false, 'downloaded': false},
+      });
+      final detail = const BookRequestStatusDetail().withOwnership(
+        row.ownership,
+        ownershipStatusKnown: row.statusKnown,
+      );
+
+      expect(row.foreignBookId, 'library-flock');
+      expect(row.statusKnown, isFalse);
+      expect(detail.isKnown, isFalse);
+      expect(
+        detail.effectiveUnknownReason,
+        BookStatusUnknownReason.formatNeedsAttention,
+      );
+      expect(detail.isRequestable(BookRequestFormat.ebook), isFalse);
+      expect(detail.isRequestable(BookRequestFormat.audiobook), isFalse);
+    });
+
+    test('legacy digest rows default to known status', () {
+      final row = OwnedTitle.fromJson({
+        'title': 'Flock',
+        'foreign_book_id': 'library-flock',
+      });
+
+      expect(row.statusKnown, isTrue);
     });
   });
 }

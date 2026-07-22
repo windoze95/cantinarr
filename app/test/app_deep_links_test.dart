@@ -21,6 +21,61 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// passkey links must route only when the link's server matches the connected
 /// one (after normalization), and anything else must be ignored quietly.
 void main() {
+  group('request decision copy', () {
+    test('movie and TV decisions keep their existing whole-request copy', () {
+      expect(
+        requestDecisionSnackText({
+          'decision': 'approved',
+          'media_type': 'movie',
+          'title': 'Arrival',
+        }),
+        'Approved: Arrival',
+      );
+      expect(
+        requestDecisionSnackText({
+          'decision': 'denied',
+          'media_type': 'tv',
+          'title': 'Severance',
+          'reason': 'Not available',
+        }),
+        'Denied: Severance — Not available',
+      );
+    });
+
+    test('partial book approval names only the successful format', () {
+      expect(
+        requestDecisionSnackText({
+          'decision': 'approved',
+          'media_type': 'book',
+          'title': 'Flock',
+          'book_format': 'both',
+          'book_formats': {
+            'ebook': 'requested',
+            'audiobook': 'unavailable',
+          },
+        }),
+        'eBook approved: Flock',
+      );
+    });
+
+    test('book denial names only the denied format and keeps its reason', () {
+      expect(
+        requestDecisionSnackText({
+          'decision': 'denied',
+          'media_type': 'book',
+          'title': 'Flock',
+          'book_format': 'both',
+          'book_formats': {
+            'ebook': 'requested',
+            'audiobook': 'denied',
+          },
+          'reason': 'No audiobook edition',
+        }),
+        'Audiobook denied: Flock — No audiobook edition',
+      );
+    });
+  });
+
   group('normalizeServer / sameServer', () {
     test('ignores trailing slashes', () {
       expect(

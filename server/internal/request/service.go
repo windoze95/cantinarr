@@ -3,9 +3,11 @@ package request
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -26,6 +28,12 @@ const (
 	StatusPartial     = "partial"
 	StatusPending     = "pending"
 	StatusDenied      = "denied"
+)
+
+var (
+	ErrChaptarrInstanceForbidden = errors.New("chaptarr instance is not available to you")
+	ErrChaptarrInstanceInvalid   = errors.New("invalid chaptarr instance")
+	ErrBookFormatUnresolved      = errors.New("book format is unsupported or ambiguous")
 )
 
 // Season scope choices a user (or admin) can attach to a TV request.
@@ -61,7 +69,10 @@ type Service struct {
 	notifier Notifier
 	// libraryCache holds reduced Chaptarr library digests keyed by instance id,
 	// so the owned-books digest doesn't refetch the whole library on every call.
-	libraryCache *cache.Cache
+	libraryCache    *cache.Cache
+	decisionLocks   [64]sync.Mutex
+	bookLocks       [64]sync.Mutex
+	projectionLocks [32]sync.Mutex
 }
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
@@ -72,6 +83,28 @@ func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, no
 		notifier:     notifier,
 		libraryCache: cache.New(),
 	}
+}
+
+func (s *Service) bookLock(key string) *sync.Mutex {
+	return &s.bookLocks[stripeHash(key)%uint32(len(s.bookLocks))]
+}
+
+func (s *Service) decisionLock(requestID int64) *sync.Mutex {
+	return &s.decisionLocks[uint64(requestID)%uint64(len(s.decisionLocks))]
+}
+
+func (s *Service) projectionLock(instanceID string) *sync.Mutex {
+	return &s.projectionLocks[stripeHash(instanceID)%uint32(len(s.projectionLocks))]
+}
+
+func stripeHash(value string) uint32 {
+	const prime32 = uint32(16777619)
+	hash := uint32(2166136261)
+	for i := 0; i < len(value); i++ {
+		hash ^= uint32(value[i])
+		hash *= prime32
+	}
+	return hash
 }
 
 // getRadarr returns the Radarr client to use as a given user's source: their
@@ -105,19 +138,45 @@ func (s *Service) getSonarr(userID int64) *sonarr.Client {
 // default/first Chaptarr instance so they can request books without assigning
 // themselves a per-user grant.
 func (s *Service) getChaptarr(userID int64) *chaptarr.Client {
-	if s.registry != nil {
-		client, _, err := s.registry.GetUserChaptarrClient(userID)
-		if err == nil && client != nil {
-			return client
-		}
-		if s.userIsAdmin(userID) {
-			client, _, err := s.registry.GetDefaultChaptarrClient()
-			if err == nil && client != nil {
-				return client
+	client, _, _ := s.resolveChaptarr(userID, "")
+	return client
+}
+
+// resolveChaptarr resolves an explicitly selected instance when present and
+// enforces requester access before returning a client. Admins may select any
+// configured Chaptarr; omitted IDs preserve the legacy effective-instance
+// behavior.
+func (s *Service) resolveChaptarr(userID int64, instanceID string) (*chaptarr.Client, string, error) {
+	if s.registry == nil {
+		return nil, "", nil
+	}
+	if instanceID != "" {
+		if !s.userIsAdmin(userID) {
+			allowed, err := s.registry.UserCanAccessInstance(userID, instanceID, "chaptarr")
+			if err != nil {
+				return nil, "", fmt.Errorf("check chaptarr access: %w", err)
+			}
+			if !allowed {
+				return nil, "", ErrChaptarrInstanceForbidden
 			}
 		}
+		client, err := s.registry.GetChaptarrClient(instanceID)
+		if err != nil {
+			return nil, "", ErrChaptarrInstanceInvalid
+		}
+		return client, instanceID, nil
 	}
-	return nil
+	client, id, err := s.registry.GetUserChaptarrClient(userID)
+	if err != nil {
+		return nil, "", err
+	}
+	if client != nil {
+		return client, id, nil
+	}
+	if s.userIsAdmin(userID) {
+		return s.registry.GetDefaultChaptarrClient()
+	}
+	return nil, "", nil
 }
 
 type CreateRequest struct {
@@ -127,8 +186,12 @@ type CreateRequest struct {
 	TvdbID    int    `json:"tvdb_id"`
 	// ForeignID is the Chaptarr/Readarr foreignBookId for book requests, which
 	// have no TMDB id. Required when media_type == "book"; ignored otherwise.
-	ForeignID        string `json:"foreign_id"`
-	BookFormat       string `json:"book_format"`
+	ForeignID  string `json:"foreign_id"`
+	BookFormat string `json:"book_format"`
+	// InstanceID pins book operations to the Chaptarr instance the requester is
+	// viewing. It is optional for backward compatibility; omitted uses the
+	// user's effective grant (or the admin default).
+	InstanceID       string `json:"instance_id,omitempty"`
 	SeasonScope      string `json:"season_scope"`
 	QualityProfileID int    `json:"quality_profile_id"`
 	// Seasons is an optional explicit list of season numbers (TV only). When
@@ -139,14 +202,16 @@ type CreateRequest struct {
 }
 
 type CreateResponse struct {
-	Success bool   `json:"success"`
-	Status  string `json:"status"`
-	Title   string `json:"title"`
+	Success     bool              `json:"success"`
+	Status      string            `json:"status"`
+	Title       string            `json:"title"`
+	BookFormats map[string]string `json:"book_formats,omitempty"`
 }
 
 type StatusResponse struct {
-	Status   string  `json:"status"`
-	Progress float64 `json:"progress"`
+	Status      string  `json:"status"`
+	Progress    float64 `json:"progress"`
+	StatusKnown *bool   `json:"status_known,omitempty"`
 	// Seasons carries per-season availability for TV titles (omitted for
 	// movies and for series not yet in the library). Season 0 / Specials are
 	// excluded, matching the rest of the app's season handling.
@@ -170,9 +235,13 @@ type SeasonStatus struct {
 
 type RequestLog struct {
 	TmdbID      int       `json:"tmdb_id"`
+	ForeignID   string    `json:"foreign_id,omitempty"`
+	BookFormat  string    `json:"book_format,omitempty"`
+	InstanceID  string    `json:"instance_id,omitempty"`
 	MediaType   string    `json:"media_type"`
 	Title       string    `json:"title"`
 	Status      string    `json:"status"`
+	StatusKnown bool      `json:"status_known"`
 	DenyReason  string    `json:"deny_reason,omitempty"`
 	RequestedAt time.Time `json:"requested_at"`
 }
@@ -187,6 +256,9 @@ type PendingRequest struct {
 	MediaType        string    `json:"media_type"`
 	Title            string    `json:"title"`
 	BookFormat       string    `json:"book_format"`
+	InstanceID       string    `json:"instance_id,omitempty"`
+	InstanceName     string    `json:"instance_name,omitempty"`
+	RequesterCount   int       `json:"requester_count"`
 	SeasonScope      string    `json:"season_scope"`
 	QualityProfileID int       `json:"quality_profile_id"`
 	RequestedAt      time.Time `json:"requested_at"`
@@ -206,7 +278,9 @@ type RequestOptions struct {
 	QualityProfiles    []QualityProfile `json:"quality_profiles"`
 }
 
-// DecisionOverride lets an admin tweak options when approving a request.
+// DecisionOverride lets an admin tweak supported TV/movie options when
+// approving. BookFormat remains in the wire shape for compatibility but is
+// immutable: a non-empty different value is rejected.
 type DecisionOverride struct {
 	SeasonScope      string `json:"season_scope"`
 	QualityProfileID int    `json:"quality_profile_id"`
@@ -265,10 +339,13 @@ type effective struct {
 // resolvedRequest is a request whose options have all been resolved server-side.
 type resolvedRequest struct {
 	userID           int64
+	actorID          int64 // optional execution authority; history remains userID-owned
 	tmdbID           int
 	tvdbID           int
 	foreignID        string // Chaptarr foreignBookId (book requests)
 	bookFormat       string
+	instanceID       string
+	bookFormats      map[string]string
 	mediaType        string
 	title            string
 	seasonScope      string
@@ -435,8 +512,15 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	if req.MediaType != "movie" && req.MediaType != "tv" && req.MediaType != "book" {
 		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
 	}
-	if req.MediaType == "book" && req.ForeignID == "" {
-		return nil, fmt.Errorf("foreign_id is required for book requests")
+	if req.MediaType == "book" {
+		req.ForeignID = strings.TrimSpace(req.ForeignID)
+		req.Title = strings.TrimSpace(req.Title)
+		if req.ForeignID == "" {
+			return nil, fmt.Errorf("foreign_id is required for book requests")
+		}
+		if req.BookFormat != "" && !validBookFormat(req.BookFormat) {
+			return nil, fmt.Errorf("book_format must be ebook, audiobook, or both")
+		}
 	}
 
 	isAdmin := s.userIsAdmin(userID)
@@ -451,8 +535,26 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		tvdbID:     req.TvdbID,
 		foreignID:  req.ForeignID,
 		bookFormat: normalizeBookFormat(req.BookFormat),
+		instanceID: strings.TrimSpace(req.InstanceID),
 		mediaType:  req.MediaType,
 		title:      req.Title,
+	}
+	var resolvedBookClient *chaptarr.Client
+	if resolved.mediaType == "book" {
+		client, instanceID, err := s.resolveChaptarr(userID, resolved.instanceID)
+		if err != nil {
+			return nil, err
+		}
+		if client == nil {
+			return nil, fmt.Errorf("chaptarr is not configured for you")
+		}
+		resolvedBookClient = client
+		resolved.instanceID = instanceID
+		// Keep the live preflight, external mutation, and request-log write in one
+		// same-process per-title critical section.
+		bookLock := s.bookLock(resolved.instanceID + "\x00" + resolved.foreignID)
+		bookLock.Lock()
+		defer bookLock.Unlock()
 	}
 
 	// Season scope (TV only). Honor the client's choice only when allowed;
@@ -486,13 +588,51 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	case "movie":
 		resolved.qualityProfileID = eff.QualityRadarr
 	}
-	// Books pick the Chaptarr instance's first quality/metadata profile at add
-	// time (addToChaptarr), so they carry no per-user quality profile here.
+	// Books resolve deterministic Chaptarr profile/root settings at add time, so
+	// they carry no requester-selectable quality profile here.
 	if req.QualityProfileID != 0 && eff.AllowQualityChoice && req.MediaType != "book" {
 		resolved.qualityProfileID = req.QualityProfileID
 	}
 
 	if eff.RequiresApproval {
+		if resolved.mediaType == "book" {
+			live, err := s.freshLiveBookFormats(resolvedBookClient, resolved.instanceID, resolved.foreignID)
+			if err != nil {
+				return nil, err
+			}
+			if resolved.title == "" && len(live) == 0 {
+				return nil, fmt.Errorf("title is required to add a new book")
+			}
+			missing := make([]string, 0, 2)
+			for _, format := range expandBookFormat(resolved.bookFormat) {
+				status, covered := live[format]
+				if !covered || status == StatusUnavailable || status == StatusDenied {
+					missing = append(missing, format)
+				}
+			}
+			if len(missing) == 0 {
+				return &CreateResponse{Success: true, Status: collapseBookStatuses(live, ""), Title: resolved.title, BookFormats: live}, nil
+			}
+			if len(missing) == 1 {
+				resolved.bookFormat = missing[0]
+			} else {
+				resolved.bookFormat = BookFormatBoth
+			}
+			pendingResp, err := s.createPendingUnlocked(resolved)
+			if err != nil {
+				return nil, err
+			}
+			if pendingResp.BookFormats == nil {
+				pendingResp.BookFormats = map[string]string{}
+			}
+			for format, status := range live {
+				if status != StatusUnavailable {
+					pendingResp.BookFormats[format] = status
+				}
+			}
+			pendingResp.Status = collapseBookStatuses(pendingResp.BookFormats, StatusPending)
+			return pendingResp, nil
+		}
 		return s.createPending(resolved)
 	}
 
@@ -502,28 +642,122 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	}
 	resolved.title = title
 	s.logRequest(resolved, title, status)
-	return &CreateResponse{Success: true, Status: status, Title: title}, nil
+	return &CreateResponse{Success: true, Status: status, Title: title, BookFormats: resolved.bookFormats}, nil
 }
 
 // createPending records a request awaiting admin approval without touching the
 // arr services. The stored options are replayed verbatim on approval.
 func (s *Service) createPending(r *resolvedRequest) (*CreateResponse, error) {
-	// Insert atomically only when no pending row already exists for this user +
-	// title, so a double-submit can't create duplicate queue entries (the check +
-	// insert is one statement under the single-writer DB). Books have no tmdb_id,
-	// so they dedupe/key on the Readarr foreignBookId instead.
+	if r.mediaType == "book" {
+		lock := s.bookLock(r.instanceID + "\x00" + r.foreignID)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+	return s.createPendingUnlocked(r)
+}
+
+func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, error) {
+	// Insert only when no overlapping pending work already exists, so a
+	// double-submit cannot create duplicate queue entries. Books have no TMDB id,
+	// so they key on canonical foreignBookId + pinned Chaptarr instance and share
+	// one work item across subscribed requesters.
 	var res sql.Result
 	var err error
+	insertedBookFormat := ""
 	if r.mediaType == "book" {
-		res, err = s.db.Exec(
-			`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, media_type, title, status)
-			 SELECT ?, 0, ?, ?, ?, ?, ?
-			 WHERE NOT EXISTS (
-			     SELECT 1 FROM request_log WHERE user_id = ? AND foreign_id = ? AND COALESCE(book_format, 'both') = ? AND media_type = ? AND status = ?
-			 )`,
-			r.userID, r.foreignID, normalizeBookFormat(r.bookFormat), r.mediaType, r.title, StatusPending,
-			r.userID, r.foreignID, normalizeBookFormat(r.bookFormat), r.mediaType, StatusPending,
+		tx, beginErr := s.db.Begin()
+		if beginErr != nil {
+			return nil, fmt.Errorf("begin pending book request: %w", beginErr)
+		}
+		defer tx.Rollback()
+
+		coveredBy := map[string]int64{}
+		rows, queryErr := tx.Query(
+			`SELECT id, COALESCE(book_format, 'both') FROM request_log
+			 WHERE foreign_id = ? AND COALESCE(instance_id, '') = COALESCE(?, '')
+			   AND media_type = 'book' AND status = ?`,
+			r.foreignID, sqlNullStr(r.instanceID), StatusPending,
 		)
+		if queryErr != nil {
+			return nil, fmt.Errorf("check pending book formats: %w", queryErr)
+		}
+		covered := map[string]bool{}
+		for rows.Next() {
+			var requestID int64
+			var storedFormat string
+			if scanErr := rows.Scan(&requestID, &storedFormat); scanErr != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan pending book format: %w", scanErr)
+			}
+			for _, format := range expandBookFormat(storedFormat) {
+				covered[format] = true
+				coveredBy[format] = requestID
+			}
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("read pending book formats: %w", rowsErr)
+		}
+		_ = rows.Close()
+
+		missing := make([]string, 0, 2)
+		for _, format := range expandBookFormat(r.bookFormat) {
+			if !covered[format] {
+				missing = append(missing, format)
+			}
+		}
+		pendingFormat := ""
+		switch len(missing) {
+		case 2:
+			pendingFormat = BookFormatBoth
+		case 1:
+			pendingFormat = missing[0]
+		}
+		if pendingFormat == "" {
+			res = zeroRowsResult{}
+		} else {
+			insertedBookFormat = pendingFormat
+			res, err = tx.Exec(
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?)`,
+				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending,
+			)
+			if err == nil {
+				requestID, _ := res.LastInsertId()
+				for _, format := range expandBookFormat(pendingFormat) {
+					coveredBy[format] = requestID
+				}
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("save pending request: %w", err)
+		}
+
+		requestedByRow := map[int64][]string{}
+		for _, format := range expandBookFormat(r.bookFormat) {
+			if requestID := coveredBy[format]; requestID != 0 {
+				requestedByRow[requestID] = append(requestedByRow[requestID], format)
+			}
+		}
+		for requestID, formats := range requestedByRow {
+			waiterFormat := formats[0]
+			if len(formats) > 1 {
+				waiterFormat = BookFormatBoth
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO book_request_waiters (request_id, user_id, book_format) VALUES (?, ?, ?)
+				 ON CONFLICT(request_id, user_id) DO UPDATE SET book_format = CASE
+				   WHEN book_request_waiters.book_format = 'both' OR excluded.book_format = 'both' THEN 'both'
+				   WHEN book_request_waiters.book_format <> excluded.book_format THEN 'both'
+				   ELSE book_request_waiters.book_format END`,
+				requestID, r.userID, waiterFormat,
+			); err != nil {
+				return nil, fmt.Errorf("subscribe to pending book request: %w", err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit pending book request: %w", err)
+		}
 	} else {
 		res, err = s.db.Exec(
 			`INSERT INTO request_log (user_id, tmdb_id, tvdb_id, media_type, title, status, season_scope, quality_profile_id)
@@ -557,10 +791,28 @@ func (s *Service) createPending(r *resolvedRequest) (*CreateResponse, error) {
 		if count, err := s.PendingCount(); err == nil {
 			data["pending_count"] = count
 		}
+		if r.mediaType == "book" {
+			data["foreign_id"] = r.foreignID
+			data["book_format"] = insertedBookFormat
+			data["instance_id"] = r.instanceID
+		}
 		s.notifier.NotifyAdmins("request_pending", data)
 	}
-	return &CreateResponse{Success: true, Status: StatusPending, Title: r.title}, nil
+	formats := map[string]string{}
+	if r.mediaType == "book" {
+		for _, format := range expandBookFormat(r.bookFormat) {
+			formats[format] = StatusPending
+		}
+	}
+	return &CreateResponse{Success: true, Status: StatusPending, Title: r.title, BookFormats: formats}, nil
 }
+
+// zeroRowsResult lets duplicate pending actions share the normal notification
+// path without issuing a dummy write.
+type zeroRowsResult struct{}
+
+func (zeroRowsResult) LastInsertId() (int64, error) { return 0, nil }
+func (zeroRowsResult) RowsAffected() (int64, error) { return 0, nil }
 
 // addToArr performs the actual Radarr/Sonarr add and returns the resulting
 // status + canonical title. It does NOT write to request_log; callers decide
@@ -578,21 +830,151 @@ func (s *Service) addToArr(r *resolvedRequest) (status string, title string, err
 	}
 }
 
-// addToChaptarr adds a book to the requesting user's granted Chaptarr instance.
-// Books have no TMDB id, so the request carries the Readarr foreignBookId; we
-// resolve it through Chaptarr's lookup (by title, matched on foreignBookId) and
-// add the book with the instance's first quality/metadata profile + root folder,
-// mirroring the addSeries flow. Verify the exact add payload against a live
-// Chaptarr instance — the lookup/add field shapes are the Readarr v1 convention.
+// addToChaptarr adds a book to the pinned Chaptarr instance. Books have no TMDB
+// id, so the request carries a canonical foreignBookId. Existing canonical
+// groups reuse their author's live configuration for a missing sibling format;
+// brand-new titles require an exact lookup match and unambiguous profiles/root.
 func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
-	client := s.getChaptarr(r.userID)
+	r.foreignID = strings.TrimSpace(r.foreignID)
+	r.title = strings.TrimSpace(r.title)
+	if r.foreignID == "" {
+		return "", "", fmt.Errorf("foreign_id is required for book requests")
+	}
+	actorID := r.actorID
+	if actorID == 0 {
+		actorID = r.userID
+	}
+	client, instanceID, err := s.resolveChaptarr(actorID, r.instanceID)
+	r.instanceID = instanceID
+	if err != nil {
+		return "", "", err
+	}
 	if client == nil {
 		return "", "", fmt.Errorf("chaptarr is not configured for you")
 	}
 
+	// Preflight the live library before lookup/add. The request boundary is the
+	// idempotency boundary: a file is already available, a monitored record is
+	// already requested, and an unmonitored record is monitored/searched in
+	// place rather than duplicated.
+	books, libraryErr := client.GetAllBooks()
+	if libraryErr != nil {
+		return "", "", fmt.Errorf("check existing book state: %w", libraryErr)
+	}
+	title, existing, unresolved := recordsForForeignID(books, r.foreignID)
+	title = strings.TrimSpace(title)
+	if unresolved {
+		return "", "", ErrBookFormatUnresolved
+	}
+	if title == "" {
+		title = r.title
+	}
+	r.bookFormats = make(map[string]string)
+	missing := make([]string, 0, 2)
+	var lastErr error
+	for _, mediaType := range chaptarrRequestFormats(r.bookFormat) {
+		records := existing[mediaType]
+		if len(records) == 0 {
+			missing = append(missing, mediaType)
+			continue
+		}
+		available := false
+		monitored := false
+		ids := make([]int, 0, len(records))
+		for _, rec := range records {
+			ids = append(ids, rec.ID)
+			available = available || rec.Statistics.BookFileCount > 0
+			monitored = monitored || rec.Monitored
+		}
+		switch {
+		case available:
+			r.bookFormats[mediaType] = StatusAvailable
+		case monitored:
+			r.bookFormats[mediaType] = StatusRequested
+		default:
+			if err := client.SetBookMonitored(ids, true); err != nil {
+				lastErr = fmt.Errorf("monitor %s: %w", mediaType, err)
+				r.bookFormats[mediaType] = StatusUnavailable
+				continue
+			}
+			// Monitoring is the durable request contract; the immediate search is a
+			// best-effort accelerator. A failed command must not make the now-
+			// monitored record requestable again.
+			_ = client.TriggerBookSearch(ids)
+			r.bookFormats[mediaType] = StatusRequested
+		}
+	}
+	if len(missing) == 0 {
+		return s.finishBookMutation(r, title, lastErr)
+	}
+	if len(existing) > 0 {
+		// A requester can arrive with the canonical library foreignBookId while
+		// metadata lookup uses a different provider ID. Add missing sibling
+		// formats under the already-tracked author instead of requiring those IDs
+		// to match or creating a second title group.
+		var seed chaptarr.Book
+		authorIDs := map[int]bool{}
+		for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
+			for _, record := range existing[format] {
+				authorID := record.AuthorID
+				if authorID == 0 && record.Author != nil {
+					authorID = record.Author.ID
+				}
+				if authorID != 0 {
+					authorIDs[authorID] = true
+				}
+				if seed.ID == 0 {
+					seed = record
+				}
+			}
+		}
+		if len(authorIDs) > 1 {
+			return "", "", fmt.Errorf("existing canonical book records disagree on author")
+		}
+		authorID := 0
+		for collectedID := range authorIDs {
+			authorID = collectedID
+		}
+		if authorID == 0 {
+			return "", "", fmt.Errorf("existing book author is unresolved")
+		}
+		author, err := client.GetAuthor(authorID)
+		if err != nil {
+			return "", "", fmt.Errorf("load existing book author: %w", err)
+		}
+		if author.QualityProfileID == 0 || author.MetadataProfileID == 0 || strings.TrimSpace(author.Path) == "" {
+			return "", "", fmt.Errorf("existing book author configuration is incomplete")
+		}
+		match := &chaptarr.LookupResult{
+			ForeignBookID:   r.foreignID,
+			Title:           title,
+			TitleSlug:       seed.TitleSlug,
+			AuthorName:      author.AuthorName,
+			ForeignAuthorID: author.ForeignAuthorID,
+		}
+		if match.TitleSlug == "" {
+			match.TitleSlug = fallbackTitleSlug(title)
+		}
+		for _, mediaType := range missing {
+			if err := s.addChaptarrBookRecord(client, match, author.QualityProfileID, author.MetadataProfileID, author.Path, title, match.TitleSlug, mediaType); err != nil {
+				lastErr = err
+				r.bookFormats[mediaType] = StatusUnavailable
+				continue
+			}
+			r.bookFormats[mediaType] = StatusRequested
+		}
+		return s.finishBookMutation(r, title, lastErr)
+	}
+	if r.title == "" {
+		return "", "", fmt.Errorf("title is required to add a new book")
+	}
+
 	results, err := client.LookupBook(r.title)
 	if err != nil {
-		return "", "", fmt.Errorf("book lookup failed: %w", err)
+		if len(missing) > 0 {
+			return "", "", fmt.Errorf("book lookup failed: %w", err)
+		}
+		results = nil
 	}
 	var match *chaptarr.LookupResult
 	for i := range results {
@@ -601,27 +983,41 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 			break
 		}
 	}
-	if match == nil {
+	if match == nil && len(missing) > 0 {
 		// The foreignBookId belongs to a book already in the library (owned
 		// records carry a library foreignBookId the metadata lookup can't match);
 		// complete the missing format from the existing records instead of adding.
-		return s.completeOwnedBook(client, r)
+		lastErr = fmt.Errorf("book not found for foreign id %s", r.foreignID)
+		for _, mediaType := range missing {
+			r.bookFormats[mediaType] = StatusUnavailable
+		}
+	}
+	if match == nil {
+		return s.finishBookMutation(r, title, lastErr)
 	}
 
 	qps, err := client.GetQualityProfiles()
 	if err != nil || len(qps) == 0 {
 		return "", "", fmt.Errorf("no quality profiles available")
 	}
+	qualityProfileID, ok := selectBookQualityProfile(qps)
+	if !ok {
+		return "", "", fmt.Errorf("multiple Chaptarr quality profiles are configured; name exactly one Default or reduce them to one")
+	}
 	mps, err := client.GetMetadataProfiles()
 	if err != nil || len(mps) == 0 {
 		return "", "", fmt.Errorf("no metadata profiles available")
+	}
+	metadataProfileID, ok := selectBookMetadataProfile(mps)
+	if !ok {
+		return "", "", fmt.Errorf("multiple Chaptarr metadata profiles are configured; name exactly one Default or reduce them to one")
 	}
 	folders, err := client.GetRootFolders()
 	if err != nil || len(folders) == 0 {
 		return "", "", fmt.Errorf("no root folders available")
 	}
 
-	title := match.Title
+	title = strings.TrimSpace(match.Title)
 	if title == "" {
 		title = r.title
 	}
@@ -634,18 +1030,82 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	// (same foreignBookId, different mediaType), so a "both" request adds the
 	// book once per format. Adding at least one record counts as requested; the
 	// last error is surfaced only if every requested format failed.
-	formats := chaptarrRequestFormats(r.bookFormat)
-	var lastErr error
-	added := 0
-	for _, mediaType := range formats {
-		if err := s.addChaptarrBookRecord(client, match, qps[0].ID, mps[0].ID, folders[0].Path, title, titleSlug, mediaType); err != nil {
-			lastErr = err
+	for _, mediaType := range missing {
+		root, ok := selectBookRoot(folders, mediaType)
+		if !ok {
+			lastErr = fmt.Errorf("no accessible root folder available for %s", mediaType)
+			r.bookFormats[mediaType] = StatusUnavailable
 			continue
 		}
-		added++
+		if err := s.addChaptarrBookRecord(client, match, qualityProfileID, metadataProfileID, root.Path, title, titleSlug, mediaType); err != nil {
+			lastErr = err
+			r.bookFormats[mediaType] = StatusUnavailable
+			continue
+		}
+		r.bookFormats[mediaType] = StatusRequested
 	}
-	if added == 0 {
-		return "", "", fmt.Errorf("add book failed: %w", lastErr)
+	return s.finishBookMutation(r, title, lastErr)
+}
+
+func selectBookQualityProfile(profiles []chaptarr.QualityProfile) (int, bool) {
+	if len(profiles) == 1 {
+		return profiles[0].ID, profiles[0].ID != 0
+	}
+	selected := 0
+	for _, profile := range profiles {
+		if strings.EqualFold(strings.TrimSpace(profile.Name), "default") {
+			if selected != 0 || profile.ID == 0 {
+				return 0, false
+			}
+			selected = profile.ID
+		}
+	}
+	return selected, selected != 0
+}
+
+func selectBookMetadataProfile(profiles []chaptarr.MetadataProfile) (int, bool) {
+	if len(profiles) == 1 {
+		return profiles[0].ID, profiles[0].ID != 0
+	}
+	selected := 0
+	for _, profile := range profiles {
+		if strings.EqualFold(strings.TrimSpace(profile.Name), "default") {
+			if selected != 0 || profile.ID == 0 {
+				return 0, false
+			}
+			selected = profile.ID
+		}
+	}
+	return selected, selected != 0
+}
+
+// finishBookMutation reduces per-format outcomes without allowing a partial
+// "both" request to masquerade as complete success.
+func (s *Service) finishBookMutation(r *resolvedRequest, title string, lastErr error) (string, string, error) {
+	succeeded := 0
+	for _, status := range r.bookFormats {
+		if status != StatusUnavailable {
+			succeeded++
+		}
+	}
+	if succeeded == 0 {
+		if lastErr == nil {
+			lastErr = fmt.Errorf("no requested format could be completed")
+		}
+		return "", "", lastErr
+	}
+	if s.libraryCache != nil && r.instanceID != "" {
+		s.libraryCache.Delete("book-library:" + r.instanceID)
+		s.libraryCache.Delete("book-live:" + r.instanceID)
+	}
+	if succeeded != len(r.bookFormats) {
+		return StatusPartial, title, nil
+	}
+	if allBookFormatsAre(r.bookFormats, StatusAvailable) {
+		return StatusAvailable, title, nil
+	}
+	if anyBookFormatIs(r.bookFormats, StatusAvailable) {
+		return StatusPartial, title, nil
 	}
 	return StatusRequested, title, nil
 }
@@ -743,11 +1203,13 @@ func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr
 	// so the format flags and searchForNewBook never take effect. Monitor +
 	// search it explicitly; SetBookMonitored re-derives the format from the
 	// mediaType set above. Books under an already-tracked author come back
-	// monitored and need nothing further. Best-effort: the add already succeeded.
+	// monitored and need nothing further. Monitoring is required; only the
+	// immediate search command is best-effort after monitoring succeeds.
 	if book != nil && book.ID != 0 && !book.Monitored {
-		if err := client.SetBookMonitored([]int{book.ID}, true); err == nil {
-			_ = client.TriggerBookSearch([]int{book.ID})
+		if err := client.SetBookMonitored([]int{book.ID}, true); err != nil {
+			return fmt.Errorf("monitor added %s: %w", mediaType, err)
 		}
+		_ = client.TriggerBookSearch([]int{book.ID})
 	}
 	return nil
 }
@@ -1189,12 +1651,41 @@ func (s *Service) GetUserStatus(userID int64, tmdbID int, mediaType string) (*St
 // after one is requested. A stored "both" request covers both ebook and
 // audiobook.
 func (s *Service) GetUserBookStatus(userID int64, foreignID string) (*StatusResponse, error) {
-	rows, err := s.db.Query(
-		"SELECT COALESCE(book_format, 'both'), status FROM request_log WHERE user_id = ? AND foreign_id = ? AND media_type = 'book' ORDER BY requested_at DESC, id DESC",
-		userID, foreignID,
-	)
+	return s.GetUserBookStatusForInstance(userID, foreignID, "")
+}
+
+// GetUserBookStatusForInstance combines per-user approval history with live,
+// per-format Chaptarr truth for the selected authorized instance. Live file,
+// queue, and monitored state outrank pending/denied/history labels.
+func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requestedInstanceID string) (*StatusResponse, error) {
+	foreignID = strings.TrimSpace(foreignID)
+	if foreignID == "" {
+		return nil, fmt.Errorf("foreign_id is required")
+	}
+	client, instanceID, err := s.resolveChaptarr(userID, requestedInstanceID)
 	if err != nil {
-		return &StatusResponse{Status: StatusUnavailable}, nil
+		return nil, err
+	}
+	query := "SELECT COALESCE(book_format, 'both'), status FROM request_log WHERE (user_id = ? OR status = 'pending') AND foreign_id = ? AND media_type = 'book'"
+	args := []interface{}{userID, foreignID}
+	if instanceID != "" {
+		if requestedInstanceID != "" {
+			// An explicit selection must never absorb unscoped legacy history from
+			// another instance.
+			query += " AND instance_id = ?"
+		} else {
+			// Omitted IDs are the compatibility path for pre-pinning clients/rows.
+			query += " AND (instance_id = ? OR instance_id IS NULL)"
+		}
+		args = append(args, instanceID)
+	} else if requestedInstanceID != "" {
+		query += " AND instance_id = ?"
+		args = append(args, requestedInstanceID)
+	}
+	query += " ORDER BY requested_at DESC, id DESC"
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query book request status: %w", err)
 	}
 	defer rows.Close()
 
@@ -1203,7 +1694,7 @@ func (s *Service) GetUserBookStatus(userID int64, foreignID string) (*StatusResp
 	for rows.Next() {
 		var format, status string
 		if err := rows.Scan(&format, &status); err != nil {
-			return &StatusResponse{Status: StatusUnavailable}, nil
+			return nil, fmt.Errorf("scan book request status: %w", err)
 		}
 		if collapsed == "" {
 			collapsed = status // first row is the latest overall
@@ -1216,40 +1707,216 @@ func (s *Service) GetUserBookStatus(userID int64, foreignID string) (*StatusResp
 			}
 		}
 	}
-	if collapsed == "" {
-		return &StatusResponse{Status: StatusUnavailable}, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read book request status: %w", err)
 	}
-
-	// Overlay live ownership: a format whose file is on disk reads available.
-	// Upgrade-only (absence proves nothing — see overlayLiveStatuses), and a
-	// pending format keeps showing pending so the approval flow stays visible.
-	if index, ok := s.bookOwnershipIndex(userID); ok {
-		if title, found := index[foreignID]; found {
-			for f, st := range formats {
-				if st == StatusPending {
-					continue
-				}
-				if bookFormatDownloaded(title, f) {
-					formats[f] = StatusAvailable
-				}
+	if client != nil {
+		live, lerr := s.liveBookFormats(client, instanceID, foreignID)
+		if lerr != nil {
+			if errors.Is(lerr, ErrBookFormatUnresolved) {
+				known := false
+				return &StatusResponse{Status: StatusUnavailable, StatusKnown: &known}, nil
+			}
+			return nil, lerr
+		}
+		for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
+			liveStatus, exists := live[format]
+			loggedStatus, logged := formats[format]
+			if exists && liveStatus != StatusUnavailable {
+				formats[format] = liveStatus
+				continue
+			}
+			if !logged {
+				continue
+			}
+			// Approval workflow outcomes remain meaningful while there is no newer
+			// live work for that format.
+			if loggedStatus != StatusPending && loggedStatus != StatusDenied {
+				formats[format] = StatusUnavailable
 			}
 		}
 	}
 
-	resp := &StatusResponse{BookFormats: formats}
-	switch {
-	case collapsed == StatusPending:
-		resp.Status = StatusPending
-	case allBookFormatsAre(formats, StatusAvailable):
-		resp.Status = StatusAvailable
-	case anyBookFormatIs(formats, StatusAvailable):
-		resp.Status = StatusPartial
-	case collapsed == StatusDenied:
-		resp.Status = StatusDenied
-	default:
-		resp.Status = StatusRequested
+	if len(formats) == 0 {
+		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
+	resp := &StatusResponse{BookFormats: formats}
+	resp.Status = collapseBookStatuses(formats, collapsed)
 	return resp, nil
+}
+
+const bookLiveProjectionTTL = 15 * time.Second
+
+type bookLiveProjection struct {
+	Formats    map[string]map[string]string `json:"formats"`
+	Unresolved map[string]bool              `json:"unresolved,omitempty"`
+}
+
+// liveBookFormats returns one title's slice of a short-lived instance-wide
+// projection. Search grids call book-status once per row, so fetching the full
+// library/queue per title would be an accidental N+1 load on Chaptarr.
+func (s *Service) liveBookFormats(client *chaptarr.Client, instanceID, foreignID string) (map[string]string, error) {
+	cacheKey := "book-live:" + instanceID
+	if projection, ok := s.cachedBookProjection(cacheKey); ok {
+		return projection.formatsFor(foreignID)
+	}
+	projectionLock := s.projectionLock(instanceID)
+	projectionLock.Lock()
+	defer projectionLock.Unlock()
+	if projection, ok := s.cachedBookProjection(cacheKey); ok {
+		return projection.formatsFor(foreignID)
+	}
+	projection, err := buildBookLiveProjection(client)
+	if err != nil {
+		return nil, err
+	}
+	s.cacheBookProjection(cacheKey, projection)
+	return projection.formatsFor(foreignID)
+}
+
+func (s *Service) freshLiveBookFormats(client *chaptarr.Client, instanceID, foreignID string) (map[string]string, error) {
+	projectionLock := s.projectionLock(instanceID)
+	projectionLock.Lock()
+	defer projectionLock.Unlock()
+	projection, err := buildBookLiveProjection(client)
+	if err != nil {
+		return nil, err
+	}
+	s.cacheBookProjection("book-live:"+instanceID, projection)
+	return projection.formatsFor(foreignID)
+}
+
+func buildBookLiveProjection(client *chaptarr.Client) (*bookLiveProjection, error) {
+	books, err := client.GetAllBooks()
+	if err != nil {
+		return nil, fmt.Errorf("check live book state: %w", err)
+	}
+	queued := make(map[int]bool)
+	if queue, err := client.GetQueueDetailed(1, 100); err == nil {
+		for _, item := range queue {
+			if item.BookID != 0 && bookQueueItemDownloading(item) {
+				queued[item.BookID] = true
+			}
+		}
+	}
+	projection := &bookLiveProjection{Formats: make(map[string]map[string]string), Unresolved: make(map[string]bool)}
+	foreignIDs := make(map[string]bool)
+	for _, book := range books {
+		if book.ForeignBookID != "" {
+			foreignIDs[book.ForeignBookID] = true
+		}
+	}
+	for id := range foreignIDs {
+		_, records, unresolved := recordsForForeignID(books, id)
+		if unresolved {
+			projection.Unresolved[id] = true
+			continue
+		}
+		live := make(map[string]string)
+		for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
+			recs := records[format]
+			if len(recs) == 0 {
+				continue
+			}
+			status := StatusUnavailable
+			for _, rec := range recs {
+				switch {
+				case rec.Statistics.BookFileCount > 0:
+					status = StatusAvailable
+				case status != StatusAvailable && queued[rec.ID]:
+					status = StatusDownloading
+				case status != StatusAvailable && status != StatusDownloading && rec.Monitored:
+					status = StatusRequested
+				}
+			}
+			live[format] = status
+		}
+		projection.Formats[id] = live
+	}
+	return projection, nil
+}
+
+func (s *Service) cachedBookProjection(cacheKey string) (*bookLiveProjection, bool) {
+	if s.libraryCache == nil || cacheKey == "book-live:" {
+		return nil, false
+	}
+	data, ok := s.libraryCache.Get(cacheKey)
+	if !ok {
+		return nil, false
+	}
+	var projection bookLiveProjection
+	if json.Unmarshal(data, &projection) != nil || projection.Formats == nil {
+		return nil, false
+	}
+	return &projection, true
+}
+
+func (s *Service) cacheBookProjection(cacheKey string, projection *bookLiveProjection) {
+	if s.libraryCache == nil || cacheKey == "book-live:" {
+		return
+	}
+	if data, err := json.Marshal(projection); err == nil {
+		s.libraryCache.Set(cacheKey, data, bookLiveProjectionTTL)
+	}
+}
+
+func (p *bookLiveProjection) formatsFor(foreignID string) (map[string]string, error) {
+	if p.Unresolved[foreignID] {
+		return nil, ErrBookFormatUnresolved
+	}
+	return p.Formats[foreignID], nil
+}
+
+func bookQueueItemDownloading(item chaptarr.QueueItem) bool {
+	trackedStatus := strings.ToLower(strings.TrimSpace(item.TrackedDownloadStatus))
+	trackedState := strings.ToLower(strings.TrimSpace(item.TrackedDownloadState))
+	status := strings.ToLower(strings.TrimSpace(item.Status))
+	problemState := trackedStatus + " " + trackedState + " " + status
+	for _, token := range []string{"paused", "unavailable", "problem", "warning", "error", "failed", "blocked", "stalled"} {
+		if strings.Contains(problemState, token) {
+			return false
+		}
+	}
+	if trackedStatus != "" && trackedStatus != "ok" || strings.TrimSpace(item.ErrorMessage) != "" {
+		return false
+	}
+	for _, message := range item.StatusMessages {
+		if strings.TrimSpace(message.Title) != "" || len(message.Messages) > 0 {
+			return false
+		}
+	}
+	switch status {
+	case "queued", "downloading", "importing":
+		return true
+	case "completed":
+		return trackedState == "importpending" || trackedState == "importing"
+	case "":
+		return trackedState == "queued" || trackedState == "downloading" || trackedState == "importpending" || trackedState == "importing"
+	default:
+		return false
+	}
+}
+
+func collapseBookStatuses(formats map[string]string, _ string) string {
+	if allBookFormatsAre(formats, StatusAvailable) {
+		return StatusAvailable
+	}
+	if anyBookFormatIs(formats, StatusAvailable) {
+		return StatusPartial
+	}
+	if anyBookFormatIs(formats, StatusDownloading) {
+		return StatusDownloading
+	}
+	if anyBookFormatIs(formats, StatusRequested) {
+		return StatusRequested
+	}
+	if anyBookFormatIs(formats, StatusPending) {
+		return StatusPending
+	}
+	if anyBookFormatIs(formats, StatusDenied) {
+		return StatusDenied
+	}
+	return StatusUnavailable
 }
 
 // allBookFormatsAre reports whether every requested format carries [status];
@@ -1277,16 +1944,19 @@ func anyBookFormatIs(formats map[string]string, status string) bool {
 	return false
 }
 
-// expandBookFormat maps a stored book_format to the concrete formats it covers:
-// "both" (and any unrecognized value) covers both ebook and audiobook.
+// expandBookFormat maps a supported stored book_format to the concrete formats
+// it covers. Empty legacy values normalize to both; unknown non-empty values
+// remain unsupported and expand to nothing.
 func expandBookFormat(format string) []string {
 	switch normalizeBookFormat(format) {
 	case BookFormatEbook:
 		return []string{BookFormatEbook}
 	case BookFormatAudiobook:
 		return []string{BookFormatAudiobook}
-	default:
+	case BookFormatBoth:
 		return []string{BookFormatEbook, BookFormatAudiobook}
+	default:
+		return nil
 	}
 }
 
@@ -1479,6 +2149,7 @@ type historyRow struct {
 	tvdbID     int
 	foreignID  string
 	bookFormat string
+	instanceID string
 }
 
 // GetRequests returns the user's request history with each row's status
@@ -1488,8 +2159,36 @@ type historyRow struct {
 // admin deleted directly in the arr, would otherwise read wrong forever).
 func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	rows, err := s.db.Query(
-		"SELECT tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), media_type, title, status, COALESCE(deny_reason, ''), requested_at FROM request_log WHERE user_id = ? ORDER BY requested_at DESC",
-		userID,
+		`SELECT tmdb_id, tvdb_id, foreign_id, book_format, instance_id, media_type, title, status, deny_reason, requested_at
+		 FROM (
+		   SELECT r.tmdb_id,
+		          COALESCE(r.tvdb_id, 0) AS tvdb_id,
+		          COALESCE(r.foreign_id, '') AS foreign_id,
+		          COALESCE(r.book_format, '') AS book_format,
+		          COALESCE(r.instance_id, '') AS instance_id,
+		          r.media_type, r.title, r.status,
+		          COALESCE(r.deny_reason, '') AS deny_reason,
+		          r.requested_at
+		   FROM request_log r
+		   WHERE r.user_id = ?
+		   UNION ALL
+		   SELECT r.tmdb_id,
+		          COALESCE(r.tvdb_id, 0),
+		          COALESCE(r.foreign_id, ''),
+		          bw.book_format,
+		          COALESCE(r.instance_id, ''),
+		          r.media_type, r.title, r.status,
+		          COALESCE(r.deny_reason, ''),
+		          r.requested_at
+		   FROM request_log r
+		   JOIN book_request_waiters bw ON bw.request_id = r.id
+		   WHERE bw.user_id = ?
+		     AND r.user_id <> ?
+		     AND r.media_type = 'book'
+		     AND r.status = ?
+		 )
+		 ORDER BY requested_at DESC`,
+		userID, userID, userID, StatusPending,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query requests: %w", err)
@@ -1499,9 +2198,13 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	var history []historyRow
 	for rows.Next() {
 		var r historyRow
-		if err := rows.Scan(&r.log.TmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.log.MediaType, &r.log.Title, &r.log.Status, &r.log.DenyReason, &r.log.RequestedAt); err != nil {
+		if err := rows.Scan(&r.log.TmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.log.MediaType, &r.log.Title, &r.log.Status, &r.log.DenyReason, &r.log.RequestedAt); err != nil {
 			return nil, fmt.Errorf("scan request: %w", err)
 		}
+		r.log.StatusKnown = true
+		r.log.ForeignID = r.foreignID
+		r.log.BookFormat = normalizeBookFormat(r.bookFormat)
+		r.log.InstanceID = r.instanceID
 		history = append(history, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -1522,18 +2225,19 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 // per media kind). Precedence mirrors GetUserStatus: pending always shows
 // as-is (the title isn't in the arr yet); denied is kept unless the title has
 // since landed anyway. Movie/TV rows match by reliable ids, so a title gone
-// from the library reads unavailable; book rows only upgrade to available or
-// partial — a request's foreign id doesn't always match a library record, so
-// absence proves nothing. Rows keep their stored status when the user's arr
-// source can't be reached.
+// from the library reads unavailable. Pinned book rows use the same
+// per-instance projection as detail views, including available, downloading,
+// requested, and unavailable. Legacy unscoped rows and unreachable arr sources
+// keep their stored state; explicitly unresolved format truth is marked unknown.
 func (s *Service) overlayLiveStatuses(userID int64, history []historyRow) {
 	var (
 		movies               map[int]movieAvailability
 		moviesOK, moviesDone bool
 		series               map[int]seriesAvailability
 		seriesOK, seriesDone bool
-		books                map[string]LibraryTitle
-		booksOK, booksDone   bool
+		bookClients          = map[string]*chaptarr.Client{}
+		bookInstanceDone     = map[string]bool{}
+		bookInstanceOK       = map[string]bool{}
 	)
 
 	for i := range history {
@@ -1576,24 +2280,41 @@ func (s *Service) overlayLiveStatuses(userID int64, history []historyRow) {
 			live = seriesAvailabilityStatus(a, found)
 
 		case "book":
-			if row.foreignID == "" {
+			// Legacy unscoped rows cannot be safely attributed after a user's
+			// default changes, so their point-in-time state remains untouched.
+			if row.foreignID == "" || row.instanceID == "" {
 				continue
 			}
-			if !booksDone {
-				books, booksOK = s.bookOwnershipIndex(userID)
-				booksDone = true
+			instanceID := row.instanceID
+			if !bookInstanceDone[instanceID] {
+				client, resolvedID, err := s.resolveChaptarr(userID, instanceID)
+				if err == nil && client != nil && resolvedID == instanceID {
+					bookClients[instanceID] = client
+					bookInstanceOK[instanceID] = true
+				}
+				bookInstanceDone[instanceID] = true
 			}
-			if !booksOK {
+			if !bookInstanceOK[instanceID] {
 				continue
 			}
-			title, found := books[row.foreignID]
-			if !found {
+			formats, err := s.liveBookFormats(bookClients[instanceID], instanceID, row.foreignID)
+			if err != nil {
+				if errors.Is(err, ErrBookFormatUnresolved) {
+					row.log.Status = StatusUnavailable
+					row.log.StatusKnown = false
+				}
+				// An unresolved format is explicit unknown truth; transient failures
+				// retain the stored state until live truth is available again.
 				continue
 			}
-			live = bookAvailabilityStatus(title, row.bookFormat)
-			if live == "" {
-				continue // nothing downloaded: upgrade-only, keep stored
+			selected := map[string]string{}
+			for _, format := range expandBookFormat(row.bookFormat) {
+				selected[format] = StatusUnavailable
+				if status, ok := formats[format]; ok {
+					selected[format] = status
+				}
 			}
+			live = collapseBookStatuses(selected, StatusUnavailable)
 
 		default:
 			continue
@@ -1610,7 +2331,11 @@ func (s *Service) overlayLiveStatuses(userID int64, history []historyRow) {
 // foreignBookId. ok is false when the digest couldn't be fetched (no access
 // resolves to an empty digest, which is a valid — always-missing — index).
 func (s *Service) bookOwnershipIndex(userID int64) (map[string]LibraryTitle, bool) {
-	digest, err := s.GetBookLibraryDigest(userID)
+	return s.bookOwnershipIndexForInstance(userID, "")
+}
+
+func (s *Service) bookOwnershipIndexForInstance(userID int64, instanceID string) (map[string]LibraryTitle, bool) {
+	digest, err := s.GetBookLibraryDigestForInstance(userID, instanceID)
 	if err != nil || digest == nil {
 		return nil, false
 	}
@@ -1628,6 +2353,9 @@ func (s *Service) bookOwnershipIndex(userID int64) (map[string]LibraryTitle, boo
 // some do, "" when none do (callers treat "" as no evidence, not absence).
 func bookAvailabilityStatus(t LibraryTitle, bookFormat string) string {
 	formats := expandBookFormat(bookFormat)
+	if len(formats) == 0 {
+		return ""
+	}
 	downloaded := 0
 	for _, f := range formats {
 		if bookFormatDownloaded(t, f) {
@@ -1668,10 +2396,80 @@ func (s *Service) PendingCount() (int, error) {
 	return n, nil
 }
 
+type bookRequestSubscriber struct {
+	UserID     int64
+	BookFormat string
+}
+
+func (s *Service) bookRequestAudience(requestID, ownerID int64, ownerFormat string) ([]bookRequestSubscriber, error) {
+	audience := map[int64]string{ownerID: ownerFormat}
+	rows, err := s.db.Query("SELECT user_id, COALESCE(book_format, 'both') FROM book_request_waiters WHERE request_id = ?", requestID)
+	if err != nil {
+		return nil, fmt.Errorf("query book request subscribers: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var userID int64
+		var bookFormat string
+		if err := rows.Scan(&userID, &bookFormat); err != nil {
+			return nil, fmt.Errorf("scan book request subscriber: %w", err)
+		}
+		bookFormat = normalizeBookFormat(bookFormat)
+		if !validBookFormat(bookFormat) {
+			return nil, fmt.Errorf("book request subscriber has unsupported book_format %q", bookFormat)
+		}
+		if existing, ok := audience[userID]; ok {
+			audience[userID] = mergeBookFormats(existing, bookFormat)
+		} else {
+			audience[userID] = bookFormat
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read book request subscribers: %w", err)
+	}
+	subscribers := make([]bookRequestSubscriber, 0, len(audience))
+	for userID, bookFormat := range audience {
+		subscribers = append(subscribers, bookRequestSubscriber{UserID: userID, BookFormat: bookFormat})
+	}
+	sort.Slice(subscribers, func(i, j int) bool { return subscribers[i].UserID < subscribers[j].UserID })
+	return subscribers, nil
+}
+
+func mergeBookFormats(a, b string) string {
+	if a == b {
+		return a
+	}
+	return BookFormatBoth
+}
+
+func bookFormatIncludes(bookFormat, concrete string) bool {
+	for _, format := range expandBookFormat(bookFormat) {
+		if format == concrete {
+			return true
+		}
+	}
+	return false
+}
+
+func concreteBookFormat(formats map[string]string) string {
+	if len(formats) > 1 {
+		return BookFormatBoth
+	}
+	for format := range formats {
+		return format
+	}
+	return ""
+}
+
 func (s *Service) ListPending() ([]PendingRequest, error) {
 	rows, err := s.db.Query(
-		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at
-		 FROM request_log r LEFT JOIN users u ON u.id = r.user_id
+		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.instance_id, ''),
+		        CASE WHEN r.media_type = 'book' THEN COALESCE(si.name, '') ELSE '' END,
+		        CASE WHEN r.media_type = 'book' THEN 1 + (SELECT COUNT(*) FROM book_request_waiters bw WHERE bw.request_id = r.id AND bw.user_id <> r.user_id) ELSE 1 END,
+		        COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at
+		 FROM request_log r
+		 LEFT JOIN users u ON u.id = r.user_id
+		 LEFT JOIN service_instances si ON si.id = r.instance_id
 		 WHERE r.status = ? ORDER BY r.requested_at ASC`,
 		StatusPending,
 	)
@@ -1683,7 +2481,7 @@ func (s *Service) ListPending() ([]PendingRequest, error) {
 	var out []PendingRequest
 	for rows.Next() {
 		var p PendingRequest
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.MediaType, &p.Title, &p.BookFormat, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
 			return nil, fmt.Errorf("scan pending request: %w", err)
 		}
 		p.BookFormat = normalizeBookFormat(p.BookFormat)
@@ -1697,9 +2495,9 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	var r resolvedRequest
 	var status string
 	err := s.db.QueryRow(
-		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
+		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), COALESCE(instance_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
 		requestID,
-	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
+	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
 	if err == sql.ErrNoRows {
 		return nil, "", fmt.Errorf("request not found")
 	}
@@ -1707,6 +2505,9 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 		return nil, "", fmt.Errorf("load request: %w", err)
 	}
 	r.bookFormat = normalizeBookFormat(r.bookFormat)
+	if r.mediaType == "book" && !validBookFormat(r.bookFormat) {
+		return nil, "", fmt.Errorf("request has unsupported book_format %q", r.bookFormat)
+	}
 	// An explicit season list was stored as JSON in season_scope; decode it so
 	// approval replays the explicit season selection the requester chose.
 	r.seasonNumbers = decodeSeasonNumbers(r.seasonScope)
@@ -1716,12 +2517,33 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 // ApproveRequest fulfills a pending request (optionally with admin overrides)
 // and marks the row approved. The arr add reuses the normal add path.
 func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOverride) (*CreateResponse, error) {
+	decisionLock := s.decisionLock(requestID)
+	decisionLock.Lock()
+	defer decisionLock.Unlock()
+
 	r, status, err := s.loadRequest(requestID)
 	if err != nil {
 		return nil, err
 	}
 	if status != StatusPending {
 		return nil, fmt.Errorf("request is not pending")
+	}
+	audience := []bookRequestSubscriber{{UserID: r.userID}}
+	if r.mediaType == "book" {
+		if strings.TrimSpace(r.instanceID) == "" {
+			return nil, fmt.Errorf("pending book request has no pinned Chaptarr instance")
+		}
+		audience, err = s.bookRequestAudience(requestID, r.userID, r.bookFormat)
+		if err != nil {
+			return nil, err
+		}
+		bookLock := s.bookLock(r.instanceID + "\x00" + r.foreignID)
+		bookLock.Lock()
+		defer bookLock.Unlock()
+		// The request's instance was authorized and pinned at submission. Execute
+		// approval under the approving admin so a later requester-grant change
+		// cannot reroute or strand it; history remains owned by r.userID.
+		r.actorID = adminID
 	}
 	if override != nil {
 		// An admin choosing a coarse scope replaces any explicit season list the
@@ -1733,8 +2555,8 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 		if override.QualityProfileID != 0 {
 			r.qualityProfileID = override.QualityProfileID
 		}
-		if r.mediaType == "book" && validBookFormat(override.BookFormat) {
-			r.bookFormat = normalizeBookFormat(override.BookFormat)
+		if r.mediaType == "book" && override.BookFormat != "" && override.BookFormat != r.bookFormat {
+			return nil, fmt.Errorf("book format cannot be changed during approval")
 		}
 	}
 
@@ -1744,19 +2566,105 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 		return nil, err
 	}
 
-	res, err := s.db.Exec(
-		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, book_format = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
-		newStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(r.bookFormat), sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), adminID, requestID, StatusPending,
+	primaryFormat, primaryStatus := r.bookFormat, newStatus
+	if r.mediaType == "book" && len(r.bookFormats) > 0 {
+		primaryFormat, primaryStatus = "", ""
+		for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
+			if st, ok := r.bookFormats[format]; ok && st != StatusUnavailable {
+				primaryFormat, primaryStatus = format, st
+				break
+			}
+		}
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin request approval: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
+		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, book_format = ?, instance_id = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
+		primaryStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(primaryFormat), sqlNullStr(r.instanceID), sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), adminID, requestID, StatusPending,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update request: %w", err)
 	}
 	// Lost a race with a concurrent decision: skip the duplicate notification.
 	if n, _ := res.RowsAffected(); n == 0 {
-		return &CreateResponse{Success: true, Status: newStatus, Title: title}, nil
+		return &CreateResponse{Success: true, Status: newStatus, Title: title, BookFormats: r.bookFormats}, nil
+	}
+	if r.mediaType == "book" && len(r.bookFormats) > 1 {
+		for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
+			formatStatus, ok := r.bookFormats[format]
+			if !ok || format == primaryFormat || formatStatus == StatusUnavailable {
+				continue
+			}
+			_, err = tx.Exec(
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, approved_by, decided_at)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?, CURRENT_TIMESTAMP)`,
+				r.userID, r.foreignID, format, sqlNullStr(r.instanceID), title, formatStatus, adminID,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("store approved book format: %w", err)
+			}
+		}
+	}
+	if r.mediaType == "book" {
+		// A shared pending row is one work item, not the other requesters'
+		// personal history. Materialize each successful concrete format for every
+		// non-owner subscriber as part of the same decision transaction. Failed
+		// coverage is represented by the replacement pending row below.
+		for _, subscriber := range audience {
+			if subscriber.UserID == r.userID {
+				continue
+			}
+			for _, format := range expandBookFormat(subscriber.BookFormat) {
+				formatStatus, ok := r.bookFormats[format]
+				if !ok || formatStatus == StatusUnavailable {
+					continue
+				}
+				if _, insertErr := tx.Exec(
+					`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, approved_by, decided_at)
+					 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?, CURRENT_TIMESTAMP)`,
+					subscriber.UserID, r.foreignID, format, sqlNullStr(r.instanceID), title, formatStatus, adminID,
+				); insertErr != nil {
+					return nil, fmt.Errorf("store subscriber book format: %w", insertErr)
+				}
+			}
+		}
+		for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
+			if r.bookFormats[format] != StatusUnavailable {
+				continue
+			}
+			failedRes, insertErr := tx.Exec(
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?)`,
+				r.userID, r.foreignID, format, r.instanceID, title, StatusPending,
+			)
+			if insertErr != nil {
+				return nil, fmt.Errorf("retain failed book format: %w", insertErr)
+			}
+			failedRequestID, insertErr := failedRes.LastInsertId()
+			if insertErr != nil {
+				return nil, fmt.Errorf("read failed book request id: %w", insertErr)
+			}
+			for _, subscriber := range audience {
+				if !bookFormatIncludes(subscriber.BookFormat, format) {
+					continue
+				}
+				if _, insertErr := tx.Exec(
+					"INSERT INTO book_request_waiters (request_id, user_id, book_format) VALUES (?, ?, ?)",
+					failedRequestID, subscriber.UserID, format,
+				); insertErr != nil {
+					return nil, fmt.Errorf("retain failed book subscriber: %w", insertErr)
+				}
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit request approval: %w", err)
 	}
 
-	if s.notifier != nil {
+	if s.notifier != nil && r.mediaType != "book" {
 		data := map[string]interface{}{
 			"decision":   "approved",
 			"tmdb_id":    r.tmdbID,
@@ -1769,14 +2677,50 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 		// foreign_id, so the field is omitted and their payloads are unchanged.
 		if r.foreignID != "" {
 			data["foreign_id"] = r.foreignID
+			data["book_format"] = primaryFormat
+			data["book_formats"] = r.bookFormats
+			data["instance_id"] = r.instanceID
 		}
-		s.notifier.NotifyUser(r.userID, "request_decision", data)
+		for _, subscriber := range audience {
+			s.notifier.NotifyUser(subscriber.UserID, "request_decision", data)
+		}
 	}
-	return &CreateResponse{Success: true, Status: newStatus, Title: title}, nil
+	if s.notifier != nil && r.mediaType == "book" {
+		for _, subscriber := range audience {
+			succeeded := map[string]string{}
+			for _, format := range expandBookFormat(subscriber.BookFormat) {
+				if formatStatus, ok := r.bookFormats[format]; ok && formatStatus != StatusUnavailable {
+					succeeded[format] = formatStatus
+				}
+			}
+			// A subscriber whose entire requested slice failed stays subscribed to
+			// the replacement pending row and must not be told it was approved.
+			if len(succeeded) == 0 {
+				continue
+			}
+			data := map[string]interface{}{
+				"decision":     "approved",
+				"tmdb_id":      r.tmdbID,
+				"media_type":   r.mediaType,
+				"title":        title,
+				"status":       collapseBookStatuses(succeeded, StatusRequested),
+				"foreign_id":   r.foreignID,
+				"book_format":  concreteBookFormat(succeeded),
+				"book_formats": succeeded,
+				"instance_id":  r.instanceID,
+			}
+			s.notifier.NotifyUser(subscriber.UserID, "request_decision", data)
+		}
+	}
+	return &CreateResponse{Success: true, Status: newStatus, Title: title, BookFormats: r.bookFormats}, nil
 }
 
 // DenyRequest marks a pending request denied and notifies the requester.
 func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
+	decisionLock := s.decisionLock(requestID)
+	decisionLock.Lock()
+	defer decisionLock.Unlock()
+
 	r, status, err := s.loadRequest(requestID)
 	if err != nil {
 		return err
@@ -1784,7 +2728,19 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	if status != StatusPending {
 		return fmt.Errorf("request is not pending")
 	}
-	res, err := s.db.Exec(
+	audience := []bookRequestSubscriber{{UserID: r.userID}}
+	if r.mediaType == "book" {
+		audience, err = s.bookRequestAudience(requestID, r.userID, r.bookFormat)
+		if err != nil {
+			return err
+		}
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin request denial: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
 		"UPDATE request_log SET status = ?, deny_reason = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
 		StatusDenied, sqlNullStr(reason), adminID, requestID, StatusPending,
 	)
@@ -1794,7 +2750,24 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil // already decided by a concurrent action
 	}
-	if s.notifier != nil {
+	if r.mediaType == "book" {
+		for _, subscriber := range audience {
+			if subscriber.UserID == r.userID {
+				continue
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, deny_reason, approved_by, decided_at)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+				subscriber.UserID, r.foreignID, subscriber.BookFormat, sqlNullStr(r.instanceID), r.title, StatusDenied, sqlNullStr(reason), adminID,
+			); err != nil {
+				return fmt.Errorf("store waiter denial: %w", err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit request denial: %w", err)
+	}
+	if s.notifier != nil && r.mediaType != "book" {
 		data := map[string]interface{}{
 			"decision":   "denied",
 			"tmdb_id":    r.tmdbID,
@@ -1807,8 +2780,28 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 		// deep-linking; movie/TV payloads are unchanged.
 		if r.foreignID != "" {
 			data["foreign_id"] = r.foreignID
+			data["book_format"] = r.bookFormat
+			data["instance_id"] = r.instanceID
 		}
-		s.notifier.NotifyUser(r.userID, "request_decision", data)
+		for _, subscriber := range audience {
+			s.notifier.NotifyUser(subscriber.UserID, "request_decision", data)
+		}
+	}
+	if s.notifier != nil && r.mediaType == "book" {
+		for _, subscriber := range audience {
+			data := map[string]interface{}{
+				"decision":    "denied",
+				"tmdb_id":     r.tmdbID,
+				"media_type":  r.mediaType,
+				"title":       r.title,
+				"reason":      reason,
+				"status":      StatusDenied,
+				"foreign_id":  r.foreignID,
+				"book_format": subscriber.BookFormat,
+				"instance_id": r.instanceID,
+			}
+			s.notifier.NotifyUser(subscriber.UserID, "request_decision", data)
+		}
 	}
 	return nil
 }
@@ -1822,11 +2815,11 @@ func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType string
 	}
 	opts := &RequestOptions{
 		CanChooseSeason:    eff.AllowSeasonChoice && mediaType == "tv",
-		CanChooseQuality:   eff.AllowQualityChoice,
+		CanChooseQuality:   eff.AllowQualityChoice && mediaType != "book",
 		DefaultSeasonScope: eff.SeasonScope,
 		QualityProfiles:    []QualityProfile{},
 	}
-	if eff.AllowQualityChoice {
+	if eff.AllowQualityChoice && mediaType != "book" {
 		opts.QualityProfiles = s.qualityProfiles(userID, mediaType)
 	}
 	return opts, nil
@@ -1869,8 +2862,8 @@ func (s *Service) GetAdminSettings() *AdminSettingsView {
 // insertRequest writes a request_log row and returns its id.
 func (s *Service) insertRequest(r *resolvedRequest, title, status string) (int64, error) {
 	res, err := s.db.Exec(
-		"INSERT INTO request_log (user_id, tmdb_id, tvdb_id, foreign_id, book_format, media_type, title, status, season_scope, quality_profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		r.userID, r.tmdbID, sqlNullInt(r.tvdbID), sqlNullStr(r.foreignID), sqlNullStr(r.bookFormat), r.mediaType, title, status, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
+		"INSERT INTO request_log (user_id, tmdb_id, tvdb_id, foreign_id, book_format, instance_id, media_type, title, status, season_scope, quality_profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		r.userID, r.tmdbID, sqlNullInt(r.tvdbID), sqlNullStr(r.foreignID), sqlNullStr(r.bookFormat), sqlNullStr(r.instanceID), r.mediaType, title, status, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
 	)
 	if err != nil {
 		return 0, err
@@ -1881,6 +2874,19 @@ func (s *Service) insertRequest(r *resolvedRequest, title, status string) (int64
 // logRequest records a fulfilled request without failing the caller (the arr
 // add already succeeded; a history-row failure should not surface as an error).
 func (s *Service) logRequest(r *resolvedRequest, title, status string) {
+	if r.mediaType == "book" && len(r.bookFormats) > 0 {
+		for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
+			formatStatus, ok := r.bookFormats[format]
+			if !ok || formatStatus == StatusUnavailable {
+				continue
+			}
+			concrete := *r
+			concrete.bookFormat = format
+			concrete.bookFormats = nil
+			_, _ = s.insertRequest(&concrete, title, formatStatus)
+		}
+		return
+	}
 	_, _ = s.insertRequest(r, title, status)
 }
 
@@ -1957,8 +2963,10 @@ func normalizeBookFormat(format string) string {
 	switch format {
 	case BookFormatEbook, BookFormatAudiobook, BookFormatBoth:
 		return format
-	default:
+	case "":
 		return BookFormatBoth
+	default:
+		return format
 	}
 }
 
@@ -1978,8 +2986,10 @@ func chaptarrRequestFormats(format string) []string {
 		return []string{"ebook"}
 	case BookFormatAudiobook:
 		return []string{"audiobook"}
-	default: // both
+	case BookFormatBoth:
 		return []string{"ebook", "audiobook"}
+	default:
+		return nil
 	}
 }
 

@@ -81,6 +81,10 @@ class _FakeAdapter implements HttpClientAdapter {
       response = {
         'id': 7,
         'authorName': 'Marcus Aurelius',
+        'foreignAuthorId': 'author-7',
+        'path': '/library/authors/marcus',
+        'qualityProfileId': 31,
+        'metadataProfileId': 41,
         'statistics': {
           'bookCount': books.length,
           'bookFileCount': 0,
@@ -114,12 +118,13 @@ Map<String, dynamic> _book({
   required DateTime releaseDate,
   required bool monitored,
   String mediaType = 'ebook',
+  bool blankForeignBookId = false,
 }) =>
     {
       'id': id,
       'title': title,
       'authorId': 7,
-      'foreignBookId': groupKey,
+      'foreignBookId': blankForeignBookId ? '' : groupKey,
       'releaseDate': releaseDate.toIso8601String(),
       'monitored': monitored,
       'mediaType': mediaType,
@@ -255,7 +260,7 @@ void main() {
         ),
       ]);
 
-      final monitoredHeading = find.text('Monitored books');
+      final monitoredHeading = find.text('Tracked books');
       final otherHeading = find.text('Other books');
       expect(monitoredHeading, findsOneWidget);
       expect(otherHeading, findsOneWidget);
@@ -306,10 +311,14 @@ void main() {
       expect(find.text('Combined title'), findsOneWidget);
       expect(_card('combined'), findsOneWidget);
       expect(
-          _formatControl('combined', 'Monitor eBook'), findsOneWidget);
-      expect(_formatControl('combined', 'Stop monitoring Audiobook'),
+          _formatControl('combined', 'Track eBook'), findsOneWidget);
+      expect(_formatControl('combined', 'Stop tracking Audiobook'),
           findsOneWidget);
-      _expectAbove(tester, find.text('Monitored books'), _card('combined'));
+      final controlSize = tester.getSize(_formatControlTapTarget(
+          'combined', 'Stop tracking Audiobook'));
+      expect(controlSize.width, greaterThanOrEqualTo(48));
+      expect(controlSize.height, greaterThanOrEqualTo(48));
+      _expectAbove(tester, find.text('Tracked books'), _card('combined'));
       _expectAbove(tester, _card('combined'), find.text('Other books'));
       _expectAbove(tester, find.text('Other books'), _card('newer-other'));
     });
@@ -340,7 +349,7 @@ void main() {
         ),
       ]);
 
-      expect(find.text('Monitored books'), findsNothing);
+      expect(find.text('Tracked books'), findsNothing);
       expect(find.text('Other books'), findsNothing);
       expect(_card('newest'), findsOneWidget);
       expect(_card('middle'), findsOneWidget);
@@ -371,7 +380,7 @@ void main() {
       _expectAbove(
           tester, _card('old-monitored'), _card('new-unmonitored'));
       await tester.tap(
-          _formatControl('old-monitored', 'Stop monitoring eBook'));
+          _formatControl('old-monitored', 'Stop tracking eBook'));
       await tester.pumpAndSettle();
 
       final puts = adapter.requests.where((request) =>
@@ -382,12 +391,170 @@ void main() {
         'bookIds': [30],
         'monitored': false,
       });
-      expect(find.text('Monitored books'), findsNothing);
+      expect(find.text('Tracked books'), findsNothing);
       expect(find.text('Other books'), findsNothing);
-      expect(_formatControl('old-monitored', 'Monitor eBook'), findsOneWidget);
+      expect(_formatControl('old-monitored', 'Track eBook'),
+          findsOneWidget);
       _expectAbove(
           tester, _card('new-unmonitored'), _card('old-monitored'));
       expect(find.byType(SnackBar), findsOneWidget);
+    });
+
+    testWidgets(
+        'one format control reduces duplicate records and toggles them together',
+        (tester) async {
+      final adapter = await _pumpDetail(tester, [
+        _book(
+          id: 50,
+          title: 'Duplicate eBook',
+          groupKey: 'duplicate-ebook',
+          releaseDate: DateTime.utc(2020),
+          monitored: false,
+        ),
+        _book(
+          id: 51,
+          title: 'Duplicate eBook',
+          groupKey: 'duplicate-ebook',
+          releaseDate: DateTime.utc(2020),
+          monitored: true,
+        ),
+      ]);
+
+      expect(
+        _formatControl('duplicate-ebook', 'Stop tracking eBook'),
+        findsOneWidget,
+      );
+      await tester.tap(
+        _formatControl('duplicate-ebook', 'Stop tracking eBook'),
+      );
+      await tester.pumpAndSettle();
+
+      final puts = adapter.requests.where((request) =>
+          request.method == 'PUT' &&
+          request.path.endsWith('/book/monitor'));
+      expect(puts, hasLength(1));
+      final body = puts.single.body as Map<String, dynamic>;
+      expect((body['bookIds'] as List<dynamic>).toSet(), {50, 51});
+      expect(body['monitored'], isFalse);
+      expect(
+        _formatControl('duplicate-ebook', 'Track eBook'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('adding a format reuses the existing author configuration',
+        (tester) async {
+      final adapter = await _pumpDetail(tester, [
+        _book(
+          id: 60,
+          title: 'Configured title',
+          groupKey: 'configured-title',
+          releaseDate: DateTime.utc(2020),
+          monitored: true,
+        ),
+      ]);
+
+      await tester.tap(
+        _formatControl('configured-title', 'Track Audiobook'),
+      );
+      await tester.pumpAndSettle();
+
+      final add = adapter.requests.singleWhere((request) =>
+          request.method == 'POST' && request.path.endsWith('/book'));
+      final author =
+          (add.body as Map<String, dynamic>)['author'] as Map<String, dynamic>;
+      expect(author['qualityProfileId'], 31);
+      expect(author['metadataProfileId'], 41);
+      expect(author['rootFolderPath'], '/library/authors/marcus');
+      expect(
+        adapter.requests.where((request) =>
+            request.path.endsWith('/qualityprofile') ||
+            request.path.endsWith('/metadataprofile') ||
+            request.path.endsWith('/rootfolder')),
+        isEmpty,
+      );
+    });
+
+    testWidgets('unknown format blocks both missing-format add controls',
+        (tester) async {
+      final adapter = await _pumpDetail(tester, [
+        _book(
+          id: 70,
+          title: 'Unclassified title',
+          groupKey: 'unclassified-title',
+          releaseDate: DateTime.utc(2020),
+          monitored: true,
+          mediaType: 'future-format',
+        ),
+      ]);
+
+      expect(find.text('Book format: Needs attention'), findsOneWidget);
+      final blocked = find.descendant(
+        of: _card('unclassified-title'),
+        matching: find.byTooltip('Fix unknown book format in Chaptarr first'),
+      );
+      expect(blocked, findsNWidgets(2));
+      for (final inkWell in tester.widgetList<InkWell>(
+        find.descendant(of: blocked, matching: find.byType(InkWell)),
+      )) {
+        expect(inkWell.onTap, isNull);
+      }
+      expect(
+        adapter.requests.where((request) => request.method == 'POST'),
+        isEmpty,
+      );
+    });
+
+    testWidgets('blank metadata ID blocks only missing-format creation',
+        (tester) async {
+      final adapter = await _pumpDetail(tester, [
+        _book(
+          id: 80,
+          title: 'Unmatched title',
+          groupKey: 'unused',
+          releaseDate: DateTime.utc(2020),
+          monitored: true,
+          blankForeignBookId: true,
+        ),
+      ]);
+
+      final card = _card('id:80');
+      final existing = find.descendant(
+        of: card,
+        matching: find.byTooltip('Stop tracking eBook'),
+      );
+      expect(existing, findsOneWidget);
+      expect(
+        tester.widget<InkWell>(
+          find.descendant(of: existing, matching: find.byType(InkWell)),
+        ).onTap,
+        isNotNull,
+      );
+
+      final blocked = find.descendant(
+        of: card,
+        matching: find.byTooltip(
+          'This book has no metadata ID. Fix it in Chaptarr before adding Audiobook',
+        ),
+      );
+      expect(blocked, findsOneWidget);
+      expect(
+        tester.widget<InkWell>(
+          find.descendant(of: blocked, matching: find.byType(InkWell)),
+        ).onTap,
+        isNull,
+      );
+      expect(
+        find.descendant(
+          of: blocked,
+          matching: find.byIcon(Icons.warning_amber_rounded),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        adapter.requests.where((request) => request.method == 'POST'),
+        isEmpty,
+      );
     });
 
     testWidgets(
@@ -423,11 +590,11 @@ void main() {
       );
 
       _invokeFormatControl(
-          tester, 'combined-overlap', 'Stop monitoring eBook');
+          tester, 'combined-overlap', 'Stop tracking eBook');
       await tester.pump();
       await _waitForPendingMonitorPuts(tester, adapter, 1);
       _invokeFormatControl(
-          tester, 'combined-overlap', 'Stop monitoring Audiobook');
+          tester, 'combined-overlap', 'Stop tracking Audiobook');
       await tester.pump();
       await _waitForPendingMonitorPuts(tester, adapter, 2);
 
@@ -453,10 +620,10 @@ void main() {
 
       // The audiobook is still monitored, so the first successful response
       // changes one format without moving the combined title.
-      expect(find.text('Monitored books'), findsOneWidget);
-      expect(find.text('Stopped monitoring eBook for Combined title'),
+      expect(find.text('Tracked books'), findsOneWidget);
+      expect(find.text('Stopped tracking eBook for Combined title'),
           findsOneWidget);
-      expect(find.text('Combined title moved out of Monitored books'),
+      expect(find.text('Combined title moved out of Tracked books'),
           findsNothing);
       _expectAbove(tester, _card('combined-overlap'),
           _card('new-other-overlap'));
@@ -472,9 +639,9 @@ void main() {
 
       // This response clears the group's last monitored format, so it is the
       // only one whose success message may claim a section move.
-      expect(find.text('Combined title moved out of Monitored books'),
+      expect(find.text('Combined title moved out of Tracked books'),
           findsOneWidget);
-      expect(find.text('Monitored books'), findsNothing);
+      expect(find.text('Tracked books'), findsNothing);
       expect(find.text('Other books'), findsNothing);
       _expectAbove(tester, _card('new-other-overlap'),
           _card('combined-overlap'));

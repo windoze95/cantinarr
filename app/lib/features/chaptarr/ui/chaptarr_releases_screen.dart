@@ -183,7 +183,7 @@ class _ChaptarrReleasesScreenState
         title: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Interactive Search'),
+            const Text('Choose a download'),
             if (widget.bookTitle != null && widget.bookTitle!.isNotEmpty)
               Text(
                 widget.bookTitle!,

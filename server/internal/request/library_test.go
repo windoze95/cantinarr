@@ -171,3 +171,57 @@ func TestReduceLibraryDownloadedUsesBookFileCount(t *testing.T) {
 		t.Errorf("ebook.downloaded = true, want false (BookFileCount is 0)")
 	}
 }
+
+func TestReduceLibraryAggregatesDuplicateFormatTruth(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 31, Title: "Duplicate", ForeignBookID: "dup", MediaType: "ebook", Monitored: true, Statistics: chaptarr.BookStatistics{BookFileCount: 1}},
+		{ID: 32, Title: "Duplicate", ForeignBookID: "dup", MediaType: "ebook", Monitored: false, Statistics: chaptarr.BookStatistics{BookFileCount: 0}},
+	}
+	digest := reduceLibrary(books)
+	if len(digest.Titles) != 1 {
+		t.Fatalf("titles = %d, want one grouped title", len(digest.Titles))
+	}
+	if !digest.Titles[0].Ebook.Monitored || !digest.Titles[0].Ebook.Downloaded {
+		t.Fatalf("ebook = %+v, want OR-reduced monitored and downloaded truth", digest.Titles[0].Ebook)
+	}
+}
+
+func TestSelectBookRootFailsClosedOnAmbiguity(t *testing.T) {
+	if _, ok := selectBookRoot([]chaptarr.RootFolder{
+		{Path: "/one/books", Accessible: true},
+		{Path: "/two/books", Accessible: true},
+	}, BookFormatEbook); ok {
+		t.Fatal("multiple generic roots were guessed instead of rejected")
+	}
+	root, ok := selectBookRoot([]chaptarr.RootFolder{
+		{Path: "/books", Accessible: true},
+		{Path: "/audiobooks", Accessible: true},
+	}, BookFormatEbook)
+	if !ok || root.Path != "/books" {
+		t.Fatalf("ebook generic root = %+v ok=%v, want sole compatible /books", root, ok)
+	}
+	if _, ok := selectBookRoot([]chaptarr.RootFolder{
+		{Path: "/audio-one", Accessible: true},
+		{Path: "/audio-two", Accessible: true},
+	}, BookFormatAudiobook); ok {
+		t.Fatal("multiple audiobook roots were guessed instead of rejected")
+	}
+}
+
+func TestReduceLibraryPreservesMixedKnownAndUnknownCanonicalRows(t *testing.T) {
+	digest := reduceLibrary([]chaptarr.Book{
+		{ID: 1, Title: "Known", ForeignBookID: "known", MediaType: "ebook", Monitored: true},
+		{ID: 2, Title: "Unknown", ForeignBookID: "unknown", MediaType: "paperback", Monitored: true},
+	})
+	if len(digest.Titles) != 2 {
+		t.Fatalf("titles = %+v, want both known and unresolved canonical rows", digest.Titles)
+	}
+	known := findTitle(t, digest, "Known")
+	unknown := findTitle(t, digest, "Unknown")
+	if !known.StatusKnown || known.ForeignBookID != "known" {
+		t.Fatalf("known row = %+v", known)
+	}
+	if unknown.StatusKnown || unknown.ForeignBookID != "unknown" {
+		t.Fatalf("unknown row = %+v, want canonical ID with status_known=false", unknown)
+	}
+}

@@ -347,17 +347,45 @@ func decisionMessage(data map[string]interface{}) (title, body string) {
 	if mediaTitle == "" {
 		mediaTitle = "Your request"
 	}
+	subject, plural := decisionSubject(data, mediaTitle)
 	switch str(data["decision"]) {
 	case "approved":
-		return "Request approved", mediaTitle + " is on the way"
+		verb := " is"
+		if plural {
+			verb = " are"
+		}
+		return "Request approved", subject + verb + " on the way"
 	case "denied":
-		body = mediaTitle + " was denied"
+		verb := " was"
+		if plural {
+			verb = " were"
+		}
+		body = subject + verb + " denied"
 		if reason := str(data["reason"]); reason != "" {
 			body += ": " + reason
 		}
 		return "Request denied", body
 	default:
 		return "", ""
+	}
+}
+
+// decisionSubject preserves the existing whole-title copy for movies/TV and
+// scopes book decisions to the concrete format coverage in the event. Partial
+// approval events deliberately include only the formats that succeeded.
+func decisionSubject(data map[string]interface{}, mediaTitle string) (string, bool) {
+	if str(data["media_type"]) != "book" {
+		return mediaTitle, false
+	}
+	switch str(data["book_format"]) {
+	case "ebook":
+		return mediaTitle + " eBook", false
+	case "audiobook":
+		return mediaTitle + " Audiobook", false
+	case "both":
+		return mediaTitle + " eBook and Audiobook", true
+	default:
+		return mediaTitle, false
 	}
 }
 
@@ -371,11 +399,23 @@ func passthrough(eventType string, data map[string]interface{}) map[string]any {
 	if v := str(data["media_type"]); v != "" {
 		out["media_type"] = v
 	}
-	// Books have no TMDB id; their identity is the Chaptarr foreignBookId.
-	// Only book request-decision events carry it, so movie/TV payloads are
+	// Books have no TMDB id. Keep the canonical identity, selected library, title
+	// hint, and decision scope together so a tap cannot drift to whichever
+	// Chaptarr instance happens to be active later. Movie/TV payloads remain
 	// unchanged.
 	if v := str(data["foreign_id"]); v != "" {
 		out["foreign_id"] = v
+	}
+	if str(data["media_type"]) == "book" {
+		if v := str(data["instance_id"]); v != "" {
+			out["instance_id"] = v
+		}
+		if v := str(data["title"]); v != "" {
+			out["title"] = v
+		}
+		if v := str(data["book_format"]); v != "" {
+			out["book_format"] = v
+		}
 	}
 	return out
 }

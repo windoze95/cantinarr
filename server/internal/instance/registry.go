@@ -91,6 +91,13 @@ func (r *Registry) GetDefaultInstanceID(serviceType string) (string, error) {
 	return inst.ID, nil
 }
 
+// UserCanAccessInstance reports whether instanceID is the effective instance
+// exposed to a requester for serviceType. It deliberately delegates to the
+// metadata-only store check, so authorization never needs to decrypt secrets.
+func (r *Registry) UserCanAccessInstance(userID int64, instanceID, serviceType string) (bool, error) {
+	return r.store.UserCanAccessInstance(userID, instanceID, serviceType)
+}
+
 // GetFresh*Client methods deliberately bypass the registry cache. Settings
 // writes use them after their per-instance lock so the client and fingerprint
 // come from the same authoritative Store.Get result, closing the

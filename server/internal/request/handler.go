@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
@@ -39,8 +40,18 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// Books are keyed by the Readarr foreignBookId (no tmdb_id); everything else
 	// is keyed by tmdb_id.
 	if req.MediaType == "book" {
+		req.ForeignID = strings.TrimSpace(req.ForeignID)
+		req.Title = strings.TrimSpace(req.Title)
 		if req.ForeignID == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required for book requests"})
+			return
+		}
+		if req.Title == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "title required for book requests"})
+			return
+		}
+		if req.BookFormat != "" && !validBookFormat(req.BookFormat) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "book_format must be ebook, audiobook, or both"})
 			return
 		}
 	} else if req.TmdbID == 0 {
@@ -50,7 +61,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.CreateMediaRequest(claims.UserID, &req)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -93,14 +104,14 @@ func (h *Handler) GetBookStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	foreignID := r.URL.Query().Get("foreign_id")
+	foreignID := strings.TrimSpace(r.URL.Query().Get("foreign_id"))
 	if foreignID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
 		return
 	}
-	resp, err := h.service.GetUserBookStatus(claims.UserID, foreignID)
+	resp, err := h.service.GetUserBookStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -116,12 +127,25 @@ func (h *Handler) GetBookLibrary(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	digest, err := h.service.GetBookLibraryDigest(claims.UserID)
+	digest, err := h.service.GetBookLibraryDigestForInstance(claims.UserID, r.URL.Query().Get("instance_id"))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, digest)
+}
+
+func bookRequestErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, ErrChaptarrInstanceForbidden):
+		return http.StatusForbidden
+	case errors.Is(err, ErrChaptarrInstanceInvalid):
+		return http.StatusBadRequest
+	case errors.Is(err, ErrBookFormatUnresolved):
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {

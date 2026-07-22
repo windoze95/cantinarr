@@ -47,6 +47,37 @@ func mkInstance(t *testing.T, s *Store, serviceType, name string) string {
 	return inst.ID
 }
 
+func TestDeleteRejectsPinnedPendingBookRequests(t *testing.T) {
+	s := newTestStore(t)
+	uid := createUser(t, s, "pending-books")
+	instanceID := mkInstance(t, s, "chaptarr", "Books")
+	if err := s.SetUserDefault(uid, "chaptarr", instanceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
+		 VALUES (?, 0, 'book-1', 'ebook', ?, 'book', 'Pending', 'pending')`,
+		uid, instanceID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(instanceID); err == nil {
+		t.Fatal("deleted instance with a pinned pending book request")
+	}
+	if inst, err := s.Get(instanceID); err != nil || inst == nil {
+		t.Fatalf("failed atomic delete removed instance: inst=%+v err=%v", inst, err)
+	}
+	if allowed, err := s.UserCanAccessInstance(uid, instanceID, "chaptarr"); err != nil || !allowed {
+		t.Fatalf("failed atomic delete removed grant: allowed=%v err=%v", allowed, err)
+	}
+	if _, err := s.db.Exec("UPDATE request_log SET status='denied' WHERE instance_id=?", instanceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(instanceID); err != nil {
+		t.Fatalf("delete after resolving pending request: %v", err)
+	}
+}
+
 // AUTH-023: Proxy authorization classifies instances without decrypting secrets.
 func TestLookupServiceTypeUsesServiceMetadata(t *testing.T) {
 	s := newTestStore(t)

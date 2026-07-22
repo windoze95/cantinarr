@@ -13,6 +13,7 @@ import 'chaptarr_releases_screen.dart';
 import 'widgets/book_status.dart';
 import 'widgets/format_badge.dart';
 import 'widgets/format_picker.dart';
+import 'widgets/search_actions.dart';
 
 /// One title's formats. Chaptarr stores a title's ebook and audiobook as
 /// separate book records (same foreignBookId); [records] holds the 1–2 records.
@@ -37,12 +38,13 @@ class ChaptarrBookScreen extends ConsumerStatefulWidget {
 
 class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
   late final ChaptarrApiService _service;
+  late List<ChaptarrBook> _liveRecords;
   // Downloaded files keyed by record (book) id.
   Map<int, List<ChaptarrBookFile>> _filesByBook = {};
   bool _isLoading = true;
   String? _error;
 
-  List<ChaptarrBook> get _records => widget.records;
+  List<ChaptarrBook> get _records => _liveRecords;
 
   @override
   void initState() {
@@ -51,21 +53,32 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
       backendDio: ref.read(backendClientProvider),
       instanceId: widget.instanceId,
     );
+    _liveRecords = List<ChaptarrBook>.from(widget.records);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
+      final seed = _records.first;
+      final library = seed.authorId > 0
+          ? await _service.getBooks(authorId: seed.authorId)
+          : await Future.wait(_records.map((r) => _service.getBookById(r.id)));
+      final refreshed = library
+          .where((book) => book.groupKey == seed.groupKey)
+          .toList()
+        ..sort((a, b) => a.format.index.compareTo(b.format.index));
+      final records = refreshed.isEmpty ? _records : refreshed;
       final results = await Future.wait(
-        _records.map((r) => _service.getBookFiles(bookId: r.id)),
+        records.map((r) => _service.getBookFiles(bookId: r.id)),
       );
       if (!mounted) return;
       final map = <int, List<ChaptarrBookFile>>{};
-      for (var i = 0; i < _records.length; i++) {
-        map[_records[i].id] = results[i];
+      for (var i = 0; i < records.length; i++) {
+        map[records[i].id] = results[i];
       }
       setState(() {
+        _liveRecords = records;
         _filesByBook = map;
         _isLoading = false;
         _error = null;
@@ -80,14 +93,15 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
   }
 
   Future<void> _automaticSearch() async {
-    final chosen = await pickFormatRecord(context, _records);
+    final chosen = await pickFormatRecords(context, _records);
     if (chosen == null || !mounted) return;
+    final primary = chosen.first;
     try {
-      await _service.searchBook([chosen.id]);
+      await _service.searchBook(chosen.map((record) => record.id).toList());
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
-              'Searching for ${chaptarrFormatLabel(chosen.format)} — ${chosen.title}…')));
+              'Searching for ${chaptarrFormatLabel(primary.format)} — ${primary.title}…')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -96,7 +110,7 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
   }
 
   Future<void> _interactiveSearch() async {
-    final chosen = await pickFormatRecord(context, _records);
+    final chosen = await pickInteractiveFormatRecord(context, _records);
     if (chosen == null || !mounted) return;
     Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
@@ -171,7 +185,7 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
       child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          _BookHeader(book: _records.first, onTap: _openDetail),
+          _BookHeader(records: _records, onTap: _openDetail),
           const Divider(color: AppTheme.border, height: 1),
           for (final r in _records)
             _FormatSection(
@@ -189,14 +203,15 @@ class _ChaptarrBookScreenState extends ConsumerState<ChaptarrBookScreen> {
 /// The book summary header — title, release date, availability line. Tapping it
 /// opens the detail sheet.
 class _BookHeader extends StatelessWidget {
-  final ChaptarrBook book;
+  final List<ChaptarrBook> records;
   final VoidCallback onTap;
 
-  const _BookHeader({required this.book, required this.onTap});
+  const _BookHeader({required this.records, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final status = bookFileStatusLine(book);
+    final book = records.first;
+    final status = groupedBookStatusLine(records);
     final release = book.releaseDate;
     return InkWell(
       onTap: onTap,
@@ -299,12 +314,19 @@ class _FormatSection extends StatelessWidget {
               ),
             ),
             Tooltip(
-              message: record.monitored ? 'Monitored' : 'Not monitored',
-              child: Icon(
-                record.monitored ? Icons.bookmark : Icons.bookmark_border,
-                size: 18,
-                color:
-                    record.monitored ? AppTheme.accent : AppTheme.textSecondary,
+              message: record.monitored
+                  ? 'Tracked ${chaptarrFormatLabel(record.format)}'
+                  : 'Not tracked ${chaptarrFormatLabel(record.format)}',
+              child: SizedBox(
+                width: 48,
+                height: 48,
+                child: Icon(
+                  record.monitored ? Icons.bookmark : Icons.bookmark_border,
+                  size: 20,
+                  color: record.monitored
+                      ? AppTheme.accent
+                      : AppTheme.textSecondary,
+                ),
               ),
             ),
           ],
@@ -329,40 +351,9 @@ class _ActionBar extends StatelessWidget {
         color: AppTheme.surface,
         border: Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: onAutomatic,
-              icon:
-                  const Icon(Icons.search, size: 18, color: AppTheme.available),
-              label: const Text('Automatic',
-                  style: TextStyle(color: AppTheme.textPrimary)),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: AppTheme.border),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: onInteractive,
-              icon: const Icon(Icons.manage_search,
-                  size: 18, color: AppTheme.available),
-              label: const Text('Interactive',
-                  style: TextStyle(color: AppTheme.textPrimary)),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: AppTheme.border),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-            ),
-          ),
-        ],
+      child: ChaptarrSearchActions(
+        onFindAutomatically: onAutomatic,
+        onChooseDownload: onInteractive,
       ),
     );
   }

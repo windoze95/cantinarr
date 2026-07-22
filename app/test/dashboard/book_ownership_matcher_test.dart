@@ -6,10 +6,15 @@ import 'package:cantinarr/features/request/data/book_ownership.dart';
 
 /// Builds a lookup result. [author] becomes `author.authorName`; pass null for a
 /// result with no author context.
-ChaptarrBook _result(String title, {String? author}) =>
+ChaptarrBook _result(
+  String title, {
+  String? author,
+  String? foreignBookId,
+}) =>
     ChaptarrBook.fromJson({
       'id': 1,
       'title': title,
+      if (foreignBookId != null) 'foreignBookId': foreignBookId,
       if (author != null) 'author': {'authorName': author},
     });
 
@@ -20,10 +25,12 @@ OwnedTitle _owned(
   bool ebookDownloaded = false,
   bool audiobookMonitored = false,
   bool audiobookDownloaded = false,
+  String foreignBookId = '',
 }) =>
     OwnedTitle.fromJson({
       'title': title,
       'author': author,
+      'foreign_book_id': foreignBookId,
       'ebook': {'monitored': ebookMonitored, 'downloaded': ebookDownloaded},
       'audiobook': {
         'monitored': audiobookMonitored,
@@ -127,17 +134,15 @@ void main() {
       expect(ownershipFor(result, digest), isNull);
     });
 
-    test('surname-only author still resolves ownership', () {
+    test('surname-only author remains a plausible but unsafe identity', () {
       final digest = [
         _owned('Heir to the Empire', 'Timothy Zahn',
             audiobookMonitored: true),
       ];
       final result = _result('Heir to the Empire', author: 'Zahn');
 
-      final ownership = ownershipFor(result, digest);
-      expect(ownership, isNotNull);
-      expect(ownership!.audiobook.monitored, isTrue);
-      expect(ownership.anyOwned, isTrue);
+      expect(ownedMatchesFor(result, digest), hasLength(1));
+      expect(ownershipFor(result, digest), isNull);
     });
 
     test('below-threshold title with same author returns null', () {
@@ -155,21 +160,16 @@ void main() {
       expect(ownershipFor(result, const []), isNull);
     });
 
-    test('marks a result from the exact-title record, not a blend', () {
+    test('multiple plausible records fail closed instead of choosing one', () {
       final digest = [
         _owned('Ahsoka', 'E.K. Johnston', ebookDownloaded: true),
         _owned('Ahsoka (Star Wars)', 'E.K. Johnston',
             ebookMonitored: true, audiobookMonitored: true),
       ];
-      // A lookup result titled exactly "Ahsoka (Star Wars)" reflects THAT record
-      // (monitored, no file) — not the downloaded plain "Ahsoka".
-      final o = ownershipFor(
-        _result('Ahsoka (Star Wars)', author: 'E.K. Johnston'),
-        digest,
-      );
-      expect(o, isNotNull);
-      expect(o!.ebook.downloaded, isFalse);
-      expect(o.ebook.monitored, isTrue);
+      final result =
+          _result('Ahsoka (Star Wars)', author: 'E.K. Johnston');
+      expect(ownedMatchesFor(result, digest), hasLength(2));
+      expect(ownershipFor(result, digest), isNull);
     });
 
     test('ownedMatchFor exposes the matched record cover', () {
@@ -186,6 +186,24 @@ void main() {
       expect(match, isNotNull);
       expect(match!.cover, '/MediaCover/Books/9/cover.jpg');
       expect(match.ownership.ebook.downloaded, isTrue);
+    });
+
+    test('an exact foreign id outranks mismatched metadata', () {
+      final digest = [
+        _owned(
+          'Library title',
+          'Library author',
+          ebookDownloaded: true,
+          foreignBookId: 'same-id',
+        ),
+      ];
+      final result = _result(
+        'Provider title variant',
+        author: 'Provider author variant',
+        foreignBookId: 'same-id',
+      );
+
+      expect(ownedMatchFor(result, digest), same(digest.single));
     });
   });
 
@@ -219,13 +237,13 @@ void main() {
       expect(ownedTitlesForQuery('heir', digest, lookup), isEmpty);
     });
 
-    test('still injects when only a differently-titled lookup result matches',
+    test('a safe normalized lookup mapping does not duplicate its library row',
         () {
       final lookup = [
         _result('Star Wars: Heir to the Empire', author: 'Timothy Zahn'),
       ];
       final injected = ownedTitlesForQuery('heir', digest, lookup);
-      expect(injected.map((t) => t.title), contains('Heir to the Empire'));
+      expect(injected, isEmpty);
     });
 
     test('injects distinct records as separate rows (no merge)', () {
@@ -235,6 +253,31 @@ void main() {
       ];
       final injected = ownedTitlesForQuery('ahsoka', two, const []);
       expect(injected.map((t) => t.title), ['Ahsoka', 'Ahsoka (Star Wars)']);
+    });
+
+    test('injects same-title records separately by stable library identity', () {
+      final two = [
+        _owned(
+          'Flock',
+          'Kate Stewart',
+          ebookDownloaded: true,
+          foreignBookId: 'library-a',
+        ),
+        _owned(
+          'Flock',
+          'Kate Stewart',
+          audiobookMonitored: true,
+          foreignBookId: 'library-b',
+        ),
+      ];
+
+      final injected = ownedTitlesForQuery(
+        'flock',
+        two,
+        [_result('Flock', author: 'Kate Stewart')],
+      );
+      expect(injected.map((row) => row.foreignBookId),
+          ['library-a', 'library-b']);
     });
 
     test('an empty query injects nothing', () {

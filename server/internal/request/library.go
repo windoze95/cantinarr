@@ -3,6 +3,7 @@ package request
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
@@ -12,7 +13,7 @@ import (
 // is served from cache before a fresh GetAllBooks. Short enough that a just-added
 // book shows as owned soon, long enough to spare Chaptarr a full library fetch on
 // every search keystroke.
-const bookLibraryCacheTTL = 120 * time.Second
+const bookLibraryCacheTTL = 15 * time.Second
 
 // FormatOwnership is one format's (ebook or audiobook) ownership state for a
 // title: whether Chaptarr is monitoring that format and whether a file is on
@@ -32,6 +33,10 @@ type LibraryTitle struct {
 	// ForeignBookID lets the app request the missing format of an owned book: the
 	// request carries it back and the backend completes the existing record.
 	ForeignBookID string `json:"foreign_book_id"`
+	// StatusKnown is false when Chaptarr returned an exact canonical record whose
+	// format cannot be classified. The row and canonical ID remain in the digest
+	// so clients can map search identity, but must not offer a request for it.
+	StatusKnown bool `json:"status_known"`
 	// Cover is the owned record's relative cover path (e.g. /MediaCover/...),
 	// which loads with the API key — so an owned search result can show real art
 	// without the login-session-gated /MediaCoverProxy lookup cover.
@@ -67,7 +72,7 @@ func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 		key := groupKey(book)
 		g, ok := groups[key]
 		if !ok {
-			g = &group{title: &LibraryTitle{}}
+			g = &group{title: &LibraryTitle{StatusKnown: true}}
 			groups[key] = g
 			order = append(order, key)
 		}
@@ -102,9 +107,13 @@ func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 		}
 		switch recordFormat(book) {
 		case chaptarr.FormatEbook:
-			g.title.Ebook = own
+			g.title.Ebook.Monitored = g.title.Ebook.Monitored || own.Monitored
+			g.title.Ebook.Downloaded = g.title.Ebook.Downloaded || own.Downloaded
 		case chaptarr.FormatAudiobook:
-			g.title.Audiobook = own
+			g.title.Audiobook.Monitored = g.title.Audiobook.Monitored || own.Monitored
+			g.title.Audiobook.Downloaded = g.title.Audiobook.Downloaded || own.Downloaded
+		default:
+			g.title.StatusKnown = false
 		}
 	}
 
@@ -182,12 +191,80 @@ func recordsByForeignID(books []chaptarr.Book, foreignID string) (string, map[st
 	return title, byFormat
 }
 
+// recordsForForeignID preserves every same-format record so live truth can be
+// aggregated deterministically and mutations can update all duplicates rather
+// than whichever record happened to arrive last.
+func recordsForForeignID(books []chaptarr.Book, foreignID string) (string, map[string][]chaptarr.Book, bool) {
+	byFormat := make(map[string][]chaptarr.Book)
+	title := ""
+	unresolved := false
+	for _, book := range books {
+		if foreignID == "" || book.ForeignBookID != foreignID {
+			continue
+		}
+		if title == "" {
+			title = book.Title
+		}
+		switch format := recordFormat(book); format {
+		case chaptarr.FormatEbook, chaptarr.FormatAudiobook:
+			byFormat[format] = append(byFormat[format], book)
+		default:
+			unresolved = true
+		}
+	}
+	return title, byFormat, unresolved
+}
+
+// selectBookRoot chooses one unambiguous accessible root. A clear format path
+// wins; one generic root is compatible with simple installs. Multiple matching
+// or generic roots fail closed instead of guessing where a format belongs.
+func selectBookRoot(folders []chaptarr.RootFolder, format string) (chaptarr.RootFolder, bool) {
+	matches := make([]chaptarr.RootFolder, 0, len(folders))
+	generic := make([]chaptarr.RootFolder, 0, len(folders))
+	for _, folder := range folders {
+		if !folder.Accessible || strings.TrimSpace(folder.Path) == "" {
+			continue
+		}
+		path := strings.ToLower(folder.Path)
+		isAudio := strings.Contains(path, "audio") || strings.Contains(path, "listen")
+		isEbook := strings.Contains(path, "ebook") || strings.Contains(path, "e-book")
+		isMatch := format == BookFormatAudiobook && isAudio
+		if format == BookFormatEbook {
+			isMatch = isEbook
+		}
+		if isMatch {
+			matches = append(matches, folder)
+		} else if !isAudio && !isEbook {
+			generic = append(generic, folder)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], true
+	}
+	if len(matches) > 1 {
+		return chaptarr.RootFolder{}, false
+	}
+	if len(generic) == 1 {
+		return generic[0], true
+	}
+	return chaptarr.RootFolder{}, false
+}
+
 // GetBookLibraryDigest returns the requesting user's reduced, cached Chaptarr
 // library digest. A user with no Chaptarr access gets an empty (non-nil) digest
 // rather than an error, so the app can degrade gracefully to "nothing owned".
 // The digest is cached per resolved Chaptarr instance for bookLibraryCacheTTL.
 func (s *Service) GetBookLibraryDigest(userID int64) (*BookLibraryDigest, error) {
-	client, instanceID := s.getChaptarrWithID(userID)
+	return s.GetBookLibraryDigestForInstance(userID, "")
+}
+
+// GetBookLibraryDigestForInstance returns the digest for an explicitly selected
+// authorized Chaptarr instance, or the user's effective instance when omitted.
+func (s *Service) GetBookLibraryDigestForInstance(userID int64, requestedInstanceID string) (*BookLibraryDigest, error) {
+	client, instanceID, err := s.resolveChaptarr(userID, requestedInstanceID)
+	if err != nil {
+		return nil, err
+	}
 	if client == nil {
 		return &BookLibraryDigest{Titles: []LibraryTitle{}}, nil
 	}

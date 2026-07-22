@@ -20,6 +20,27 @@ func newUsersRouter(h *Handler) http.Handler {
 	return r
 }
 
+func TestDeletePendingBookInstanceReturnsConflict(t *testing.T) {
+	s := newTestStore(t)
+	uid := createUser(t, s, "delete-conflict")
+	instanceID := mkInstance(t, s, "chaptarr", "Books")
+	if _, err := s.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
+		 VALUES (?, 0, 'pending', 'ebook', ?, 'book', 'Pending', 'pending')`, uid, instanceID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(s, nil)
+	router := chi.NewRouter()
+	router.Delete("/instances/{instanceID}", h.Delete)
+	req := httptest.NewRequest(http.MethodDelete, "/instances/"+instanceID, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "await approval") {
+		t.Fatalf("delete response = %d %q, want 409 structured refusal", rec.Code, rec.Body.String())
+	}
+}
+
 func TestInstanceUsersEndpoints(t *testing.T) {
 	s := newTestStore(t)
 	h := NewHandler(s, nil)

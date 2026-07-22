@@ -20,10 +20,78 @@ void main() {
       format: BookRequestFormat.audiobook,
     );
 
-    expect(status, RequestStatus.requested);
+    expect(status?.status, RequestStatus.requested);
     expect(adapter.body['media_type'], 'book');
     expect(adapter.body['foreign_id'], 'book-123');
     expect(adapter.body['book_format'], 'audiobook');
+  });
+
+  test('requestBook pins the selected instance and preserves partial formats',
+      () async {
+    final adapter = _CaptureAdapter(response: {
+      'status': 'partial',
+      'book_formats': {
+        'ebook': 'requested',
+        'audiobook': 'unavailable',
+      },
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    final result = await RequestService(backendDio: dio).requestBook(
+      foreignId: 'book-123',
+      title: 'A Book',
+      format: BookRequestFormat.both,
+      instanceId: 'books-two',
+    );
+
+    expect(adapter.body['instance_id'], 'books-two');
+    expect(result?.status, RequestStatus.partial);
+    expect(result?.succeeded(BookRequestFormat.ebook), isTrue);
+    expect(result?.succeeded(BookRequestFormat.audiobook), isFalse);
+  });
+
+  test('requestBook fails closed on unknown response statuses', () async {
+    final cases = [
+      {
+        'status': 'future-status',
+        'book_formats': {'ebook': 'requested'},
+      },
+      {
+        'status': 'partial',
+        'book_formats': {
+          'ebook': 'future-status',
+          'audiobook': 'unavailable',
+        },
+      },
+    ];
+
+    for (final response in cases) {
+      final adapter = _CaptureAdapter(response: response);
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+        ..httpClientAdapter = adapter;
+      final result = await RequestService(backendDio: dio).requestBook(
+        foreignId: 'book-123',
+        title: 'A Book',
+        format: BookRequestFormat.both,
+      );
+
+      expect(result?.isKnown, isFalse);
+    }
+  });
+
+  test('submission success excludes denied and unavailable outcomes', () {
+    const submission = BookRequestSubmission(
+      status: RequestStatus.partial,
+      formats: {
+        BookRequestFormat.ebook: RequestStatus.denied,
+        BookRequestFormat.audiobook: RequestStatus.pending,
+      },
+    );
+
+    expect(submission.succeeded(BookRequestFormat.ebook), isFalse);
+    expect(submission.succeeded(BookRequestFormat.audiobook), isTrue);
+    expect(submission.succeeded(BookRequestFormat.both), isFalse);
   });
 
   test('requestBook surfaces backend error messages', () async {
@@ -45,10 +113,40 @@ void main() {
         isA<RequestSubmissionException>().having(
           (e) => e.message,
           'message',
-          'no audiobook edition available',
+          'No audiobook edition is available for this book.',
         ),
       ),
     );
+  });
+
+  test('book setup profile errors give requesters one plain next step',
+      () async {
+    for (final backendError in [
+      'quality profile selection is ambiguous',
+      'metadata profile is missing',
+    ]) {
+      final adapter = _CaptureAdapter(
+        statusCode: 500,
+        response: {'error': backendError},
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+        ..httpClientAdapter = adapter;
+
+      expect(
+        () => RequestService(backendDio: dio).requestBook(
+          foreignId: 'book-123',
+          title: 'A Book',
+          format: BookRequestFormat.ebook,
+        ),
+        throwsA(
+          isA<RequestSubmissionException>().having(
+            (e) => e.message,
+            'message',
+            'Ask an admin to check the book settings.',
+          ),
+        ),
+      );
+    }
   });
 
   test('pending book requests expose media and format labels', () {
@@ -59,11 +157,26 @@ void main() {
       'media_type': 'book',
       'title': 'Star Wars: Heir to the Empire',
       'book_format': 'both',
+      'instance_name': 'Family Books',
+      'requester_count': 2,
     });
 
     expect(item.isBook, isTrue);
     expect(item.mediaLabel, 'Book');
     expect(item.requestedBookFormat, BookRequestFormat.both);
+    expect(item.instanceName, 'Family Books');
+    expect(item.requesterCount, 2);
+    expect(item.requestedByLabel, 'Requested by reader and 1 other');
+  });
+
+  test('unknown pending book formats are not converted into both', () {
+    final item = PendingRequestItem.fromJson({
+      'id': 1,
+      'media_type': 'book',
+      'book_format': 'future-format',
+    });
+
+    expect(item.requestedBookFormat, isNull);
   });
 }
 

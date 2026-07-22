@@ -16,7 +16,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Chaptarr books
 
-- [ ] `BOOK-003` · P0 · UI/LIVE — Request both formats; verify exactly one ebook record and one audiobook record share the foreignBookId/group as one logical title, with no duplicate same-format record.
+- [ ] `BOOK-003` · P0 · UI/LIVE — From the selected Chaptarr instance, request both formats; verify exactly one ebook record and one audiobook record share the foreignBookId/group as one logical title, each moves Requested → Downloading → Available independently, returning from Chaptarr refreshes immediately, and repeating or approving concurrently cannot create a duplicate same-format record in that or another instance.
 - [ ] `BOOK-014` · P0 · LIVE — Run supported Import Doctor classifications/fixes for Chaptarr, including exact queue/manual-import scope; verify no title-level mutation occurs without a durable book ID.
 
 ## Download clients and unified downloads

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/status_pill.dart';
 import '../../data/chaptarr_models.dart';
+import 'format_badge.dart';
 
 /// Short status label for a queue item (e.g. "Import pending", "Downloading").
 String chaptarrQueueStatusLabel(ChaptarrQueueItem item) {
@@ -181,6 +182,8 @@ class ChaptarrQueueItemCard extends StatelessWidget {
               children: [
                 StatusPill(
                     text: chaptarrQueueStatusLabel(item), color: statusColor),
+                if (item.format != BookFormat.unknown)
+                  ChaptarrFormatBadge(format: item.format),
                 StatusPill(
                   text: protocol.toUpperCase(),
                   color: protocol == 'torrent'

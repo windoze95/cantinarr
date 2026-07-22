@@ -165,11 +165,10 @@ func TestGetRequestsKeepsStoredStatusWhenArrUnreachable(t *testing.T) {
 	}
 }
 
-// TestGetRequestsBookRowsUpgradeOnly covers book history rows: a requested
-// format whose file landed reads available, one of two reads partial, and a
-// book absent from the digest keeps its stored status (foreign-id matching is
-// not reliable enough to downgrade on absence).
-func TestGetRequestsBookRowsUpgradeOnly(t *testing.T) {
+// TestGetRequestsBookRowsUsePinnedLiveProjection covers book history rows: a
+// requested format whose file landed reads available, one of two reads partial,
+// and a canonical title absent from its pinned instance reads unavailable.
+func TestGetRequestsBookRowsUsePinnedLiveProjection(t *testing.T) {
 	chaptarrSrv := jsonServer(t, map[string]string{
 		"/api/v1/book": `[
 			{"id":1,"title":"Read Me","foreignBookId":"book-1","monitored":true,"mediaType":"ebook",
@@ -177,10 +176,21 @@ func TestGetRequestsBookRowsUpgradeOnly(t *testing.T) {
 			{"id":2,"title":"Half Here","foreignBookId":"book-2","monitored":true,"mediaType":"ebook",
 			 "author":{"authorName":"B"},"statistics":{"bookFileCount":1}},
 			{"id":3,"title":"Half Here","foreignBookId":"book-2","monitored":true,"mediaType":"audiobook",
-			 "author":{"authorName":"B"},"statistics":{"bookFileCount":0}}
+			 "author":{"authorName":"B"},"statistics":{"bookFileCount":0}},
+			{"id":4,"title":"On the Way","foreignBookId":"book-3","monitored":true,"mediaType":"audiobook",
+			 "author":{"authorName":"C"},"statistics":{"bookFileCount":0}},
+			{"id":5,"title":"Being Watched","foreignBookId":"book-4","monitored":true,"mediaType":"ebook",
+			 "author":{"authorName":"D"},"statistics":{"bookFileCount":0}},
+			{"id":6,"title":"Unknown Format","foreignBookId":"book-5","monitored":true,"mediaType":"paperback",
+			 "author":{"authorName":"E"},"statistics":{"bookFileCount":0}}
 		]`,
+		"/api/v1/queue": `{"totalRecords":1,"records":[{"bookId":4,"status":"downloading","trackedDownloadStatus":"ok"}]}`,
 	})
 	s, uid := newHistoryTestService(t, "", "", chaptarrSrv.URL)
+	_, instanceID, err := s.resolveChaptarr(uid, "")
+	if err != nil || instanceID == "" {
+		t.Fatalf("resolve Chaptarr: id=%q err=%v", instanceID, err)
+	}
 
 	seed := []struct {
 		title     string
@@ -188,15 +198,22 @@ func TestGetRequestsBookRowsUpgradeOnly(t *testing.T) {
 		format    string
 		status    string
 	}{
-		{"Read Me", "book-1", BookFormatEbook, StatusRequested},     // downloaded -> available
-		{"Half Here", "book-2", "both", StatusRequested},            // one of two -> partial
-		{"Not Matched", "book-9", BookFormatEbook, StatusRequested}, // absent -> stays requested
+		{"Read Me", "book-1", BookFormatEbook, StatusRequested},        // downloaded -> available
+		{"Half Here", "book-2", "both", StatusRequested},               // one of two -> partial
+		{"On the Way", "book-3", BookFormatAudiobook, StatusRequested}, // healthy queue -> downloading
+		{"Being Watched", "book-4", BookFormatEbook, StatusAvailable},  // monitored, no file -> requested
+		{"Unknown Format", "book-5", BookFormatEbook, StatusRequested}, // cannot map format -> unknown
+		{"Not Matched", "book-9", BookFormatEbook, StatusRequested},    // absent -> unavailable
 	}
 	for _, row := range seed {
-		r := &resolvedRequest{userID: uid, mediaType: "book", foreignID: row.foreignID, bookFormat: row.format}
+		r := &resolvedRequest{userID: uid, mediaType: "book", foreignID: row.foreignID, bookFormat: row.format, instanceID: instanceID}
 		if _, err := s.insertRequest(r, row.title, row.status); err != nil {
 			t.Fatalf("seed %s: %v", row.title, err)
 		}
+	}
+	legacy := &resolvedRequest{userID: uid, mediaType: "book", foreignID: "book-1", bookFormat: BookFormatEbook}
+	if _, err := s.insertRequest(legacy, "Legacy Unscoped", StatusRequested); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
 	}
 
 	requests, err := s.GetRequests(uid)
@@ -204,13 +221,25 @@ func TestGetRequestsBookRowsUpgradeOnly(t *testing.T) {
 		t.Fatalf("GetRequests: %v", err)
 	}
 	want := map[string]string{
-		"Read Me":     StatusAvailable,
-		"Half Here":   StatusPartial,
-		"Not Matched": StatusRequested,
+		"Read Me":         StatusAvailable,
+		"Half Here":       StatusPartial,
+		"On the Way":      StatusDownloading,
+		"Being Watched":   StatusRequested,
+		"Unknown Format":  StatusUnavailable,
+		"Not Matched":     StatusUnavailable,
+		"Legacy Unscoped": StatusRequested,
 	}
 	for title, wantStatus := range want {
 		if got := statusOf(t, requests, title); got != wantStatus {
 			t.Errorf("%s = %s, want %s", title, got, wantStatus)
+		}
+	}
+	for _, request := range requests {
+		if request.Title == "Unknown Format" && request.StatusKnown {
+			t.Fatalf("unresolved history = %+v, want status_known false", request)
+		}
+		if request.Title == "Read Me" && !request.StatusKnown {
+			t.Fatalf("resolved history = %+v, want status_known true", request)
 		}
 	}
 }
@@ -231,6 +260,7 @@ func TestGetUserBookStatusOverlaysOwnership(t *testing.T) {
 			{"id":4,"title":"Pending But Here","foreignBookId":"book-3","monitored":true,"mediaType":"ebook",
 			 "author":{"authorName":"C"},"statistics":{"bookFileCount":1}}
 		]`,
+		"/api/v1/queue": `{"totalRecords":0,"records":[]}`,
 	})
 	s, uid := newHistoryTestService(t, "", "", chaptarrSrv.URL)
 
@@ -258,8 +288,8 @@ func TestGetUserBookStatusOverlaysOwnership(t *testing.T) {
 	}{
 		{"book-1", StatusAvailable, StatusAvailable},
 		{"book-2", StatusPartial, StatusAvailable},
-		{"book-3", StatusPending, StatusPending}, // approval flow stays visible
-		{"book-9", StatusRequested, StatusRequested},
+		{"book-3", StatusAvailable, StatusAvailable}, // live truth outranks stale approval state
+		{"book-9", StatusUnavailable, StatusUnavailable},
 	}
 	for _, c := range cases {
 		st, err := s.GetUserBookStatus(uid, c.foreignID)
