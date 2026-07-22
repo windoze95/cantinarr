@@ -369,6 +369,7 @@ func NewRouter(
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequirePermission(auth.PermissionInstancesManage))
 				r.Get("/instances", instanceHandler.List)
+				r.Get("/instances/media-roots", instanceHandler.MediaRoots)
 				r.Post("/instances", instanceHandler.Create)
 				// Dry-run connectivity check from the server — the host that
 				// actually dials instance URLs — so cluster-internal names the
@@ -500,10 +501,11 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		w.Header().Set("Cache-Control", "no-store")
 		// Build instances list
 		type instanceInfo struct {
-			ID          string `json:"id"`
-			ServiceType string `json:"service_type"`
-			Name        string `json:"name"`
-			IsDefault   bool   `json:"is_default"`
+			ID             string `json:"id"`
+			ServiceType    string `json:"service_type"`
+			Name           string `json:"name"`
+			IsDefault      bool   `json:"is_default"`
+			MediaDownloads bool   `json:"media_downloads"`
 		}
 
 		// The config payload is per-user: admins see every instance, while
@@ -549,10 +551,11 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 					isDefault = pinned == inst.ID
 				}
 				instances = append(instances, instanceInfo{
-					ID:          inst.ID,
-					ServiceType: inst.ServiceType,
-					Name:        inst.Name,
-					IsDefault:   isDefault,
+					ID:             inst.ID,
+					ServiceType:    inst.ServiceType,
+					Name:           inst.Name,
+					IsDefault:      isDefault,
+					MediaDownloads: inst.MediaDownloadsConfigured(cfg.MediaDownloadRoots),
 				})
 			}
 		}
@@ -567,12 +570,15 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"radarr":          false,
 			"sonarr":          false,
 			"chaptarr":        false,
-			"media_downloads": len(cfg.MediaDownloadRoots) > 0,
+			"media_downloads": false,
 			"ai":              aiAvailable,
 			"tmdb":            creds.IsConfigured(credentials.KeyTMDBAccessToken),
 			"trakt":           creds.IsConfigured(credentials.KeyTraktClientID),
 		}
 		for _, inst := range instances {
+			if inst.MediaDownloads {
+				services["media_downloads"] = true
+			}
 			switch inst.ServiceType {
 			case "radarr":
 				services["radarr"] = true

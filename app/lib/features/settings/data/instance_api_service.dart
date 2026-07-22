@@ -1,6 +1,29 @@
 import 'package:dio/dio.dart';
 import '../../../core/models/backend_connection.dart';
 
+/// Maps the path reported by one arr instance to the corresponding read-only
+/// path mounted inside the Cantinarr server.
+class MediaPathMapping {
+  final String arrPath;
+  final String cantinarrPath;
+
+  const MediaPathMapping({
+    required this.arrPath,
+    required this.cantinarrPath,
+  });
+
+  factory MediaPathMapping.fromJson(Map<String, dynamic> json) =>
+      MediaPathMapping(
+        arrPath: json['arr_path'] as String? ?? '',
+        cantinarrPath: json['cantinarr_path'] as String? ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {
+        'arr_path': arrPath,
+        'cantinarr_path': cantinarrPath,
+      };
+}
+
 /// Calls the backend instance CRUD API endpoints.
 class InstanceApiService {
   final Dio _dio;
@@ -25,6 +48,16 @@ class InstanceApiService {
     return null;
   }
 
+  /// Absolute filesystem roots the server operator has explicitly allowed for
+  /// completed-media delivery. This endpoint is admin-only. Unsupported/404
+  /// responses intentionally propagate so older servers remain write-safe.
+  Future<List<String>> listMediaRoots() async {
+    final resp = await _dio.get('/api/instances/media-roots');
+    return (resp.data as List<dynamic>)
+        .map((root) => root as String)
+        .toList(growable: false);
+  }
+
   Future<ServiceInstance> createInstance({
     required String serviceType,
     required String name,
@@ -33,6 +66,7 @@ class InstanceApiService {
     String username = '',
     String password = '',
     bool isDefault = false,
+    List<MediaPathMapping>? mediaPathMappings,
   }) async {
     final resp = await _dio.post('/api/instances', data: {
       'service_type': serviceType,
@@ -42,6 +76,9 @@ class InstanceApiService {
       'username': username,
       'password': password,
       'is_default': isDefault,
+      if (mediaPathMappings != null)
+        'media_path_mappings':
+            mediaPathMappings.map((mapping) => mapping.toJson()).toList(),
     });
     return ServiceInstance.fromJson(resp.data as Map<String, dynamic>);
   }
@@ -54,6 +91,7 @@ class InstanceApiService {
     String username = '',
     String password = '',
     bool isDefault = false,
+    List<MediaPathMapping>? mediaPathMappings,
   }) async {
     final resp = await _dio.put('/api/instances/$id', data: {
       'name': name,
@@ -62,6 +100,9 @@ class InstanceApiService {
       'username': username,
       'password': password,
       'is_default': isDefault,
+      if (mediaPathMappings != null)
+        'media_path_mappings':
+            mediaPathMappings.map((mapping) => mapping.toJson()).toList(),
     });
     return ServiceInstance.fromJson(resp.data as Map<String, dynamic>);
   }

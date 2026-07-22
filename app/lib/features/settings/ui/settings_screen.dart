@@ -233,9 +233,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       await context.push<bool>('/settings/instance/new');
                   if (result != true || !context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text(
-                            'Instance added. Restart the app to see changes.')),
+                    const SnackBar(content: Text('Instance added.')),
                   );
                 },
                 icon: const Icon(Icons.add),

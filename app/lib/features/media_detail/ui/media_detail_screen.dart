@@ -549,7 +549,6 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final generation = ++_arrResolveGeneration;
     final auth = ref.read(authProvider).valueOrNull;
     final isAdmin = auth?.user?.isAdmin ?? false;
-    final downloadsEnabled = auth?.connection?.services.mediaDownloads ?? false;
     final backendDio = ref.read(backendClientProvider);
     final instances = ref.read(instanceProvider);
     final connection = auth?.connection;
@@ -562,13 +561,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         _downloadInstanceId = null;
       });
     }
-    if (!isAdmin && !downloadsEnabled) return;
-
     try {
       if (widget.mediaType == MediaType.movie) {
         final instanceId = instances.activeRadarrInstance?.id ??
             connection?.defaultRadarrInstance?.id;
         if (instanceId == null) return;
+        final downloadsEnabled =
+            connection?.mediaDownloadsEnabledFor(instanceId) ?? false;
+        if (!isAdmin && !downloadsEnabled) return;
         final service = RadarrApiService(
           backendDio: backendDio,
           instanceId: instanceId,
@@ -599,6 +599,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         final instanceId = instances.activeSonarrInstance?.id ??
             connection?.defaultSonarrInstance?.id;
         if (instanceId == null) return;
+        final downloadsEnabled =
+            connection?.mediaDownloadsEnabledFor(instanceId) ?? false;
+        if (!isAdmin && !downloadsEnabled) return;
         final service = SonarrApiService(
           backendDio: backendDio,
           instanceId: instanceId,

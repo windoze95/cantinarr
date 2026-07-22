@@ -27,7 +27,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 
 - **One-tap requests with an approval queue** -- Users browse and tap request; the server handles ID bridging, arr lookups, quality profiles, and root folders. Admins can require approval globally or per user, and per user allow season-level choice, quality choice, and per-service default quality profiles.
 - **Books via Chaptarr** -- A Readarr-API (v1) books module with per-format (ebook/audiobook) monitoring, requesting, and library awareness. Chaptarr access is granted per user by an admin.
-- **Completed-media downloads** -- Opt-in delivery of ebook, audiobook, movie, and episode files from exact read-only library mounts. The server accepts only live arr file IDs, confines every open to explicit roots, and streams through short-lived file-scoped links with HEAD and Range support.
+- **Completed-media downloads** -- Opt-in delivery of ebook, audiobook, movie, and episode files from read-only library mounts. Deployment roots form the outer filesystem allowlist; per-instance path mappings translate each arr namespace into that boundary. The server accepts only live arr file IDs and streams through short-lived file-scoped links with HEAD and Range support.
 - **Automatic ID bridging** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then title+year search. Results cached in SQLite for 30 days.
 - **Availability computed live** -- Request status is derived from the arrs' real episode/file state (never from a stale snapshot or monitored-only stats), refreshed by queue polling and instant arr webhooks.
 - **Connect link auth, passwordless by default** -- Admins generate connect links; redeeming one starts a permanent device session (an opaque refresh token validated against the DB -- never expires, never rotates, independent of the JWT secret) that mints 15-minute access JWTs. Sessions end only by device revocation or user deletion. Passwords and passkeys (WebAuthn, incl. native iOS/Android/Windows) are admin-gated per user.
@@ -93,7 +93,7 @@ Optional env vars for deployment tuning (a `.env` file next to the binary is aut
 | `CANTINARR_AI_MODEL` | provider default | Fallback model for the included server AI profile when none is saved in the admin UI |
 | `CANTINARR_CODEX_BIN` | auto-discovered | Optional path to `codex-app-server` or the full `codex` CLI; official container images bundle the tested 0.144.3 app-server at `/usr/local/bin/codex-app-server` |
 | `CANTINARR_CODEX_RUNTIME_DIR` | `/dev/shm/cantinarr-codex` | Absolute Linux tmpfs/ramfs directory used for server-owned, ephemeral per-session Codex state; if it already exists, it must be owned by the server user with mode `0700` |
-| `CANTINARR_MEDIA_ROOTS` | unset | Comma-separated absolute container paths from which completed arr media may be served. Empty disables downloads. Mount each library read-only at the same absolute path its arr reports; `/` and aliases of `/` are refused |
+| `CANTINARR_MEDIA_ROOTS` | unset | Comma-separated absolute server/container paths forming the outer filesystem allowlist for completed-media downloads. Empty disables downloads. Mount libraries read-only beneath these roots, then map each arr-reported prefix to a path inside them from that instance's settings; `/` and aliases of `/` are refused |
 | `CANTINARR_PUSH_GATEWAY_URL` | unset | Push gateway origin; setting it **enables** push notifications |
 | `CANTINARR_PUSH_API_KEY` | unset | Optional pinned gateway key -- leave blank and the server auto-enrolls on first start, persisting its issued key encrypted in the DB |
 | `CANTINARR_PUSH_ENROLL_TOKEN` | unset | Shared enroll token, only for gateways with gated enrollment |
@@ -162,7 +162,7 @@ PUT    /api/admin/plex/settings            # server, shared libraries, auto-invi
 ```
 GET    /api/admin/setup-status             # live-derived checklist of configured/unconfigured features
 ```
-Re-derived from actual configuration on every request (never stored), so the app's setup wizard is resumable and can't go stale. New features surface themselves by adding an item here; clients render unknown keys generically.
+Re-derived from actual configuration on every request (never stored), so the app's setup wizard is resumable and can't go stale. New features surface themselves by adding an item here; clients render unknown keys generically. Completed-media downloads are an optional item and count as configured once deployment roots are present and at least one Radarr, Sonarr, or Chaptarr instance has an effective media path mapping.
 
 ### Update status (admin)
 ```
@@ -284,6 +284,7 @@ Tool debug mode records names, timing, status, and payload sizes only; tool inpu
 ### Instances & arr proxy
 ```
 GET|POST /api/instances                      # admin: list/create
+GET    /api/instances/media-roots             # admin: deployment-approved Cantinarr roots for the mapping editor
 POST   /api/instances/test                   # admin: dry-run connectivity check, dialed from the server
 PUT|DELETE /api/instances/{instanceID}       # admin: update/delete
 GET|PUT /api/instances/{instanceID}/users    # admin: which users are pinned/assigned here
@@ -292,6 +293,8 @@ ANY    /api/instances/{instanceID}/*         # proxy to the instance's own API; 
                                              # and upstream redirects are remapped onto this route (off-origin ones become 502)
 ```
 The proxy allows read-only Radarr/Sonarr browsing (library, queue, history, wanted, calendar) for regular users; writes, commands, interactive search, config, and all non-arr services require admin. Requesters are bound to their own effective instance -- their pin, or the deterministic global default/fallback -- exactly as `/api/config` reports it; a sibling instance the admin has hidden cannot be reached by guessing its ID, and instance authorization is classified from stored metadata so an undecryptable secret can never widen access. JSON responses are bounded and recursively scrubbed for credential fields and secret-bearing URL query parameters before they reach any client. An encoded, malformed, streaming, or oversized JSON response fails closed rather than bypassing that scrubber.
+
+Radarr, Sonarr, and Chaptarr create/update payloads may include `media_path_mappings`, an ordered array of `{ "arr_path": "...", "cantinarr_path": "..." }` objects. Each row translates an absolute path prefix reported by that one instance into a server-visible directory beneath `CANTINARR_MEDIA_ROOTS`; source prefixes may use POSIX, Windows drive, or UNC syntax independently of the server OS. An empty array disables completed-media downloads for that instance. The admin-only `media-roots` endpoint supplies the approved target roots used by the editor. Mapping paths are admin-only instance configuration and never appear in the requester `/api/config` payload. Saving explicit mappings replaces the legacy identity behavior for that instance.
 
 The proxy is also a transport trust boundary. `CONNECT`, `TRACE`, and `TRACK` are rejected before instance resolution or any upstream contact, and an upstream protocol upgrade (`101`) is refused, so the HTTP proxy can never become an opaque tunnel or reflect the injected `X-Api-Key`. Inbound Cantinarr session cookies and every forwarded credential, client-identity assertion (reverse-proxy `X-Auth-*`/`Remote-*`/mTLS headers), routing/method-override, and request-trailer header terminate here; only the instance's own `X-Api-Key` is added outbound. Upstream responses are marked private and non-cacheable, and nginx/lighttpd internal-redirect controls (`X-Accel-*`, `X-Sendfile`, `X-Reproxy-URL`) plus response trailers are stripped so a fronting web server cannot be steered by an upstream header.
 
@@ -304,7 +307,11 @@ GET|HEAD /api/media-files/download/{ticket}          # public bearer capability 
 
 Ticket issuance requires `media:download`, re-checks the caller's current account role, and limits requesters to their effective Radarr/Sonarr instance or explicitly granted Chaptarr instance. Administrators may select any configured arr instance. The client supplies only an instance ID and live arr file ID; it never supplies a path. Cantinarr re-fetches that exact file record from Radarr (`moviefile`), Sonarr (`episodefile`), or Chaptarr (`bookfile`) both when issuing the ticket and for every transfer.
 
-Bytes are available only when `CANTINARR_MEDIA_ROOTS` contains an exact read-only mount matching the path the arr reports. Files outside those roots, directory entries, and symlink escapes are refused. Tickets are opaque, bounded, reusable for ten minutes so browser HEAD probes and resumed Range requests work, and contain neither JWTs nor server paths. Every GET/HEAD re-checks that the user still exists, uses the user's current role, and re-checks effective-instance access for non-admins. Responses are attachment-only `application/octet-stream` with no-store, no-referrer, nosniff, same-origin resource policy, and sandbox CSP headers; errors never expose arr hosts, filesystem paths, or OS details. `/api/config.services.media_downloads` reports whether roots are configured without returning the roots themselves.
+Bytes are available only when two boundaries agree: the live arr path must match a mapping owned by that exact instance, and the mapped Cantinarr path must remain beneath a configured `CANTINARR_MEDIA_ROOTS` root. In Docker the target is the container path of a read-only mount; for a native server it is an absolute local directory readable by the server process. This lets instances that both report `/ebooks` safely map to different mounts, and lets a Chaptarr instance map as many independent ebook/audiobook trees as it uses. Mapping does not infer media format from a directory name; the exact Chaptarr record remains authoritative. Files outside either boundary, directory entries, and symlink escapes are refused.
+
+Instances that predate per-instance mappings retain the former identity behavior: each global root is treated as both the arr prefix and Cantinarr prefix until an admin saves explicit mappings. Newly created instances start with downloads disabled. `/api/config.services.media_downloads` remains a compatibility aggregate and is true when at least one instance visible to the current user has an effective download mapping; each returned instance also reports its own path-free download capability so current clients show controls only for the selected instance. Neither response exposes roots or mapping paths.
+
+Tickets are opaque, bounded, reusable for ten minutes so browser HEAD probes and resumed Range requests work, and contain neither JWTs nor server paths. Every GET/HEAD re-checks that the user still exists, uses the user's current role, re-checks effective-instance access for non-admins, re-fetches the live file record, and applies the current mapping. Responses are attachment-only `application/octet-stream` with no-store, no-referrer, nosniff, same-origin resource policy, and sandbox CSP headers; errors never expose arr hosts, filesystem paths, or OS details. Delivery covers the primary files indexed by Radarr, Sonarr, and Chaptarr, not arbitrary neighboring files, subtitles, extras, or directories. Multi-file audiobooks remain individual file choices rather than being packaged into an archive.
 
 ### Downloads & monitoring (admin)
 ```
@@ -517,7 +524,7 @@ SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db
 |---|---|
 | Accounts & sessions | `users`, `refresh_tokens`, `connect_tokens`, `devices` (hardware-id deduped), `webauthn_credentials` |
 | Requests | `request_log` (approval + season/quality/book-format/instance capture), `book_request_waiters` (shared pending subscribers + their concrete format coverage), `user_request_settings` |
-| Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials), `user_default_instances` |
+| Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials + per-instance media path mappings/legacy mode), `user_default_instances` |
 | Push | `push_tokens` (one per device), `notification_prefs` |
 | AI access | `user_ai_settings` (explicit personal selection), `user_ai_credentials` (per-provider encrypted personal API keys), `user_codex_accounts` (personal encrypted OpenAI OAuth authorization), `shared_codex_account` (singleton encrypted included authorization); `users.ai_shared_enabled` stores the included-access grant, while `settings` stores the daily health-check switch/timestamp |
 | AI configuration history | `external_setting_changes` (append-only AI/MCP quality-profile/custom-format outcomes, server-held before/applied snapshots, and linked quality-profile restores) |
@@ -547,7 +554,8 @@ server/
 │   ├── instance/             # Instance registry, defaults invariant, per-user pins, safe webhook rotation
 │   ├── mcp/                  # 33 registered tools, toggles, tool server (31 also exposed through external MCP)
 │   ├── mcpserver/            # MCP Streamable HTTP endpoint, prompts, agent guide (mcp-go)
-│   ├── mediafiles/           # Ticketed, root-confined completed-media streaming
+│   ├── mediafiles/           # Ticketed, instance-mapped + root-confined media streaming
+│   ├── mediapath/            # Cross-platform arr-path validation and local translation
 │   ├── nzbget/               # NZBGet JSON-RPC client
 │   ├── plex/                 # plex.tv PIN link + shared_servers invites (one-tap & auto)
 │   ├── proxy/                # Credential-scrubbing arr reverse proxy (read-only for users)

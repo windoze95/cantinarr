@@ -33,6 +33,7 @@ type setupFacts struct {
 	HasSonarr         bool
 	HasChaptarr       bool
 	HasDownloadClient bool
+	MediaDownloads    bool
 	HasTautulli       bool
 	TMDB              bool
 	Trakt             bool
@@ -85,6 +86,13 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Optional:    true,
 		},
 		{
+			Key:         "media_downloads",
+			Title:       "Completed media downloads",
+			Description: "Mount media read-only on the server, then map paths inside each Radarr, Sonarr, or Chaptarr instance.",
+			Configured:  f.MediaDownloads,
+			Optional:    true,
+		},
+		{
 			Key:         "tautulli",
 			Title:       "Plex monitoring (Tautulli)",
 			Description: "Watch live Plex streams, history, and stats from the app.",
@@ -122,6 +130,9 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 		var facts setupFacts
 		if instances, err := store.ListAll(); err == nil {
 			for _, inst := range instances {
+				if inst.MediaDownloadsConfigured(cfg.MediaDownloadRoots) {
+					facts.MediaDownloads = true
+				}
 				switch inst.ServiceType {
 				case "radarr":
 					facts.HasRadarr = true

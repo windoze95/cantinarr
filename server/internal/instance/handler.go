@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
@@ -35,24 +36,39 @@ var allowedServiceTypes = map[string]bool{
 // instanceResponse is the JSON shape returned to clients. All credentials are
 // write-only, including the token used to authenticate arr webhook callbacks.
 type instanceResponse struct {
-	ID          string `json:"id"`
-	ServiceType string `json:"service_type"`
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	Username    string `json:"username,omitempty"`
-	IsDefault   bool   `json:"is_default"`
-	SortOrder   int    `json:"sort_order"`
+	ID                string              `json:"id"`
+	ServiceType       string              `json:"service_type"`
+	Name              string              `json:"name"`
+	URL               string              `json:"url"`
+	Username          string              `json:"username,omitempty"`
+	IsDefault         bool                `json:"is_default"`
+	SortOrder         int                 `json:"sort_order"`
+	MediaDownloads    bool                `json:"media_downloads"`
+	MediaPathMappings []mediapath.Mapping `json:"media_path_mappings"`
 }
 
-func toResponse(inst *Instance) instanceResponse {
+type instanceRequest struct {
+	Instance
+	// Pointer distinguishes an old client that omitted this new field from an
+	// admin explicitly sending [] to disable downloads on an existing instance.
+	MediaPathMappings *[]mediapath.Mapping `json:"media_path_mappings"`
+}
+
+func (h *Handler) toResponse(inst *Instance) instanceResponse {
+	mappings := inst.EffectiveMediaPathMappings(h.mediaRoots)
+	if mappings == nil {
+		mappings = []mediapath.Mapping{}
+	}
 	return instanceResponse{
-		ID:          inst.ID,
-		ServiceType: inst.ServiceType,
-		Name:        inst.Name,
-		URL:         inst.URL,
-		Username:    inst.Username,
-		IsDefault:   inst.IsDefault,
-		SortOrder:   inst.SortOrder,
+		ID:                inst.ID,
+		ServiceType:       inst.ServiceType,
+		Name:              inst.Name,
+		URL:               inst.URL,
+		Username:          inst.Username,
+		IsDefault:         inst.IsDefault,
+		SortOrder:         inst.SortOrder,
+		MediaDownloads:    inst.MediaDownloadsConfigured(h.mediaRoots),
+		MediaPathMappings: mappings,
 	}
 }
 
@@ -63,6 +79,7 @@ type Handler struct {
 	webhookMu    sync.Mutex
 	webhookLocks map[string]*sync.Mutex
 	publicURL    string
+	mediaRoots   []string
 }
 
 // NewHandler creates a new instance handler.
@@ -72,6 +89,49 @@ func NewHandler(store *Store, registry *Registry, publicURL ...string) *Handler 
 		h.publicURL = strings.TrimRight(publicURL[0], "/")
 	}
 	return h
+}
+
+// SetMediaDownloadRoots supplies the deployment-owned outer filesystem
+// boundary. It is called during process construction before the router starts.
+func (h *Handler) SetMediaDownloadRoots(roots []string) {
+	h.mediaRoots = append([]string(nil), roots...)
+}
+
+func (h *Handler) applyMediaPathMappings(inst *Instance, provided *[]mediapath.Mapping, existing *Instance) error {
+	if provided == nil {
+		if existing != nil {
+			inst.MediaDownloadMode = existing.MediaDownloadMode
+			inst.MediaPathMappings = append([]mediapath.Mapping(nil), existing.MediaPathMappings...)
+		} else {
+			inst.MediaDownloadMode = MediaDownloadModeDisabled
+			inst.MediaPathMappings = nil
+		}
+		return nil
+	}
+
+	if inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" {
+		if len(*provided) > 0 {
+			return fmt.Errorf("media path mappings are supported only for Radarr, Sonarr, and Chaptarr")
+		}
+		inst.MediaDownloadMode = MediaDownloadModeDisabled
+		inst.MediaPathMappings = nil
+		return nil
+	}
+	// Clearing an instance must remain possible even if a deployment mount has
+	// disappeared since startup. There is nothing to validate when no mapping
+	// will remain.
+	if len(*provided) == 0 {
+		inst.MediaDownloadMode = MediaDownloadModeDisabled
+		inst.MediaPathMappings = nil
+		return nil
+	}
+	normalized, err := mediapath.Validate(*provided, h.mediaRoots)
+	if err != nil {
+		return fmt.Errorf("invalid media path mappings: %w", err)
+	}
+	inst.MediaDownloadMode = MediaDownloadModeMapped
+	inst.MediaPathMappings = normalized
+	return nil
 }
 
 func (h *Handler) lockWebhookConfiguration(instanceID string) func() {
@@ -95,25 +155,43 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := make([]instanceResponse, 0, len(instances))
 	for _, inst := range instances {
-		resp = append(resp, toResponse(&inst))
+		resp = append(resp, h.toResponse(&inst))
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
+// MediaRoots returns the deployment-authorized local roots to administrators
+// configuring an instance. Requester config never includes these server paths.
+func (h *Handler) MediaRoots(w http.ResponseWriter, _ *http.Request) {
+	roots := append([]string(nil), h.mediaRoots...)
+	if roots == nil {
+		roots = []string{}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(roots)
+}
+
 // Create adds a new service instance.
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-	var inst Instance
-	if err := json.NewDecoder(r.Body).Decode(&inst); err != nil {
+	var request instanceRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}
+	inst := request.Instance
 
 	if !allowedServiceTypes[inst.ServiceType] {
 		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"}`, http.StatusBadRequest)
 		return
 	}
 	if err := validateRequiredFields(&inst); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	if err := h.applyMediaPathMappings(&inst, request.MediaPathMappings, nil); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -134,7 +212,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(toResponse(&inst))
+	json.NewEncoder(w).Encode(h.toResponse(&inst))
 }
 
 // Update modifies an existing service instance.
@@ -151,11 +229,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var inst Instance
-	if err := json.NewDecoder(r.Body).Decode(&inst); err != nil {
+	var request instanceRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}
+	inst := request.Instance
 	inst.ID = instanceID
 	// Service type is immutable; validate against the stored type.
 	inst.ServiceType = existing.ServiceType
@@ -175,6 +254,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
+	if err := h.applyMediaPathMappings(&inst, request.MediaPathMappings, existing); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
 
 	inst.URL = strings.TrimRight(inst.URL, "/")
 
@@ -191,7 +274,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	h.registry.InvalidateClient(instanceID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(toResponse(&inst))
+	json.NewEncoder(w).Encode(h.toResponse(&inst))
 }
 
 // TestConnection validates a candidate configuration's reachability and

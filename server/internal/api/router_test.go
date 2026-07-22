@@ -223,7 +223,13 @@ func TestConfigHandlerFailsClosedWhenUserDefaultsUnavailable(t *testing.T) {
 
 func TestConfigHandlerReportsMediaDownloadCapabilityWithoutExposingRoots(t *testing.T) {
 	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
-	rootSentinel := "/private/library/path-must-not-cross-api"
+	enabled := createConfigInstance(t, store, "radarr", "Mapped movies", true)
+	enabled.MediaDownloadMode = instance.MediaDownloadModeIdentity
+	if err := store.Update(&enabled); err != nil {
+		t.Fatalf("enable migrated media downloads: %v", err)
+	}
+	disabled := createConfigInstance(t, store, "sonarr", "Unmapped TV", true)
+	rootSentinel := t.TempDir()
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{
 		UserID: userID,
@@ -242,6 +248,13 @@ func TestConfigHandlerReportsMediaDownloadCapabilityWithoutExposingRoots(t *test
 	}
 	if !response.Services["media_downloads"] {
 		t.Fatalf("services = %#v, want media_downloads capability", response.Services)
+	}
+	capabilities := make(map[string]bool, len(response.Instances))
+	for _, inst := range response.Instances {
+		capabilities[inst.ID] = inst.MediaDownloads
+	}
+	if !capabilities[enabled.ID] || capabilities[disabled.ID] {
+		t.Fatalf("instance media capabilities = %#v, want only %s enabled", capabilities, enabled.ID)
 	}
 	if strings.Contains(rec.Body.String(), rootSentinel) {
 		t.Fatalf("config exposed media root: %s", rec.Body.String())
@@ -423,7 +436,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			seen := make(map[string]bool, len(gotInstances))
 			for _, got := range gotInstances {
-				assertExactMapKeys(t, got, "id", "service_type", "name", "is_default")
+				assertExactMapKeys(t, got, "id", "service_type", "name", "is_default", "media_downloads")
 				var id, serviceType string
 				if err := json.Unmarshal(got["id"], &id); err != nil {
 					t.Fatalf("decode instance id: %v", err)
@@ -459,10 +472,11 @@ func assertExactMapKeys[V any](t *testing.T, got map[string]V, want ...string) {
 type configHandlerResponse struct {
 	Services  map[string]bool `json:"services"`
 	Instances []struct {
-		ID          string `json:"id"`
-		ServiceType string `json:"service_type"`
-		Name        string `json:"name"`
-		IsDefault   bool   `json:"is_default"`
+		ID             string `json:"id"`
+		ServiceType    string `json:"service_type"`
+		Name           string `json:"name"`
+		IsDefault      bool   `json:"is_default"`
+		MediaDownloads bool   `json:"media_downloads"`
 	} `json:"instances"`
 }
 

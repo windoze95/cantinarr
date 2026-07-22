@@ -342,7 +342,8 @@ class _FileCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final cutoffMet = !file.qualityCutoffNotMet;
     final connection = ref.watch(authProvider).valueOrNull?.connection;
-    final downloadsEnabled = connection?.services.mediaDownloads ?? false;
+    final downloadsEnabled =
+        connection?.mediaDownloadsEnabledFor(instanceId) ?? false;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(

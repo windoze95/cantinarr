@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -55,6 +56,17 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool? _webhookConfigured;
   String? _webhookResult;
 
+  // Completed-media path mappings belong to this exact arr instance. The
+  // deployment roots remain server-owned; this form only routes arr paths into
+  // those already-authorized read-only folders.
+  final List<_MediaPathMappingFields> _mediaPathMappings = [];
+  List<String>? _mediaRoots;
+  String? _mediaRootsError;
+  String? _mediaMappingsError;
+  bool _mediaMappingsLoaded = false;
+  bool _mediaMappingApiSupported = false;
+  bool _mediaMappingsDirty = false;
+
   /// Fresh instance list from the server — the login-time copy in the auth
   /// state can be stale, and both the first-of-type auto-default and the
   /// default-takeover confirmation depend on what actually exists right now.
@@ -101,6 +113,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   bool get _isChaptarr => _serviceType == 'chaptarr';
 
+  bool get _supportsMediaDownloads =>
+      _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
+
+  bool get _shouldSubmitMediaPathMappings =>
+      _supportsMediaDownloads &&
+      _mediaMappingApiSupported &&
+      _mediaMappingsLoaded &&
+      (!widget.isEditing || _mediaMappingsDirty);
+
   /// Source types feed requests and dashboard statuses, so they support
   /// per-user assignment; download clients and Tautulli are global-only.
   bool get _supportsUserAssignment =>
@@ -132,7 +153,31 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _serviceType = widget.initialServiceType ?? 'radarr';
     _isDefault = widget.initialIsDefault;
     if (widget.isEditing) _loadDetails();
+    _loadMediaRoots();
     _loadDirectory();
+  }
+
+  Future<void> _loadMediaRoots() async {
+    try {
+      final roots = await InstanceApiService(
+        backendDio: ref.read(backendClientProvider),
+      ).listMediaRoots();
+      if (!mounted) return;
+      setState(() {
+        _mediaRoots = roots;
+        _mediaRootsError = null;
+        if (!widget.isEditing) {
+          _mediaMappingApiSupported = true;
+          _mediaMappingsLoaded = true;
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _mediaRoots = null;
+        _mediaRootsError = 'Could not load the server media folders.';
+      });
+    }
   }
 
   /// Loads the fresh instance list plus the users and their current pins for
@@ -240,11 +285,71 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        if (details.containsKey('media_path_mappings')) {
+          final rawMappings = details['media_path_mappings'] as List? ?? [];
+          _replaceMediaPathMappings(rawMappings
+              .whereType<Map>()
+              .map((raw) => MediaPathMapping.fromJson(
+                    Map<String, dynamic>.from(raw),
+                  ))
+              .toList(growable: false));
+          _mediaMappingApiSupported = true;
+          _mediaMappingsLoaded = true;
+          _mediaMappingsError = null;
+        } else {
+          _mediaMappingsError =
+              'Update the Cantinarr server to configure media downloads.';
+        }
       });
     } catch (_) {
-      // Best-effort prefill; the form still works with manual entry.
+      // Connection fields remain manually editable, but mapping data must not
+      // be guessed: omitting it on Save preserves the server's current rules.
+      if (!mounted) return;
+      setState(() => _mediaMappingsError =
+          'Could not load this instance’s media path mappings.');
     }
   }
+
+  void _replaceMediaPathMappings(List<MediaPathMapping> mappings) {
+    for (final mapping in _mediaPathMappings) {
+      mapping.dispose();
+    }
+    _mediaPathMappings
+      ..clear()
+      ..addAll(mappings.map((mapping) => _MediaPathMappingFields.fromMapping(
+            mapping,
+            onChanged: _markMediaMappingsDirty,
+          )));
+    _mediaMappingsDirty = false;
+  }
+
+  void _markMediaMappingsDirty() {
+    _mediaMappingsDirty = true;
+  }
+
+  void _addMediaPathMapping() {
+    setState(() {
+      _mediaPathMappings.add(_MediaPathMappingFields(
+        onChanged: _markMediaMappingsDirty,
+      ));
+      _mediaMappingsDirty = true;
+    });
+  }
+
+  void _removeMediaPathMapping(int index) {
+    setState(() {
+      _mediaPathMappings.removeAt(index).dispose();
+      _mediaMappingsDirty = true;
+    });
+  }
+
+  List<MediaPathMapping> _currentMediaPathMappings() => [
+        for (final mapping in _mediaPathMappings)
+          MediaPathMapping(
+            arrPath: mapping.arrPath.text.trim(),
+            cantinarrPath: mapping.cantinarrPath.text.trim(),
+          ),
+      ];
 
   @override
   void dispose() {
@@ -253,6 +358,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _apiKeyController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
+    for (final mapping in _mediaPathMappings) {
+      mapping.dispose();
+    }
     super.dispose();
   }
 
@@ -296,6 +404,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     if (_nameController.text.trim().isEmpty ||
         _urlController.text.trim().isEmpty) {
       return 'Name and URL are required';
+    }
+    if (_shouldSubmitMediaPathMappings) {
+      for (final mapping in _mediaPathMappings) {
+        if (mapping.arrPath.text.trim().isEmpty ||
+            mapping.cantinarrPath.text.trim().isEmpty) {
+          return 'Both paths are required for every media mapping';
+        }
+      }
     }
     // When editing, blank credentials keep the existing ones.
     if (widget.isEditing) return null;
@@ -575,6 +691,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _users != null &&
         !_sameSelection(_assignedUserIds, _savedAssignedUserIds);
     final assignedIds = _assignedUserIds.toList()..sort();
+    final mediaPathMappings = _shouldSubmitMediaPathMappings
+        ? _currentMediaPathMappings()
+        : null;
     // Pulling users off a sibling instance needs the same explicit sign-off
     // as a default takeover.
     if (applyAssignments && !await _confirmUserMoves()) return;
@@ -595,6 +714,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           username: _usernameController.text.trim(),
           password: _passwordController.text,
           isDefault: isDefault,
+          mediaPathMappings: mediaPathMappings,
         );
         if (applyAssignments) {
           try {
@@ -602,17 +722,17 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           } catch (e) {
             // The instance itself saved; stay here so Save can retry the
             // assignments (re-updating the instance is idempotent).
+            if (!mounted) return;
             setState(() => _isSaving = false);
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                    content: Text('Instance saved, but assigning users '
-                        'failed: ${_errorMessage(e)}')),
-              );
-            }
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                  content: Text('Instance saved, but assigning users '
+                      'failed: ${_errorMessage(e)}')),
+            );
             return;
           }
         }
+        await _refreshConfigAfterSave();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Instance updated')),
@@ -630,6 +750,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         username: _usernameController.text.trim(),
         password: _passwordController.text,
         isDefault: isDefault,
+        mediaPathMappings: mediaPathMappings,
       );
       // The instance exists now, so a failed assignment must not re-run
       // create: surface it and let the admin retry from the edit screen.
@@ -641,6 +762,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           assignmentError = _errorMessage(e);
         }
       }
+      await _refreshConfigAfterSave();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -652,12 +774,52 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         context.pop(true); // Return true to signal refresh needed
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isSaving = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save: ${_errorMessage(e)}')),
-        );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save: ${_errorMessage(e)}')),
+      );
+    }
+  }
+
+  Future<void> _refreshConfigAfterSave() async {
+    final activeBefore = ref.read(instanceProvider);
+    try {
+      await ref.read(authProvider.notifier).refreshConfig();
+      if (!mounted) return;
+      final refreshed = ref.read(instanceProvider);
+      final notifier = ref.read(instanceProvider.notifier);
+      final radarrId = activeBefore.activeRadarrInstanceId;
+      if (radarrId != null &&
+          refreshed.radarrInstances.any((instance) => instance.id == radarrId)) {
+        notifier.setActiveRadarrInstance(radarrId);
       }
+      final sonarrId = activeBefore.activeSonarrInstanceId;
+      if (sonarrId != null &&
+          refreshed.sonarrInstances.any((instance) => instance.id == sonarrId)) {
+        notifier.setActiveSonarrInstance(sonarrId);
+      }
+      final chaptarrId = activeBefore.activeChaptarrInstanceId;
+      if (chaptarrId != null &&
+          refreshed.chaptarrInstances
+              .any((instance) => instance.id == chaptarrId)) {
+        notifier.setActiveChaptarrInstance(chaptarrId);
+      }
+      final downloadId = activeBefore.activeDownloadInstanceId;
+      if (downloadId != null &&
+          refreshed.downloadInstances
+              .any((instance) => instance.id == downloadId)) {
+        notifier.setActiveDownloadInstance(downloadId);
+      }
+      final tautulliId = activeBefore.activeTautulliInstanceId;
+      if (tautulliId != null &&
+          refreshed.tautulliInstances
+              .any((instance) => instance.id == tautulliId)) {
+        notifier.setActiveTautulliInstance(tautulliId);
+      }
+    } catch (_) {
+      // The instance itself is already saved. The normal resume/config refresh
+      // will reconcile capability metadata if this best-effort refresh fails.
     }
   }
 
@@ -757,6 +919,318 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     }
   }
 
+  Widget _buildMediaDownloadsSection() {
+    final roots = _mediaRoots;
+    final canAdd = _mediaMappingsLoaded &&
+        _mediaMappingApiSupported &&
+        (roots?.isNotEmpty ?? false);
+    final mappingCount = _mediaPathMappings.length;
+    final statusBadge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: (mappingCount == 0 ? AppTheme.textSecondary : AppTheme.accent)
+            .withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        mappingCount == 0
+            ? 'Off'
+            : '$mappingCount '
+                '${mappingCount == 1 ? 'mapping' : 'mappings'}',
+        style: TextStyle(
+          color: mappingCount == 0
+              ? AppTheme.textSecondary
+              : AppTheme.accent,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+    Widget titleRow({required bool includeStatus}) => Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: AppTheme.accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.download_for_offline_outlined,
+                color: AppTheme.accent,
+                size: 21,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Media downloads',
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            if (includeStatus) statusBadge,
+          ],
+        );
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final largeText =
+                  MediaQuery.textScalerOf(context).scale(1) > 1.3;
+              if (constraints.maxWidth < 300 || largeText) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    titleRow(includeStatus: false),
+                    const SizedBox(height: 8),
+                    statusBadge,
+                  ],
+                );
+              }
+              return titleRow(includeStatus: true);
+            },
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Optional. Map each library path reported by $_serviceLabel to '
+            'where the same files are mounted inside Cantinarr. Only files '
+            'covered by this instance’s mappings can be downloaded. Linux, '
+            'Windows drive, and UNC source paths are supported.',
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (roots == null && _mediaRootsError == null)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppTheme.accent,
+                  ),
+                ),
+              ),
+            ),
+          if (_mediaRootsError != null)
+            _MediaMappingNotice(
+              icon: Icons.sync_problem_outlined,
+              message: _mediaRootsError!,
+              action: TextButton(
+                onPressed: () {
+                  setState(() => _mediaRootsError = null);
+                  _loadMediaRoots();
+                },
+                child: const Text('Retry'),
+              ),
+            ),
+          if (_mediaMappingsError != null)
+            _MediaMappingNotice(
+              icon: Icons.sync_problem_outlined,
+              message: _mediaMappingsError!,
+              action: widget.isEditing
+                  ? TextButton(
+                      onPressed: () {
+                        setState(() => _mediaMappingsError = null);
+                        _loadDetails();
+                      },
+                      child: const Text('Retry'),
+                    )
+                  : null,
+            ),
+          if (roots != null && roots.isEmpty)
+            const _MediaMappingNotice(
+              icon: Icons.folder_off_outlined,
+              message: 'No server media folders are available. Mount them '
+                  'read-only, set CANTINARR_MEDIA_ROOTS, and restart the server.',
+            ),
+          if (roots != null && roots.isNotEmpty) ...[
+            Text(
+              'Allowed Cantinarr ${roots.length == 1 ? 'root' : 'roots'}',
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 5),
+            for (final root in roots)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 3),
+                      child: Icon(
+                        Icons.folder_open_outlined,
+                        size: 14,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: SelectableText(
+                        root,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 10),
+          ],
+          if (_mediaMappingsLoaded) ...[
+            if (_mediaPathMappings.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 6),
+                child: Text(
+                  'No paths mapped — downloads are off for this instance.',
+                  style: TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            for (var i = 0; i < _mediaPathMappings.length; i++) ...[
+              _buildMediaPathMappingCard(i),
+              if (i != _mediaPathMappings.length - 1)
+                const SizedBox(height: 10),
+            ],
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: canAdd ? _addMediaPathMapping : null,
+              icon: const Icon(Icons.add_link_rounded, size: 18),
+              label: const Text('Add path'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMediaPathMappingCard(int index) {
+    final mapping = _mediaPathMappings[index];
+    final rootHint = _mediaRoots?.isNotEmpty == true ? _mediaRoots!.first : '';
+    return Container(
+      key: ObjectKey(mapping),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 12),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Path mapping ${index + 1}',
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Remove path mapping',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _removeMediaPathMapping(index),
+                icon: const Icon(
+                  Icons.close_rounded,
+                  size: 18,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ],
+          ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final source = TextField(
+                controller: mapping.arrPath,
+                decoration: InputDecoration(
+                  labelText: '$_serviceLabel path',
+                  hintText: _isChaptarr ? '/ebooks' : '/media/library',
+                ),
+                autocorrect: false,
+              );
+              final target = TextField(
+                controller: mapping.cantinarrPath,
+                decoration: InputDecoration(
+                  labelText: 'Cantinarr path',
+                  hintText: rootHint.isEmpty ? '/media/library' : rootHint,
+                ),
+                autocorrect: false,
+              );
+              final wide = constraints.maxWidth >= 560;
+              final arrow = Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  wide
+                      ? Icons.arrow_forward_rounded
+                      : Icons.arrow_downward_rounded,
+                  size: 18,
+                  color: AppTheme.accent,
+                ),
+              );
+              if (wide) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(child: source),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: arrow,
+                    ),
+                    Expanded(child: target),
+                  ],
+                );
+              }
+              return Column(
+                children: [
+                  source,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: arrow,
+                  ),
+                  target,
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -786,6 +1260,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             // phone, so use a dropdown instead.
             DropdownButtonFormField<String>(
               initialValue: _serviceType,
+              isExpanded: true,
               dropdownColor: AppTheme.surfaceVariant,
               items: _serviceTypes
                   .map((t) => DropdownMenuItem(
@@ -881,9 +1356,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
               obscureText: true,
             ),
-          // Chaptarr also takes an optional web login: its cover images are
-          // served behind the web session (not the API key), so these let the
-          // backend fetch search-result cover art.
+          if (_supportsMediaDownloads) ...[
+            const SizedBox(height: 24),
+            _buildMediaDownloadsSection(),
+          ],
           const SizedBox(height: 16),
 
           // Chaptarr has no global default: its instances are assigned
@@ -1005,6 +1481,79 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ],
         ],
       )),
+    );
+  }
+}
+
+class _MediaPathMappingFields {
+  final TextEditingController arrPath;
+  final TextEditingController cantinarrPath;
+
+  _MediaPathMappingFields({
+    String arrPath = '',
+    String cantinarrPath = '',
+    required VoidCallback onChanged,
+  })
+      : arrPath = TextEditingController(text: arrPath),
+        cantinarrPath = TextEditingController(text: cantinarrPath) {
+    this.arrPath.addListener(onChanged);
+    this.cantinarrPath.addListener(onChanged);
+  }
+
+  factory _MediaPathMappingFields.fromMapping(
+    MediaPathMapping mapping, {
+    required VoidCallback onChanged,
+  }) =>
+      _MediaPathMappingFields(
+        arrPath: mapping.arrPath,
+        cantinarrPath: mapping.cantinarrPath,
+        onChanged: onChanged,
+      );
+
+  void dispose() {
+    arrPath.dispose();
+    cantinarrPath.dispose();
+  }
+}
+
+class _MediaMappingNotice extends StatelessWidget {
+  final IconData icon;
+  final String message;
+  final Widget? action;
+
+  const _MediaMappingNotice({
+    required this.icon,
+    required this.message,
+    this.action,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 9, 8, 9),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: AppTheme.textSecondary),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+                height: 1.35,
+              ),
+            ),
+          ),
+          if (action != null) action!,
+        ],
+      ),
     );
   }
 }

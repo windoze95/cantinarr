@@ -19,12 +19,14 @@ class _FakeAdapter implements HttpClientAdapter {
   _FakeAdapter({
     this.instances = const [],
     this.pins = const [],
+    this.mediaRoots = const ['/media'],
     this.webhookError,
     this.testError,
   });
 
   final List<Map<String, dynamic>> instances;
   final List<Map<String, dynamic>> pins;
+  final List<String> mediaRoots;
   final String? webhookError;
   final String? testError;
   final List<({String method, String path, dynamic body})> requests = [];
@@ -44,7 +46,9 @@ class _FakeAdapter implements HttpClientAdapter {
     requests.add((method: options.method, path: path, body: body));
 
     dynamic response = <String, dynamic>{};
-    if (options.method == 'GET' && path == '/api/instances') {
+    if (options.method == 'GET' && path == '/api/instances/media-roots') {
+      response = mediaRoots;
+    } else if (options.method == 'GET' && path == '/api/instances') {
       response = instances;
     } else if (options.method == 'GET' && path.endsWith('/users')) {
       response = pins;
@@ -119,6 +123,9 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   @override
   Future<List<UserSummary>> listUsers() async => users;
+
+  @override
+  Future<void> refreshConfig() async {}
 }
 
 UserSummary _user(int id, String username) => UserSummary(
@@ -157,9 +164,11 @@ Future<void> _pumpEdit(
   required _FakeAdapter adapter,
   required List<UserSummary> users,
   InstanceEditScreen screen = const InstanceEditScreen(),
+  Size viewSize = const Size(800, 1800),
+  double textScaleFactor = 1,
 }) async {
   // Tall viewport so the whole (lazily built) form list is materialized.
-  tester.view.physicalSize = const Size(800, 1800);
+  tester.view.physicalSize = viewSize;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
 
@@ -179,7 +188,15 @@ Future<void> _pumpEdit(
         authProvider.overrideWith(() => _FakeAuthNotifier(users)),
         backendClientProvider.overrideWithValue(dio),
       ],
-      child: MaterialApp.router(routerConfig: router),
+      child: MaterialApp.router(
+        routerConfig: router,
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(textScaleFactor),
+          ),
+          child: child!,
+        ),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -287,6 +304,258 @@ void main() {
     expect(putUsers.body, {
       'user_ids': [1]
     });
+  });
+
+  testWidgets('Chaptarr create saves four independent media path mappings',
+      (tester) async {
+    final adapter = _FakeAdapter(mediaRoots: const ['/media']);
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Chaptarr').last);
+    await tester.pumpAndSettle();
+    await _fillForm(tester, 'Books');
+
+    for (var i = 0; i < 4; i++) {
+      final add = find.widgetWithText(OutlinedButton, 'Add path');
+      await tester.ensureVisible(add);
+      await tester.tap(add);
+      await tester.pumpAndSettle();
+    }
+    final arrFields = find.widgetWithText(TextField, 'Chaptarr path');
+    final cantinarrFields = find.widgetWithText(TextField, 'Cantinarr path');
+    expect(arrFields, findsNWidgets(4));
+    expect(cantinarrFields, findsNWidgets(4));
+    const sources = [
+      '/ebooks',
+      '/audiobooks',
+      '/yana-ebooks',
+      '/yana-audiobooks',
+    ];
+    const targets = [
+      '/media/ebooks',
+      '/media/audiobooks',
+      '/media/yana-ebooks',
+      '/media/yana-audiobooks',
+    ];
+    for (var i = 0; i < 4; i++) {
+      await tester.enterText(arrFields.at(i), sources[i]);
+      await tester.enterText(cantinarrFields.at(i), targets[i]);
+    }
+
+    final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    final post = adapter.requests.singleWhere(
+        (request) => request.method == 'POST' && request.path == '/api/instances');
+    expect(post.body['media_path_mappings'], [
+      for (var i = 0; i < 4; i++)
+        {'arr_path': sources[i], 'cantinarr_path': targets[i]},
+    ]);
+  });
+
+  testWidgets('an incomplete media mapping blocks instance creation',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+    await _fillForm(tester, 'Movies');
+
+    final add = find.widgetWithText(OutlinedButton, 'Add path');
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Radarr path'), '/movies');
+
+    final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Both paths are required for every media mapping'),
+        findsOneWidget);
+    expect(
+        adapter.requests.where((request) =>
+            request.method == 'POST' && request.path == '/api/instances'),
+        isEmpty);
+  });
+
+  testWidgets('media mapping editor fits a narrow screen at 200% text',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      viewSize: const Size(320, 1800),
+      textScaleFactor: 2,
+    );
+    expect(tester.takeException(), isNull);
+
+    final add = find.widgetWithText(OutlinedButton, 'Add path');
+    await tester.drag(find.byType(ListView), const Offset(0, -600));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(add);
+    await tester.pumpAndSettle();
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(TextField, 'Radarr path'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Cantinarr path'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('edit hydrates, removes, and replaces this instance mappings',
+      (tester) async {
+    final mapped = {
+      ..._radarrB,
+      'media_downloads': true,
+      'media_path_mappings': [
+        {'arr_path': '/movies', 'cantinarr_path': '/media/movies'},
+        {'arr_path': '/uhd', 'cantinarr_path': '/media/uhd'},
+      ],
+    };
+    final adapter = _FakeAdapter(instances: [Map.of(_mainRadarr), mapped]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    final sourceFields = find.widgetWithText(TextField, 'Radarr path');
+    final targetFields = find.widgetWithText(TextField, 'Cantinarr path');
+    expect(sourceFields, findsNWidgets(2));
+    expect(targetFields, findsNWidgets(2));
+    expect(tester.widget<TextField>(sourceFields.first).controller!.text,
+        '/movies');
+    expect(tester.widget<TextField>(targetFields.last).controller!.text,
+        '/media/uhd');
+
+    await tester.tap(find.byTooltip('Remove path mapping').first);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'Radarr path'), findsOneWidget);
+
+    final save = find.widgetWithText(ElevatedButton, 'Save Changes');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    final update = adapter.requests.singleWhere((request) =>
+        request.method == 'PUT' && request.path == '/api/instances/radarr-b');
+    expect(update.body['media_path_mappings'], [
+      {'arr_path': '/uhd', 'cantinarr_path': '/media/uhd'},
+    ]);
+  });
+
+  testWidgets('unrelated edit preserves unchanged legacy identity mappings',
+      (tester) async {
+    final legacy = {
+      ..._radarrB,
+      'media_downloads': true,
+      'media_path_mappings': [
+        {'arr_path': '/media', 'cantinarr_path': '/media'},
+      ],
+    };
+    final adapter = _FakeAdapter(instances: [legacy]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Name'), 'Renamed Radarr');
+    final save = find.widgetWithText(ElevatedButton, 'Save Changes');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    final update = adapter.requests.singleWhere((request) =>
+        request.method == 'PUT' && request.path == '/api/instances/radarr-b');
+    expect(update.body.containsKey('media_path_mappings'), isFalse);
+  });
+
+  testWidgets('unrelated edit preserves a temporarily unavailable mapping',
+      (tester) async {
+    final unavailable = {
+      ..._radarrB,
+      'media_downloads': false,
+      'media_path_mappings': [
+        {'arr_path': '/movies', 'cantinarr_path': '/media/offline'},
+      ],
+    };
+    final adapter = _FakeAdapter(instances: [unavailable]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Name'), 'Renamed Radarr');
+    final save = find.widgetWithText(ElevatedButton, 'Save Changes');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    final update = adapter.requests.singleWhere((request) =>
+        request.method == 'PUT' && request.path == '/api/instances/radarr-b');
+    expect(update.body.containsKey('media_path_mappings'), isFalse);
+  });
+
+  testWidgets('removing the final mapping sends an explicit empty array',
+      (tester) async {
+    final mapped = {
+      ..._radarrB,
+      'media_downloads': true,
+      'media_path_mappings': [
+        {'arr_path': '/movies', 'cantinarr_path': '/media/movies'},
+      ],
+    };
+    final adapter = _FakeAdapter(instances: [mapped]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Remove path mapping'));
+    await tester.pumpAndSettle();
+    final save = find.widgetWithText(ElevatedButton, 'Save Changes');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    final update = adapter.requests.singleWhere((request) =>
+        request.method == 'PUT' && request.path == '/api/instances/radarr-b');
+    expect(update.body['media_path_mappings'], isEmpty);
   });
 
   testWidgets(

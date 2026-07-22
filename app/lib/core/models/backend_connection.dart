@@ -5,11 +5,16 @@ class ServiceInstance {
   final String name;
   final bool isDefault;
 
+  /// Whether this exact instance has completed-media path mappings. Null means
+  /// the server predates per-instance download capabilities.
+  final bool? mediaDownloads;
+
   const ServiceInstance({
     required this.id,
     required this.serviceType,
     required this.name,
     this.isDefault = false,
+    this.mediaDownloads,
   });
 
   factory ServiceInstance.fromJson(Map<String, dynamic> json) =>
@@ -18,6 +23,7 @@ class ServiceInstance {
         serviceType: json['service_type'] as String,
         name: json['name'] as String,
         isDefault: json['is_default'] as bool? ?? false,
+        mediaDownloads: json['media_downloads'] as bool?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -25,6 +31,7 @@ class ServiceInstance {
         'service_type': serviceType,
         'name': name,
         'is_default': isDefault,
+        if (mediaDownloads != null) 'media_downloads': mediaDownloads,
       };
 }
 
@@ -108,6 +115,27 @@ class BackendConnection {
   /// Get all Tautulli instances.
   List<ServiceInstance> get tautulliInstances =>
       instances.where((i) => i.serviceType == 'tautulli').toList();
+
+  /// Whether downloads are configured for [instanceId]. New servers report
+  /// this per instance. Fall back to the legacy global capability only when no
+  /// instance carries the new field, so one configured sibling cannot enable
+  /// controls for another instance.
+  bool mediaDownloadsEnabledFor(String? instanceId) {
+    ServiceInstance? target;
+    if (instanceId != null) {
+      for (final instance in instances) {
+        if (instance.id == instanceId) {
+          target = instance;
+          break;
+        }
+      }
+    }
+    if (target?.mediaDownloads != null) return target!.mediaDownloads!;
+    if (instances.any((instance) => instance.mediaDownloads != null)) {
+      return false;
+    }
+    return services.mediaDownloads;
+  }
 
   /// Get the default Radarr instance, if any.
   ServiceInstance? get defaultRadarrInstance {
