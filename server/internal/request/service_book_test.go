@@ -734,19 +734,19 @@ func TestBookRequestOptionsDoNotOfferIgnoredQualityChoice(t *testing.T) {
 }
 
 func TestSelectBookProfilesRequiresOneOrUniqueDefault(t *testing.T) {
-	if id, ok := selectBookQualityProfile([]chaptarr.QualityProfile{{ID: 4, Name: "Only"}}); !ok || id != 4 {
+	if id, ok := selectBookQualityProfile([]chaptarr.QualityProfile{{ID: 4, Name: "Only"}}, BookFormatEbook); !ok || id != 4 {
 		t.Fatalf("single quality = %d ok=%v", id, ok)
 	}
-	if id, ok := selectBookQualityProfile([]chaptarr.QualityProfile{{ID: 1, Name: "Books"}, {ID: 2, Name: "DEFAULT"}}); !ok || id != 2 {
+	if id, ok := selectBookQualityProfile([]chaptarr.QualityProfile{{ID: 1, Name: "Books"}, {ID: 2, Name: "DEFAULT"}}, BookFormatEbook); !ok || id != 2 {
 		t.Fatalf("default quality = %d ok=%v", id, ok)
 	}
-	if _, ok := selectBookQualityProfile([]chaptarr.QualityProfile{{ID: 1, Name: "One"}, {ID: 2, Name: "Two"}}); ok {
+	if _, ok := selectBookQualityProfile([]chaptarr.QualityProfile{{ID: 1, Name: "One"}, {ID: 2, Name: "Two"}}, BookFormatEbook); ok {
 		t.Fatal("ambiguous quality profiles were guessed")
 	}
-	if id, ok := selectBookMetadataProfile([]chaptarr.MetadataProfile{{ID: 7, Name: "Default"}, {ID: 8, Name: "Other"}}); !ok || id != 7 {
+	if id, ok := selectBookMetadataProfile([]chaptarr.MetadataProfile{{ID: 7, Name: "Default"}, {ID: 8, Name: "Other"}}, BookFormatEbook); !ok || id != 7 {
 		t.Fatalf("default metadata = %d ok=%v", id, ok)
 	}
-	if _, ok := selectBookMetadataProfile([]chaptarr.MetadataProfile{{ID: 7, Name: "Default"}, {ID: 8, Name: "default"}}); ok {
+	if _, ok := selectBookMetadataProfile([]chaptarr.MetadataProfile{{ID: 7, Name: "Default"}, {ID: 8, Name: "default"}}, BookFormatEbook); ok {
 		t.Fatal("duplicate default metadata profiles were guessed")
 	}
 }
@@ -926,6 +926,12 @@ func TestBookRequestBothFormatAddsEbookAndAudiobookRecords(t *testing.T) {
 	}
 	if got := audio["author"].(map[string]any)["rootFolderPath"]; got != "/library/audiobooks" {
 		t.Fatalf("audiobook root = %v, want format-specific /library/audiobooks", got)
+	}
+	for format, body := range byFormat {
+		author := body["author"].(map[string]any)
+		if author["ebookMonitorFuture"] != true || author["audiobookMonitorFuture"] != true {
+			t.Fatalf("%s author future-monitor gates = %#v, want both requested formats enabled", format, author)
+		}
 	}
 }
 

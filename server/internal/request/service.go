@@ -832,8 +832,9 @@ func (s *Service) addToArr(r *resolvedRequest) (status string, title string, err
 
 // addToChaptarr adds a book to the pinned Chaptarr instance. Books have no TMDB
 // id, so the request carries a canonical foreignBookId. Existing canonical
-// groups reuse their author's live configuration for a missing sibling format;
-// brand-new titles require an exact lookup match and unambiguous profiles/root.
+// groups reuse their author's live per-format configuration for a missing
+// sibling format; brand-new titles require an exact lookup match and
+// unambiguous per-format profiles/roots.
 func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	r.foreignID = strings.TrimSpace(r.foreignID)
 	r.title = strings.TrimSpace(r.title)
@@ -942,9 +943,11 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		if err != nil {
 			return "", "", fmt.Errorf("load existing book author: %w", err)
 		}
-		if author.QualityProfileID == 0 || author.MetadataProfileID == 0 || strings.TrimSpace(author.Path) == "" {
-			return "", "", fmt.Errorf("existing book author configuration is incomplete")
+		config, ok := bookConfigFromAuthor(author)
+		if !ok {
+			return "", "", fmt.Errorf("existing book configuration is incomplete for one or more formats")
 		}
+		config.includeRequestedFormats(r.bookFormat)
 		match := &chaptarr.LookupResult{
 			ForeignBookID:   r.foreignID,
 			Title:           title,
@@ -956,7 +959,7 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 			match.TitleSlug = fallbackTitleSlug(title)
 		}
 		for _, mediaType := range missing {
-			if err := s.addChaptarrBookRecord(client, match, author.QualityProfileID, author.MetadataProfileID, author.Path, title, match.TitleSlug, mediaType); err != nil {
+			if err := s.addChaptarrBookRecord(client, match, config, title, match.TitleSlug, mediaType); err != nil {
 				lastErr = err
 				r.bookFormats[mediaType] = StatusUnavailable
 				continue
@@ -1000,22 +1003,19 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	if err != nil || len(qps) == 0 {
 		return "", "", fmt.Errorf("no quality profiles available")
 	}
-	qualityProfileID, ok := selectBookQualityProfile(qps)
-	if !ok {
-		return "", "", fmt.Errorf("multiple Chaptarr quality profiles are configured; name exactly one Default or reduce them to one")
-	}
 	mps, err := client.GetMetadataProfiles()
 	if err != nil || len(mps) == 0 {
 		return "", "", fmt.Errorf("no metadata profiles available")
-	}
-	metadataProfileID, ok := selectBookMetadataProfile(mps)
-	if !ok {
-		return "", "", fmt.Errorf("multiple Chaptarr metadata profiles are configured; name exactly one Default or reduce them to one")
 	}
 	folders, err := client.GetRootFolders()
 	if err != nil || len(folders) == 0 {
 		return "", "", fmt.Errorf("no root folders available")
 	}
+	config, err := selectBookConfig(qps, mps, folders)
+	if err != nil {
+		return "", "", err
+	}
+	config.includeRequestedFormats(r.bookFormat)
 
 	title = strings.TrimSpace(match.Title)
 	if title == "" {
@@ -1031,13 +1031,7 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	// book once per format. Adding at least one record counts as requested; the
 	// last error is surfaced only if every requested format failed.
 	for _, mediaType := range missing {
-		root, ok := selectBookRoot(folders, mediaType)
-		if !ok {
-			lastErr = fmt.Errorf("no accessible root folder available for %s", mediaType)
-			r.bookFormats[mediaType] = StatusUnavailable
-			continue
-		}
-		if err := s.addChaptarrBookRecord(client, match, qualityProfileID, metadataProfileID, root.Path, title, titleSlug, mediaType); err != nil {
+		if err := s.addChaptarrBookRecord(client, match, config, title, titleSlug, mediaType); err != nil {
 			lastErr = err
 			r.bookFormats[mediaType] = StatusUnavailable
 			continue
@@ -1047,14 +1041,202 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	return s.finishBookMutation(r, title, lastErr)
 }
 
-func selectBookQualityProfile(profiles []chaptarr.QualityProfile) (int, bool) {
-	if len(profiles) == 1 {
-		return profiles[0].ID, profiles[0].ID != 0
+// bookAddConfig is the complete Chaptarr author configuration required by
+// current releases. Chaptarr keeps separate quality/metadata profiles and root
+// paths for ebooks and audiobooks; the legacy singular fields in the add body
+// are still populated from the concrete format for older releases.
+type bookAddConfig struct {
+	authorID                   int
+	ebookQualityProfileID      int
+	audiobookQualityProfileID  int
+	ebookMetadataProfileID     int
+	audiobookMetadataProfileID int
+	ebookRootFolderPath        string
+	audiobookRootFolderPath    string
+	ebookMonitorFuture         bool
+	audiobookMonitorFuture     bool
+}
+
+func (c bookAddConfig) forFormat(format string) (qualityProfileID, metadataProfileID int, rootFolderPath string) {
+	if format == BookFormatAudiobook {
+		return c.audiobookQualityProfileID, c.audiobookMetadataProfileID, c.audiobookRootFolderPath
 	}
+	return c.ebookQualityProfileID, c.ebookMetadataProfileID, c.ebookRootFolderPath
+}
+
+func (c bookAddConfig) complete() bool {
+	return c.ebookQualityProfileID > 0 &&
+		c.audiobookQualityProfileID > 0 &&
+		c.ebookMetadataProfileID > 0 &&
+		c.audiobookMetadataProfileID > 0 &&
+		strings.TrimSpace(c.ebookRootFolderPath) != "" &&
+		strings.TrimSpace(c.audiobookRootFolderPath) != ""
+}
+
+func (c *bookAddConfig) includeRequestedFormats(bookFormat string) {
+	for _, format := range expandBookFormat(bookFormat) {
+		if format == BookFormatEbook {
+			c.ebookMonitorFuture = true
+		} else if format == BookFormatAudiobook {
+			c.audiobookMonitorFuture = true
+		}
+	}
+}
+
+func bookConfigFromAuthor(author *chaptarr.Author) (bookAddConfig, bool) {
+	if author == nil {
+		return bookAddConfig{}, false
+	}
+	config := bookAddConfig{authorID: author.ID}
+	hasPerFormatConfig := author.EbookQualityProfileID > 0 ||
+		author.AudiobookQualityProfileID > 0 ||
+		author.EbookMetadataProfileID > 0 ||
+		author.AudiobookMetadataProfileID > 0 ||
+		strings.TrimSpace(author.EbookRootFolderPath) != "" ||
+		strings.TrimSpace(author.AudiobookRootFolderPath) != ""
+	if hasPerFormatConfig {
+		config.ebookQualityProfileID = author.EbookQualityProfileID
+		config.audiobookQualityProfileID = author.AudiobookQualityProfileID
+		config.ebookMetadataProfileID = author.EbookMetadataProfileID
+		config.audiobookMetadataProfileID = author.AudiobookMetadataProfileID
+		config.ebookRootFolderPath = strings.TrimSpace(author.EbookRootFolderPath)
+		config.audiobookRootFolderPath = strings.TrimSpace(author.AudiobookRootFolderPath)
+	} else {
+		config.ebookQualityProfileID = author.QualityProfileID
+		config.audiobookQualityProfileID = author.QualityProfileID
+		config.ebookMetadataProfileID = author.MetadataProfileID
+		config.audiobookMetadataProfileID = author.MetadataProfileID
+		config.ebookRootFolderPath = strings.TrimSpace(author.Path)
+		config.audiobookRootFolderPath = strings.TrimSpace(author.Path)
+	}
+	config.ebookMonitorFuture = author.EbookMonitorFuture
+	config.audiobookMonitorFuture = author.AudiobookMonitorFuture
+	return config, config.complete()
+}
+
+func selectBookConfig(qualityProfiles []chaptarr.QualityProfile, metadataProfiles []chaptarr.MetadataProfile, folders []chaptarr.RootFolder) (bookAddConfig, error) {
+	config := bookAddConfig{}
+	for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
+		qualityProfileID, ok := selectBookQualityProfile(qualityProfiles, format)
+		if !ok {
+			return bookAddConfig{}, fmt.Errorf("Chaptarr %s quality profile selection is ambiguous", format)
+		}
+		metadataProfileID, ok := selectBookMetadataProfile(metadataProfiles, format)
+		if !ok {
+			return bookAddConfig{}, fmt.Errorf("Chaptarr %s metadata profile selection is ambiguous", format)
+		}
+		root, ok := selectBookRoot(folders, format)
+		if !ok {
+			return bookAddConfig{}, fmt.Errorf("no accessible root folder available for %s", format)
+		}
+		if format == BookFormatEbook {
+			config.ebookQualityProfileID = qualityProfileID
+			config.ebookMetadataProfileID = metadataProfileID
+			config.ebookRootFolderPath = root.Path
+		} else {
+			config.audiobookQualityProfileID = qualityProfileID
+			config.audiobookMetadataProfileID = metadataProfileID
+			config.audiobookRootFolderPath = root.Path
+		}
+	}
+	return config, nil
+}
+
+func selectBookQualityProfile(profiles []chaptarr.QualityProfile, format string) (int, bool) {
+	expectedType := format
+	typed := make([]bookProfileCandidate, 0, len(profiles))
+	untyped := make([]bookProfileCandidate, 0, len(profiles))
+	for _, profile := range profiles {
+		profileType := strings.ToLower(strings.TrimSpace(profile.ProfileType))
+		if profileType == BookFormatEbook || profileType == BookFormatAudiobook {
+			if profileType == expectedType {
+				typed = append(typed, bookProfileCandidate{ID: profile.ID, Name: profile.Name})
+			}
+		} else if profileType == "" {
+			untyped = append(untyped, bookProfileCandidate{ID: profile.ID, Name: profile.Name})
+		}
+	}
+	if len(typed) > 0 {
+		return selectSingleBookProfileCandidate(typed)
+	}
+	return selectLegacyBookProfile(untyped, format)
+}
+
+func selectBookMetadataProfile(profiles []chaptarr.MetadataProfile, format string) (int, bool) {
+	expectedType := "2"
+	if format == BookFormatAudiobook {
+		expectedType = "1"
+	}
+	typed := make([]bookProfileCandidate, 0, len(profiles))
+	untyped := make([]bookProfileCandidate, 0, len(profiles))
+	for _, profile := range profiles {
+		profileType := strings.ToLower(strings.TrimSpace(profile.ProfileType))
+		recognized := profileType == "0" || profileType == "1" || profileType == "2" ||
+			profileType == BookFormatEbook || profileType == BookFormatAudiobook
+		matches := profileType == expectedType ||
+			(format == BookFormatEbook && profileType == BookFormatEbook) ||
+			(format == BookFormatAudiobook && profileType == BookFormatAudiobook)
+		if matches {
+			typed = append(typed, bookProfileCandidate{ID: profile.ID, Name: profile.Name})
+		} else if !recognized && profileType == "" {
+			untyped = append(untyped, bookProfileCandidate{ID: profile.ID, Name: profile.Name})
+		}
+	}
+	if len(typed) > 0 {
+		return selectSingleBookProfileCandidate(typed)
+	}
+	return selectLegacyBookProfile(untyped, format)
+}
+
+type bookProfileCandidate struct {
+	ID   int
+	Name string
+}
+
+func selectSingleBookProfileCandidate(profiles []bookProfileCandidate) (int, bool) {
 	selected := 0
 	for _, profile := range profiles {
-		if strings.EqualFold(strings.TrimSpace(profile.Name), "default") {
-			if selected != 0 || profile.ID == 0 {
+		if profile.ID <= 0 {
+			continue
+		}
+		if selected != 0 {
+			return 0, false
+		}
+		selected = profile.ID
+	}
+	return selected, selected != 0
+}
+
+func selectLegacyBookProfile(profiles []bookProfileCandidate, format string) (int, bool) {
+	if len(profiles) == 1 {
+		return profiles[0].ID, profiles[0].ID > 0
+	}
+	formatMatches := make([]bookProfileCandidate, 0, len(profiles))
+	for _, profile := range profiles {
+		if bookProfileNameMatchesFormat(profile.Name, format) {
+			formatMatches = append(formatMatches, profile)
+		}
+	}
+	if len(formatMatches) > 0 {
+		return selectBookProfileCandidate(formatMatches)
+	}
+	return selectBookProfileCandidate(profiles)
+}
+
+func selectBookProfileCandidate(profiles []bookProfileCandidate) (int, bool) {
+	valid := make([]bookProfileCandidate, 0, len(profiles))
+	for _, profile := range profiles {
+		if profile.ID > 0 {
+			valid = append(valid, profile)
+		}
+	}
+	if len(valid) == 1 {
+		return valid[0].ID, true
+	}
+	selected := 0
+	for _, profile := range valid {
+		if bookProfileNameIsDefault(profile.Name) {
+			if selected != 0 {
 				return 0, false
 			}
 			selected = profile.ID
@@ -1063,20 +1245,22 @@ func selectBookQualityProfile(profiles []chaptarr.QualityProfile) (int, bool) {
 	return selected, selected != 0
 }
 
-func selectBookMetadataProfile(profiles []chaptarr.MetadataProfile) (int, bool) {
-	if len(profiles) == 1 {
-		return profiles[0].ID, profiles[0].ID != 0
+func bookProfileNameMatchesFormat(name, format string) bool {
+	normalized := strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(strings.TrimSpace(name)))
+	if format == BookFormatAudiobook {
+		return strings.Contains(normalized, "audiobook") || strings.Contains(normalized, "audio book")
 	}
-	selected := 0
-	for _, profile := range profiles {
-		if strings.EqualFold(strings.TrimSpace(profile.Name), "default") {
-			if selected != 0 || profile.ID == 0 {
-				return 0, false
-			}
-			selected = profile.ID
+	return strings.Contains(normalized, "ebook") || strings.Contains(normalized, "e book")
+}
+
+func bookProfileNameIsDefault(name string) bool {
+	normalized := strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(strings.TrimSpace(name)))
+	for _, part := range strings.Fields(normalized) {
+		if part == "default" {
+			return true
 		}
 	}
-	return selected, selected != 0
+	return false
 }
 
 // finishBookMutation reduces per-format outcomes without allowing a partial
@@ -1148,12 +1332,21 @@ func (s *Service) completeOwnedBook(client *chaptarr.Client, r *resolvedRequest)
 // addChaptarrBookRecord adds one format record (ebook or audiobook) of a book and
 // ensures it ends up monitored and searched. Chaptarr tracks format at the book
 // level via mediaType, so each requested format is its own record.
-func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr.LookupResult, qualityProfileID, metadataProfileID int, rootFolderPath, title, titleSlug, mediaType string) error {
+func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr.LookupResult, config bookAddConfig, title, titleSlug, mediaType string) error {
+	qualityProfileID, metadataProfileID, rootFolderPath := config.forFormat(mediaType)
 	addReq := chaptarr.AddBookRequest{
-		ForeignBookID: match.ForeignBookID,
-		Title:         title,
-		TitleSlug:     titleSlug,
-		Monitored:     true,
+		ForeignBookID:              match.ForeignBookID,
+		AuthorID:                   config.authorID,
+		Title:                      title,
+		TitleSlug:                  titleSlug,
+		Monitored:                  true,
+		RootFolderPath:             rootFolderPath,
+		EbookQualityProfileID:      config.ebookQualityProfileID,
+		AudiobookQualityProfileID:  config.audiobookQualityProfileID,
+		EbookMetadataProfileID:     config.ebookMetadataProfileID,
+		AudiobookMetadataProfileID: config.audiobookMetadataProfileID,
+		EbookRootFolderPath:        config.ebookRootFolderPath,
+		AudiobookRootFolderPath:    config.audiobookRootFolderPath,
 	}
 	setChaptarrMediaType(&addReq, mediaType)
 
@@ -1167,11 +1360,20 @@ func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr
 			foreignAuthorID = match.Author.ForeignAuthorID
 		}
 	}
+	addReq.Author.ID = config.authorID
 	addReq.Author.AuthorName = authorName
 	addReq.Author.ForeignAuthorID = foreignAuthorID
 	addReq.Author.QualityProfileID = qualityProfileID
 	addReq.Author.MetadataProfileID = metadataProfileID
 	addReq.Author.RootFolderPath = rootFolderPath
+	addReq.Author.EbookQualityProfileID = config.ebookQualityProfileID
+	addReq.Author.AudiobookQualityProfileID = config.audiobookQualityProfileID
+	addReq.Author.EbookMetadataProfileID = config.ebookMetadataProfileID
+	addReq.Author.AudiobookMetadataProfileID = config.audiobookMetadataProfileID
+	addReq.Author.EbookRootFolderPath = config.ebookRootFolderPath
+	addReq.Author.AudiobookRootFolderPath = config.audiobookRootFolderPath
+	addReq.Author.EbookMonitorFuture = config.ebookMonitorFuture || mediaType == BookFormatEbook
+	addReq.Author.AudiobookMonitorFuture = config.audiobookMonitorFuture || mediaType == BookFormatAudiobook
 	addReq.Author.Monitored = true
 	addReq.Author.AddOptions.Monitor = "all"
 	addReq.AddOptions.SearchForNewBook = true
