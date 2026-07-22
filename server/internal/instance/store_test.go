@@ -2,9 +2,12 @@ package instance
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/db"
+	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
@@ -45,6 +48,103 @@ func mkInstance(t *testing.T, s *Store, serviceType, name string) string {
 		t.Fatalf("create %s instance: %v", serviceType, err)
 	}
 	return inst.ID
+}
+
+func TestMediaPathMappingsRoundTripAndFailClosed(t *testing.T) {
+	s := newTestStore(t)
+	inst := &Instance{
+		ServiceType:       "chaptarr",
+		Name:              "Books",
+		URL:               "http://localhost",
+		APIKey:            "key",
+		MediaDownloadMode: MediaDownloadModeMapped,
+		MediaPathMappings: []mediapath.Mapping{
+			{ArrPath: "/ebooks", CantinarrPath: "/media/books/ebooks"},
+			{ArrPath: `Z:\Audiobooks`, CantinarrPath: "/media/books/audio"},
+		},
+	}
+	if err := s.Create(inst); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Get(inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MediaDownloadMode != MediaDownloadModeMapped || len(got.MediaPathMappings) != 2 ||
+		got.MediaPathMappings[1].ArrPath != `Z:\Audiobooks` {
+		t.Fatalf("stored media config = mode %q mappings %#v", got.MediaDownloadMode, got.MediaPathMappings)
+	}
+	listed, err := s.List("chaptarr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || len(listed[0].MediaPathMappings) != 2 {
+		t.Fatalf("listed mappings = %#v", listed)
+	}
+
+	got.MediaDownloadMode = MediaDownloadModeDisabled
+	got.MediaPathMappings = nil
+	if err := s.Update(got); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Get(inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MediaDownloadMode != MediaDownloadModeDisabled || len(got.MediaPathMappings) != 0 {
+		t.Fatalf("disabled media config = mode %q mappings %#v", got.MediaDownloadMode, got.MediaPathMappings)
+	}
+
+	if _, err := s.db.Exec(
+		"UPDATE service_instances SET media_download_mode = 'mapped', media_path_mappings = 'not-json' WHERE id = ?",
+		inst.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Get(inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MediaDownloadMode != MediaDownloadModeDisabled || len(got.MediaPathMappings) != 0 {
+		t.Fatalf("corrupt media config did not fail closed: %+v", got)
+	}
+}
+
+func TestMediaDownloadsConfiguredUsesCurrentAccessibleRoots(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "books")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	inst := &Instance{
+		ServiceType:       "chaptarr",
+		MediaDownloadMode: MediaDownloadModeMapped,
+		MediaPathMappings: []mediapath.Mapping{{
+			ArrPath:       "/ebooks",
+			CantinarrPath: target,
+		}},
+	}
+	if !inst.MediaDownloadsConfigured([]string{root}) {
+		t.Fatal("accessible in-root mapping was not advertised")
+	}
+	if inst.MediaDownloadsConfigured([]string{t.TempDir()}) {
+		t.Fatal("mapping outside the current allowlist was advertised")
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if inst.MediaDownloadsConfigured([]string{root}) {
+		t.Fatal("mapping with an unavailable target was advertised")
+	}
+
+	identity := &Instance{
+		ServiceType:       "radarr",
+		MediaDownloadMode: MediaDownloadModeIdentity,
+	}
+	if !identity.MediaDownloadsConfigured([]string{root}) {
+		t.Fatal("legacy identity mapping over an accessible root was not advertised")
+	}
 }
 
 func TestDeleteRejectsPinnedPendingBookRequests(t *testing.T) {

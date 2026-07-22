@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/mediapath"
 )
 
 type fakeInstanceStore struct {
@@ -335,16 +336,25 @@ func TestIssueTicketRejectsPathsOutsideRootAndDoesNotLeakDetails(t *testing.T) {
 		t.Fatalf("in-root symlink download = %d %q", insideDownload.Code, insideDownload.Body.String())
 	}
 
-	paths := []string{outsidePath, prefixPath, symlinkPath, directoryPath, "relative/file.mkv"}
-	for index, candidate := range paths {
+	paths := []struct {
+		path   string
+		status int
+	}{
+		{path: outsidePath, status: http.StatusConflict},
+		{path: prefixPath, status: http.StatusConflict},
+		{path: symlinkPath, status: http.StatusNotFound},
+		{path: directoryPath, status: http.StatusNotFound},
+		{path: "relative/file.mkv", status: http.StatusConflict},
+	}
+	for index, testCase := range paths {
 		fileID := index + 1
-		resolver.paths[fileID] = candidate
+		resolver.paths[fileID] = testCase.path
 		response, _ := issueTicket(t, h, &auth.Claims{UserID: 11, Role: auth.RoleUser}, `{"instance_id":"sonarr-main","file_id":`+strconv.Itoa(fileID)+`}`)
-		if response.Code != http.StatusNotFound {
-			t.Errorf("path %q status = %d, body = %s", candidate, response.Code, response.Body.String())
+		if response.Code != testCase.status {
+			t.Errorf("path %q status = %d, want %d; body = %s", testCase.path, response.Code, testCase.status, response.Body.String())
 		}
-		if strings.Contains(response.Body.String(), candidate) || strings.Contains(response.Body.String(), "secret") {
-			t.Errorf("path %q leaked in response %q", candidate, response.Body.String())
+		if strings.Contains(response.Body.String(), testCase.path) || strings.Contains(response.Body.String(), "secret") {
+			t.Errorf("path %q leaked in response %q", testCase.path, response.Body.String())
 		}
 	}
 
@@ -455,6 +465,128 @@ func TestLexicalRootAliasAndActiveContentRemainDownloadOnly(t *testing.T) {
 	}
 }
 
+func TestPerInstanceMappingsDisambiguateTheSameArrPath(t *testing.T) {
+	root := t.TempDir()
+	firstRoot := filepath.Join(root, "first-library")
+	secondRoot := filepath.Join(root, "second-library")
+	for _, library := range []struct {
+		root    string
+		content string
+	}{
+		{root: firstRoot, content: "first instance"},
+		{root: secondRoot, content: "second instance"},
+	} {
+		if err := os.MkdirAll(library.root, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(library.root, "same-name.epub"), []byte(library.content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store := &fakeInstanceStore{
+		instances: map[string]*instance.Instance{
+			"books-first": {
+				ID:                "books-first",
+				ServiceType:       "chaptarr",
+				MediaDownloadMode: instance.MediaDownloadModeMapped,
+				MediaPathMappings: []mediapath.Mapping{{ArrPath: "/ebooks", CantinarrPath: firstRoot}},
+			},
+			"books-second": {
+				ID:                "books-second",
+				ServiceType:       "chaptarr",
+				MediaDownloadMode: instance.MediaDownloadModeMapped,
+				MediaPathMappings: []mediapath.Mapping{{ArrPath: "/ebooks", CantinarrPath: secondRoot}},
+			},
+		},
+		allowed: true,
+	}
+	resolver := &fakeMetadataResolver{paths: map[int]string{
+		1: "/ebooks/same-name.epub",
+		2: "/ebooks/same-name.epub",
+	}}
+	h := newTestHandler(t, store, resolver, []string{root})
+
+	first, firstTicket := issueTicket(t, h, &auth.Claims{UserID: 1, Role: auth.RoleAdmin}, `{"instance_id":"books-first","file_id":1}`)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first issue status = %d, body = %s", first.Code, first.Body.String())
+	}
+	second, secondTicket := issueTicket(t, h, &auth.Claims{UserID: 1, Role: auth.RoleAdmin}, `{"instance_id":"books-second","file_id":2}`)
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second issue status = %d, body = %s", second.Code, second.Body.String())
+	}
+
+	firstDownload := downloadRequest(h, http.MethodGet, firstTicket.URL, "")
+	if firstDownload.Code != http.StatusOK || firstDownload.Body.String() != "first instance" {
+		t.Fatalf("first download = %d %q", firstDownload.Code, firstDownload.Body.String())
+	}
+	secondDownload := downloadRequest(h, http.MethodGet, secondTicket.URL, "")
+	if secondDownload.Code != http.StatusOK || secondDownload.Body.String() != "second instance" {
+		t.Fatalf("second download = %d %q", secondDownload.Code, secondDownload.Body.String())
+	}
+}
+
+func TestMissingOrRemovedInstanceMappingFailsBeforeMetadataResolution(t *testing.T) {
+	root := t.TempDir()
+	mediaPath := filepath.Join(root, "book.epub")
+	if err := os.WriteFile(mediaPath, []byte("book"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeInstanceStore{
+		instances: map[string]*instance.Instance{
+			"books-1": {
+				ID:                "books-1",
+				ServiceType:       "chaptarr",
+				MediaDownloadMode: instance.MediaDownloadModeDisabled,
+			},
+		},
+		allowed: true,
+	}
+	resolver := &fakeMetadataResolver{paths: map[int]string{
+		19: "/ebooks/book.epub",
+		20: "/audiobooks/book.m4b",
+	}}
+	h := newTestHandler(t, store, resolver, []string{root})
+
+	disabled, _ := issueTicket(t, h, &auth.Claims{UserID: 1, Role: auth.RoleAdmin}, `{"instance_id":"books-1","file_id":19}`)
+	if disabled.Code != http.StatusNotFound {
+		t.Fatalf("disabled issue status = %d, body = %s", disabled.Code, disabled.Body.String())
+	}
+	if len(resolver.calls) != 0 {
+		t.Fatalf("disabled instance resolved metadata: %#v", resolver.calls)
+	}
+
+	store.instances["books-1"].MediaDownloadMode = instance.MediaDownloadModeMapped
+	store.instances["books-1"].MediaPathMappings = []mediapath.Mapping{{
+		ArrPath:       "/ebooks",
+		CantinarrPath: root,
+	}}
+	unmapped, _ := issueTicket(t, h, &auth.Claims{UserID: 1, Role: auth.RoleAdmin}, `{"instance_id":"books-1","file_id":20}`)
+	if unmapped.Code != http.StatusConflict {
+		t.Fatalf("unmapped file issue status = %d, body = %s", unmapped.Code, unmapped.Body.String())
+	}
+	if strings.Contains(unmapped.Body.String(), "/ebooks") ||
+		strings.Contains(unmapped.Body.String(), "/audiobooks") ||
+		strings.Contains(unmapped.Body.String(), root) {
+		t.Fatalf("unmapped file response leaked a path: %s", unmapped.Body.String())
+	}
+	issued, ticket := issueTicket(t, h, &auth.Claims{UserID: 1, Role: auth.RoleAdmin}, `{"instance_id":"books-1","file_id":19}`)
+	if issued.Code != http.StatusCreated {
+		t.Fatalf("mapped issue status = %d, body = %s", issued.Code, issued.Body.String())
+	}
+	resolvesAfterIssue := len(resolver.calls)
+
+	store.instances["books-1"].MediaDownloadMode = instance.MediaDownloadModeDisabled
+	store.instances["books-1"].MediaPathMappings = nil
+	revoked := downloadRequest(h, http.MethodGet, ticket.URL, "")
+	if revoked.Code != http.StatusNotFound {
+		t.Fatalf("revoked mapping download status = %d, body = %s", revoked.Code, revoked.Body.String())
+	}
+	if len(resolver.calls) != resolvesAfterIssue {
+		t.Fatal("revoked mapping resolved metadata before rejecting the ticket")
+	}
+}
+
 func TestSafeFilenameRemovesHeaderControls(t *testing.T) {
 	got := safeFilename("folder/evil\r\nX-Evil: injected.epub", 5)
 	if got != "evilX-Evil: injected.epub" {
@@ -468,6 +600,14 @@ func TestSafeFilenameRemovesHeaderControls(t *testing.T) {
 
 func newTestHandler(t *testing.T, store *fakeInstanceStore, resolver metadataResolver, roots []string) *Handler {
 	t.Helper()
+	// Tests written for the original global-root behavior model a database that
+	// has crossed the compatibility migration, where existing arr instances use
+	// identity mappings until an admin replaces or disables them.
+	for _, inst := range store.instances {
+		if inst.MediaDownloadMode == "" {
+			inst.MediaDownloadMode = instance.MediaDownloadModeIdentity
+		}
+	}
 	h, err := newHandler(store, store, resolver, roots)
 	if err != nil {
 		t.Fatalf("newHandler() error = %v", err)

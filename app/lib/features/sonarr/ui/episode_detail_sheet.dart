@@ -111,7 +111,8 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
     final e = widget.episode;
     final status = _shortStatus;
     final connection = ref.watch(authProvider).valueOrNull?.connection;
-    final downloadsEnabled = connection?.services.mediaDownloads ?? false;
+    final downloadsEnabled =
+        connection?.mediaDownloadsEnabledFor(widget.instanceId) ?? false;
     final airDate = e.airDateUtc?.toLocal() ??
         (e.airDate != null ? DateTime.tryParse(e.airDate!) : null);
 

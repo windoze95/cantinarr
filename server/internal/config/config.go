@@ -63,10 +63,9 @@ type Config struct {
 	// Codex auth state may exist while an app-server process is running. Empty
 	// lets the adapter use /dev/shm/cantinarr-codex when available.
 	CodexRuntimeDir string
-	// MediaDownloadRoots are the explicit read-only filesystem boundaries from
-	// which authenticated users may download completed arr media. Empty keeps
-	// media delivery disabled. Arr-reported paths outside these roots are never
-	// opened, even for administrators.
+	// MediaDownloadRoots are the deployment-owned read-only filesystem
+	// boundaries from which completed media may be served. Per-instance mappings
+	// may target these roots or their descendants; empty disables media delivery.
 	MediaDownloadRoots []string
 }
 
@@ -199,11 +198,10 @@ func normalizeMediaDownloadRoots(values []string) ([]string, error) {
 		if !info.IsDir() {
 			return nil, fmt.Errorf("entry %q is not a directory", value)
 		}
-		// Retain the cleaned lexical path. Arr file records refer to the path
-		// mounted in their container, and resolving aliases here (notably macOS
-		// /var -> /private/var) would make an otherwise exact shared mount stop
-		// matching. The resolved path above is used only to validate the target
-		// and reject aliases of the filesystem root.
+		// Retain the cleaned lexical path because this is the namespace visible to
+		// Cantinarr and therefore the destination namespace admins select in their
+		// per-instance mappings. The resolved path above validates the target and
+		// rejects aliases of the filesystem root.
 		if seen[cleaned] {
 			continue
 		}

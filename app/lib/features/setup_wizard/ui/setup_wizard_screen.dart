@@ -39,6 +39,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'tautulli':
       case 'books':
         return '/settings/instance/new';
+      case 'media_downloads':
+        return '/settings';
       case 'tmdb':
       case 'trakt':
       case 'ai':
@@ -62,6 +64,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.trending_up;
       case 'download_client':
         return Icons.download_outlined;
+      case 'media_downloads':
+        return Icons.download_for_offline_outlined;
       case 'tautulli':
         return Icons.monitor_heart_outlined;
       case 'push':

@@ -182,7 +182,7 @@ class _RequesterBookDetailScreenState
     final auth = ref.read(authProvider).valueOrNull;
     final isAdmin = auth?.user?.isAdmin ?? false;
     final downloadsEnabled =
-        auth?.connection?.services.mediaDownloads ?? false;
+        auth?.connection?.mediaDownloadsEnabledFor(_instanceId) ?? false;
     if (!isAdmin && !downloadsEnabled) return;
     final service = _chaptarrService();
     if (service == null) return;
@@ -263,6 +263,12 @@ class _RequesterBookDetailScreenState
     ref.listen(libraryChangedEventsProvider, (_, next) {
       if (next.hasValue) _refreshBookTruth();
     });
+    // A config refresh can enable downloads for this exact Chaptarr instance
+    // while the detail page remains open. Re-resolve its live file records so
+    // the newly available actions do not require reopening the screen.
+    ref.listen(authProvider, (_, __) {
+      _resolveChaptarrRecords(_loadGeneration);
+    });
     ref.listen(
       instanceProvider.select((state) => state.activeChaptarrInstance?.id),
       (previous, next) {
@@ -332,12 +338,13 @@ class _RequesterBookDetailScreenState
           ownershipStatusKnown: owned?.statusKnown ?? true,
         );
     final auth = ref.watch(authProvider).valueOrNull;
-    final downloadsEnabled = auth?.connection?.services.mediaDownloads ?? false;
+    final instanceId = _instanceId;
+    final downloadsEnabled =
+        auth?.connection?.mediaDownloadsEnabledFor(instanceId) ?? false;
     final ebookFiles = _downloadChoicesFor(BookFormat.ebook);
     final audiobookFiles = _downloadChoicesFor(BookFormat.audiobook);
     final isAdmin = auth?.user?.isAdmin ?? false;
 
-    final instanceId = _instanceId;
     final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
     ChaptarrImageSource? cover;
     if (instanceId != null) {

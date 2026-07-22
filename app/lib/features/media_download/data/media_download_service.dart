@@ -66,6 +66,11 @@ class MediaDownloadService {
           throw const MediaDownloadException(
             'This file is no longer available.',
           );
+        case 409:
+          throw const MediaDownloadException(
+            'This file is not available through Cantinarr’s configured '
+            'media folders.',
+          );
         default:
           throw const MediaDownloadException(
             'Could not prepare the download. Try again.',

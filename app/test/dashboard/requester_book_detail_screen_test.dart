@@ -169,6 +169,31 @@ void main() {
     expect(find.textContaining(r'Z:\'), findsNothing);
   });
 
+  testWidgets('enabling this instance refreshes downloads on an open detail',
+      (tester) async {
+    final (:router, :container) = await _pumpRouter(
+      tester,
+      authState: _exactDownloadBooksState(false),
+      adapter: _BooksAdapter(bookFiles: true),
+    );
+
+    router.go('/detail/book/29749107?title=Ahsoka');
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Download eBook'), findsNothing);
+
+    final notifier = container.read(authProvider.notifier);
+    (notifier as _FakeAuthNotifier).replace(_exactDownloadBooksState(true));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byTooltip('Download eBook'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.byTooltip('Download eBook'), findsOneWidget);
+    expect(find.byTooltip('Download audiobook'), findsOneWidget);
+  });
+
   testWidgets('admin Chaptarr detail has the same per-format downloads',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(
@@ -350,6 +375,28 @@ const _adminDownloadBooksState = AuthState(
   user: UserProfile(id: 1, username: 'admin', role: 'admin'),
 );
 
+AuthState _exactDownloadBooksState(bool enabled) => AuthState(
+      connection: BackendConnection(
+        serverUrl: 'http://localhost',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        services: AvailableServices(
+          chaptarr: true,
+          mediaDownloads: enabled,
+        ),
+        instances: [
+          ServiceInstance(
+            id: 'books',
+            serviceType: 'chaptarr',
+            name: 'Books',
+            isDefault: true,
+            mediaDownloads: enabled,
+          ),
+        ],
+      ),
+      user: const UserProfile(id: 1, username: 'tester', role: 'user'),
+    );
+
 Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
   WidgetTester tester, {
   AuthState authState = _booksState,
@@ -393,6 +440,10 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   @override
   Future<AuthState> build() async => _initial;
+
+  void replace(AuthState next) {
+    state = AsyncData(next);
+  }
 }
 
 Dio _fakeDio({String ownedCover = '', _BooksAdapter? adapter}) {

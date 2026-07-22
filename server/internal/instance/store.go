@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -12,28 +13,79 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 var ErrPendingBookRequests = errors.New("instance has pending book requests")
 
+const (
+	MediaDownloadModeDisabled = "disabled"
+	MediaDownloadModeIdentity = "identity"
+	MediaDownloadModeMapped   = "mapped"
+)
+
 // Instance represents a configured service instance (Radarr, Sonarr, SABnzbd,
 // or qBittorrent). Radarr/Sonarr/SABnzbd authenticate with an API key;
 // qBittorrent authenticates with username/password.
 type Instance struct {
-	ID          string    `json:"id"`
-	ServiceType string    `json:"service_type"` // "radarr", "sonarr", "sabnzbd", or "qbittorrent"
-	Name        string    `json:"name"`
-	URL         string    `json:"url"`
-	APIKey      string    `json:"api_key"`
-	Username    string    `json:"username"`
-	Password    string    `json:"password"`
-	IsDefault   bool      `json:"is_default"`
-	SortOrder   int       `json:"sort_order"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string `json:"id"`
+	ServiceType string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", or "qbittorrent"
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	APIKey      string `json:"api_key"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	IsDefault   bool   `json:"is_default"`
+	SortOrder   int    `json:"sort_order"`
+	// MediaDownloadMode is disabled for new instances, identity for instances
+	// migrated from the original global exact-path feature, and mapped after an
+	// admin saves explicit per-instance path mappings.
+	MediaDownloadMode string              `json:"-"`
+	MediaPathMappings []mediapath.Mapping `json:"-"`
+	CreatedAt         time.Time           `json:"created_at"`
 }
 
-const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, created_at"
+const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, created_at"
+
+// EffectiveMediaPathMappings returns the instance's current routing rules.
+// Identity mode is the upgrade bridge for the original global same-path
+// behavior; new and explicitly-edited instances use mapped/disabled instead.
+func (inst *Instance) EffectiveMediaPathMappings(roots []string) []mediapath.Mapping {
+	switch inst.MediaDownloadMode {
+	case MediaDownloadModeIdentity:
+		mappings := make([]mediapath.Mapping, 0, len(roots))
+		for _, root := range roots {
+			mappings = append(mappings, mediapath.Mapping{
+				ArrPath:       root,
+				CantinarrPath: root,
+			})
+		}
+		return mappings
+	case MediaDownloadModeMapped:
+		return append([]mediapath.Mapping(nil), inst.MediaPathMappings...)
+	default:
+		return nil
+	}
+}
+
+// MediaDownloadsConfigured is safe for requester-facing capability metadata:
+// it reveals only whether this exact instance has at least one effective rule.
+func (inst *Instance) MediaDownloadsConfigured(roots []string) bool {
+	if len(roots) == 0 {
+		return false
+	}
+	// Configuration may have changed since a mapping was saved. Advertise the
+	// capability when at least one current rule still names an accessible target
+	// inside the deployment's present allowlist; ticket-time resolution remains
+	// the final file-specific authority.
+	for _, mapping := range inst.EffectiveMediaPathMappings(roots) {
+		if _, err := mediapath.Validate([]mediapath.Mapping{mapping}, roots); err == nil {
+			return true
+		}
+	}
+	return false
+}
 
 // Store provides CRUD operations for service instances. API keys and
 // passwords are encrypted at rest; legacy plaintext rows decrypt as-is.
@@ -72,6 +124,79 @@ func (s *Store) encryptSecrets(inst *Instance) (apiKey, password string, err err
 	return apiKey, password, nil
 }
 
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanInstance(scanner rowScanner) (Instance, error) {
+	var inst Instance
+	var mappingsJSON string
+	if err := scanner.Scan(
+		&inst.ID,
+		&inst.ServiceType,
+		&inst.Name,
+		&inst.URL,
+		&inst.APIKey,
+		&inst.Username,
+		&inst.Password,
+		&inst.IsDefault,
+		&inst.SortOrder,
+		&inst.MediaDownloadMode,
+		&mappingsJSON,
+		&inst.CreatedAt,
+	); err != nil {
+		return Instance{}, err
+	}
+	if inst.MediaDownloadMode != MediaDownloadModeDisabled &&
+		inst.MediaDownloadMode != MediaDownloadModeIdentity &&
+		inst.MediaDownloadMode != MediaDownloadModeMapped {
+		log.Printf("instance: invalid media download mode for %s; downloads disabled", inst.ID)
+		inst.MediaDownloadMode = MediaDownloadModeDisabled
+	}
+	if err := json.Unmarshal([]byte(mappingsJSON), &inst.MediaPathMappings); err != nil {
+		// Paths are admin-repairable operational metadata. Fail closed for
+		// downloads while keeping the instance visible in the editor.
+		log.Printf("instance: invalid media path mappings for %s; downloads disabled", inst.ID)
+		inst.MediaDownloadMode = MediaDownloadModeDisabled
+		inst.MediaPathMappings = nil
+	}
+	if inst.MediaDownloadMode != MediaDownloadModeMapped {
+		inst.MediaPathMappings = nil
+	}
+	return inst, nil
+}
+
+func normalizeMediaDownloadConfig(inst *Instance) {
+	if inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" {
+		inst.MediaDownloadMode = MediaDownloadModeDisabled
+		inst.MediaPathMappings = nil
+		return
+	}
+	switch inst.MediaDownloadMode {
+	case MediaDownloadModeIdentity:
+		inst.MediaPathMappings = nil
+	case MediaDownloadModeMapped:
+		if len(inst.MediaPathMappings) == 0 {
+			inst.MediaDownloadMode = MediaDownloadModeDisabled
+		}
+	default:
+		inst.MediaDownloadMode = MediaDownloadModeDisabled
+		inst.MediaPathMappings = nil
+	}
+}
+
+func encodeMediaPathMappings(inst *Instance) (string, error) {
+	normalizeMediaDownloadConfig(inst)
+	if len(inst.MediaPathMappings) == 0 {
+		return "[]", nil
+	}
+	encoded, err := json.Marshal(inst.MediaPathMappings)
+	if err != nil {
+		return "", fmt.Errorf("encode media path mappings: %w", err)
+	}
+	return string(encoded), nil
+}
+
 // List returns all instances of the given service type, ordered by sort_order.
 func (s *Store) List(serviceType string) ([]Instance, error) {
 	rows, err := s.db.Query(
@@ -99,11 +224,10 @@ func (s *Store) ListAll() ([]Instance, error) {
 
 // Get returns a single instance by ID.
 func (s *Store) Get(id string) (*Instance, error) {
-	var inst Instance
-	err := s.db.QueryRow(
+	inst, err := scanInstance(s.db.QueryRow(
 		"SELECT "+instanceColumns+" FROM service_instances WHERE id = ?",
 		id,
-	).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
+	))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -153,6 +277,10 @@ func (s *Store) Create(inst *Instance) error {
 	if err != nil {
 		return err
 	}
+	mappingsJSON, err := encodeMediaPathMappings(inst)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("create instance: %w", err)
@@ -162,8 +290,8 @@ func (s *Store) Create(inst *Instance) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.CreatedAt,
+		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, inst.CreatedAt,
 	); err != nil {
 		return fmt.Errorf("create instance: %w", err)
 	}
@@ -195,13 +323,17 @@ func (s *Store) Update(inst *Instance) error {
 	if err != nil {
 		return fmt.Errorf("update instance: %w", err)
 	}
+	mappingsJSON, err := encodeMediaPathMappings(inst)
+	if err != nil {
+		return err
+	}
 	normalizeDefault(inst)
 	if err := clearSiblingDefaults(tx, inst); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(
-		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ? WHERE id = ?",
-		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.ID,
+		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ?, media_download_mode = ?, media_path_mappings = ? WHERE id = ?",
+		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, inst.ID,
 	); err != nil {
 		return fmt.Errorf("update instance: %w", err)
 	}
@@ -420,17 +552,16 @@ func (s *Store) Delete(id string) error {
 // keep at most one default per type; the ORDER BY makes the pick deterministic
 // for legacy rows written before that invariant existed.
 func (s *Store) GetDefault(serviceType string) (*Instance, error) {
-	var inst Instance
-	err := s.db.QueryRow(
+	inst, err := scanInstance(s.db.QueryRow(
 		"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? AND is_default = 1 ORDER BY sort_order, name, id LIMIT 1",
 		serviceType,
-	).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
+	))
 	if err == sql.ErrNoRows {
 		// Fall back to first instance
-		err = s.db.QueryRow(
+		inst, err = scanInstance(s.db.QueryRow(
 			"SELECT "+instanceColumns+" FROM service_instances WHERE service_type = ? ORDER BY sort_order, name, id LIMIT 1",
 			serviceType,
-		).Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt)
+		))
 	}
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -680,8 +811,8 @@ func (s *Store) Count(serviceType string) (int, error) {
 func (s *Store) scanInstances(rows *sql.Rows) ([]Instance, error) {
 	var instances []Instance
 	for rows.Next() {
-		var inst Instance
-		if err := rows.Scan(&inst.ID, &inst.ServiceType, &inst.Name, &inst.URL, &inst.APIKey, &inst.Username, &inst.Password, &inst.IsDefault, &inst.SortOrder, &inst.CreatedAt); err != nil {
+		inst, err := scanInstance(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan instance: %w", err)
 		}
 		if err := s.decryptSecrets(&inst); err != nil {

@@ -39,6 +39,12 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 		INSERT INTO users (id, username, password_hash, role) VALUES (2, 'requester', '', 'user');
 		INSERT INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order)
 			VALUES ('radarr-main', 'radarr', 'Radarr', 'http://radarr.local:7878', 'fake-legacy-api-key', 1, 0);
+		INSERT INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order)
+			VALUES ('sonarr-main', 'sonarr', 'Sonarr', 'http://sonarr.local:8989', 'fake-sonarr-key', 0, 0);
+		INSERT INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order)
+			VALUES ('chaptarr-main', 'chaptarr', 'Chaptarr', 'http://chaptarr.local:8787', 'fake-chaptarr-key', 0, 0);
+		INSERT INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order)
+			VALUES ('sab-main', 'sabnzbd', 'SABnzbd', 'http://sab.local:8080', 'fake-sab-key', 0, 0);
 		INSERT INTO request_log (id, user_id, tmdb_id, media_type, title, status)
 			VALUES (1, 2, 603, 'movie', 'The Matrix', 'requested');
 		INSERT INTO settings (key, value) VALUES ('request_settings', '{"require_approval":true}');
@@ -102,11 +108,11 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 
 	// The instance keeps its api key and default flag; the columns added by
 	// the ladder exist and carry their defaults.
-	var apiKey, instanceURL, instanceUsername, webhookToken string
+	var apiKey, instanceURL, instanceUsername, webhookToken, mediaDownloadMode, mediaPathMappings string
 	var isDefault bool
 	if err := database.QueryRow(
-		`SELECT api_key, url, username, webhook_token, is_default FROM service_instances WHERE id = 'radarr-main'`,
-	).Scan(&apiKey, &instanceURL, &instanceUsername, &webhookToken, &isDefault); err != nil {
+		`SELECT api_key, url, username, webhook_token, is_default, media_download_mode, media_path_mappings FROM service_instances WHERE id = 'radarr-main'`,
+	).Scan(&apiKey, &instanceURL, &instanceUsername, &webhookToken, &isDefault, &mediaDownloadMode, &mediaPathMappings); err != nil {
 		t.Fatalf("read upgraded service instance: %v", err)
 	}
 	if apiKey != "fake-legacy-api-key" || instanceURL != "http://radarr.local:7878" || !isDefault {
@@ -114,6 +120,28 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 	}
 	if instanceUsername != "" || webhookToken != "" {
 		t.Fatalf("new instance columns = (username %q, webhook_token %q), want empty defaults", instanceUsername, webhookToken)
+	}
+	if mediaDownloadMode != "identity" || mediaPathMappings != "[]" {
+		t.Fatalf("legacy media config = (mode %q, mappings %q), want identity/[]", mediaDownloadMode, mediaPathMappings)
+	}
+	for _, want := range []struct {
+		id   string
+		mode string
+	}{
+		{id: "sonarr-main", mode: "identity"},
+		{id: "chaptarr-main", mode: "identity"},
+		{id: "sab-main", mode: "disabled"},
+	} {
+		var mode, mappings string
+		if err := database.QueryRow(
+			`SELECT media_download_mode, media_path_mappings FROM service_instances WHERE id = ?`,
+			want.id,
+		).Scan(&mode, &mappings); err != nil {
+			t.Fatalf("read upgraded media config for %s: %v", want.id, err)
+		}
+		if mode != want.mode || mappings != "[]" {
+			t.Errorf("%s media config = (mode %q, mappings %q), want %s/[]", want.id, mode, mappings, want.mode)
+		}
 	}
 
 	// The request row survives; the approval-era columns exist and are NULL.
@@ -150,7 +178,7 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 	}
 
 	// Nothing was invented or dropped by the two upgrade passes.
-	for table, want := range map[string]int{"users": 2, "service_instances": 1, "request_log": 1, "settings": 1, "devices": 1} {
+	for table, want := range map[string]int{"users": 2, "service_instances": 4, "request_log": 1, "settings": 1, "devices": 1} {
 		var count int
 		if err := database.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)

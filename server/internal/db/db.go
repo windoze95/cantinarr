@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS service_instances (
     password TEXT NOT NULL DEFAULT '',
     is_default BOOLEAN DEFAULT 0,
     sort_order INTEGER DEFAULT 0,
+    media_download_mode TEXT NOT NULL DEFAULT 'disabled',
+    media_path_mappings TEXT NOT NULL DEFAULT '[]',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -598,6 +600,16 @@ func Open(dbPath string) (*sql.DB, error) {
 		// updates the remote arr Connect record. A failed/ambiguous remote update
 		// therefore cannot break the previously working webhook.
 		{alter: "ALTER TABLE service_instances ADD COLUMN webhook_pending_token TEXT NOT NULL DEFAULT ''"},
+		{
+			// Completed-media downloads were originally one global identity-path
+			// switch. Preserve that exact behavior for instances that predate the
+			// per-instance mapper; newly-created instances explicitly start disabled.
+			alter: "ALTER TABLE service_instances ADD COLUMN media_download_mode TEXT NOT NULL DEFAULT 'disabled'",
+			backfill: []string{
+				"UPDATE service_instances SET media_download_mode = 'identity' WHERE service_type IN ('radarr', 'sonarr', 'chaptarr')",
+			},
+		},
+		{alter: "ALTER TABLE service_instances ADD COLUMN media_path_mappings TEXT NOT NULL DEFAULT '[]'"},
 		// Plex access requests: the email a user shares so an admin can invite
 		// them to the Plex server. Empty = not yet shared.
 		{alter: "ALTER TABLE users ADD COLUMN plex_email TEXT NOT NULL DEFAULT ''"},

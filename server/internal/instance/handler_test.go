@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/mediapath"
 )
 
 // newUsersRouter mounts the instance-users endpoints the way router.go does,
@@ -114,6 +116,155 @@ func TestInstanceUsersEndpoints(t *testing.T) {
 func jsonInt(v int64) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+func TestPerInstanceMediaPathMappingsPreserveClearAndValidate(t *testing.T) {
+	root := t.TempDir()
+	books := root + "/books"
+	if err := os.Mkdir(books, 0700); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(newTestStore(t), nil)
+	h.SetMediaDownloadRoots([]string{root})
+	existing := &Instance{
+		ServiceType:       "chaptarr",
+		MediaDownloadMode: MediaDownloadModeIdentity,
+	}
+
+	preserved := &Instance{ServiceType: "chaptarr"}
+	if err := h.applyMediaPathMappings(preserved, nil, existing); err != nil {
+		t.Fatal(err)
+	}
+	if preserved.MediaDownloadMode != MediaDownloadModeIdentity {
+		t.Fatalf("omitted update mode = %q, want identity", preserved.MediaDownloadMode)
+	}
+
+	empty := []mediapath.Mapping{}
+	if err := h.applyMediaPathMappings(preserved, &empty, existing); err != nil {
+		t.Fatal(err)
+	}
+	if preserved.MediaDownloadMode != MediaDownloadModeDisabled {
+		t.Fatalf("explicit clear mode = %q, want disabled", preserved.MediaDownloadMode)
+	}
+	removedRootHandler := NewHandler(newTestStore(t), nil)
+	removedRootHandler.SetMediaDownloadRoots([]string{root + "/missing"})
+	if err := removedRootHandler.applyMediaPathMappings(preserved, &empty, existing); err != nil {
+		t.Fatalf("clear with unavailable deployment root: %v", err)
+	}
+
+	mappings := []mediapath.Mapping{
+		{ArrPath: "/ebooks", CantinarrPath: books},
+		{ArrPath: `Z:\Audiobooks`, CantinarrPath: books},
+	}
+	if err := h.applyMediaPathMappings(preserved, &mappings, existing); err != nil {
+		t.Fatal(err)
+	}
+	if preserved.MediaDownloadMode != MediaDownloadModeMapped || len(preserved.MediaPathMappings) != 2 {
+		t.Fatalf("mapped config = mode %q mappings %#v", preserved.MediaDownloadMode, preserved.MediaPathMappings)
+	}
+
+	outside := []mediapath.Mapping{{ArrPath: "/ebooks", CantinarrPath: t.TempDir()}}
+	if err := h.applyMediaPathMappings(preserved, &outside, existing); err == nil {
+		t.Fatal("accepted a Cantinarr path outside the deployment allowlist")
+	}
+	nonArr := &Instance{ServiceType: "sabnzbd"}
+	if err := h.applyMediaPathMappings(nonArr, &mappings, nil); err == nil {
+		t.Fatal("accepted media mappings on a download client")
+	}
+}
+
+func TestInstanceHTTPWritesPreserveOmittedMappingsAndDisableNewInstances(t *testing.T) {
+	arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(arr.Close)
+	root := t.TempDir()
+	movies := root + "/movies"
+	if err := os.Mkdir(movies, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store := newTestStore(t)
+	existing := &Instance{
+		ServiceType:       "radarr",
+		Name:              "Movies",
+		URL:               arr.URL,
+		APIKey:            "key",
+		MediaDownloadMode: MediaDownloadModeMapped,
+		MediaPathMappings: []mediapath.Mapping{{
+			ArrPath:       "/movies",
+			CantinarrPath: movies,
+		}},
+	}
+	if err := store.Create(existing); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(store, NewRegistry(store))
+	h.SetMediaDownloadRoots([]string{root})
+	router := chi.NewRouter()
+	router.Put("/instances/{instanceID}", h.Update)
+	router.Post("/instances", h.Create)
+
+	update := httptest.NewRequest(
+		http.MethodPut,
+		"/instances/"+existing.ID,
+		strings.NewReader(`{"name":"Renamed","url":"`+arr.URL+`","api_key":"","is_default":true}`),
+	)
+	updatedResponse := httptest.NewRecorder()
+	router.ServeHTTP(updatedResponse, update)
+	if updatedResponse.Code != http.StatusOK {
+		t.Fatalf("old-client update = %d %s", updatedResponse.Code, updatedResponse.Body.String())
+	}
+	updated, err := store.Get(existing.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.MediaDownloadMode != MediaDownloadModeMapped ||
+		len(updated.MediaPathMappings) != 1 ||
+		updated.MediaPathMappings[0].CantinarrPath != movies {
+		t.Fatalf("omitted update changed mappings: %+v", updated)
+	}
+
+	create := httptest.NewRequest(
+		http.MethodPost,
+		"/instances",
+		strings.NewReader(`{"service_type":"radarr","name":"New Movies","url":"`+arr.URL+`","api_key":"key"}`),
+	)
+	createdResponse := httptest.NewRecorder()
+	router.ServeHTTP(createdResponse, create)
+	if createdResponse.Code != http.StatusCreated {
+		t.Fatalf("old-client create = %d %s", createdResponse.Code, createdResponse.Body.String())
+	}
+	var created instanceResponse
+	if err := json.NewDecoder(createdResponse.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	createdStored, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdStored.MediaDownloadMode != MediaDownloadModeDisabled || created.MediaDownloads {
+		t.Fatalf("new omitted mapping config = stored %q response enabled %t", createdStored.MediaDownloadMode, created.MediaDownloads)
+	}
+}
+
+func TestMediaRootsReturnsOnlyConfiguredRootsWithoutCaching(t *testing.T) {
+	h := NewHandler(newTestStore(t), nil)
+	h.SetMediaDownloadRoots([]string{"/media/books", "/media/movies"})
+	recorder := httptest.NewRecorder()
+	h.MediaRoots(recorder, httptest.NewRequest(http.MethodGet, "/instances/media-roots", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	if recorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q", recorder.Header().Get("Cache-Control"))
+	}
+	var roots []string
+	if err := json.NewDecoder(recorder.Body).Decode(&roots); err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 2 || roots[0] != "/media/books" || roots[1] != "/media/movies" {
+		t.Fatalf("roots = %#v", roots)
+	}
 }
 
 func TestInstanceURLRejectsEmbeddedSecrets(t *testing.T) {

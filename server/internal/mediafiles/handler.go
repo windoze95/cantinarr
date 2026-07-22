@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/mediapath"
 )
 
 const (
@@ -35,7 +37,10 @@ const (
 	maxDownloadFilenameBytes  = 240
 )
 
-var errMediaFileUnavailable = errors.New("media file unavailable")
+var (
+	errMediaFileUnavailable = errors.New("media file unavailable")
+	errMediaPathUnmapped    = errors.New("media path is not mapped")
+)
 
 type instanceAccessStore interface {
 	Get(id string) (*instance.Instance, error)
@@ -182,6 +187,12 @@ func newHandler(store instanceAccessStore, users currentUserStore, resolver meta
 		seen[cleaned] = true
 		h.roots = append(h.roots, mediaRoot{path: cleaned, root: root})
 	}
+	// Prefer the narrowest authorized handle when roots overlap. The final
+	// OpenRoot boundary is safe either way, but deterministic specificity makes
+	// nested bind mounts and per-instance targets resolve as configured.
+	sort.SliceStable(h.roots, func(i, j int) bool {
+		return len(h.roots[i].path) > len(h.roots[j].path)
+	})
 	return h, nil
 }
 
@@ -279,14 +290,22 @@ func (h *Handler) IssueTicket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if len(h.effectiveMappings(inst)) == 0 {
+		writeJSONError(w, http.StatusNotFound, "media file unavailable")
+		return
+	}
 
 	metadata, err := h.resolver.Resolve(inst.ID, inst.ServiceType, request.FileID)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, "media file unavailable")
 		return
 	}
-	opened, err := h.openMediaFile(metadata.Path, request.FileID)
+	opened, err := h.openMediaFile(inst, metadata.Path, request.FileID)
 	if err != nil {
+		if errors.Is(err, errMediaPathUnmapped) {
+			writeJSONError(w, http.StatusConflict, "media file is not available through this instance's configured media folders")
+			return
+		}
 		writeJSONError(w, http.StatusNotFound, "media file unavailable")
 		return
 	}
@@ -375,13 +394,17 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if len(h.effectiveMappings(inst)) == 0 {
+		writeDownloadError(w, r, http.StatusNotFound, "download unavailable")
+		return
+	}
 
 	metadata, err := h.resolver.Resolve(ticket.instanceID, ticket.serviceType, ticket.fileID)
 	if err != nil {
 		writeDownloadError(w, r, http.StatusBadGateway, "download unavailable")
 		return
 	}
-	opened, err := h.openMediaFile(metadata.Path, ticket.fileID)
+	opened, err := h.openMediaFile(inst, metadata.Path, ticket.fileID)
 	if err != nil {
 		writeDownloadError(w, r, http.StatusNotFound, "download unavailable")
 		return
@@ -464,11 +487,23 @@ type openedMediaFile struct {
 	filename string
 }
 
-func (h *Handler) openMediaFile(reportedPath string, fileID int) (*openedMediaFile, error) {
-	if !filepath.IsAbs(reportedPath) {
+func (h *Handler) effectiveMappings(inst *instance.Instance) []mediapath.Mapping {
+	roots := make([]string, 0, len(h.roots))
+	for _, root := range h.roots {
+		roots = append(roots, root.path)
+	}
+	return inst.EffectiveMediaPathMappings(roots)
+}
+
+func (h *Handler) openMediaFile(inst *instance.Instance, reportedPath string, fileID int) (*openedMediaFile, error) {
+	localPath, ok := mediapath.Translate(reportedPath, h.effectiveMappings(inst))
+	if !ok {
+		return nil, errMediaPathUnmapped
+	}
+	if !filepath.IsAbs(localPath) {
 		return nil, errMediaFileUnavailable
 	}
-	cleaned := filepath.Clean(reportedPath)
+	cleaned := filepath.Clean(localPath)
 	for _, allowedRoot := range h.roots {
 		relative, err := filepath.Rel(allowedRoot.path, cleaned)
 		if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
@@ -486,7 +521,7 @@ func (h *Handler) openMediaFile(reportedPath string, fileID int) (*openedMediaFi
 		return &openedMediaFile{
 			file:     file,
 			info:     info,
-			filename: safeFilename(filepath.Base(cleaned), fileID),
+			filename: safeFilename(reportedPath, fileID),
 		}, nil
 	}
 	return nil, errMediaFileUnavailable

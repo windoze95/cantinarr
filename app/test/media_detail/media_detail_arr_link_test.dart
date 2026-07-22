@@ -24,6 +24,8 @@ void main() {
     required bool isAdmin,
     required List<Map<String, dynamic>> radarrMovies,
     bool mediaDownloads = false,
+    bool? instanceMediaDownloads,
+    bool mappedSibling = false,
     MediaType mediaType = MediaType.movie,
     List<Map<String, dynamic>> sonarrSeries = const [],
     List<Map<String, dynamic>> sonarrEpisodes = const [],
@@ -55,7 +57,13 @@ void main() {
         overrides: [
           authProvider.overrideWith(
             () => _FakeAuthNotifier(
-              _state(isAdmin, mediaDownloads, mediaType),
+              _state(
+                isAdmin,
+                mediaDownloads,
+                mediaType,
+                instanceMediaDownloads: instanceMediaDownloads,
+                mappedSibling: mappedSibling,
+              ),
             ),
           ),
           backendClientProvider.overrideWithValue(_fakeDio(
@@ -137,6 +145,33 @@ void main() {
     expect(find.text('Open in Radarr'), findsNothing);
   });
 
+  testWidgets('a mapped sibling does not enable downloads on this instance',
+      (tester) async {
+    await pumpDetail(
+      tester,
+      isAdmin: false,
+      mediaDownloads: true,
+      instanceMediaDownloads: false,
+      mappedSibling: true,
+      radarrMovies: [
+        {
+          'id': 5,
+          'title': 'The Matrix',
+          'year': 1999,
+          'tmdbId': _tmdbId,
+          'hasFile': true,
+          'movieFile': {
+            'id': 42,
+            'relativePath': 'The Matrix.mkv',
+            'size': 100,
+          },
+        },
+      ],
+    );
+
+    expect(find.text('Download movie'), findsNothing);
+  });
+
   testWidgets('TV download opens individual exact episode choices',
       (tester) async {
     await pumpDetail(
@@ -194,7 +229,10 @@ AuthState _state(
   bool isAdmin,
   bool mediaDownloads,
   MediaType mediaType,
-) =>
+  {
+  bool? instanceMediaDownloads,
+  bool mappedSibling = false,
+}) =>
     AuthState(
       connection: BackendConnection(
         serverUrl: 'http://localhost',
@@ -202,20 +240,29 @@ AuthState _state(
         refreshToken: 'refresh',
         services: AvailableServices(mediaDownloads: mediaDownloads),
         instances: mediaType == MediaType.movie
-            ? const [
+            ? [
                 ServiceInstance(
                   id: 'radarr-main',
                   serviceType: 'radarr',
                   name: 'Main Radarr',
                   isDefault: true,
+                  mediaDownloads: instanceMediaDownloads,
                 ),
+                if (mappedSibling)
+                  const ServiceInstance(
+                    id: 'radarr-4k',
+                    serviceType: 'radarr',
+                    name: '4K Radarr',
+                    mediaDownloads: true,
+                  ),
               ]
-            : const [
+            : [
                 ServiceInstance(
                   id: 'sonarr-main',
                   serviceType: 'sonarr',
                   name: 'Main Sonarr',
                   isDefault: true,
+                  mediaDownloads: instanceMediaDownloads,
                 ),
               ],
       ),

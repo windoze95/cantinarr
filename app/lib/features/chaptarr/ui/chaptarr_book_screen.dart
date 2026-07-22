@@ -285,7 +285,8 @@ class _FormatSection extends ConsumerWidget {
         ? '${file.qualityName ?? 'Downloaded'} — ${file.sizeFormatted}'
         : (loading ? 'Checking…' : status.text);
     final connection = ref.watch(authProvider).valueOrNull?.connection;
-    final downloadsEnabled = connection?.services.mediaDownloads ?? false;
+    final downloadsEnabled =
+        connection?.mediaDownloadsEnabledFor(instanceId) ?? false;
     final choices = [
       for (var i = 0; i < files.length; i++)
         if (files[i].id > 0)

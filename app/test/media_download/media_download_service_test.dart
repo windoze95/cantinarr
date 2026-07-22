@@ -95,6 +95,24 @@ void main() {
       ),
     );
   });
+
+  test('explains when an instance path is not configured', () async {
+    final service = MediaDownloadService(
+      backendDio: _dio(_TicketAdapter(response: const {}, statusCode: 409)),
+    );
+
+    expect(
+      () => service.createTicket(instanceId: 'books', fileId: 3),
+      throwsA(
+        isA<MediaDownloadException>().having(
+          (error) => error.message,
+          'message',
+          'This file is not available through Cantinarr’s configured '
+              'media folders.',
+        ),
+      ),
+    );
+  });
 }
 
 Dio _dio(HttpClientAdapter adapter) => Dio(
