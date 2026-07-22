@@ -215,37 +215,73 @@ func recordsForForeignID(books []chaptarr.Book, foreignID string) (string, map[s
 	return title, byFormat, unresolved
 }
 
-// selectBookRoot chooses one unambiguous accessible root. A clear format path
-// wins; one generic root is compatible with simple installs. Multiple matching
-// or generic roots fail closed instead of guessing where a format belongs.
+// selectBookRoot chooses one unambiguous accessible root. Current Chaptarr
+// releases expose per-format effective-default flags; older releases are
+// resolved conservatively from the root name/path, with one generic root kept
+// as a compatible fallback. Multiple candidates fail closed.
 func selectBookRoot(folders []chaptarr.RootFolder, format string) (chaptarr.RootFolder, bool) {
-	matches := make([]chaptarr.RootFolder, 0, len(folders))
-	generic := make([]chaptarr.RootFolder, 0, len(folders))
+	accessible := make([]chaptarr.RootFolder, 0, len(folders))
+	effectiveDefaults := make([]chaptarr.RootFolder, 0, len(folders))
+	explicitMatches := make([]chaptarr.RootFolder, 0, len(folders))
 	for _, folder := range folders {
-		if !folder.Accessible || strings.TrimSpace(folder.Path) == "" {
+		if !folder.IsAccessible() || strings.TrimSpace(folder.Path) == "" {
 			continue
 		}
-		path := strings.ToLower(folder.Path)
-		isAudio := strings.Contains(path, "audio") || strings.Contains(path, "listen")
-		isEbook := strings.Contains(path, "ebook") || strings.Contains(path, "e-book")
-		isMatch := format == BookFormatAudiobook && isAudio
-		if format == BookFormatEbook {
-			isMatch = isEbook
+		accessible = append(accessible, folder)
+		if format == BookFormatAudiobook && folder.IsEffectiveDefaultAudiobook {
+			effectiveDefaults = append(effectiveDefaults, folder)
+		} else if format == BookFormatEbook && folder.IsEffectiveDefaultEbook {
+			effectiveDefaults = append(effectiveDefaults, folder)
 		}
-		if isMatch {
-			matches = append(matches, folder)
-		} else if !isAudio && !isEbook {
+		if format == BookFormatAudiobook && folder.Audiobook {
+			explicitMatches = append(explicitMatches, folder)
+		} else if format == BookFormatEbook && folder.Ebook {
+			explicitMatches = append(explicitMatches, folder)
+		}
+	}
+	if len(effectiveDefaults) == 1 {
+		return effectiveDefaults[0], true
+	}
+	if len(effectiveDefaults) > 1 {
+		return chaptarr.RootFolder{}, false
+	}
+	if len(explicitMatches) == 1 {
+		return explicitMatches[0], true
+	}
+	if len(explicitMatches) > 1 {
+		return chaptarr.RootFolder{}, false
+	}
+
+	inferred := make([]chaptarr.RootFolder, 0, len(accessible))
+	generic := make([]chaptarr.RootFolder, 0, len(accessible))
+	for _, folder := range accessible {
+		label := strings.ToLower(strings.TrimSpace(folder.Name + " " + folder.Path))
+		isAudio := strings.Contains(label, "audio") ||
+			strings.Contains(label, "listen")
+		isEbook := !isAudio && (strings.Contains(label, "ebook") ||
+			strings.Contains(label, "e-book") ||
+			strings.Contains(label, "e book"))
+		if !isAudio && !isEbook {
 			generic = append(generic, folder)
 		}
+		if (format == BookFormatAudiobook && isAudio) || (format == BookFormatEbook && isEbook) {
+			inferred = append(inferred, folder)
+		}
 	}
-	if len(matches) == 1 {
-		return matches[0], true
+	if len(inferred) == 1 {
+		return inferred[0], true
 	}
-	if len(matches) > 1 {
+	if len(inferred) > 1 {
 		return chaptarr.RootFolder{}, false
 	}
 	if len(generic) == 1 {
 		return generic[0], true
+	}
+	if len(generic) > 1 {
+		return chaptarr.RootFolder{}, false
+	}
+	if len(accessible) == 1 {
+		return accessible[0], true
 	}
 	return chaptarr.RootFolder{}, false
 }

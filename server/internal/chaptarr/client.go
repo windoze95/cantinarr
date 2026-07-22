@@ -98,19 +98,27 @@ type AuthorStatistics struct {
 }
 
 type Author struct {
-	ID                int              `json:"id"`
-	AuthorName        string           `json:"authorName"`
-	ForeignAuthorID   string           `json:"foreignAuthorId"`
-	TitleSlug         string           `json:"titleSlug"`
-	Overview          string           `json:"overview"`
-	Status            string           `json:"status"`
-	Monitored         bool             `json:"monitored"`
-	Path              string           `json:"path,omitempty"`
-	QualityProfileID  int              `json:"qualityProfileId"`
-	MetadataProfileID int              `json:"metadataProfileId"`
-	Statistics        AuthorStatistics `json:"statistics"`
-	Images            []Image          `json:"images"`
-	Genres            genreList        `json:"genres"`
+	ID                         int              `json:"id"`
+	AuthorName                 string           `json:"authorName"`
+	ForeignAuthorID            string           `json:"foreignAuthorId"`
+	TitleSlug                  string           `json:"titleSlug"`
+	Overview                   string           `json:"overview"`
+	Status                     string           `json:"status"`
+	Monitored                  bool             `json:"monitored"`
+	Path                       string           `json:"path,omitempty"`
+	QualityProfileID           int              `json:"qualityProfileId"`
+	MetadataProfileID          int              `json:"metadataProfileId"`
+	EbookQualityProfileID      int              `json:"ebookQualityProfileId"`
+	AudiobookQualityProfileID  int              `json:"audiobookQualityProfileId"`
+	EbookMetadataProfileID     int              `json:"ebookMetadataProfileId"`
+	AudiobookMetadataProfileID int              `json:"audiobookMetadataProfileId"`
+	EbookRootFolderPath        string           `json:"ebookRootFolderPath"`
+	AudiobookRootFolderPath    string           `json:"audiobookRootFolderPath"`
+	EbookMonitorFuture         bool             `json:"ebookMonitorFuture"`
+	AudiobookMonitorFuture     bool             `json:"audiobookMonitorFuture"`
+	Statistics                 AuthorStatistics `json:"statistics"`
+	Images                     []Image          `json:"images"`
+	Genres                     genreList        `json:"genres"`
 }
 
 // BookStatistics is the per-book file rollup Chaptarr returns on a book.
@@ -177,20 +185,115 @@ type BookFile struct {
 }
 
 type QualityProfile struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	ProfileType string `json:"profileType"`
 }
 
 type MetadataProfile struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	ProfileType string `json:"profileType"`
 }
 
 type RootFolder struct {
-	ID         int    `json:"id"`
-	Path       string `json:"path"`
-	FreeSpace  int64  `json:"freeSpace"`
-	Accessible bool   `json:"accessible"`
+	ID                          int    `json:"id"`
+	Name                        string `json:"name"`
+	Path                        string `json:"path"`
+	FreeSpace                   int64  `json:"freeSpace"`
+	Accessible                  bool   `json:"accessible"`
+	Ebook                       bool   `json:"ebook"`
+	Audiobook                   bool   `json:"audiobook"`
+	IsEffectiveDefaultEbook     bool   `json:"isEffectiveDefaultEbook"`
+	IsEffectiveDefaultAudiobook bool   `json:"isEffectiveDefaultAudiobook"`
+}
+
+// UnmarshalJSON accepts both Chaptarr metadata-profile representations. The
+// current API uses numeric format discriminators (2 for ebook, 1 for
+// audiobook), while transitional responses have serialized the same value as
+// a string. Keeping a normalized string preserves either representation for
+// callers without making every profile consumer repeat the compatibility
+// parsing.
+func (p *MetadataProfile) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ID          int             `json:"id"`
+		Name        string          `json:"name"`
+		ProfileType json.RawMessage `json:"profileType"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+
+	profileType := ""
+	raw := bytes.TrimSpace(wire.ProfileType)
+	if len(raw) > 0 && !bytes.Equal(raw, []byte("null")) {
+		if raw[0] == '"' {
+			if err := json.Unmarshal(raw, &profileType); err != nil {
+				return fmt.Errorf("decode metadata profile type: %w", err)
+			}
+		} else {
+			var number json.Number
+			if err := json.Unmarshal(raw, &number); err != nil {
+				return fmt.Errorf("decode metadata profile type: %w", err)
+			}
+			profileType = number.String()
+		}
+	}
+
+	*p = MetadataProfile{ID: wire.ID, Name: wire.Name, ProfileType: profileType}
+	return nil
+}
+
+// UnmarshalJSON keeps root-folder reads compatible with Chaptarr releases that
+// omit accessible and releases that expose ebook/audiobook as nested settings
+// objects. Only an explicit boolean true is a format discriminator; a nested
+// object appears on both root types and must not select either one.
+func (r *RootFolder) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ID                          int             `json:"id"`
+		Name                        string          `json:"name"`
+		Path                        string          `json:"path"`
+		FreeSpace                   int64           `json:"freeSpace"`
+		Accessible                  json.RawMessage `json:"accessible"`
+		Ebook                       json.RawMessage `json:"ebook"`
+		Audiobook                   json.RawMessage `json:"audiobook"`
+		IsEffectiveDefaultEbook     bool            `json:"isEffectiveDefaultEbook"`
+		IsEffectiveDefaultAudiobook bool            `json:"isEffectiveDefaultAudiobook"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+
+	accessible := true
+	rawAccessible := bytes.TrimSpace(wire.Accessible)
+	if len(rawAccessible) > 0 && !bytes.Equal(rawAccessible, []byte("null")) {
+		if err := json.Unmarshal(rawAccessible, &accessible); err != nil {
+			return fmt.Errorf("decode root folder accessibility: %w", err)
+		}
+	}
+
+	*r = RootFolder{
+		ID:                          wire.ID,
+		Name:                        wire.Name,
+		Path:                        wire.Path,
+		FreeSpace:                   wire.FreeSpace,
+		Accessible:                  accessible,
+		Ebook:                       explicitTrue(wire.Ebook),
+		Audiobook:                   explicitTrue(wire.Audiobook),
+		IsEffectiveDefaultEbook:     wire.IsEffectiveDefaultEbook,
+		IsEffectiveDefaultAudiobook: wire.IsEffectiveDefaultAudiobook,
+	}
+	return nil
+}
+
+func explicitTrue(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("true"))
+}
+
+// IsAccessible treats an omitted accessibility field as usable for older
+// Chaptarr responses, while preserving an explicit false from the server.
+func (r RootFolder) IsAccessible() bool {
+	return r.Accessible
 }
 
 // LookupResult is one entry from author/lookup or book/lookup. It carries the
@@ -218,13 +321,22 @@ type LookupResult struct {
 // AddAuthorRequest mirrors Sonarr's AddSeriesRequest shape for adding an author
 // to the Chaptarr library.
 type AddAuthorRequest struct {
-	AuthorName        string `json:"authorName"`
-	ForeignAuthorID   string `json:"foreignAuthorId"`
-	QualityProfileID  int    `json:"qualityProfileId"`
-	MetadataProfileID int    `json:"metadataProfileId"`
-	RootFolderPath    string `json:"rootFolderPath"`
-	Monitored         bool   `json:"monitored"`
-	AddOptions        struct {
+	ID                         int    `json:"id,omitempty"`
+	AuthorName                 string `json:"authorName"`
+	ForeignAuthorID            string `json:"foreignAuthorId"`
+	QualityProfileID           int    `json:"qualityProfileId"`
+	MetadataProfileID          int    `json:"metadataProfileId"`
+	RootFolderPath             string `json:"rootFolderPath"`
+	EbookQualityProfileID      int    `json:"ebookQualityProfileId,omitempty"`
+	AudiobookQualityProfileID  int    `json:"audiobookQualityProfileId,omitempty"`
+	EbookMetadataProfileID     int    `json:"ebookMetadataProfileId,omitempty"`
+	AudiobookMetadataProfileID int    `json:"audiobookMetadataProfileId,omitempty"`
+	EbookRootFolderPath        string `json:"ebookRootFolderPath,omitempty"`
+	AudiobookRootFolderPath    string `json:"audiobookRootFolderPath,omitempty"`
+	EbookMonitorFuture         bool   `json:"ebookMonitorFuture"`
+	AudiobookMonitorFuture     bool   `json:"audiobookMonitorFuture"`
+	Monitored                  bool   `json:"monitored"`
+	AddOptions                 struct {
 		// Monitor is Chaptarr's monitor scope applied at add time: one of
 		// all/future/missing/existing/none. Empty means Chaptarr's default.
 		Monitor               string `json:"monitor,omitempty"`
@@ -241,16 +353,24 @@ type AddAuthorRequest struct {
 // fields. Editions is raw JSON round-tripped from the lookup result so the
 // add satisfies Chaptarr's NOT NULL edition columns (links, images).
 type AddBookRequest struct {
-	ForeignBookID      string           `json:"foreignBookId"`
-	Title              string           `json:"title"`
-	TitleSlug          string           `json:"titleSlug,omitempty"`
-	Monitored          bool             `json:"monitored"`
-	AnyEditionOk       bool             `json:"anyEditionOk"`
-	MediaType          string           `json:"mediaType,omitempty"`
-	EbookMonitored     *bool            `json:"ebookMonitored,omitempty"`
-	AudiobookMonitored *bool            `json:"audiobookMonitored,omitempty"`
-	Author             AddAuthorRequest `json:"author"`
-	AddOptions         struct {
+	ForeignBookID              string           `json:"foreignBookId"`
+	AuthorID                   int              `json:"authorId,omitempty"`
+	Title                      string           `json:"title"`
+	TitleSlug                  string           `json:"titleSlug,omitempty"`
+	Monitored                  bool             `json:"monitored"`
+	AnyEditionOk               bool             `json:"anyEditionOk"`
+	MediaType                  string           `json:"mediaType,omitempty"`
+	EbookMonitored             *bool            `json:"ebookMonitored,omitempty"`
+	AudiobookMonitored         *bool            `json:"audiobookMonitored,omitempty"`
+	RootFolderPath             string           `json:"rootFolderPath,omitempty"`
+	EbookQualityProfileID      int              `json:"ebookQualityProfileId,omitempty"`
+	AudiobookQualityProfileID  int              `json:"audiobookQualityProfileId,omitempty"`
+	EbookMetadataProfileID     int              `json:"ebookMetadataProfileId,omitempty"`
+	AudiobookMetadataProfileID int              `json:"audiobookMetadataProfileId,omitempty"`
+	EbookRootFolderPath        string           `json:"ebookRootFolderPath,omitempty"`
+	AudiobookRootFolderPath    string           `json:"audiobookRootFolderPath,omitempty"`
+	Author                     AddAuthorRequest `json:"author"`
+	AddOptions                 struct {
 		SearchForNewBook bool `json:"searchForNewBook"`
 	} `json:"addOptions"`
 	Editions []json.RawMessage `json:"editions,omitempty"`
