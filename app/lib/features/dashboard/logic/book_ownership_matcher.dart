@@ -89,6 +89,12 @@ double jaccard(Set<String> a, Set<String> b) {
   return intersection / union;
 }
 
+bool strongNormalizedTitleMatch(String a, String b) {
+  final aTokens = normalizeTitleTokens(a).toSet();
+  final bTokens = normalizeTitleTokens(b).toSet();
+  return aTokens.isNotEmpty && bTokens.isNotEmpty && jaccard(aTokens, bTokens) == 1;
+}
+
 /// Normalizes an author string into comparison tokens: lowercase, split on
 /// non-alphanumerics, drop author stopwords and empties.
 List<String> _authorTokens(String s) => s
@@ -111,6 +117,18 @@ bool authorMatches(String? lookupAuthor, String digestAuthor) {
   return a.last == b.last;
 }
 
+/// Strong author identity for provider-ID fallback. Unlike [authorMatches],
+/// this does not accept a shared surname by itself: every normalized author
+/// token must match, though token order may differ.
+bool strongAuthorMatch(String? lookupAuthor, String digestAuthor) {
+  if (lookupAuthor == null) return false;
+  final lookup = _authorTokens(lookupAuthor).toSet();
+  final digest = _authorTokens(digestAuthor).toSet();
+  return lookup.isNotEmpty &&
+      digest.isNotEmpty &&
+      jaccard(lookup, digest) == 1;
+}
+
 /// The best title-similarity score between a result and a digest row, taking the
 /// max over the series-stripped and series-kept tokenizations (so a result that
 /// keeps its "Series: " prefix can still match a digest row that dropped it, and
@@ -131,7 +149,10 @@ double _titleScore(ChaptarrBook result, OwnedTitle owned) {
 /// AND the authors match (or, when an author is missing on either side, the
 /// title score stands alone at >= 0.9). A title can have more than one matching
 /// row when the user owns several near-identically-titled records.
-List<OwnedTitle> _matchingTitles(ChaptarrBook result, List<OwnedTitle> digest) {
+List<OwnedTitle> ownedMatchesFor(
+  ChaptarrBook result,
+  List<OwnedTitle> digest,
+) {
   final lookupAuthor = result.author?.authorName;
   final lookupAuthorEmpty = lookupAuthor == null || lookupAuthor.isEmpty;
   final out = <OwnedTitle>[];
@@ -145,17 +166,69 @@ List<OwnedTitle> _matchingTitles(ChaptarrBook result, List<OwnedTitle> digest) {
   return out;
 }
 
-/// The single digest row [result] matches — preferring the one whose title
-/// exactly equals the result's, else the first match (the user's separate
-/// records are surfaced as their own rows, not merged). Null when none qualify.
-/// Exposes the matched [OwnedTitle] so callers can reuse its cached cover.
+bool _sameForeignId(ChaptarrBook result, OwnedTitle owned) {
+  final lookupId = result.foreignBookId?.trim() ?? '';
+  return lookupId.isNotEmpty && lookupId == owned.foreignBookId.trim();
+}
+
+/// Identity candidates prefer an exact nonempty foreign id. Fuzzy metadata is
+/// considered only when the provider's lookup id does not identify a digest
+/// row (the common mismatched-id case).
+List<OwnedTitle> ownedIdentityCandidatesFor(
+  ChaptarrBook result,
+  List<OwnedTitle> digest,
+) {
+  final exact = digest.where((owned) => _sameForeignId(result, owned)).toList();
+  return exact.isNotEmpty ? exact : ownedMatchesFor(result, digest);
+}
+
+bool _strongIdentityMatch(ChaptarrBook result, OwnedTitle owned) {
+  if (_titleScore(result, owned) < 0.999) return false;
+  final lookupAuthor = _authorTokens(result.author?.authorName ?? '').toSet();
+  final digestAuthor = _authorTokens(owned.author).toSet();
+  if (lookupAuthor.isEmpty || digestAuthor.isEmpty) return false;
+  return jaccard(lookupAuthor, digestAuthor) == 1;
+}
+
+/// The single digest row [result] matches. Ambiguity fails closed rather than
+/// choosing a first record and potentially requesting the wrong library item.
 OwnedTitle? ownedMatchFor(ChaptarrBook result, List<OwnedTitle> digest) {
-  final matches = _matchingTitles(result, digest);
-  if (matches.isEmpty) return null;
-  for (final m in matches) {
-    if (m.title == result.title) return m;
+  final matches = ownedIdentityCandidatesFor(result, digest);
+  return matches.length == 1 &&
+          (_sameForeignId(result, matches.single) ||
+              _strongIdentityMatch(result, matches.single))
+      ? matches.single
+      : null;
+}
+
+/// One-to-one lookup-to-library mappings. A mapping is safe only when a lookup
+/// row has exactly one digest candidate and that digest row belongs to exactly
+/// one lookup row. This rejects ambiguity in either direction.
+Map<ChaptarrBook, OwnedTitle> unambiguousOwnedMatches(
+  List<ChaptarrBook> lookupResults,
+  List<OwnedTitle> digest,
+) {
+  final candidates = <ChaptarrBook, List<OwnedTitle>>{};
+  final lookupCounts = <OwnedTitle, int>{};
+  for (final result in lookupResults) {
+    final matches = ownedIdentityCandidatesFor(result, digest);
+    candidates[result] = matches;
+    for (final match in matches) {
+      lookupCounts[match] = (lookupCounts[match] ?? 0) + 1;
+    }
   }
-  return matches.first;
+
+  final resolved = <ChaptarrBook, OwnedTitle>{};
+  for (final entry in candidates.entries) {
+    if (entry.value.length != 1) continue;
+    final match = entry.value.single;
+    if (lookupCounts[match] == 1 &&
+        (_sameForeignId(entry.key, match) ||
+            _strongIdentityMatch(entry.key, match))) {
+      resolved[entry.key] = match;
+    }
+  }
+  return resolved;
 }
 
 /// Decides whether the user already owns [result], by matching it against the
@@ -166,12 +239,10 @@ BookOwnership? ownershipFor(ChaptarrBook result, List<OwnedTitle> digest) =>
 
 /// Owned digest titles matching the search [query] (every query token appears in
 /// the title), each kept as its own entry so the user sees and picks among their
-/// distinct records — nothing is merged. Only titles the user actually has or is
-/// monitoring qualify, so empty library shells (all-missing, unmonitored
-/// duplicate records) don't appear. Skips a record a lookup result already lists
-/// under the exact same title (that row already carries the chip), and collapses
-/// only literally-identical titles. Injected at the top so a book the user
-/// owns/monitors surfaces even when Chaptarr's search doesn't rank it.
+/// distinct records — nothing is merged or deduplicated by title. Only titles
+/// the user actually has/monitors (plus unresolved fail-closed rows) qualify.
+/// A record is omitted only when a strong one-to-one lookup mapping already
+/// represents that exact digest row.
 List<OwnedTitle> ownedTitlesForQuery(
   String query,
   List<OwnedTitle> digest,
@@ -180,21 +251,18 @@ List<OwnedTitle> ownedTitlesForQuery(
   final queryTokens = normalizeTitleTokens(query).toSet();
   if (queryTokens.isEmpty) return const [];
 
-  final lookupTitles = lookupResults.map((r) => r.title).toSet();
-  final seen = <String>{};
+  final alreadyRepresented =
+      unambiguousOwnedMatches(lookupResults, digest).values.toSet();
   final out = <OwnedTitle>[];
   for (final owned in digest) {
     // Only surface books the user actually has or is monitoring — not empty
     // library shells (all-missing, unmonitored duplicate records).
-    if (!owned.ownership.anyOwned) continue;
+    if (!owned.ownership.anyOwned && owned.statusKnown) continue;
     final titleTokens = normalizeTitleTokens(owned.title).toSet();
     if (titleTokens.isEmpty) continue;
     // The query must be contained in the title (a partial-name match).
     if (!queryTokens.every(titleTokens.contains)) continue;
-    // A lookup row with this exact title already shows the ownership chip.
-    if (lookupTitles.contains(owned.title)) continue;
-    // Drop only literally-identical titles, never distinct ones.
-    if (!seen.add(owned.title)) continue;
+    if (alreadyRepresented.contains(owned)) continue;
     out.add(owned);
   }
   return out;

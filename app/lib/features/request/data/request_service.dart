@@ -42,103 +42,195 @@ enum BookRequestFormat {
   final String value;
   final String label;
 
-  static BookRequestFormat fromValue(String value) =>
-      BookRequestFormat.values.firstWhere(
-        (format) => format.value == value,
-        orElse: () => BookRequestFormat.both,
-      );
+  static BookRequestFormat? tryFromValue(String? value) {
+    for (final format in BookRequestFormat.values) {
+      if (format.value == value) return format;
+    }
+    return null;
+  }
 }
 
-/// A user's per-format request state for a book. [status] is the collapsed
-/// (latest) state; [formats] maps each already-requested concrete format to its
-/// status (a stored "both" request fills both ebook and audiobook); [ownership]
-/// is what the user already has in the Chaptarr library. A format is covered (no
-/// longer requestable) when it's already requested OR its file is already
-/// present (downloaded). A format that's only *monitored* (tracked but no file
-/// yet) stays requestable, so the user can still pull the missing file.
+enum BookStatusUnknownReason { transient, formatNeedsAttention }
+
+/// A user's per-format request state for a book. [formats] contains the server's
+/// live/request-history projection and [ownership] is the current Chaptarr
+/// digest. The two are reduced into one requester-facing truth by [statusFor].
+/// A null result means the status could not be checked; it must never be treated
+/// as "not requested" because doing so could create a duplicate request.
 class BookRequestStatusDetail {
   final RequestStatus status;
   final Map<BookRequestFormat, RequestStatus> formats;
   final BookOwnership? ownership;
+  final bool isKnown;
+  final BookStatusUnknownReason? unknownReason;
 
   const BookRequestStatusDetail({
     this.status = RequestStatus.unavailable,
     this.formats = const {},
     this.ownership,
+    this.isKnown = true,
+    this.unknownReason,
   });
 
-  /// Returns a copy carrying library [ownership] (from the owned-books digest).
-  BookRequestStatusDetail withOwnership(BookOwnership? ownership) =>
-      BookRequestStatusDetail(
-          status: status, formats: formats, ownership: ownership);
+  BookStatusUnknownReason? get effectiveUnknownReason =>
+      isKnown ? null : (unknownReason ?? BookStatusUnknownReason.transient);
 
-  /// Covered = already requested (non-denied) OR its file is downloaded. A
-  /// merely-monitored format (no file) is NOT covered — the user should still be
-  /// able to request the missing file. "both" is covered only when each concrete
-  /// format is covered (possibly from different sources — e.g. ebook downloaded +
-  /// audiobook requested). The backend expands a stored "both" request into
-  /// ebook+audiobook, so [formats] never carries a literal "both" key.
+  /// Returns a copy carrying library [ownership] (from the owned-books digest).
+  /// A matched digest row whose format truth is unresolved fails the combined
+  /// state closed even when the request-status endpoint itself responded.
+  BookRequestStatusDetail withOwnership(
+    BookOwnership? ownership, {
+    bool ownershipStatusKnown = true,
+  }) =>
+      BookRequestStatusDetail(
+        status: status,
+        formats: formats,
+        ownership: ownership,
+        isKnown: isKnown && ownershipStatusKnown,
+        unknownReason: !ownershipStatusKnown
+            ? BookStatusUnknownReason.formatNeedsAttention
+            : unknownReason,
+      );
+
+  /// User-facing state precedence: a file is Available; an active queue item is
+  /// Downloading; a monitored record is Requested; only then do pending/denied
+  /// history states apply. Live Chaptarr truth therefore heals stale request
+  /// history without exposing arr vocabulary to requesters.
+  RequestStatus? statusFor(BookRequestFormat format) {
+    if (format == BookRequestFormat.both) return null;
+    final owned = switch (format) {
+      BookRequestFormat.ebook => ownership?.ebook,
+      BookRequestFormat.audiobook => ownership?.audiobook,
+      BookRequestFormat.both => null,
+    };
+    if (owned?.downloaded ?? false) return RequestStatus.available;
+
+    final server = formats[format];
+    if (server == RequestStatus.available ||
+        server == RequestStatus.downloading ||
+        server == RequestStatus.requested ||
+        server == RequestStatus.partial) {
+      return server == RequestStatus.partial
+          ? RequestStatus.requested
+          : server;
+    }
+    if (owned?.monitored ?? false) return RequestStatus.requested;
+    if (server == RequestStatus.pending || server == RequestStatus.denied) {
+      return server;
+    }
+    if (!isKnown) return null;
+    return RequestStatus.unavailable;
+  }
+
+  /// "Both" is covered only when each concrete format is covered, possibly
+  /// from different sources (for example an available eBook and a requested
+  /// audiobook).
   bool isCovered(BookRequestFormat format) {
     if (format == BookRequestFormat.both) {
       return isCovered(BookRequestFormat.ebook) &&
           isCovered(BookRequestFormat.audiobook);
     }
-    return _requestCovered(format) || _downloaded(format);
+    final state = statusFor(format);
+    return state == RequestStatus.available ||
+        state == RequestStatus.downloading ||
+        state == RequestStatus.requested ||
+        state == RequestStatus.pending;
   }
 
-  bool _requestCovered(BookRequestFormat format) {
-    final s = formats[format];
-    return s != null &&
-        s != RequestStatus.denied &&
-        s != RequestStatus.unavailable;
+  bool isRequestable(BookRequestFormat format) {
+    if (format == BookRequestFormat.both) {
+      return isRequestable(BookRequestFormat.ebook) &&
+          isRequestable(BookRequestFormat.audiobook);
+    }
+    final state = statusFor(format);
+    return state == RequestStatus.unavailable || state == RequestStatus.denied;
   }
 
-  bool _downloaded(BookRequestFormat format) {
-    final o = ownership;
-    if (o == null) return false;
-    return switch (format) {
-      BookRequestFormat.ebook => o.ebook.downloaded,
-      BookRequestFormat.audiobook => o.audiobook.downloaded,
-      BookRequestFormat.both => o.ebook.downloaded && o.audiobook.downloaded,
-    };
-  }
-
-  /// Short reason a [format] is covered, for the request sheet: a request status
-  /// label, else "Downloaded" when the file is present, else null. An
-  /// available (fulfilled) request also reads "Downloaded" — the movie/TV
-  /// available label is normalized to "Downloaded" for a book.
+  /// Short requester-facing reason a format cannot be selected.
   String? coverageLabel(BookRequestFormat format) {
     if (!isCovered(format)) return null;
-    final reqKey =
-        format == BookRequestFormat.both ? BookRequestFormat.ebook : format;
-    final s = formats[reqKey];
-    if (s == RequestStatus.available) return 'Downloaded';
-    if (s != null &&
-        s != RequestStatus.denied &&
-        s != RequestStatus.unavailable) {
-      return s.label;
-    }
-    return _downloaded(format) ? 'Downloaded' : null;
+    if (format == BookRequestFormat.both) return 'Already covered';
+    return statusFor(format)?.label;
   }
 }
 
 class RequestSubmissionException implements Exception {
   final String message;
+  final bool definitive;
 
-  const RequestSubmissionException(this.message);
+  const RequestSubmissionException(
+    this.message, {
+    this.definitive = false,
+  });
 
   @override
   String toString() => message;
 }
 
+class BookRequestSubmission {
+  final RequestStatus? status;
+  final Map<BookRequestFormat, RequestStatus> formats;
+  final bool isKnown;
+
+  const BookRequestSubmission({
+    required this.status,
+    this.formats = const {},
+    this.isKnown = true,
+  });
+
+  bool succeeded(BookRequestFormat format) {
+    final state = formats[format];
+    return switch (state) {
+      RequestStatus.available ||
+      RequestStatus.downloading ||
+      RequestStatus.requested ||
+      RequestStatus.pending ||
+      RequestStatus.partial => true,
+      RequestStatus.denied || RequestStatus.unavailable || null => false,
+    };
+  }
+}
+
 String _requestErrorMessage(DioException error) {
   final data = error.response?.data;
+  String? raw;
   if (data is Map) {
     final message = data['error'] ?? data['message'];
-    if (message is String && message.isNotEmpty) return message;
+    if (message is String && message.isNotEmpty) raw = message;
   }
-  if (data is String && data.isNotEmpty) return data;
-  return error.message ?? 'Request failed. Please try again.';
+  if (data is String && data.isNotEmpty) raw = data;
+  final lower = raw?.toLowerCase() ?? '';
+  if (lower.contains('no audiobook edition')) {
+    return 'No audiobook edition is available for this book.';
+  }
+  if (lower.contains('no ebook edition')) {
+    return 'No eBook edition is available for this book.';
+  }
+  if (lower.contains('root folder')) {
+    return 'No library folder is available for this book format. Ask an admin to check the book settings.';
+  }
+  if (lower.contains('quality profile') ||
+      lower.contains('metadata profile')) {
+    return 'Ask an admin to check the book settings.';
+  }
+  if (lower.contains('book not found') || lower.contains('foreign id')) {
+    return 'This book could not be matched in the library. Search for it again and retry.';
+  }
+  return 'This book could not be requested. Check the connection and try again.';
+}
+
+bool _requestErrorIsDefinitive(DioException error) {
+  final data = error.response?.data;
+  final raw = data is Map
+      ? (data['error'] ?? data['message'])?.toString().toLowerCase() ?? ''
+      : data?.toString().toLowerCase() ?? '';
+  return raw.contains('no audiobook edition') ||
+      raw.contains('no ebook edition') ||
+      raw.contains('root folder') ||
+      raw.contains('quality profile') ||
+      raw.contains('metadata profile') ||
+      raw.contains('book not found') ||
+      raw.contains('foreign id');
 }
 
 /// The TV season-scope choices a user may attach to a request. The string
@@ -380,45 +472,86 @@ class RequestService {
   /// Check the current user's request state for a book, keyed by the Chaptarr/
   /// Readarr foreignBookId (books have no tmdb_id). Returns one of
   /// unavailable / pending / requested / denied.
-  Future<RequestStatus> checkBookStatus(String foreignId) async =>
-      (await checkBookStatusDetail(foreignId)).status;
+  Future<RequestStatus> checkBookStatus(String foreignId,
+          {String? instanceId}) async =>
+      (await checkBookStatusDetail(foreignId, instanceId: instanceId)).status;
 
   /// Like [checkBookStatus] but also returns the per-format breakdown so the
-  /// caller can still offer a not-yet-requested format. Falls back to an
-  /// unavailable/empty detail on any failure.
+  /// caller can still offer a not-yet-requested format. A failed lookup is
+  /// returned as unknown so callers cannot turn an outage into a duplicate
+  /// request affordance.
   Future<BookRequestStatusDetail> checkBookStatusDetail(
-      String foreignId) async {
+    String foreignId, {
+    String? instanceId,
+  }) async {
     try {
       final resp = await _backendDio.get(
         '/api/requests/book-status',
-        queryParameters: {'foreign_id': foreignId},
+        queryParameters: {
+          'foreign_id': foreignId,
+          if (instanceId != null && instanceId.isNotEmpty)
+            'instance_id': instanceId,
+        },
       );
       final data = resp.data as Map<String, dynamic>;
-      final status = RequestStatus.values.firstWhere(
-        (s) => s.name == (data['status'] as String? ?? 'unavailable'),
-        orElse: () => RequestStatus.unavailable,
-      );
+      var isKnown = data['status_known'] as bool? ?? true;
+      final BookStatusUnknownReason? unknownReason = isKnown
+          ? null
+          : BookStatusUnknownReason.formatNeedsAttention;
+      RequestStatus? parseStatus(Object? value) {
+        for (final status in RequestStatus.values) {
+          if (status.name == value?.toString()) return status;
+        }
+        return null;
+      }
+
+      final status = parseStatus(data['status']);
+      if (status == null) isKnown = false;
       final formats = <BookRequestFormat, RequestStatus>{};
+      RequestStatus? bothStatus;
       final raw = data['book_formats'];
       if (raw is Map) {
         raw.forEach((key, value) {
-          BookRequestFormat? fmt;
-          for (final f in BookRequestFormat.values) {
-            if (f.value == key.toString()) {
-              fmt = f;
-              break;
-            }
+          final fmt = BookRequestFormat.tryFromValue(key.toString());
+          if (fmt == null) {
+            isKnown = false;
+            return;
           }
-          if (fmt == null) return;
-          formats[fmt] = RequestStatus.values.firstWhere(
-            (s) => s.name == value.toString(),
-            orElse: () => RequestStatus.requested,
-          );
+          final parsed = parseStatus(value);
+          if (parsed == null) {
+            isKnown = false;
+            return;
+          }
+          if (fmt == BookRequestFormat.both) {
+            bothStatus = parsed;
+          } else {
+            formats[fmt] = parsed;
+          }
         });
       }
-      return BookRequestStatusDetail(status: status, formats: formats);
+      // Older servers can return one stored "both" request instead of concrete
+      // format states. Expand it without overwriting newer per-format truth.
+      final legacyBoth = bothStatus;
+      if (legacyBoth != null) {
+        formats.putIfAbsent(BookRequestFormat.ebook, () => legacyBoth);
+        formats.putIfAbsent(BookRequestFormat.audiobook, () => legacyBoth);
+      }
+      // An aggregate non-empty state without concrete format truth is not safe
+      // to turn into two request buttons. Older/malformed responses cannot tell
+      // us whether eBook, Audiobook, or both are already covered.
+      if (formats.isEmpty &&
+          status != null &&
+          status != RequestStatus.unavailable) {
+        isKnown = false;
+      }
+      return BookRequestStatusDetail(
+        status: status ?? RequestStatus.unavailable,
+        formats: formats,
+        isKnown: isKnown,
+        unknownReason: unknownReason,
+      );
     } catch (_) {
-      return const BookRequestStatusDetail();
+      return const BookRequestStatusDetail(isKnown: false);
     }
   }
 
@@ -426,10 +559,11 @@ class RequestService {
   /// the backend adds the book to the user's granted Chaptarr instance (after
   /// approval when the user's policy requires it). Returns the resulting status
   /// (e.g. [RequestStatus.pending]) or null on non-HTTP failure.
-  Future<RequestStatus?> requestBook({
+  Future<BookRequestSubmission?> requestBook({
     required String foreignId,
     required String title,
     BookRequestFormat format = BookRequestFormat.both,
+    String? instanceId,
   }) async {
     try {
       final resp = await _backendDio.post('/api/requests', data: {
@@ -437,16 +571,55 @@ class RequestService {
         'foreign_id': foreignId,
         'title': title,
         'book_format': format.value,
+        if (instanceId != null && instanceId.isNotEmpty)
+          'instance_id': instanceId,
       });
       if (resp.statusCode != 200 && resp.statusCode != 201) return null;
       final data = resp.data as Map<String, dynamic>?;
-      final name = data?['status'] as String? ?? 'requested';
-      return RequestStatus.values.firstWhere(
-        (s) => s.name == name,
-        orElse: () => RequestStatus.requested,
+      RequestStatus? parseStatus(Object? value) {
+        for (final candidate in RequestStatus.values) {
+          if (candidate.name == value?.toString()) return candidate;
+        }
+        return null;
+      }
+
+      final status = parseStatus(data?['status']);
+      var isKnown = status != null;
+      final formats = <BookRequestFormat, RequestStatus>{};
+      final rawFormats = data?['book_formats'];
+      if (rawFormats is Map) {
+        rawFormats.forEach((key, value) {
+          final parsedFormat = BookRequestFormat.tryFromValue(key.toString());
+          if (parsedFormat == null || parsedFormat == BookRequestFormat.both) {
+            isKnown = false;
+            return;
+          }
+          final parsedStatus = parseStatus(value);
+          if (parsedStatus == null) {
+            isKnown = false;
+            return;
+          }
+          formats[parsedFormat] = parsedStatus;
+        });
+      }
+      if (status == RequestStatus.partial) {
+        final expected = format == BookRequestFormat.both
+            ? [BookRequestFormat.ebook, BookRequestFormat.audiobook]
+            : [format];
+        if (expected.any((requested) => !formats.containsKey(requested))) {
+          isKnown = false;
+        }
+      }
+      return BookRequestSubmission(
+        status: status,
+        formats: formats,
+        isKnown: isKnown,
       );
     } on DioException catch (e) {
-      throw RequestSubmissionException(_requestErrorMessage(e));
+      throw RequestSubmissionException(
+        _requestErrorMessage(e),
+        definitive: _requestErrorIsDefinitive(e),
+      );
     } catch (_) {
       return null;
     }

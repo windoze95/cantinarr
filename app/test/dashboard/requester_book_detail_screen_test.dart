@@ -36,14 +36,15 @@ void main() {
     expect(find.text('Audiobook'), findsOneWidget);
     expect(find.text('Requested'), findsOneWidget);
     expect(find.text('Not requested'), findsOneWidget);
-    // The requested ebook plus an open audiobook reads "Request more".
+    // Flock-style mixed truth: a monitored audiobook is Requested while the
+    // untouched eBook remains the one exact action.
     await tester.scrollUntilVisible(
-      find.text('Request more'),
+      find.text('Request eBook'),
       250,
       scrollable: _detailScrollable(),
     );
-    expect(find.text('Request more'), findsOneWidget);
-    expect(find.text('Open in Chaptarr'), findsNothing);
+    expect(find.text('Request eBook'), findsOneWidget);
+    expect(find.text('Manage book'), findsNothing);
   });
 
   testWidgets('a deep link resolves rich metadata and both requested formats',
@@ -56,32 +57,84 @@ void main() {
     expect(find.text('Dune Messiah'), findsOneWidget);
     expect(find.text('Frank Herbert'), findsOneWidget);
     expect(find.text('1969 · 336 pages'), findsOneWidget);
-    expect(find.text('The desert planet has a new emperor.'), findsOneWidget);
+    expect(
+      find.text('The desert planet has a new emperor.\n\nA second chapter & more.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('<b>'), findsNothing);
     expect(find.text('Science Fiction'), findsOneWidget);
-    expect(find.text('Requested'), findsNWidgets(3));
+    expect(find.text('Requested'), findsNWidgets(2));
+  });
+
+  testWidgets('a canonical deep link accepts one strong title metadata match',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(mismatchedLookupId: true),
+    );
+
+    router.go('/detail/book/555?title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Dune Messiah'), findsOneWidget);
+    expect(find.text('Frank Herbert'), findsOneWidget);
+    expect(find.text('1969 · 336 pages'), findsOneWidget);
+  });
+
+  testWidgets(
+      'a provider-id mismatch rejects same-title metadata from another author',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(
+        mismatchedLookupId: true,
+        mismatchedLookupAuthor: true,
+      ),
+    );
+
+    router.go('/detail/book/555?title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Dune Messiah'), findsOneWidget);
+    expect(find.text('Brian Herbert'), findsNothing);
+    expect(find.text('1969 · 336 pages'), findsNothing);
+    expect(find.text('Science Fiction'), findsNothing);
+    expect(find.textContaining('desert planet'), findsNothing);
+  });
+
+  testWidgets('a known format stays visible beside an unknown sibling',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(partiallyUnknownStatus: true),
+    );
+
+    router.go('/detail/book/555?title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Requested'), findsOneWidget);
+    expect(find.text('Format needs attention'), findsOneWidget);
+    expect(
+      find.text('Ask an admin to check this book’s format'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('an admin can open both exact-format records in Chaptarr',
       (tester) async {
-    final (:router, :container) =
+    final (:router, container: _) =
         await _pumpRouter(tester, authState: _adminBooksState);
 
     router.go('/detail/book/29749107?title=Ahsoka');
     await tester.pumpAndSettle();
 
     await tester.scrollUntilVisible(
-      find.text('Open in Chaptarr'),
+      find.text('Manage book'),
       250,
       scrollable: _detailScrollable(),
     );
-    expect(find.text('Open in Chaptarr'), findsOneWidget);
-    // The destination stays bound to the instance that supplied the records,
-    // even if the drawer selection changes before the admin taps through.
-    container
-        .read(instanceProvider.notifier)
-        .setActiveChaptarrInstance('books-two');
-    await tester.pump();
-    await tester.tap(find.text('Open in Chaptarr'));
+    expect(find.text('Manage book'), findsOneWidget);
+    await tester.tap(find.text('Manage book'));
     await tester.pumpAndSettle();
 
     expect(find.byType(ChaptarrBookScreen), findsOneWidget);
@@ -123,7 +176,35 @@ void main() {
 
     // The live list contains Ahsoka, but not this metadata-only Dune result.
     expect(find.text('Dune Messiah'), findsOneWidget);
-    expect(find.text('Open in Chaptarr'), findsNothing);
+    expect(find.text('Manage book'), findsNothing);
+  });
+
+  testWidgets('a pinned detail ignores ownership from the active instance',
+      (tester) async {
+    final adapter = _BooksAdapter(divergentLibraries: true);
+    final (:router, :container) = await _pumpRouter(
+      tester,
+      authState: _adminBooksState,
+      adapter: adapter,
+    );
+
+    router.go(
+      '/detail/book/29749107?title=Ahsoka&instance_id=books',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Requested'), findsOneWidget);
+    expect(find.text('Not requested'), findsOneWidget);
+
+    container
+        .read(instanceProvider.notifier)
+        .setActiveChaptarrInstance('books-two');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Requested'), findsOneWidget);
+    expect(find.text('Not requested'), findsOneWidget);
+    expect(find.text('Available'), findsNothing);
+    expect(adapter.libraryInstanceIds, everyElement('books'));
+    expect(adapter.statusInstanceIds, everyElement('books'));
   });
 
   testWidgets('an unresolvable id shows a graceful state with a Books tab exit',
@@ -192,6 +273,7 @@ Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
   WidgetTester tester, {
   AuthState authState = _booksState,
   String ownedCover = '',
+  _BooksAdapter? adapter,
 }) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
@@ -202,7 +284,10 @@ Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
   final container = ProviderContainer(
     overrides: [
       authProvider.overrideWith(() => _FakeAuthNotifier(authState)),
-      backendClientProvider.overrideWithValue(_fakeDio(ownedCover: ownedCover)),
+      backendClientProvider.overrideWithValue(_fakeDio(
+        ownedCover: ownedCover,
+        adapter: adapter,
+      )),
     ],
   );
   addTearDown(container.dispose);
@@ -229,9 +314,10 @@ class _FakeAuthNotifier extends AuthNotifier {
   Future<AuthState> build() async => _initial;
 }
 
-Dio _fakeDio({String ownedCover = ''}) {
+Dio _fakeDio({String ownedCover = '', _BooksAdapter? adapter}) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
-  dio.httpClientAdapter = _BooksAdapter(ownedCover: ownedCover);
+  dio.httpClientAdapter =
+      adapter ?? _BooksAdapter(ownedCover: ownedCover);
   return dio;
 }
 
@@ -239,8 +325,20 @@ Dio _fakeDio({String ownedCover = ''}) {
 /// resolves before showing the internal module link.
 class _BooksAdapter implements HttpClientAdapter {
   final String ownedCover;
+  final bool divergentLibraries;
+  final bool mismatchedLookupId;
+  final bool mismatchedLookupAuthor;
+  final bool partiallyUnknownStatus;
+  final libraryInstanceIds = <String>[];
+  final statusInstanceIds = <String>[];
 
-  const _BooksAdapter({this.ownedCover = ''});
+  _BooksAdapter({
+    this.ownedCover = '',
+    this.divergentLibraries = false,
+    this.mismatchedLookupId = false,
+    this.mismatchedLookupAuthor = false,
+    this.partiallyUnknownStatus = false,
+  });
 
   @override
   Future<ResponseBody> fetch(
@@ -250,6 +348,9 @@ class _BooksAdapter implements HttpClientAdapter {
   ) async {
     final Object body;
     if (options.path == '/api/requests/book-library') {
+      final instanceId = options.queryParameters['instance_id'].toString();
+      libraryInstanceIds.add(instanceId);
+      final otherLibrary = divergentLibraries && instanceId == 'books-two';
       body = {
         'titles': [
           {
@@ -259,23 +360,54 @@ class _BooksAdapter implements HttpClientAdapter {
             // Empty by default so most tests never start a real image fetch.
             'cover': ownedCover,
             'foreign_book_id': '29749107',
-            'ebook': {'monitored': true, 'downloaded': false},
-            'audiobook': {'monitored': false, 'downloaded': false},
+            'ebook': {
+              'monitored': otherLibrary,
+              'downloaded': otherLibrary,
+            },
+            'audiobook': {
+              'monitored': !otherLibrary,
+              'downloaded': false,
+            },
           },
+          if (mismatchedLookupId)
+            {
+              'title': 'Dune Messiah',
+              'author': 'Frank Herbert',
+              'year': 0,
+              'cover': '',
+              'foreign_book_id': '555',
+              'ebook': {
+                'monitored': true,
+                'downloaded': false,
+              },
+              'audiobook': {
+                'monitored': true,
+                'downloaded': false,
+              },
+            },
         ],
       };
     } else if (options.path == '/api/requests/book-status') {
+      statusInstanceIds.add(
+        options.queryParameters['instance_id'].toString(),
+      );
       body = switch (options.queryParameters['foreign_id']) {
         '29749107' => {
             'status': 'requested',
-            'book_formats': {'ebook': 'requested'},
+            'book_formats': {'audiobook': 'requested'},
           },
         '555' => {
-            'status': 'requested',
-            'book_formats': {
-              'ebook': 'requested',
-              'audiobook': 'requested',
-            },
+            'status': partiallyUnknownStatus ? 'partial' : 'requested',
+            'status_known': !partiallyUnknownStatus,
+            'book_formats': partiallyUnknownStatus
+                ? {
+                    'ebook': 'requested',
+                    'audiobook': 'future-status',
+                  }
+                : {
+                    'ebook': 'requested',
+                    'audiobook': 'requested',
+                  },
           },
         _ => {'status': 'unavailable'},
       };
@@ -283,14 +415,17 @@ class _BooksAdapter implements HttpClientAdapter {
       body = [
         {
           'title': 'Dune Messiah',
-          'foreignBookId': '555',
+          'foreignBookId': mismatchedLookupId ? 'lookup-555' : '555',
           'year': 1969,
           'pageCount': 336,
-          'overview': 'The desert planet has a new emperor.',
+          'overview': '<b>The desert planet has a new emperor.</b><br/><br/>'
+              'A second chapter &amp; more.',
           'genres': ['Science Fiction'],
           'author': {
             'id': 0,
-            'authorName': 'Frank Herbert',
+            'authorName': mismatchedLookupAuthor
+                ? 'Brian Herbert'
+                : 'Frank Herbert',
             'foreignAuthorId': 'author-2',
           },
         },

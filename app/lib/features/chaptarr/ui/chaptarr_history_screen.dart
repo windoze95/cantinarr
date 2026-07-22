@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
+import 'widgets/format_badge.dart';
 
 /// Paginated Chaptarr history: grabs, imports, failures, deletions, renames.
 class ChaptarrHistoryScreen extends ConsumerStatefulWidget {
@@ -314,9 +315,18 @@ class _HistoryTile extends StatelessWidget {
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
-      subtitle: Text(
-        subtitleParts.join(' • '),
-        style: TextStyle(color: style.color, fontSize: 12),
+      subtitle: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            subtitleParts.join(' • '),
+            style: TextStyle(color: style.color, fontSize: 12),
+          ),
+          if (record.format != BookFormat.unknown)
+            ChaptarrFormatBadge(format: record.format),
+        ],
       ),
       trailing: Text(
         _timeLabel(record.date),

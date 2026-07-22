@@ -248,6 +248,23 @@ void main() {
       expect(h.router.pushed, ['/detail/book/29749107?title=Dune%20Messiah']);
     });
 
+    test('a book decision pins its Chaptarr instance in the detail link',
+        () async {
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'request_decision',
+        'tmdb_id': 0,
+        'media_type': 'book',
+        'foreign_id': '29749107',
+        'title': 'Flock',
+        'instance_id': 'books-two',
+      });
+      expect(
+        h.router.pushed,
+        ['/detail/book/29749107?title=Flock&instance_id=books-two'],
+      );
+    });
+
     test('blank and non-string foreign_id values fall back to the Books tab',
         () async {
       final h = _Harness();

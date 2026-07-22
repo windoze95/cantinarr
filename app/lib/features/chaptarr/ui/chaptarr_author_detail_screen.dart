@@ -83,40 +83,44 @@ class _ChaptarrAuthorDetailScreenState
     }
   }
 
-  Future<void> _toggleBookMonitored(ChaptarrBook book) async {
-    final target = !book.monitored;
-    setState(() => _togglingBooks.add(book.id));
+  Future<void> _toggleBooksMonitored(List<ChaptarrBook> records) async {
+    if (records.isEmpty) return;
+    final target = !records.any((book) => book.monitored);
+    final ids = records.map((book) => book.id).toSet();
+    final primary = records.first;
+    setState(() => _togglingBooks.addAll(ids));
     try {
-      await _service.setBookMonitored([book.id], target);
+      await _service.setBookMonitored(ids.toList(), target);
       if (!mounted) return;
       // Reflect the change locally without a full reload.
       var movedSections = false;
       setState(() {
         final wasMonitored = _books.any((candidate) =>
-            candidate.groupKey == book.groupKey && candidate.monitored);
+            candidate.groupKey == primary.groupKey && candidate.monitored);
         _books = _books
-            .map((b) => b.id == book.id ? _withMonitored(b, target) : b)
+            .map((book) =>
+                ids.contains(book.id) ? _withMonitored(book, target) : book)
             .toList();
         final isMonitored = _books.any((candidate) =>
-            candidate.groupKey == book.groupKey && candidate.monitored);
+            candidate.groupKey == primary.groupKey && candidate.monitored);
         movedSections = wasMonitored != isMonitored;
       });
-      final format = chaptarrFormatLabel(book.format);
+      final format = chaptarrFormatLabel(primary.format);
       final message = movedSections
           ? target
-              ? '${book.title} moved to Monitored books'
-              : '${book.title} moved out of Monitored books'
+              ? '${primary.title} moved to Tracked books'
+              : '${primary.title} moved out of Tracked books'
           : target
-              ? 'Monitoring $format for ${book.title}'
-              : 'Stopped monitoring $format for ${book.title}';
+              ? 'Tracking $format for ${primary.title}'
+              : 'Stopped tracking $format for ${primary.title}';
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not change monitoring: $e')));
+          SnackBar(content: Text('Could not change tracking: $e')));
     } finally {
-      if (mounted) setState(() => _togglingBooks.remove(book.id));
+      if (mounted) setState(() => _togglingBooks.removeAll(ids));
     }
   }
 
@@ -155,7 +159,7 @@ class _ChaptarrAuthorDetailScreenState
         togglingIds: _togglingBooks,
         addingKeys: _addingFormats,
         onTap: () => _openBookGroup(records),
-        onToggleRecord: _toggleBookMonitored,
+        onToggleRecords: _toggleBooksMonitored,
         onAddFormat: (format) => _addFormat(records, format),
       );
 
@@ -176,33 +180,41 @@ class _ChaptarrAuthorDetailScreenState
     final key = _addKey(records, format);
     setState(() => _addingFormats.add(key));
     try {
-      final qps = await _service.getQualityProfiles();
-      final mps = await _service.getMetadataProfiles();
-      final folders = await _service.getRootFolders();
-      if (qps.isEmpty || mps.isEmpty || folders.isEmpty) {
-        throw Exception('a quality/metadata profile or root folder is missing');
+      final author = _author;
+      final authorPath = author?.path?.trim() ?? '';
+      if (author == null ||
+          author.qualityProfileId <= 0 ||
+          author.metadataProfileId <= 0 ||
+          authorPath.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            'Could not track $label. Check this author’s library path and profiles.',
+          ),
+        ));
+        return;
       }
       await _service.addBook(chaptarrAddFormatBody(
         foreignBookId: foreignBookId,
         title: primary.title,
         titleSlug: primary.titleSlug,
         format: format,
-        authorName: _author?.authorName ?? primary.author?.authorName ?? '',
+        authorName: author.authorName,
         foreignAuthorId:
-            _author?.foreignAuthorId ?? primary.author?.foreignAuthorId,
-        qualityProfileId: qps.first.id,
-        metadataProfileId: mps.first.id,
-        rootFolderPath: chaptarrRootFolderFor(format, folders),
+            author.foreignAuthorId ?? primary.author?.foreignAuthorId,
+        qualityProfileId: author.qualityProfileId,
+        metadataProfileId: author.metadataProfileId,
+        rootFolderPath: authorPath,
       ));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content:
-              Text('Monitoring $label — searching for ${primary.title}…')));
+              Text('Tracking $label — searching for ${primary.title}…')));
       await _load();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not monitor $label: $e')));
+          SnackBar(content: Text('Could not track $label: $e')));
     } finally {
       if (mounted) setState(() => _addingFormats.remove(key));
     }
@@ -251,7 +263,7 @@ class _ChaptarrAuthorDetailScreenState
                       if (_author != null) _AuthorSummaryCard(author: _author!),
                       const SizedBox(height: 4),
                       if (monitoredBooks.isNotEmpty) ...[
-                        const _BookSectionHeading(title: 'Monitored books'),
+                        const _BookSectionHeading(title: 'Tracked books'),
                         ...monitoredBooks.map(_bookCard),
                       ],
                       if (otherBooks.isNotEmpty) ...[
@@ -382,16 +394,16 @@ class _AuthorSummaryCard extends StatelessWidget {
 }
 
 /// One card per title. Chaptarr stores a title's ebook and audiobook as
-/// separate records (same foreignBookId); [records] holds the 1–2 records so the
-/// card shows a single entry with, per format, a monitor toggle (when that
-/// format exists) or an add button (when it doesn't).
+/// separate records (same foreignBookId); [records] holds every matching record
+/// so the card shows a single entry with one reduced control per format. That
+/// control updates all duplicate same-format records together.
 class _BookCard extends StatelessWidget {
   final List<ChaptarrBook> records;
   final ChaptarrImageSource? cover;
   final Set<int> togglingIds;
   final Set<String> addingKeys;
   final VoidCallback onTap;
-  final void Function(ChaptarrBook record) onToggleRecord;
+  final void Function(List<ChaptarrBook> records) onToggleRecords;
   final void Function(BookFormat format) onAddFormat;
 
   const _BookCard({
@@ -401,17 +413,14 @@ class _BookCard extends StatelessWidget {
     required this.togglingIds,
     required this.addingKeys,
     required this.onTap,
-    required this.onToggleRecord,
+    required this.onToggleRecords,
     required this.onAddFormat,
   });
 
   @override
   Widget build(BuildContext context) {
     final primary = records.first;
-    // Prefer a downloaded record for the status line, else the first record.
-    final fileRecord =
-        records.firstWhere((r) => r.hasFile, orElse: () => primary);
-    final status = bookFileStatusLine(fileRecord);
+    final status = groupedBookStatusLine(records);
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -457,7 +466,7 @@ class _BookCard extends StatelessWidget {
                         color: status.color,
                         fontSize: 13,
                         fontWeight: FontWeight.w500),
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
@@ -478,26 +487,28 @@ class _BookCard extends StatelessWidget {
   }
 
   Widget _formatControl(BookFormat format) {
-    final record = _recordForFormat(records, format);
-    final busy = (record != null && togglingIds.contains(record.id)) ||
+    final formatRecords =
+        records.where((record) => record.format == format).toList();
+    final blockedByUnknown = formatRecords.isEmpty &&
+        records.any((record) => record.format == BookFormat.unknown);
+    final foreignBookId = records.first.foreignBookId?.trim() ?? '';
+    final blockedReason = blockedByUnknown
+        ? 'Fix unknown book format in Chaptarr first'
+        : formatRecords.isEmpty && foreignBookId.isEmpty
+            ? 'This book has no metadata ID. Fix it in Chaptarr before adding ${chaptarrFormatLabel(format)}'
+            : null;
+    final busy =
+        formatRecords.any((record) => togglingIds.contains(record.id)) ||
         addingKeys.contains('${records.first.groupKey}:${format.index}');
     return _FormatControl(
       format: format,
-      record: record,
+      records: formatRecords,
+      blockedReason: blockedReason,
       busy: busy,
-      onToggle: onToggleRecord,
+      onToggle: onToggleRecords,
       onAdd: () => onAddFormat(format),
     );
   }
-}
-
-/// Finds a title's record for a format, or null when nothing is monitored as
-/// that format yet.
-ChaptarrBook? _recordForFormat(List<ChaptarrBook> records, BookFormat format) {
-  for (final r in records) {
-    if (r.format == format) return r;
-  }
-  return null;
 }
 
 /// A per-format monitoring bookmark on the right of a book card. Format is never
@@ -507,14 +518,16 @@ ChaptarrBook? _recordForFormat(List<ChaptarrBook> records, BookFormat format) {
 /// one yet — and tapping a filled one stops monitoring it.
 class _FormatControl extends StatelessWidget {
   final BookFormat format;
-  final ChaptarrBook? record;
+  final List<ChaptarrBook> records;
+  final String? blockedReason;
   final bool busy;
-  final void Function(ChaptarrBook record) onToggle;
+  final void Function(List<ChaptarrBook> records) onToggle;
   final VoidCallback onAdd;
 
   const _FormatControl({
     required this.format,
-    required this.record,
+    required this.records,
+    required this.blockedReason,
     required this.busy,
     required this.onToggle,
     required this.onAdd,
@@ -523,37 +536,52 @@ class _FormatControl extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = chaptarrFormatLabel(format);
-    final r = record;
-    final monitored = r?.monitored ?? false;
+    final monitored = records.any((record) => record.monitored);
+    final blocked = blockedReason != null;
     return Tooltip(
-      message: monitored ? 'Stop monitoring $label' : 'Monitor $label',
+      message: blocked
+          ? blockedReason!
+          : monitored
+              ? 'Stop tracking $label'
+              : 'Track $label',
       // Tap an existing record to toggle its monitoring; tap an empty bookmark
       // with no record to start monitoring that format (which creates it).
       child: InkWell(
-        onTap: busy ? null : (r != null ? () => onToggle(r) : onAdd),
+        onTap: busy || blocked
+            ? null
+            : (records.isNotEmpty ? () => onToggle(records) : onAdd),
         borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(chaptarrFormatIcon(format),
-                  size: 14, color: AppTheme.textSecondary),
-              const SizedBox(width: 4),
-              busy
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppTheme.accent),
-                    )
-                  : Icon(
-                      monitored ? Icons.bookmark : Icons.bookmark_border,
-                      size: 20,
-                      color:
-                          monitored ? AppTheme.accent : AppTheme.textSecondary,
-                    ),
-            ],
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 56, minHeight: 48),
+          child: Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(chaptarrFormatIcon(format),
+                    size: 14, color: AppTheme.textSecondary),
+                const SizedBox(width: 4),
+                busy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppTheme.accent),
+                      )
+                    : Icon(
+                        blocked
+                            ? Icons.warning_amber_rounded
+                            : monitored
+                                ? Icons.bookmark
+                                : Icons.bookmark_border,
+                        size: 20,
+                        color: blocked
+                            ? AppTheme.requested
+                            : monitored
+                            ? AppTheme.accent
+                            : AppTheme.textSecondary,
+                      ),
+              ],
+            ),
           ),
         ),
       ),

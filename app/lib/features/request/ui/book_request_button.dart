@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -11,17 +13,25 @@ import '../data/request_service.dart';
 class BookRequestButton extends StatefulWidget {
   final String foreignId;
   final String title;
+  final String? instanceId;
   final RequestService service;
   final BookOwnership? ownership;
+  final bool ownershipStatusKnown;
+  final int refreshTick;
+  final bool showCoveredStatus;
   final ValueChanged<BookRequestStatusDetail>? onDetailChanged;
-  final VoidCallback? onRequestCompleted;
+  final FutureOr<void> Function()? onRequestCompleted;
 
   const BookRequestButton({
     super.key,
     required this.foreignId,
     required this.title,
+    this.instanceId,
     required this.service,
     this.ownership,
+    this.ownershipStatusKnown = true,
+    this.refreshTick = 0,
+    this.showCoveredStatus = false,
     this.onDetailChanged,
     this.onRequestCompleted,
   });
@@ -37,13 +47,19 @@ class _BookRequestButtonState extends State<BookRequestButton> {
   // otherwise an owned-but-unrequested format reads as "Request", not
   // "Request more".
   BookRequestStatusDetail _serverDetail = const BookRequestStatusDetail();
-  RequestStatus _status = RequestStatus.unavailable;
   bool _loading = true;
   bool _busy = false;
+  int _activeChecks = 0;
   int _checkGeneration = 0;
+  Timer? _pendingRecheckTimer;
+
+  bool get _checking => _activeChecks > 0;
 
   BookRequestStatusDetail get _detail =>
-      _serverDetail.withOwnership(widget.ownership);
+      _serverDetail.withOwnership(
+        widget.ownership,
+        ownershipStatusKnown: widget.ownershipStatusKnown,
+      );
 
   @override
   void initState() {
@@ -55,105 +71,180 @@ class _BookRequestButtonState extends State<BookRequestButton> {
   void didUpdateWidget(covariant BookRequestButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     // If this row got reused for a different book, re-fetch its request state.
-    if (oldWidget.foreignId != widget.foreignId) {
+    if (oldWidget.foreignId != widget.foreignId ||
+        oldWidget.instanceId != widget.instanceId) {
       _loading = true;
       _serverDetail = const BookRequestStatusDetail();
-      _status = RequestStatus.unavailable;
       _check();
-    } else if (oldWidget.ownership != widget.ownership) {
+    } else if (oldWidget.refreshTick != widget.refreshTick && !_busy) {
+      _check();
+    } else if (oldWidget.ownership != widget.ownership ||
+        oldWidget.ownershipStatusKnown != widget.ownershipStatusKnown) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) widget.onDetailChanged?.call(_detail);
+        if (mounted) {
+          _syncPendingRecheck();
+          widget.onDetailChanged?.call(_detail);
+        }
       });
     }
   }
 
-  Future<void> _check() async {
-    final foreignId = widget.foreignId;
-    final generation = ++_checkGeneration;
-    final detail = await widget.service.checkBookStatusDetail(foreignId);
-    if (!mounted ||
-        generation != _checkGeneration ||
-        foreignId != widget.foreignId) {
-      return;
-    }
-    setState(() {
-      _serverDetail = detail;
-      _status = detail.status;
-      _loading = false;
-    });
-    widget.onDetailChanged?.call(_detail);
+  @override
+  void dispose() {
+    _pendingRecheckTimer?.cancel();
+    super.dispose();
   }
 
-  Future<void> _request() async {
-    if (_busy) return;
-    final selected = await showModalBottomSheet<BookRequestFormat>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _BookFormatSheet(title: widget.title, detail: _detail),
+  Future<void> _check() async {
+    _activeChecks++;
+    final foreignId = widget.foreignId;
+    final generation = ++_checkGeneration;
+    try {
+      final detail = await widget.service.checkBookStatusDetail(
+        foreignId,
+        instanceId: widget.instanceId,
+      );
+      if (!mounted ||
+          generation != _checkGeneration ||
+          foreignId != widget.foreignId) {
+        return;
+      }
+      setState(() {
+        _serverDetail = detail;
+        _loading = false;
+      });
+      _syncPendingRecheck();
+      widget.onDetailChanged?.call(_detail);
+    } finally {
+      _activeChecks--;
+    }
+  }
+
+  void _syncPendingRecheck() {
+    final hasPending = [
+      BookRequestFormat.ebook,
+      BookRequestFormat.audiobook,
+    ].any((format) => _detail.statusFor(format) == RequestStatus.pending);
+    if (!hasPending) {
+      _pendingRecheckTimer?.cancel();
+      _pendingRecheckTimer = null;
+      return;
+    }
+    _pendingRecheckTimer ??= Timer.periodic(
+      const Duration(seconds: 30),
+      (_) {
+        if (mounted && !_busy && !_checking) _check();
+      },
     );
+  }
+
+  Future<void> _chooseAndRequest() async {
+    if (_busy) return;
+    final requestable = _requestableFormats;
+    final selected = requestable.length == 1
+        ? requestable.first
+        : await showModalBottomSheet<BookRequestFormat>(
+            context: context,
+            backgroundColor: Colors.transparent,
+            builder: (_) => _BookFormatSheet(
+              title: widget.title,
+              detail: _detail,
+            ),
+          );
     if (selected == null) return;
     if (!mounted) return;
     setState(() => _busy = true);
-    RequestStatus? s;
-    String? failureMessage;
     try {
-      s = await widget.service.requestBook(
-        foreignId: widget.foreignId,
-        title: widget.title,
-        format: selected,
-      );
-    } on RequestSubmissionException catch (e) {
-      failureMessage = e.message;
+      BookRequestSubmission? submission;
+      String? failureMessage;
+      var definitiveFailure = false;
+      try {
+        submission = await widget.service.requestBook(
+          foreignId: widget.foreignId,
+          title: widget.title,
+          format: selected,
+          instanceId: widget.instanceId,
+        );
+      } on RequestSubmissionException catch (e) {
+        failureMessage = e.message;
+        definitiveFailure = e.definitive;
+      }
+      if (!mounted) return;
+      if (submission == null) {
+        await _refreshAfterSubmission();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(definitiveFailure && failureMessage != null
+                ? failureMessage
+                : 'The request outcome couldn’t be confirmed. The book status was refreshed.'),
+          ),
+        );
+        return;
+      }
+      if (!submission.isKnown) {
+        await _refreshAfterSubmission();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'The request was sent, but its result could not be confirmed. The book status was refreshed.',
+            ),
+          ),
+        );
+        return;
+      }
+      String? partialMessage;
+      if (submission.status == RequestStatus.partial) {
+        final requestedFormats = selected == BookRequestFormat.both
+            ? [BookRequestFormat.ebook, BookRequestFormat.audiobook]
+            : [selected];
+        partialMessage = requestedFormats
+            .map((format) =>
+                _formatOutcome(format, submission!.formats[format]))
+            .join(' ');
+      }
+      await _refreshAfterSubmission();
+      if (!mounted) return;
+      if (partialMessage != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(partialMessage)),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
-    if (!mounted) return;
-    setState(() => _busy = false);
-    if (s == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(failureMessage ?? 'Request failed. Please try again.'),
-        ),
-      );
-      return;
-    }
-    // Re-pull per-format coverage so the button reflects the still-open format.
+  }
+
+  Future<void> _refreshAfterSubmission() async {
+    // Re-pull per-format truth before re-enabling the CTA so a fast second tap
+    // cannot submit the same format against stale pre-request state.
     await _check();
-    if (mounted) widget.onRequestCompleted?.call();
+    if (!mounted) return;
+    // Parent ownership/live-record invalidation can change [refreshTick]. Keep
+    // [_busy] set while it runs; didUpdateWidget suppresses a redundant status
+    // check until this accepted refresh has fully completed.
+    await widget.onRequestCompleted?.call();
   }
 
-  bool _isCovered(BookRequestFormat f) => _detail.isCovered(f);
+  List<BookRequestFormat> get _requestableFormats => [
+        if (_detail.isRequestable(BookRequestFormat.ebook))
+          BookRequestFormat.ebook,
+        if (_detail.isRequestable(BookRequestFormat.audiobook))
+          BookRequestFormat.audiobook,
+      ];
 
-  /// Requestable while at least one of ebook/audiobook hasn't been requested.
-  bool get _requestable => !(_isCovered(BookRequestFormat.ebook) &&
-      _isCovered(BookRequestFormat.audiobook));
-
-  String get _buttonText {
-    if (!_requestable) {
-      // Both formats covered. Books don't use the movie/TV available labels
-      // ("Available"): a fulfilled request is simply downloaded, and a
-      // partially fulfilled one is still on its way.
-      return switch (_status) {
-        RequestStatus.available => 'Downloaded',
-        RequestStatus.partial => 'Requested',
-        _ => _status.buttonLabel,
+  String _formatOutcome(BookRequestFormat format, RequestStatus? status) =>
+      switch (status) {
+        RequestStatus.available => '${format.label} is available.',
+        RequestStatus.downloading => '${format.label} is downloading.',
+        RequestStatus.requested || RequestStatus.partial =>
+          '${format.label} requested.',
+        RequestStatus.pending => '${format.label} is pending approval.',
+        RequestStatus.denied => '${format.label} was not approved.',
+        RequestStatus.unavailable || null =>
+          '${format.label} could not be requested. Try again.',
       };
-    }
-    final anyCovered = _isCovered(BookRequestFormat.ebook) ||
-        _isCovered(BookRequestFormat.audiobook);
-    return anyCovered ? 'Request more' : _status.buttonLabel;
-  }
-
-  Color get _color {
-    if (_requestable) return AppTheme.accent;
-    return switch (_status) {
-      RequestStatus.pending ||
-      RequestStatus.requested ||
-      RequestStatus.partial =>
-        AppTheme.requested,
-      RequestStatus.downloading => AppTheme.downloading,
-      RequestStatus.available => AppTheme.available,
-      _ => AppTheme.accent,
-    };
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -170,16 +261,65 @@ class _BookRequestButtonState extends State<BookRequestButton> {
         ),
       );
     }
+    if (!_detail.isKnown) {
+      if (_detail.effectiveUnknownReason ==
+          BookStatusUnknownReason.formatNeedsAttention) {
+        return const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.warning_amber_rounded,
+                size: 18, color: AppTheme.requested),
+            SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                'Ask an admin to check this book’s format',
+                style: TextStyle(
+                  color: AppTheme.requested,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+      }
+      return TextButton.icon(
+        onPressed: _busy ? null : _check,
+        icon: const Icon(Icons.refresh_rounded, size: 18),
+        label: const Text('Couldn’t check · Retry'),
+      );
+    }
+    final requestable = _requestableFormats;
+    if (requestable.isEmpty) {
+      if (!widget.showCoveredStatus) return const SizedBox.shrink();
+      final ebook = _detail.statusFor(BookRequestFormat.ebook);
+      final audiobook = _detail.statusFor(BookRequestFormat.audiobook);
+      final label = ebook == audiobook
+          ? ebook?.label ?? 'Couldn’t check'
+          : '${ebook?.label ?? 'Unknown'} + '
+              '${audiobook?.label ?? 'Unknown'}';
+      return Text(
+        label,
+        style: const TextStyle(
+          color: AppTheme.textSecondary,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      );
+    }
+    final buttonText = requestable.length == 1
+        ? 'Request ${requestable.first.label}'
+        : 'Choose format';
     return TextButton(
-      onPressed: _requestable && !_busy ? _request : null,
-      style: TextButton.styleFrom(foregroundColor: _color),
+      onPressed: !_busy ? _chooseAndRequest : null,
+      style: TextButton.styleFrom(foregroundColor: AppTheme.accent),
       child: _busy
           ? const SizedBox(
               width: 16,
               height: 16,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
-          : Text(_buttonText),
+          : Text(buttonText),
     );
   }
 }
@@ -207,7 +347,6 @@ class _BookFormatSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final eb = detail.isCovered(BookRequestFormat.ebook);
     final ab = detail.isCovered(BookRequestFormat.audiobook);
-    final exactlyOneCovered = eb != ab;
     return SafeArea(
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
@@ -242,9 +381,9 @@ class _BookFormatSheet extends StatelessWidget {
             ),
             const SizedBox(height: 14),
             for (final choice in BookRequestFormat.values)
-              // Hide "both" when exactly one format is already requested — only
-              // the remaining single format is worth offering.
-              if (!(choice == BookRequestFormat.both && exactlyOneCovered))
+              if ((choice == BookRequestFormat.ebook && !eb) ||
+                  (choice == BookRequestFormat.audiobook && !ab) ||
+                  (choice == BookRequestFormat.both && !eb && !ab))
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _FormatChoiceTile(

@@ -72,6 +72,69 @@ String normalizeServer(String value) {
       .toString();
 }
 
+/// Requester-facing copy for realtime approval decisions. Book decisions are
+/// scoped to the concrete formats in the event so a partial result never
+/// claims that the whole title was approved or denied.
+@visibleForTesting
+String requestDecisionSnackText(Map<String, dynamic> data) {
+  final approved = data['decision'] == 'approved';
+  final rawTitle = (data['title'] as String?)?.trim();
+  final title = rawTitle == null || rawTitle.isEmpty
+      ? 'Your request'
+      : rawTitle;
+  final reason = (data['reason'] as String?)?.trim();
+  final bookScope = data['media_type'] == 'book'
+      ? _bookDecisionScope(data, approved: approved)
+      : null;
+  final text = bookScope == null
+      ? (approved ? 'Approved: $title' : 'Denied: $title')
+      : '$bookScope ${approved ? 'approved' : 'denied'}: $title';
+  return !approved && reason != null && reason.isNotEmpty
+      ? '$text — $reason'
+      : text;
+}
+
+String? _bookDecisionScope(
+  Map<String, dynamic> data, {
+  required bool approved,
+}) {
+  final rawFormats = data['book_formats'];
+  final formats = <String>{};
+  if (rawFormats is Map) {
+    for (final entry in rawFormats.entries) {
+      final format = entry.key.toString();
+      final status = entry.value.toString();
+      final belongsToDecision = approved
+          ? const {
+              'available',
+              'downloading',
+              'requested',
+              'partial',
+            }.contains(status)
+          : status == 'denied';
+      if (belongsToDecision &&
+          (format == 'ebook' || format == 'audiobook')) {
+        formats.add(format);
+      }
+    }
+  }
+  if (formats.isEmpty) {
+    switch (data['book_format']?.toString()) {
+      case 'ebook':
+        formats.add('ebook');
+      case 'audiobook':
+        formats.add('audiobook');
+      case 'both':
+        formats.addAll(const ['ebook', 'audiobook']);
+    }
+  }
+  if (formats.isEmpty) return null;
+  return [
+    if (formats.contains('ebook')) 'eBook',
+    if (formats.contains('audiobook')) 'Audiobook',
+  ].join(' + ');
+}
+
 class CantinarrApp extends ConsumerStatefulWidget {
   const CantinarrApp({super.key});
 
@@ -174,15 +237,7 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
     if (messenger == null) return;
     final data = event.data;
     final approved = data['decision'] == 'approved';
-    final rawTitle = (data['title'] as String?)?.trim();
-    final label =
-        rawTitle == null || rawTitle.isEmpty ? 'Your request' : rawTitle;
-    final reason = (data['reason'] as String?)?.trim();
-    final text = approved
-        ? 'Approved: $label'
-        : (reason == null || reason.isEmpty
-            ? 'Denied: $label'
-            : 'Denied: $label — $reason');
+    final text = requestDecisionSnackText(data);
     messenger
       ..clearSnackBars()
       ..showSnackBar(SnackBar(

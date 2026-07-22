@@ -169,10 +169,19 @@ class PushService {
           }
           // The payload's title rides along so the detail screen can still
           // name a book the library can't resolve (e.g. denied, never added).
+          // Pin the destination instance too: approvals can complete after the
+          // user has switched the drawer to another Chaptarr library.
           final title = _asTrimmedString(data['title']);
-          final query =
-              title == null ? '' : '?title=${Uri.encodeComponent(title)}';
-          router.push('/detail/book/${Uri.encodeComponent(foreignId)}$query');
+          final instanceId = _asTrimmedString(data['instance_id']);
+          final query = <String>[
+            if (title != null) 'title=${Uri.encodeComponent(title)}',
+            if (instanceId != null)
+              'instance_id=${Uri.encodeComponent(instanceId)}',
+          ];
+          final suffix = query.isEmpty ? '' : '?${query.join('&')}';
+          router.push(
+            '/detail/book/${Uri.encodeComponent(foreignId)}$suffix',
+          );
           return;
         }
         final tmdbId = _asInt(data['tmdb_id']);

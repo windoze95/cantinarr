@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
@@ -41,8 +42,70 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   }
 
   String _friendlyError(Object e) {
-    final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
-    return m != null ? m.group(1)! : 'Something went wrong';
+    String? raw;
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map) {
+        final message = data['error'] ?? data['message'];
+        if (message is String && message.isNotEmpty) raw = message;
+      } else if (data is String && data.isNotEmpty) {
+        raw = data;
+      }
+    }
+    final lower = raw?.toLowerCase() ?? '';
+    final missingBookInstance = lower.contains('book') &&
+        lower.contains('instance') &&
+        (lower.contains('missing') ||
+            lower.contains('does not identify') ||
+            lower.contains('no library') ||
+            lower.contains('no pinned'));
+    if (missingBookInstance) {
+      return 'This older request doesn’t identify a book library; deny it and ask the requester to submit it again.';
+    }
+    if (lower.contains('root folder') ||
+        lower.contains('quality profile') ||
+        lower.contains('metadata profile') ||
+        lower.contains('book configuration')) {
+      return 'Check this book library’s paths and profiles, then try again.';
+    }
+    return 'Something went wrong. Try again.';
+  }
+
+  String _approvalMessage(
+    PendingRequestItem item,
+    BookApprovalResult result,
+  ) {
+    if (!item.isBook) return 'Approved ${item.title}';
+    if (!result.isKnown || result.formats.isEmpty) {
+      return 'Approval saved. The remaining queue was refreshed.';
+    }
+    final approved = <String>[];
+    final attention = <String>[];
+    for (final format in [
+      BookRequestFormat.ebook,
+      BookRequestFormat.audiobook,
+    ]) {
+      final status = result.formats[format];
+      if (status == null) continue;
+      switch (status) {
+        case RequestStatus.available:
+        case RequestStatus.downloading:
+        case RequestStatus.requested:
+        case RequestStatus.partial:
+          approved.add('${format.label} approved.');
+        case RequestStatus.pending:
+          attention.add('${format.label} still needs attention.');
+        case RequestStatus.denied:
+        case RequestStatus.unavailable:
+          attention.add(result.status == RequestStatus.partial
+              ? '${format.label} still needs attention.'
+              : '${format.label} could not be approved.');
+      }
+    }
+    final message = [...approved, ...attention].join(' ');
+    return message.isEmpty
+        ? 'Approval saved. The remaining queue was refreshed.'
+        : message;
   }
 
   Future<void> _load() async {
@@ -74,6 +137,17 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   Future<void> _approve(PendingRequestItem item) async {
     final admin = _admin;
     if (admin == null) return;
+    final requestedBookFormat = item.requestedBookFormat;
+    if (item.isBook && requestedBookFormat == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This request uses an unsupported book format and cannot be approved.',
+          ),
+        ),
+      );
+      return;
+    }
     final profiles = item.isBook
         ? const <QualityProfile>[]
         : (item.isTv ? admin.sonarrProfiles : admin.radarrProfiles);
@@ -87,7 +161,6 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         ? _keepRequestedScope
         : (item.seasonScope.isNotEmpty ? item.seasonScope : SeasonScope.all);
     int? chosenProfile;
-    BookRequestFormat chosenBookFormat = item.requestedBookFormat;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -104,6 +177,14 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Text(
+                    item.requestedByLabel,
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   if (item.isTv) ...[
                     const Text(
                       'Season scope',
@@ -140,33 +221,29 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                   ],
                   if (item.isBook) ...[
                     const Text(
-                      'Format',
+                      'Requested format',
                       style: TextStyle(
                           color: AppTheme.textSecondary, fontSize: 13),
                     ),
                     const SizedBox(height: 4),
-                    DropdownButtonFormField<BookRequestFormat>(
-                      initialValue: chosenBookFormat,
-                      dropdownColor: AppTheme.surfaceVariant,
-                      style: const TextStyle(color: AppTheme.textPrimary),
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                        isDense: true,
+                    Text(
+                      requestedBookFormat!.label,
+                      style: const TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
                       ),
-                      items: BookRequestFormat.values
-                          .map(
-                            (format) => DropdownMenuItem<BookRequestFormat>(
-                              value: format,
-                              child: Text(format.label),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (v) {
-                        if (v != null) {
-                          setDialogState(() => chosenBookFormat = v);
-                        }
-                      },
                     ),
+                    if (item.instanceName.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      Text(
+                        'Library: ${item.instanceName}',
+                        style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
                   ] else ...[
                     const Text(
                       'Quality profile',
@@ -220,7 +297,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     if (confirmed != true) return;
     if (!mounted) return;
     try {
-      await _service.approve(
+      final result = await _service.approve(
         item.id,
         // The "keep requested" sentinel sends no override, so the server keeps
         // the explicit season list the user picked.
@@ -228,13 +305,12 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
             ? (chosenScope == _keepRequestedScope ? null : chosenScope)
             : null,
         qualityProfileId: item.isBook ? null : chosenProfile,
-        bookFormat: item.isBook ? chosenBookFormat : null,
       );
       if (!mounted) return;
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Approved ${item.title}')),
+        SnackBar(content: Text(_approvalMessage(item, result))),
       );
     } catch (e) {
       if (!mounted) return;
@@ -413,7 +489,7 @@ class _PendingTile extends StatelessWidget {
         children: [
           const SizedBox(height: 2),
           Text(
-            'Requested by ${item.username}',
+            item.requestedByLabel,
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
           const SizedBox(height: 6),
@@ -423,7 +499,10 @@ class _PendingTile extends StatelessWidget {
             children: [
               _chip(item.mediaLabel),
               if (showScope) _chip(SeasonScope.describe(item.seasonScope)),
-              if (showBookFormat) _chip(item.requestedBookFormat.label),
+              if (showBookFormat)
+                _chip(item.requestedBookFormat?.label ?? 'Unsupported format'),
+              if (item.isBook && item.instanceName.isNotEmpty)
+                _chip('Library: ${item.instanceName}'),
             ],
           ),
         ],
@@ -434,8 +513,12 @@ class _PendingTile extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.check_circle_outline),
             color: AppTheme.available,
-            tooltip: 'Approve',
-            onPressed: onApprove,
+            tooltip: item.isBook && item.requestedBookFormat == null
+                ? 'Unsupported book format'
+                : 'Approve',
+            onPressed: item.isBook && item.requestedBookFormat == null
+                ? null
+                : onApprove,
           ),
           IconButton(
             icon: const Icon(Icons.cancel_outlined),

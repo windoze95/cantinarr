@@ -61,7 +61,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 ### Requests
 - **One-tap requesting** with status-aware labels: Request → Pending (awaiting approval) → Requested → Downloading → **Available**; partially-available shows get **Request More**, which jumps to the season picker. The ready state stays provider-neutral rather than assuming a particular playback app.
 - **Season-level choice** -- per-season availability, multi-select, "Request N seasons"; shown only to users the admin has allowed to choose (others inherit the default scope).
-- **Book formats** -- request the eBook, the Audiobook, or both; the book detail keeps separate eBook and Audiobook states visible, and formats already owned or requested are disabled with their status shown.
+- **Book formats** -- request the eBook, the Audiobook, or both; each format continuously translates live Chaptarr truth into Available / Downloading / Requested / Pending approval / Request denied / Not requested. A monitored format is already Requested, failures stay unknown instead of becoming requestable, and only the still-open format actions are shown.
 - **Live status** -- request state and download progress update in real time over WebSocket, including changes made directly in the arrs (webhooks).
 
 ### Media management (admin)
@@ -73,9 +73,9 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Import Doctor** -- any stuck queue item explains itself in plain English with the raw arr messages shown for transparency, then offers ordered one-click fixes (manual/force import with candidates preview, remove, blocklist + re-search, category hand-off, rescan). One shared rule engine drives Sonarr, Radarr, and Chaptarr, mirrored from the server's classifier.
 
 ### Books (Chaptarr)
-- **Per-format everything** -- a title's ebook and audiobook are separate records; the author page groups monitored titles first and shows two bookmark toggles per book (tap an empty one to add + search the missing format).
+- **Per-format everything** -- a title's ebook and audiobook are separate records; the author page groups tracked titles first and gives each format its own accessible tracking control (an empty control adds and searches that format).
 - **Requester book detail** -- search results stay navigable before and after a request, with author, publication metadata, synopsis, genres, and separate eBook/Audiobook request states; admins can continue into the exact live Chaptarr title.
-- **Owned-aware search** -- library titles are injected into lookup results and floated to the top with Downloaded / In Library chips; distinct records are never merged.
+- **Owned-aware search** -- library titles are injected into lookup results and floated to the top with format-specific Available / Requested summaries; distinct records are never merged.
 - **Full module** -- library with author drill-down, queue with Import Doctor, history, and wanted (missing / cutoff unmet).
 
 ### Downloads & Tautulli (admin)

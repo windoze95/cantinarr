@@ -134,6 +134,39 @@ void main() {
     });
   });
 
+  group('format context outside the library', () {
+    test('queue items prefer the embedded book mediaType', () {
+      final item = ChaptarrQueueItem.fromJson({
+        'id': 1,
+        'title': 'Ambiguous release title',
+        'quality': {
+          'quality': {'name': 'EPUB'}
+        },
+        'book': {'id': 3, 'title': 'Flock', 'mediaType': 'audiobook'},
+      });
+
+      expect(item.format, BookFormat.audiobook);
+    });
+
+    test('wanted and history records expose format when supplied', () {
+      final wanted = ChaptarrWantedRecord.fromJson({
+        'id': 3,
+        'title': 'Flock',
+        'mediaType': 'audiobook',
+      });
+      final history = ChaptarrHistoryRecord.fromJson({
+        'id': 4,
+        'sourceTitle': 'Flock',
+        'quality': {
+          'quality': {'name': 'EPUB'}
+        },
+      });
+
+      expect(wanted.format, BookFormat.audiobook);
+      expect(history.format, BookFormat.ebook);
+    });
+  });
+
   // diagnoseChaptarrQueueItem bridges ChaptarrStatusMessage -> the shared neutral
   // engine; these confirm the bridge feeds the catalog correctly for books.
   group('diagnoseChaptarrQueueItem', () {

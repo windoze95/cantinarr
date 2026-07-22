@@ -6,6 +6,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
+import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/status_pill.dart';
@@ -19,6 +20,7 @@ import '../../request/data/book_ownership.dart';
 import '../../request/data/request_service.dart';
 import '../../request/ui/book_request_button.dart';
 import '../data/book_library_service.dart';
+import '../logic/book_ownership_matcher.dart';
 
 /// Requester-facing detail for one book, addressed by its Chaptarr/Readarr
 /// foreignBookId. Search navigation supplies [initialBook] for an immediate,
@@ -29,12 +31,14 @@ class RequesterBookDetailScreen extends ConsumerStatefulWidget {
   final String foreignId;
   final String? titleHint;
   final ChaptarrBook? initialBook;
+  final String? instanceId;
 
   const RequesterBookDetailScreen({
     super.key,
     required this.foreignId,
     this.titleHint,
     this.initialBook,
+    this.instanceId,
   });
 
   @override
@@ -43,7 +47,8 @@ class RequesterBookDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _RequesterBookDetailScreenState
-    extends ConsumerState<RequesterBookDetailScreen> {
+    extends ConsumerState<RequesterBookDetailScreen>
+    with WidgetsBindingObserver {
   late final RequestService _requestService;
   ChaptarrBook? _metadata;
   List<ChaptarrBook> _chaptarrRecords = const [];
@@ -56,9 +61,21 @@ class _RequesterBookDetailScreenState
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _requestService =
         RequestService(backendDio: ref.read(backendClientProvider));
     _startLoads();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshBookTruth();
   }
 
   @override
@@ -66,7 +83,8 @@ class _RequesterBookDetailScreenState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.foreignId != widget.foreignId ||
         oldWidget.initialBook != widget.initialBook ||
-        oldWidget.titleHint != widget.titleHint) {
+        oldWidget.titleHint != widget.titleHint ||
+        oldWidget.instanceId != widget.instanceId) {
       _startLoads();
     }
   }
@@ -74,7 +92,8 @@ class _RequesterBookDetailScreenState
   void _startLoads() {
     final generation = ++_loadGeneration;
     _recordsLoadGeneration++;
-    _instanceId = ref.read(instanceProvider).activeChaptarrInstance?.id;
+    _instanceId = widget.instanceId ??
+        ref.read(instanceProvider).activeChaptarrInstance?.id;
     _metadata = widget.initialBook;
     _chaptarrRecords = const [];
     _requestDetail = null;
@@ -96,8 +115,10 @@ class _RequesterBookDetailScreenState
   }
 
   /// Notification links carry only a title and foreign id. Resolve their
-  /// metadata with the same read-only lookup as Books search, then require the
-  /// exact foreign id so similarly named books cannot be substituted.
+  /// metadata with the same read-only lookup as Books search. Prefer the exact
+  /// foreign id. An older provider-id mismatch may use metadata only when the
+  /// canonical digest row exists and exactly one lookup result strongly
+  /// matches both that row's title and author.
   Future<void> _resolveMetadata(int generation) async {
     if (_metadata != null) return;
     final term = widget.titleHint?.trim() ?? '';
@@ -115,6 +136,29 @@ class _RequesterBookDetailScreenState
         if (book.foreignBookId == widget.foreignId) {
           match = book;
           break;
+        }
+      }
+      if (match == null) {
+        final digest = await ref.read(
+          ownedBooksForInstanceProvider(_instanceId).future,
+        );
+        final canonicalRows = digest
+            .where((owned) =>
+                owned.foreignBookId.trim() == widget.foreignId.trim())
+            .toList(growable: false);
+        if (canonicalRows.length == 1) {
+          final canonical = canonicalRows.single;
+          final strongIdentityMatches = results
+              .where((book) =>
+                  strongNormalizedTitleMatch(book.title, canonical.title) &&
+                  strongAuthorMatch(
+                    book.author?.authorName,
+                    canonical.author,
+                  ))
+              .toList(growable: false);
+          if (strongIdentityMatches.length == 1) {
+            match = strongIdentityMatches.single;
+          }
         }
       }
     } catch (_) {
@@ -162,16 +206,22 @@ class _RequesterBookDetailScreenState
   Future<void> _onRequestCompleted() async {
     // The request may have created the live Chaptarr records immediately.
     // Refresh both the ownership digest and the admin destination in place.
-    ref.invalidate(ownedBooksProvider);
+    ref.invalidate(ownedBooksForInstanceProvider(_instanceId));
     ref.read(libraryRefreshTickProvider.notifier).state++;
     await _resolveChaptarrRecords(_loadGeneration);
   }
 
-  void _openInChaptarr() {
+  Future<void> _refreshBookTruth() async {
+    ref.invalidate(ownedBooksForInstanceProvider(_instanceId));
+    ref.read(libraryRefreshTickProvider.notifier).state++;
+    await _resolveChaptarrRecords(_loadGeneration);
+  }
+
+  Future<void> _openInChaptarr() async {
     if (_chaptarrRecords.isEmpty) return;
     final instanceId = _instanceId;
     if (instanceId == null) return;
-    Navigator.of(context, rootNavigator: true).push(
+    await Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
         builder: (_) => ChaptarrBookScreen(
           instanceId: instanceId,
@@ -180,22 +230,29 @@ class _RequesterBookDetailScreenState
         ),
       ),
     );
+    if (mounted) await _refreshBookTruth();
   }
 
   @override
   Widget build(BuildContext context) {
-    final digest = ref.watch(ownedBooksProvider);
+    ref.listen(libraryChangedEventsProvider, (_, next) {
+      if (next.hasValue) _refreshBookTruth();
+    });
+    ref.listen(
+      instanceProvider.select((state) => state.activeChaptarrInstance?.id),
+      (previous, next) {
+        if (previous == next || widget.instanceId != null) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(_startLoads);
+        });
+      },
+    );
+    final digest = ref.watch(ownedBooksForInstanceProvider(_instanceId));
     return Scaffold(
       appBar: AppBar(title: const Text('Book details')),
-      body: digest.when(
-        loading: () => const Center(
-          child: CircularProgressIndicator(color: AppTheme.accent),
-        ),
-        // The digest normally degrades to an empty list on failure. Keep the
-        // metadata/deep-link path usable if an override surfaces an error.
-        error: (_, __) => _resolved(const []),
-        data: _resolved,
-      ),
+      // Metadata renders immediately; ownership and request truth resolve in
+      // their own rows instead of blanking the whole page behind one digest.
+      body: _resolved(digest.valueOrNull ?? const []),
     );
   }
 
@@ -245,9 +302,13 @@ class _RequesterBookDetailScreenState
         : (live?.genres ?? const <String>[]);
     final ownership = owned?.ownership;
     final detail = (_requestDetail ?? const BookRequestStatusDetail())
-        .withOwnership(ownership);
+        .withOwnership(
+          ownership,
+          ownershipStatusKnown: owned?.statusKnown ?? true,
+        );
 
     final instanceId = _instanceId;
+    final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
     ChaptarrImageSource? cover;
     if (instanceId != null) {
       final rawOwnedCover = owned?.cover.trim() ?? '';
@@ -273,6 +334,10 @@ class _RequesterBookDetailScreenState
 
     return CenteredContent(
       child: ListView(
+        // Build the status/action region even when large accessibility text
+        // pushes it just below the viewport; it owns the live status refresh
+        // that feeds the format panel above it.
+        cacheExtent: MediaQuery.sizeOf(context).height * 2,
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
         children: [
           Center(
@@ -333,8 +398,12 @@ class _RequesterBookDetailScreenState
               BookRequestButton(
                 foreignId: widget.foreignId,
                 title: title,
+                instanceId: instanceId,
                 service: _requestService,
                 ownership: ownership,
+                ownershipStatusKnown: owned?.statusKnown ?? true,
+                refreshTick: requestRefreshTick,
+                showCoveredStatus: false,
                 onDetailChanged: _onRequestDetailChanged,
                 onRequestCompleted: _onRequestCompleted,
               ),
@@ -342,7 +411,7 @@ class _RequesterBookDetailScreenState
                 OutlinedButton.icon(
                   onPressed: _openInChaptarr,
                   icon: const Icon(Icons.open_in_new_rounded, size: 17),
-                  label: const Text('Open in Chaptarr'),
+                  label: const Text('Manage book'),
                 ),
             ],
           ),
@@ -472,19 +541,38 @@ class _FormatStatusRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final stack = MediaQuery.textScalerOf(context).scale(1) > 1.3 ||
+        MediaQuery.sizeOf(context).width < 360 ||
+        state.label == 'Format needs attention';
+    final heading = Row(
+      children: [
+        Icon(icon, color: AppTheme.accent, size: 20),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(label, style: Theme.of(context).textTheme.titleSmall),
+        ),
+      ],
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        children: [
-          Icon(icon, color: AppTheme.accent, size: 20),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(label,
-                style: Theme.of(context).textTheme.titleSmall),
-          ),
-          StatusPill(text: state.label, color: state.color),
-        ],
-      ),
+      child: stack
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                heading,
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.only(left: 32),
+                  child: StatusPill(text: state.label, color: state.color),
+                ),
+              ],
+            )
+          : Row(
+              children: [
+                Expanded(child: heading),
+                StatusPill(text: state.label, color: state.color),
+              ],
+            ),
     );
   }
 }
@@ -504,8 +592,12 @@ class _FormatStatusRow extends StatelessWidget {
     return (label: 'Available', color: AppTheme.available);
   }
 
-  final status = detail.formats[format];
-  if (status != null) {
+  if (owned?.monitored ?? false) {
+    return (label: 'Requested', color: AppTheme.requested);
+  }
+
+  final status = detail.statusFor(format);
+  if (status != null && status != RequestStatus.unavailable) {
     return switch (status) {
       RequestStatus.available =>
         (label: 'Available', color: AppTheme.available),
@@ -519,14 +611,27 @@ class _FormatStatusRow extends StatelessWidget {
         (label: 'Requested', color: AppTheme.requested),
       RequestStatus.denied =>
         (label: 'Request Denied', color: AppTheme.error),
-      RequestStatus.unavailable =>
-        (label: 'Not requested', color: AppTheme.textSecondary),
+      RequestStatus.unavailable => throw StateError('unreachable'),
     };
   }
+
+  // Until request history resolves, an empty ownership row does not prove the
+  // format was never requested. Keep the neutral loading state instead of
+  // briefly claiming "Not requested" for a pending or denied request.
   if (!statusLoaded) {
     return (label: 'Checking…', color: AppTheme.textSecondary);
   }
-  return (label: 'Not requested', color: AppTheme.textSecondary);
+
+  if (!detail.isKnown) {
+    return detail.effectiveUnknownReason ==
+            BookStatusUnknownReason.formatNeedsAttention
+        ? (label: 'Format needs attention', color: AppTheme.requested)
+        : (label: 'Couldn’t check', color: AppTheme.error);
+  }
+  if (status == RequestStatus.unavailable) {
+    return (label: 'Not requested', color: AppTheme.textSecondary);
+  }
+  return (label: 'Couldn’t check', color: AppTheme.error);
 }
 
 String _firstText(Iterable<String?> values) {

@@ -9,6 +9,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
+import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
@@ -30,7 +31,8 @@ class DashboardBooksTab extends ConsumerStatefulWidget {
   ConsumerState<DashboardBooksTab> createState() => _DashboardBooksTabState();
 }
 
-class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
+class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
+    with WidgetsBindingObserver {
   final _controller = TextEditingController();
   Timer? _debounce;
   List<ChaptarrBook> _results = [];
@@ -41,10 +43,30 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
   String _searchedTerm = ''; // term the current _results belong to
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
     _controller.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshBookTruth();
+  }
+
+  void _refreshBookTruth() {
+    final instanceId =
+        ref.read(instanceProvider).activeChaptarrInstance?.id;
+    ref.invalidate(ownedBooksForInstanceProvider(instanceId));
+    ref.invalidate(ownedBooksProvider);
+    ref.read(libraryRefreshTickProvider.notifier).state++;
   }
 
   // Search as the user types (debounced) so results appear without having to
@@ -67,8 +89,11 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
   Future<void> _search() async {
     final term = _controller.text.trim();
     if (term.isEmpty) {
+      _searchGen++;
       setState(() {
         _results = [];
+        _searchedTerm = '';
+        _isSearching = false;
         _searched = false;
         _error = null;
       });
@@ -99,25 +124,44 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
       setState(() {
         _isSearching = false;
         _searched = true;
-        // Surface the real failure: a 404 usually means this Chaptarr build's
-        // search API differs from Readarr's /api/v1/book/lookup; 401/403 is an
-        // access/grant problem.
-        _error = code != null
-            ? 'Search failed (HTTP $code). This Chaptarr instance may not support /api/v1/book/lookup.'
-            : 'Search failed: ${e.message ?? 'network error'}.';
+        _error = code == 401 || code == 403
+            ? 'You do not have access to search this book library.'
+            : 'Books could not be searched. Check the connection and try again.';
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted || gen != _searchGen) return;
       setState(() {
         _isSearching = false;
         _searched = true;
-        _error = 'Search failed: $e';
+        _error = 'Books could not be searched. Check the connection and try again.';
       });
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(libraryChangedEventsProvider, (_, next) {
+      if (next.hasValue) _refreshBookTruth();
+    });
+    ref.listen(
+      instanceProvider.select((state) => state.activeChaptarrInstance?.id),
+      (previous, next) {
+        if (previous == next) return;
+        _searchGen++;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          setState(() {
+            _results = [];
+            _searchedTerm = '';
+            _searched = false;
+            _isSearching = false;
+            _error = null;
+          });
+          ref.invalidate(ownedBooksProvider);
+          if (_controller.text.trim().isNotEmpty) _search();
+        });
+      },
+    );
     return Column(
       children: [
         Padding(
@@ -180,9 +224,9 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
     // requests, and surface owned/monitored books the metadata search missed.
     final digest =
         ref.watch(ownedBooksProvider).valueOrNull ?? const <OwnedTitle>[];
-    // Owned library titles matching the query that lookup didn't return — shown
-    // first as "you already have this" rows. They carry no foreignBookId, so
-    // they're informational (no Request button).
+    // Concrete library records not already represented by a safe one-to-one
+    // lookup mapping. Ambiguous candidates are shown separately here so the
+    // requester can choose a real record rather than targeting a fuzzy guess.
     final injected = digest.isEmpty
         ? const <OwnedTitle>[]
         : ownedTitlesForQuery(_searchedTerm, digest, _results);
@@ -192,44 +236,78 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
     // results carry a cover: the owned record's cached /MediaCover, which loads
     // with the API key. Lookup (/MediaCoverProxy) covers are broken server-side
     // in this fork, so we don't attempt them — not-yet-owned rows stay iconic.
-    final owned = <(ChaptarrBook, BookOwnership?, String?)>[];
-    final rest = <(ChaptarrBook, BookOwnership?, String?)>[];
-    for (final book in _results) {
-      final match = digest.isEmpty ? null : ownedMatchFor(book, digest);
+    final safeMatches = unambiguousOwnedMatches(_results, digest);
+    final owned = <_ResolvedBookResult>[];
+    final rest = <_ResolvedBookResult>[];
+    for (var lookupIndex = 0;
+        lookupIndex < _results.length;
+        lookupIndex++) {
+      final book = _results[lookupIndex];
+      final candidates =
+          digest.isEmpty
+              ? const <OwnedTitle>[]
+              : ownedIdentityCandidatesFor(book, digest);
+      final match = safeMatches[book];
+      final identityAmbiguous = candidates.isNotEmpty && match == null;
       final cover =
           (match != null && match.cover.isNotEmpty) ? match.cover : null;
+      final libraryId = match?.foreignBookId.trim() ?? '';
+      final lookupId = book.foreignBookId?.trim() ?? '';
       ((match?.ownership.anyOwned ?? false) ? owned : rest)
-          .add((book, match?.ownership, cover));
+          .add(_ResolvedBookResult(
+            book: book,
+            ownership: match?.ownership,
+            ownershipStatusKnown: match?.statusKnown ?? true,
+            identityAmbiguous: identityAmbiguous,
+            sourceIdentity: 'lookup:$lookupIndex',
+            cover: cover,
+            canonicalForeignId:
+                libraryId.isNotEmpty ? libraryId : lookupId,
+          ));
     }
-    final ordered = <(ChaptarrBook, BookOwnership?, String?)>[
-      for (final t in injected)
-        (
-          _ownedTitleAsBook(t),
-          t.ownership,
-          t.cover.isNotEmpty ? t.cover : null
+    final ordered = <_ResolvedBookResult>[
+      for (var libraryIndex = 0;
+          libraryIndex < injected.length;
+          libraryIndex++)
+        _ResolvedBookResult(
+          book: _ownedTitleAsBook(injected[libraryIndex]),
+          ownership: injected[libraryIndex].ownership,
+          ownershipStatusKnown: injected[libraryIndex].statusKnown,
+          identityAmbiguous: false,
+          sourceIdentity: 'library:$libraryIndex',
+          cover: injected[libraryIndex].cover.isNotEmpty
+              ? injected[libraryIndex].cover
+              : null,
+          canonicalForeignId: injected[libraryIndex].foreignBookId,
         ),
       ...owned,
       ...rest,
     ];
 
     if (ordered.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.menu_book,
-                  size: 48, color: AppTheme.textSecondary),
-              const SizedBox(height: 12),
-              Text(
-                _searched
-                    ? 'No books found. Try a different search.'
-                    : 'Search for a book or author to request.\nYour library lives in the Books section.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: AppTheme.textSecondary),
+      return LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.menu_book,
+                      size: 48, color: AppTheme.textSecondary),
+                  const SizedBox(height: 12),
+                  Text(
+                    _searched
+                        ? 'No books found. Try a different search.'
+                        : 'Search for a book or author to request.\nYour library lives in the Books section.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppTheme.textSecondary),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       );
@@ -253,32 +331,70 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab> {
         separatorBuilder: (_, __) =>
             const Divider(height: 1, color: AppTheme.border),
         itemBuilder: (_, i) => _BookResultTile(
-          book: ordered[i].$1,
-          ownership: ordered[i].$2,
+          book: ordered[i].book,
+          canonicalForeignId: ordered[i].canonicalForeignId,
+          ownership: ordered[i].ownership,
+          ownershipStatusKnown: ordered[i].ownershipStatusKnown,
+          identityAmbiguous: ordered[i].identityAmbiguous,
+          sourceIdentity: ordered[i].sourceIdentity,
           cover: instanceId == null
               ? null
-              : chaptarrImageSource(ref, ordered[i].$3, instanceId),
+              : chaptarrImageSource(ref, ordered[i].cover, instanceId),
           requestService: requestService,
           requestRefreshTick: requestRefreshTick,
+          instanceId: instanceId,
+          onRequestCompleted: _refreshBookTruth,
         ),
       );
     });
   }
 }
 
-class _BookResultTile extends StatelessWidget {
+class _ResolvedBookResult {
   final ChaptarrBook book;
   final BookOwnership? ownership;
+  final bool ownershipStatusKnown;
+  final bool identityAmbiguous;
+  final String sourceIdentity;
+  final String? cover;
+  final String canonicalForeignId;
+
+  const _ResolvedBookResult({
+    required this.book,
+    required this.ownership,
+    required this.ownershipStatusKnown,
+    required this.identityAmbiguous,
+    required this.sourceIdentity,
+    required this.cover,
+    required this.canonicalForeignId,
+  });
+}
+
+class _BookResultTile extends StatelessWidget {
+  final ChaptarrBook book;
+  final String canonicalForeignId;
+  final BookOwnership? ownership;
+  final bool ownershipStatusKnown;
+  final bool identityAmbiguous;
+  final String sourceIdentity;
   final ChaptarrImageSource? cover;
   final RequestService requestService;
   final int requestRefreshTick;
+  final String? instanceId;
+  final VoidCallback onRequestCompleted;
 
   const _BookResultTile({
     required this.book,
+    required this.canonicalForeignId,
     this.ownership,
+    this.ownershipStatusKnown = true,
+    this.identityAmbiguous = false,
+    required this.sourceIdentity,
     this.cover,
     required this.requestService,
     required this.requestRefreshTick,
+    required this.instanceId,
+    required this.onRequestCompleted,
   });
 
   @override
@@ -288,20 +404,47 @@ class _BookResultTile extends StatelessWidget {
       if (book.author?.authorName.isNotEmpty ?? false) book.author!.authorName,
       if (year != null) '$year',
     ].join(' · ');
-    final fid = book.foreignBookId;
+    // Lookup metadata can use a provider-specific foreign id that differs from
+    // the actual library record. Status, navigation, and mutation all stay on
+    // the matched canonical library id while [book] preserves lookup metadata.
+    final fid = canonicalForeignId.trim();
+    final lookupId = book.foreignBookId?.trim() ?? '';
     final o = ownership;
-    // Lookup results never carry a library id (always null), so ownership comes
-    // from the owned-books digest, matched by title+author. Only hide the request
-    // affordance when BOTH files are present — a format that's missing or merely
-    // monitored can still be requested.
-    final bothDownloaded =
-        o != null && o.ebook.downloaded && o.audiobook.downloaded;
     final chip = _ownershipChip(o);
-    final canOpen = fid != null && fid.isNotEmpty;
+    final canOpen = fid.isNotEmpty && !identityAmbiguous;
+    final identityGuidance = identityAmbiguous
+        ? 'Choose a matching library record'
+        : fid.isEmpty
+            ? 'Ask an admin to check this book’s library record'
+            : null;
+    final stackAction = MediaQuery.textScalerOf(context).scale(1) > 1.3 ||
+        MediaQuery.sizeOf(context).width < 360;
+    final requestControl = canOpen
+        ? ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: stackAction ? 288 : 180),
+            child: BookRequestButton(
+              key: ValueKey(
+                'book-request:$lookupId:$fid:$sourceIdentity:$requestRefreshTick',
+              ),
+              foreignId: fid,
+              title: book.title,
+              instanceId: instanceId,
+              service: requestService,
+              ownership: o,
+              ownershipStatusKnown: ownershipStatusKnown,
+              refreshTick: requestRefreshTick,
+              showCoveredStatus: false,
+              onRequestCompleted: onRequestCompleted,
+            ),
+          )
+        : null;
 
-    return ListTile(
-      key: ValueKey('book-result:$fid'),
+    final resultKey = ValueKey('book-result:$lookupId:$fid:$sourceIdentity');
+    final tile = ListTile(
+      key: canOpen && stackAction ? null : resultKey,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      isThreeLine: stackAction,
+      minVerticalPadding: stackAction ? 12 : null,
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(4),
         child: CachedImage(
@@ -319,22 +462,35 @@ class _BookResultTile extends StatelessWidget {
         style: const TextStyle(
             color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
       ),
-      subtitle: (subtitle.isEmpty && chip == null)
+      subtitle: (subtitle.isEmpty &&
+              chip == null &&
+              identityGuidance == null)
           ? null
           : Padding(
               padding: const EdgeInsets.only(top: 3),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (subtitle.isNotEmpty)
-                    Flexible(
-                      child: Text(subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style:
-                              const TextStyle(color: AppTheme.textSecondary)),
+                    Text(subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            const TextStyle(color: AppTheme.textSecondary)),
+                  if (identityGuidance != null) ...[
+                    if (subtitle.isNotEmpty) const SizedBox(height: 4),
+                    Text(
+                      identityGuidance,
+                      style: const TextStyle(
+                        color: AppTheme.requested,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
+                  ],
                   if (chip != null) ...[
-                    if (subtitle.isNotEmpty) const SizedBox(width: 8),
+                    if (subtitle.isNotEmpty || identityGuidance != null)
+                      const SizedBox(height: 4),
                     chip,
                   ],
                 ],
@@ -344,17 +500,13 @@ class _BookResultTile extends StatelessWidget {
       // chevron makes that destination visible even while the trailing request
       // control is disabled because both formats are already covered.
       trailing: canOpen
-          ? Row(
+          ? stackAction
+              ? const Icon(Icons.chevron_right,
+                  color: AppTheme.textSecondary)
+              : Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (!bothDownloaded)
-                  BookRequestButton(
-                    key: ValueKey('book-request:$fid:$requestRefreshTick'),
-                    foreignId: fid,
-                    title: book.title,
-                    service: requestService,
-                    ownership: o,
-                  ),
+                requestControl!,
                 const Icon(Icons.chevron_right,
                     color: AppTheme.textSecondary),
               ],
@@ -363,20 +515,55 @@ class _BookResultTile extends StatelessWidget {
       onTap: canOpen
           ? () => context.push(
                 '/detail/book/${Uri.encodeComponent(fid)}'
-                '?title=${Uri.encodeQueryComponent(book.title)}',
+                '?title=${Uri.encodeQueryComponent(book.title)}'
+                '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId!)}'}',
                 extra: book,
               )
           : null,
+    );
+    if (!canOpen || !stackAction) return tile;
+
+    // At narrow widths and large text scales, keeping request guidance in the
+    // ListTile subtitle constrains it to the small column beside the cover and
+    // can transiently overflow while status loads. Give it the full row below
+    // the book summary so neither guidance nor format actions are truncated.
+    return Column(
+      key: resultKey,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        tile,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: requestControl!,
+          ),
+        ),
+      ],
     );
   }
 }
 
 Widget? _ownershipChip(BookOwnership? o) {
   if (o == null || !o.anyOwned) return null;
-  final downloaded = o.anyDownloaded;
+  final states = <String>[
+    if (o.ebook.downloaded)
+      'eBook available'
+    else if (o.ebook.monitored)
+      'eBook requested',
+    if (o.audiobook.downloaded)
+      'Audiobook available'
+    else if (o.audiobook.monitored)
+      'Audiobook requested',
+  ];
+  // The grouped chip describes every represented format. A downloaded eBook
+  // must not make the whole group look available while its audiobook is still
+  // only monitored.
+  final available = (!o.ebook.owned || o.ebook.downloaded) &&
+      (!o.audiobook.owned || o.audiobook.downloaded);
   return _OwnershipChip(
-    label: downloaded ? 'Downloaded' : 'In Library',
-    color: downloaded ? AppTheme.available : AppTheme.requested,
+    label: states.join(' · '),
+    color: available ? AppTheme.available : AppTheme.requested,
   );
 }
 

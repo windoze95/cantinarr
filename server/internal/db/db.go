@@ -39,11 +39,22 @@ CREATE TABLE IF NOT EXISTS request_log (
     season_scope TEXT,
     quality_profile_id INTEGER,
     book_format TEXT,
+    instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL,
     approved_by INTEGER REFERENCES users(id),
     decided_at DATETIME,
     deny_reason TEXT,
     requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME
+);
+
+-- Users sharing one library may subscribe to the same pending book mutation.
+-- The request row retains its original owner/history; waiters receive the
+-- eventual decision without inheriting another user's denial history.
+CREATE TABLE IF NOT EXISTS book_request_waiters (
+    request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    book_format TEXT NOT NULL DEFAULT 'both',
+    PRIMARY KEY (request_id, user_id)
 );
 
 -- Per-user request policy overrides. Any NULL column means "inherit the
@@ -564,6 +575,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// Books (Chaptarr) have no TMDB id; they are keyed by the Readarr
 		// foreignBookId stored here (tmdb_id is left 0 for book rows).
 		{alter: "ALTER TABLE request_log ADD COLUMN foreign_id TEXT"},
+		// New book requests pin the Chaptarr instance the requester was viewing.
+		// Legacy rows remain NULL: assigning them to today's user default would
+		// invent provenance and could misroute an old approval/history row.
+		{alter: "ALTER TABLE request_log ADD COLUMN instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL"},
 		// Stable per-device hardware id (e.g. iOS identifierForVendor) so a
 		// reconnect from the same physical device updates its existing row
 		// instead of creating a duplicate. Empty for rows created before this

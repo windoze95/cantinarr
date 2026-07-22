@@ -180,11 +180,11 @@ The app exposes these records at Settings > Configuration history. Timeline resp
 ### Requests
 ```
 POST   /api/requests                       # user: create (movie/tv by tmdb_id;
-                                           #   books by foreign_id + book_format)
+                                           #   books by foreign_id + book_format; optional instance_id)
 GET    /api/requests                       # user: own request history
 GET    /api/requests/options               # user: what this user may choose (seasons, quality)
-GET    /api/requests/book-status           # user: per-format request/ownership state of a book
-GET    /api/requests/book-library          # user: owned/monitored books digest (~2 min cache)
+GET    /api/requests/book-status           # user: per-format live state by foreign_id; optional instance_id
+GET    /api/requests/book-library          # user: owned/monitored digest; optional instance_id (brief cache)
 GET    /api/requests/{tmdb_id}/status      # user: live availability + download progress
 GET    /api/admin/requests                 # admin: pending approval queue
 POST   /api/admin/requests/{id}/approve    # admin: approve (executes the stored request once)
@@ -371,15 +371,17 @@ GET sonarr/api/v3/series/lookup?term=tvdb:81189  (exact match)
 POST sonarr/api/v3/series  (add with the user's effective defaults)
 ```
 
-Movies skip bridging entirely -- Radarr natively supports `term=tmdb:{id}`. Books have no TMDB id at all; they're keyed by the Chaptarr/Readarr `foreignBookId` plus a `book_format` (`ebook`, `audiobook`, or both).
+Movies skip bridging entirely -- Radarr natively supports `term=tmdb:{id}`. Books have no TMDB id at all; they're keyed by the Chaptarr/Readarr `foreignBookId` plus a strict `book_format` (`ebook`, `audiobook`, or `both`). Book request bodies may include `instance_id`; status and library endpoints accept the same field as a query parameter. The server authorizes that selection and persists it with new pending/history rows, so approval always targets the instance the requester was viewing. Omitted IDs on new requests resolve through the requester's effective grant (or the admin fallback). Legacy rows are deliberately left unscoped because today's default cannot prove their original library; a legacy pending book row must be resubmitted instead of being approved against a guessed instance.
 
 ### Requests, approvals & live availability
 
-A request is recorded in `request_log`, then either executed immediately or parked as `pending` when approval is required (globally or for that user). Approval replays the stored request -- season scope, quality choice, book format -- exactly once; denial notifies the requester with the reason.
+A request is recorded in `request_log`, then either executed immediately or parked as `pending` when approval is required (globally or for that user). Approval replays the stored request -- season scope, quality choice, immutable concrete book format, and pinned Chaptarr instance -- exactly once; book format cannot be changed during approval. Denial notifies the requester with the reason. Book `both` operations return `book_formats` with a result for each concrete format. On partial approval, successful formats are recorded as requested/available while failed coverage remains pending for retry; a subscriber whose entire requested slice failed is not sent a false approval. Pending book coverage is overlap-aware (`both` conflicts with either concrete format) and shared by canonical title + instance across users; every subscriber sees their own concrete pending coverage in personal history, while the admin row exposes only the safe instance name and requester count. Approval materializes each subscriber's successful formats in personal history and sends a format-scoped decision; denial history is likewise personal, and unrelated users remain requestable.
+
+For a brand-new Chaptarr author, profile selection is deterministic: Cantinarr uses the sole quality/metadata profile, or exactly one profile named `Default` (case-insensitive); multiple ambiguous choices fail with an admin-fixable error. Adding a missing format beside an existing canonical book instead reuses that author's actual quality profile, metadata profile, and root path. Bounded in-process striped locks serialize conflicting canonical-book mutations and instance projection refreshes without a single global network-call lock; the supported deployment remains the repository's single-process SQLite server, not multiple independent writers.
 
 Availability is **always derived live from the arrs**: TV availability comes from the real episode list (aired episodes with files), never from Sonarr's monitored-only percentage -- so a show with one monitored season never reads "available" while most of it is missing. Series with some-but-not-all aired episodes read `partial`, with per-season detail and a one-tap "request more" path that adds seasons without unmonitoring what's already there. Stale request rows are reconciled against reality (a "requested" title the arr has since imported reads `available`; a deleted one falls back to `unavailable`).
 
-Freshness has three layers: WebSocket queue polling (30s), instant arr webhooks for out-of-band changes, and short-TTL caches (e.g. the owned-books digest, ~2 minutes) that those events invalidate.
+Freshness has three layers: WebSocket queue polling (30s), instant arr webhooks for out-of-band changes, and short-TTL caches that mutations/events invalidate. Book status is a per-instance live projection: a file is `available`, a healthy active item in the fully paginated Chaptarr queue is `downloading`, and monitored-without-a-file is `requested`, even when no Cantinarr request-log row exists. Warning, blocked, failed, and error queue rows remain `requested` rather than claiming active progress. The projection and reduced owned-books digest are cached briefly across search-result calls and invalidated together after mutations. Live state outranks stale decided history. When legacy Chaptarr data cannot be mapped safely to eBook versus audiobook, targeted status returns `status_known: false` and the library digest marks that title the same way; clients must present an unknown/unresolved state rather than treating it as requestable.
 
 ### Instances & per-user defaults
 
@@ -421,7 +423,7 @@ Notification categories (per-user preferences; admin-scoped ones are enforced in
 | `plex_access_request` | on | admins | a user shared their Plex email for a server invite (collapse-keyed per user; body says whether auto-invite already handled it) |
 | `plex_invite_sent` | on | requester | their Plex invite email went out (one-tap or auto) |
 
-Bodies are server-authored templates (untrusted text never hits the lock screen), sends are fire-and-forget with a 30s timeout, a 10-minute in-process dedupe window absorbs the overlap between queue polling and webhooks, and tokens the gateway reports dead are pruned automatically. Payloads carry deep-link data (`type`, `tmdb_id`/`issue_id`/`user_id`; book request decisions add `foreign_id`, the Chaptarr foreignBookId, since books store `tmdb_id` 0) the app routes on tap.
+Bodies are server-authored templates (untrusted text never hits the lock screen), sends are fire-and-forget with a 30s timeout, a 10-minute in-process dedupe window absorbs the overlap between queue polling and webhooks, and tokens the gateway reports dead are pruned automatically. Payloads carry deep-link data (`type`, `tmdb_id`/`issue_id`/`user_id`; book request decisions add `foreign_id`, the Chaptarr foreignBookId, plus `title`, `book_format`, and the pinned `instance_id`, since books store `tmdb_id` 0) the app routes on tap.
 
 ### Plex invites
 
@@ -501,7 +503,7 @@ SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db
 | Area | Tables |
 |---|---|
 | Accounts & sessions | `users`, `refresh_tokens`, `connect_tokens`, `devices` (hardware-id deduped), `webauthn_credentials` |
-| Requests | `request_log` (approval + season/quality/book-format capture), `user_request_settings` |
+| Requests | `request_log` (approval + season/quality/book-format/instance capture), `book_request_waiters` (shared pending subscribers + their concrete format coverage), `user_request_settings` |
 | Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials), `user_default_instances` |
 | Push | `push_tokens` (one per device), `notification_prefs` |
 | AI access | `user_ai_settings` (explicit personal selection), `user_ai_credentials` (per-provider encrypted personal API keys), `user_codex_accounts` (personal encrypted OpenAI OAuth authorization), `shared_codex_account` (singleton encrypted included authorization); `users.ai_shared_enabled` stores the included-access grant, while `settings` stores the daily health-check switch/timestamp |

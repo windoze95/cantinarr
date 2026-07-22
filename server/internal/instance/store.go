@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
+
+var ErrPendingBookRequests = errors.New("instance has pending book requests")
 
 // Instance represents a configured service instance (Radarr, Sonarr, SABnzbd,
 // or qBittorrent). Radarr/Sonarr/SABnzbd authenticate with an API key;
@@ -377,7 +380,23 @@ func newWebhookToken() (string, error) {
 
 // Delete removes an instance by ID.
 func (s *Store) Delete(id string) error {
-	result, err := s.db.Exec("DELETE FROM service_instances WHERE id = ?", id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin instance deletion: %w", err)
+	}
+	defer tx.Rollback()
+	var pending int
+	err = tx.QueryRow(
+		"SELECT COUNT(*) FROM request_log WHERE instance_id = ? AND media_type = 'book' AND status = 'pending'",
+		id,
+	).Scan(&pending)
+	if err != nil {
+		return fmt.Errorf("check pending book requests: %w", err)
+	}
+	if pending > 0 {
+		return fmt.Errorf("%w: cannot delete instance while %d book request(s) await approval", ErrPendingBookRequests, pending)
+	}
+	result, err := tx.Exec("DELETE FROM service_instances WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete instance: %w", err)
 	}
@@ -388,8 +407,11 @@ func (s *Store) Delete(id string) error {
 	// Drop any per-user defaults/grants that pointed at this instance so a
 	// deleted instance neither lingers as someone's default nor (for chaptarr)
 	// keeps granting access to a now-removed instance.
-	if _, err := s.db.Exec("DELETE FROM user_default_instances WHERE instance_id = ?", id); err != nil {
+	if _, err := tx.Exec("DELETE FROM user_default_instances WHERE instance_id = ?", id); err != nil {
 		return fmt.Errorf("delete instance user defaults: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit instance deletion: %w", err)
 	}
 	return nil
 }

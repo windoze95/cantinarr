@@ -2,6 +2,9 @@ import 'package:dio/dio.dart';
 
 import '../../request/data/request_service.dart';
 
+int _positiveRequesterCount(Object? value) =>
+    value is int && value > 0 ? value : 1;
+
 /// An arr quality profile (id + name) offered for selection.
 class QualityProfile {
   final int id;
@@ -145,6 +148,8 @@ class PendingRequestItem {
   final String mediaType;
   final String title;
   final String bookFormat;
+  final String instanceName;
+  final int requesterCount;
   final String seasonScope;
   final int qualityProfileId;
   final DateTime? requestedAt;
@@ -158,6 +163,8 @@ class PendingRequestItem {
     required this.mediaType,
     required this.title,
     required this.bookFormat,
+    required this.instanceName,
+    required this.requesterCount,
     required this.seasonScope,
     required this.qualityProfileId,
     required this.requestedAt,
@@ -170,8 +177,14 @@ class PendingRequestItem {
         'book' => 'Book',
         _ => 'Movie',
       };
-  BookRequestFormat get requestedBookFormat =>
-      BookRequestFormat.fromValue(bookFormat);
+  BookRequestFormat? get requestedBookFormat =>
+      BookRequestFormat.tryFromValue(bookFormat);
+  String get requestedByLabel {
+    final requester = username.trim().isEmpty ? 'a user' : username.trim();
+    final others = requesterCount - 1;
+    if (others <= 0) return 'Requested by $requester';
+    return 'Requested by $requester and $others ${others == 1 ? 'other' : 'others'}';
+  }
 
   factory PendingRequestItem.fromJson(Map<String, dynamic> json) =>
       PendingRequestItem(
@@ -183,11 +196,65 @@ class PendingRequestItem {
         mediaType: json['media_type'] as String? ?? 'movie',
         title: json['title'] as String? ?? '',
         bookFormat: json['book_format'] as String? ?? 'both',
+        instanceName: json['instance_name'] as String? ?? '',
+        requesterCount: _positiveRequesterCount(json['requester_count']),
         seasonScope: json['season_scope'] as String? ?? '',
         qualityProfileId: json['quality_profile_id'] as int? ?? 0,
         requestedAt:
             DateTime.tryParse(json['requested_at'] as String? ?? '')?.toLocal(),
       );
+}
+
+class BookApprovalResult {
+  final RequestStatus? status;
+  final Map<BookRequestFormat, RequestStatus> formats;
+  final bool isKnown;
+
+  const BookApprovalResult({
+    required this.status,
+    required this.formats,
+    required this.isKnown,
+  });
+
+  factory BookApprovalResult.fromJson(Object? value) {
+    if (value is! Map) {
+      return const BookApprovalResult(
+        status: null,
+        formats: {},
+        isKnown: false,
+      );
+    }
+    RequestStatus? parseStatus(Object? raw) {
+      for (final status in RequestStatus.values) {
+        if (status.name == raw?.toString()) return status;
+      }
+      return null;
+    }
+
+    final status = parseStatus(value['status']);
+    var isKnown = status != null;
+    final formats = <BookRequestFormat, RequestStatus>{};
+    final rawFormats = value['book_formats'];
+    if (rawFormats is Map) {
+      rawFormats.forEach((key, rawStatus) {
+        final format = BookRequestFormat.tryFromValue(key.toString());
+        final parsedStatus = parseStatus(rawStatus);
+        if (format == null ||
+            format == BookRequestFormat.both ||
+            parsedStatus == null) {
+          isKnown = false;
+          return;
+        }
+        formats[format] = parsedStatus;
+      });
+    }
+    if (status == RequestStatus.partial && formats.isEmpty) isKnown = false;
+    return BookApprovalResult(
+      status: status,
+      formats: formats,
+      isKnown: isKnown,
+    );
+  }
 }
 
 /// Admin API client for media-request settings + the approval queue.
@@ -242,17 +309,16 @@ class RequestSettingsService {
         .toList();
   }
 
-  Future<void> approve(int id,
-      {String? seasonScope,
-      int? qualityProfileId,
-      BookRequestFormat? bookFormat}) async {
+  Future<BookApprovalResult> approve(int id,
+      {String? seasonScope, int? qualityProfileId}) async {
     final body = <String, dynamic>{};
     if (seasonScope != null) body['season_scope'] = seasonScope;
     if (qualityProfileId != null && qualityProfileId != 0) {
       body['quality_profile_id'] = qualityProfileId;
     }
-    if (bookFormat != null) body['book_format'] = bookFormat.value;
-    await _dio.post('/api/admin/requests/$id/approve', data: body);
+    final response =
+        await _dio.post('/api/admin/requests/$id/approve', data: body);
+    return BookApprovalResult.fromJson(response.data);
   }
 
   Future<void> deny(int id, {String? reason}) async {

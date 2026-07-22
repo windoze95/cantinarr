@@ -2,6 +2,7 @@ package instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -257,7 +258,11 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "instanceID")
 
 	if err := h.store.Delete(instanceID); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		status := http.StatusInternalServerError
+		if errors.Is(err, ErrPendingBookRequests) {
+			status = http.StatusConflict
+		}
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), status)
 		return
 	}
 
