@@ -97,31 +97,34 @@ class _FormatPickerSheet extends StatelessWidget {
             for (final group in groups)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-                  leading: Icon(chaptarrFormatIcon(group.first.format),
-                      color: AppTheme.accent),
-                  title: Text(
-                    chaptarrFormatLabel(group.first.format),
-                    style: const TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontWeight: FontWeight.w600,
+                child: Material(
+                  color: Colors.transparent,
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                    leading: Icon(chaptarrFormatIcon(group.first.format),
+                        color: AppTheme.accent),
+                    title: Text(
+                      chaptarrFormatLabel(group.first.format),
+                      style: const TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
+                    subtitle: group.length > 1
+                        ? Text(
+                            '${group.length} records',
+                            style: const TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 12,
+                            ),
+                          )
+                        : null,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: const BorderSide(color: AppTheme.border),
+                    ),
+                    onTap: () => Navigator.of(context).pop(group),
                   ),
-                  subtitle: group.length > 1
-                      ? Text(
-                          '${group.length} records',
-                          style: const TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 12,
-                          ),
-                        )
-                      : null,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    side: const BorderSide(color: AppTheme.border),
-                  ),
-                  onTap: () => Navigator.of(context).pop(group),
                 ),
               ),
           ],
@@ -185,30 +188,33 @@ class _RecordPickerSheet extends StatelessWidget {
                     for (final record in records)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
-                        child: ListTile(
-                          contentPadding:
-                              const EdgeInsets.symmetric(horizontal: 12),
-                          leading: Icon(chaptarrFormatIcon(record.format),
-                              color: AppTheme.accent),
-                          title: Text(
-                            'Record #${record.id}',
-                            style: const TextStyle(
-                              color: AppTheme.textPrimary,
-                              fontWeight: FontWeight.w600,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: ListTile(
+                            contentPadding:
+                                const EdgeInsets.symmetric(horizontal: 12),
+                            leading: Icon(chaptarrFormatIcon(record.format),
+                                color: AppTheme.accent),
+                            title: Text(
+                              'Record #${record.id}',
+                              style: const TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
-                          ),
-                          subtitle: Text(
-                            bookFileStatusLine(record).text,
-                            style: const TextStyle(
-                              color: AppTheme.textSecondary,
-                              fontSize: 12,
+                            subtitle: Text(
+                              bookFileStatusLine(record).text,
+                              style: const TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontSize: 12,
+                              ),
                             ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              side: const BorderSide(color: AppTheme.border),
+                            ),
+                            onTap: () => Navigator.of(context).pop(record),
                           ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            side: const BorderSide(color: AppTheme.border),
-                          ),
-                          onTap: () => Navigator.of(context).pop(record),
                         ),
                       ),
                   ],
