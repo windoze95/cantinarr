@@ -85,11 +85,17 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('eBook'));
     await tester.pumpAndSettle();
+    expect(find.text('Which match looks right?'), findsNothing);
 
     expect(adapter.requestBodies, hasLength(1));
     expect(
       adapter.requestBodies.single['book_selection']['lookup_term'],
       'haunting Adelin',
+    );
+    expect(
+      adapter.requestBodies.single['book_selection']
+          ['catalog_foreign_book_id'],
+      'book-a',
     );
   });
 
@@ -171,6 +177,22 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
+    expect(
+      tester
+          .widget<RequesterBookDetailScreen>(
+            find.byType(RequesterBookDetailScreen),
+          )
+          .lookupTerm,
+      'meditations',
+    );
+    expect(
+      tester
+          .widget<RequesterBookDetailScreen>(
+            find.byType(RequesterBookDetailScreen),
+          )
+          .catalogForeignBookId,
+      'book-1',
+    );
     expect(find.text('Marcus Aurelius'), findsOneWidget);
     expect(find.text('2002 · 304 pages'), findsOneWidget);
     expect(find.text('A practical guide to Stoic philosophy.'), findsOneWidget);
@@ -278,6 +300,7 @@ void main() {
     expect(adapter.requestBodies.single['book_format'], 'audiobook');
     expect(adapter.requestBodies.single['book_selection'], {
       'lookup_term': 'the hobbit',
+      'catalog_foreign_book_id': 'hobbit-anniversary',
       'foreign_author_id': 'author-tolkien',
       'author_name': 'J. R. R. Tolkien',
       'audiobook': {
@@ -319,15 +342,15 @@ void main() {
       ),
       findsOneWidget,
     );
-    // The normal-row test above proves the tile gesture. Continue this case
-    // through the exact route/extra the mismatched row owns so the remainder
-    // can assert detail identity and mutation payload end to end.
     router.go(
-      '/detail/book/library-flock?title=Flock&instance_id=books',
+      '/detail/book/library-flock?title=Flock&lookup_term=flock&catalog_foreign_book_id=lookup-flock&instance_id=books',
       extra: ChaptarrBook.fromJson({
         'title': 'Flock',
         'foreignBookId': 'lookup-flock',
-        'author': {'authorName': 'Kate Stewart'},
+        'author': {
+          'authorName': 'Kate Stewart',
+          'foreignAuthorId': 'author-flock',
+        },
       }),
     );
     await tester.pumpAndSettle();
@@ -338,10 +361,16 @@ void main() {
       router.routeInformationProvider.value.uri.queryParameters['instance_id'],
       'books',
     );
+    expect(
+      router.routeInformationProvider.value.uri.queryParameters['lookup_term'],
+      'flock',
+    );
     final screen = tester.widget<RequesterBookDetailScreen>(
       find.byType(RequesterBookDetailScreen),
     );
     expect(screen.foreignId, 'library-flock');
+    expect(screen.lookupTerm, 'flock');
+    expect(screen.catalogForeignBookId, 'lookup-flock');
     expect(screen.initialBook?.foreignBookId, 'lookup-flock');
 
     await tester.scrollUntilVisible(
@@ -359,6 +388,12 @@ void main() {
     expect(adapter.requestBodies.single['foreign_id'], 'library-flock');
     expect(adapter.requestBodies.single['instance_id'], 'books');
     expect(adapter.requestBodies.single['book_format'], 'ebook');
+    expect(adapter.requestBodies.single['book_selection'], {
+      'lookup_term': 'flock',
+      'catalog_foreign_book_id': 'lookup-flock',
+      'foreign_author_id': 'author-flock',
+      'author_name': 'Kate Stewart',
+    });
   });
 
   testWidgets('a single known match and format submits without extra steps',
@@ -386,6 +421,12 @@ void main() {
     expect(adapter.requestBodies, hasLength(1));
     expect(adapter.requestBodies.single['foreign_id'], 'library-flock');
     expect(adapter.requestBodies.single['book_format'], 'ebook');
+    expect(adapter.requestBodies.single['book_selection'], {
+      'lookup_term': 'flock',
+      'catalog_foreign_book_id': 'lookup-flock',
+      'foreign_author_id': 'author-flock',
+      'author_name': 'Kate Stewart',
+    });
   });
 
   testWidgets(
@@ -486,7 +527,7 @@ void main() {
   });
 
   testWidgets(
-      'equivalent lookup rows resolve automatically without exposing record ids',
+      'equivalent hidden matches keep the clicked lookup identity',
       (tester) async {
     _usePhoneSize(tester);
     final (:router, container: _, :adapter) =
@@ -530,21 +571,62 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('eBook'));
     await tester.pumpAndSettle();
+    expect(find.text('Which match looks right?'), findsNothing);
 
     expect(adapter.requestBodies, hasLength(1));
     expect(adapter.requestBodies.single['foreign_id'], 'lookup-flock');
     expect(adapter.requestBodies.single['book_format'], 'ebook');
-    expect(adapter.requestBodies.single['book_selection'], {
-      'lookup_term': 'flock',
-      'foreign_author_id': 'author-flock',
-      'author_name': 'Kate Stewart',
-    });
+    final selection = adapter.requestBodies.single['book_selection']
+        as Map<String, dynamic>;
+    expect(selection['lookup_term'], 'flock');
+    expect(
+      selection['catalog_foreign_book_id'],
+      adapter.requestBodies.single['foreign_id'],
+    );
     expect(find.text('Confirm the matching title'), findsNothing);
     expect(
       find.textContaining('equivalent catalog matches grouped'),
       findsNothing,
     );
     expect(find.text('Which match looks right?'), findsNothing);
+  });
+
+  testWidgets(
+      'an injected library request omits lookup-only catalog identity',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, :adapter) =
+        await _pumpRouter(tester, ambiguousLookup: true);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final searchField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'Search books or authors…',
+    );
+    await tester.enterText(searchField, 'flock');
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+
+    final libraryRow = find.byKey(
+      const ValueKey(
+          'book-result:library-flock:library-flock:library:0'),
+    );
+    await tester.tap(
+      find.descendant(of: libraryRow, matching: find.text('Request eBook')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(adapter.requestBodies, hasLength(1));
+    expect(adapter.requestBodies.single['foreign_id'], 'library-flock');
+    expect(adapter.requestBodies.single['book_format'], 'ebook');
+    final selection = adapter.requestBodies.single['book_selection']
+        as Map<String, dynamic>;
+    expect(selection['lookup_term'], 'flock');
+    expect(selection['foreign_author_id'], 'author-flock');
+    expect(selection['author_name'], 'Kate Stewart');
+    expect(selection.containsKey('catalog_foreign_book_id'), isFalse);
   });
 
   testWidgets('same-title library records are surfaced separately',

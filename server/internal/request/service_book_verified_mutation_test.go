@@ -53,6 +53,7 @@ type verifiedBookUpstream struct {
 	activeSearch              bool
 	activeSearchBookID        int
 	driftIdentityOnRead       bool
+	formatlessSeedEdition     bool
 	failAddFormat             map[string]bool
 	rejectAddStatus           map[string]int
 	dropAddResponse           map[string]bool
@@ -311,6 +312,11 @@ func (u *verifiedBookUpstream) serveAddBook(w http.ResponseWriter, r *http.Reque
 	u.author.EbookMonitorFuture = add.Author.EbookMonitorFuture
 	u.author.AudiobookMonitorFuture = add.Author.AudiobookMonitorFuture
 	bookID := u.addRowLocked(add.MediaType, false, false)
+	if u.formatlessSeedEdition {
+		row := u.rows[bookID]
+		row.editions[0].Format = ""
+		row.book.ForeignEditionID = row.editions[0].ForeignEditionID
+	}
 	if u.duplicatePocket {
 		u.addRowLocked(add.MediaType, false, true)
 	}
@@ -536,6 +542,38 @@ func TestVerifiedBookMutationSelectsAuthoritativeRequestedFormat(t *testing.T) {
 				t.Fatalf("selected row = %#v, want one monitored %s edition", row, format)
 			}
 		})
+	}
+}
+
+func TestVerifiedBookMutationAcceptsFormatlessEditionThroughExactAuthoritativeParent(t *testing.T) {
+	upstream := newVerifiedBookUpstream("The Clockwork Orchard", "hc:work-1001")
+	bookID := upstream.addExisting(BookFormatAudiobook, false)
+	isEbookFalse := false
+	upstream.mu.Lock()
+	row := upstream.rows[bookID]
+	row.editions[0].Format = ""
+	row.editions[0].IsEbook = &isEbookFalse
+	row.book.ForeignEditionID = row.editions[0].ForeignEditionID
+	upstream.mu.Unlock()
+
+	service, userID := newVerifiedMutationService(t, upstream)
+	response, err := service.CreateMediaRequest(userID, &CreateRequest{
+		MediaType: "book", ForeignID: upstream.foreignBookID, Title: upstream.title, BookFormat: BookFormatAudiobook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if response.Status != StatusRequested || response.BookFormats[BookFormatAudiobook] != StatusRequested {
+		t.Fatalf("response = %#v, want verified requested audiobook", response)
+	}
+
+	upstream.mu.Lock()
+	defer upstream.mu.Unlock()
+	if len(upstream.seedBodies) != 0 || len(upstream.monitorIDs) != 1 || upstream.monitorIDs[0] != bookID || upstream.searchCalls != 1 {
+		t.Fatalf("seed=%d monitor=%v searches=%d, want one in-place authoritative request", len(upstream.seedBodies), upstream.monitorIDs, upstream.searchCalls)
+	}
+	if len(row.editions) != 1 || !row.editions[0].Monitored || !row.editions[0].ManualAdd || row.editions[0].Format != "" {
+		t.Fatalf("updated format-less edition = %#v", row.editions)
 	}
 }
 

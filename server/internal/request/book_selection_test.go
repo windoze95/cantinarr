@@ -14,9 +14,10 @@ import (
 
 func TestBookSelectionCanonicalNormalizationAndValidation(t *testing.T) {
 	selection, err := normalizeBookSelection(&BookSelection{
-		LookupTerm:      "  haunting Adelin  ",
-		ForeignAuthorID: "  hc:author-42  ",
-		AuthorName:      "  Mara Vale  ",
+		LookupTerm:           "  haunting Adelin  ",
+		CatalogForeignBookID: "  hc:catalog-haunting  ",
+		ForeignAuthorID:      "  hc:author-42  ",
+		AuthorName:           "  Mara Vale  ",
 		Ebook: &BookPublicationSelection{
 			ISBN13:       " 978-1-4028-9462-6 ",
 			EditionTitle: " First edition ",
@@ -39,6 +40,9 @@ func TestBookSelectionCanonicalNormalizationAndValidation(t *testing.T) {
 	if selection.LookupTerm != "haunting Adelin" {
 		t.Fatalf("normalized lookup term = %q", selection.LookupTerm)
 	}
+	if selection.CatalogForeignBookID != "hc:catalog-haunting" {
+		t.Fatalf("normalized catalog foreign id = %q", selection.CatalogForeignBookID)
+	}
 	if selection.Ebook == nil || selection.Ebook.ISBN13 != "978-1-4028-9462-6" ||
 		selection.Ebook.EditionTitle != "First edition" || selection.Ebook.Publisher != "Lantern Press" ||
 		selection.Ebook.Language != "English" {
@@ -52,7 +56,7 @@ func TestBookSelectionCanonicalNormalizationAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeBookSelection: %v", err)
 	}
-	const want = `{"lookup_term":"haunting Adelin","foreign_author_id":"hc:author-42","author_name":"Mara Vale","audiobook":{"foreign_edition_id":"hc:edition-audio-7","asin":"B0EXACT42"}}`
+	const want = `{"lookup_term":"haunting Adelin","catalog_foreign_book_id":"hc:catalog-haunting","foreign_author_id":"hc:author-42","author_name":"Mara Vale","audiobook":{"foreign_edition_id":"hc:edition-audio-7","asin":"B0EXACT42"}}`
 	if encoded != want {
 		t.Fatalf("canonical audiobook JSON = %s, want %s", encoded, want)
 	}
@@ -77,6 +81,7 @@ func TestBookSelectionCanonicalNormalizationAndValidation(t *testing.T) {
 		{name: "publication for unrequested format", selection: &BookSelection{Ebook: &BookPublicationSelection{ASIN: "B0WRONG"}}, format: BookFormatAudiobook},
 		{name: "negative year", selection: &BookSelection{Ebook: &BookPublicationSelection{Year: -1}}, format: BookFormatEbook},
 		{name: "impossible page count", selection: &BookSelection{Audiobook: &BookPublicationSelection{PageCount: 10_000_001}}, format: BookFormatAudiobook},
+		{name: "oversized catalog identity", selection: &BookSelection{CatalogForeignBookID: tooLongIdentity}, format: BookFormatEbook},
 		{name: "oversized author identity", selection: &BookSelection{ForeignAuthorID: tooLongIdentity}, format: BookFormatEbook},
 		{name: "oversized lookup term", selection: &BookSelection{LookupTerm: tooLongText}, format: BookFormatEbook},
 		{name: "oversized publication text", selection: &BookSelection{Ebook: &BookPublicationSelection{EditionTitle: tooLongText}}, format: BookFormatEbook},
@@ -86,6 +91,14 @@ func TestBookSelectionCanonicalNormalizationAndValidation(t *testing.T) {
 				t.Fatalf("normalizeBookSelection error = %v, want ErrBookSelectionInvalid", err)
 			}
 		})
+	}
+}
+
+func TestBookSelectionsWithDifferentCatalogWorksAreDistinct(t *testing.T) {
+	left := &BookSelection{CatalogForeignBookID: "hc:catalog-one", ForeignAuthorID: "hc:author"}
+	right := &BookSelection{CatalogForeignBookID: "hc:catalog-two", ForeignAuthorID: "hc:author"}
+	if bookSelectionsEquivalent(left, right, BookFormatAudiobook) {
+		t.Fatal("different selected catalog works were treated as one request")
 	}
 }
 
@@ -290,6 +303,124 @@ func TestVerifiedBookRequestReplaysTheLookupTermThatFoundTheWork(t *testing.T) {
 	})
 }
 
+func TestVerifiedBookRequestKeepsCanonicalMutationIdentityAndCatalogLookupIdentity(t *testing.T) {
+	const (
+		canonicalID = "hc:library-haunting"
+		catalogID   = "hc:catalog-haunting"
+		lookupTerm  = "haunting Adelin"
+	)
+	lookupResult := func(upstream *verifiedBookUpstream, foreignBookID, authorID string) map[string]any {
+		return map[string]any{
+			"title":         upstream.title,
+			"titleSlug":     fallbackTitleSlug(upstream.title),
+			"foreignBookId": foreignBookID,
+			"author": map[string]any{
+				"authorName":      upstream.authorName,
+				"foreignAuthorId": authorID,
+			},
+			"editions": []map[string]any{{
+				"foreignEditionId": "lookup-only",
+				"format":           nil,
+				"isEbook":          false,
+			}},
+		}
+	}
+	selection := func(upstream *verifiedBookUpstream) *BookSelection {
+		return &BookSelection{
+			LookupTerm:           lookupTerm,
+			CatalogForeignBookID: catalogID,
+			ForeignAuthorID:      upstream.foreignAuthorID,
+			AuthorName:           upstream.authorName,
+		}
+	}
+
+	t.Run("anchored missing audiobook mutates canonical sibling once", func(t *testing.T) {
+		upstream := newVerifiedBookUpstream("Haunting Adeline (Cat and Mouse, #1)", canonicalID)
+		upstream.addExisting(BookFormatEbook, true)
+		upstream.formatlessSeedEdition = true
+		upstream.lookupResultsByTerm = map[string][]map[string]any{
+			lookupTerm:     {lookupResult(upstream, catalogID, upstream.foreignAuthorID)},
+			upstream.title: {},
+		}
+		service, userID := newVerifiedMutationService(t, upstream)
+
+		response, err := service.CreateMediaRequest(userID, &CreateRequest{
+			MediaType: "book", ForeignID: canonicalID, Title: upstream.title, BookFormat: BookFormatAudiobook,
+			BookSelection: selection(upstream),
+		})
+		if err != nil {
+			t.Fatalf("CreateMediaRequest: %v", err)
+		}
+		if response.Status != StatusRequested || response.BookFormats[BookFormatAudiobook] != StatusRequested {
+			t.Fatalf("response = %#v, want requested audiobook", response)
+		}
+
+		upstream.mu.Lock()
+		defer upstream.mu.Unlock()
+		if len(upstream.seedBodies) != 1 || upstream.seedBodies[0]["foreignBookId"] != canonicalID || upstream.seedBodies[0]["mediaType"] != BookFormatAudiobook {
+			t.Fatalf("seed bodies = %#v, want one canonical audiobook sibling", upstream.seedBodies)
+		}
+		seedEditions, ok := upstream.seedBodies[0]["editions"].([]any)
+		if !ok || len(seedEditions) != 1 || seedEditions[0].(map[string]any)["format"] != nil {
+			t.Fatalf("seed editions = %#v, want the raw format-null lookup edition", upstream.seedBodies[0]["editions"])
+		}
+		if len(upstream.lookupTerms) == 0 || upstream.lookupTerms[0] != lookupTerm {
+			t.Fatalf("lookup terms = %#v, want selected discovery term first", upstream.lookupTerms)
+		}
+		if upstream.searchCalls != 1 || len(upstream.searchBookIDs) != 1 {
+			t.Fatalf("searches=%d ids=%v, want one authoritative local audiobook", upstream.searchCalls, upstream.searchBookIDs)
+		}
+		requestedRow := upstream.rows[upstream.searchBookIDs[0]]
+		if requestedRow == nil || requestedRow.book.MediaType != BookFormatAudiobook ||
+			len(requestedRow.editions) != 1 || requestedRow.editions[0].Format != "" || !requestedRow.editions[0].Monitored {
+			t.Fatalf("requested local audiobook = %#v, want monitored authoritative format-null edition", requestedRow)
+		}
+	})
+
+	t.Run("wrong catalog work cannot borrow the canonical anchor", func(t *testing.T) {
+		upstream := newVerifiedBookUpstream("Haunting Adeline (Cat and Mouse, #1)", canonicalID)
+		upstream.addExisting(BookFormatEbook, true)
+		upstream.lookupResultsByTerm = map[string][]map[string]any{
+			lookupTerm:     {lookupResult(upstream, "hc:another-catalog-work", upstream.foreignAuthorID)},
+			upstream.title: {},
+		}
+		service, userID := newVerifiedMutationService(t, upstream)
+
+		_, err := service.CreateMediaRequest(userID, &CreateRequest{
+			MediaType: "book", ForeignID: canonicalID, Title: upstream.title, BookFormat: BookFormatAudiobook,
+			BookSelection: selection(upstream),
+		})
+		if !errors.Is(err, ErrBookMatchNotFound) {
+			t.Fatalf("CreateMediaRequest error = %v, want ErrBookMatchNotFound", err)
+		}
+		if len(upstream.seedBodies) != 0 || len(upstream.bookPutIDs) != 0 || len(upstream.monitorIDs) != 0 || upstream.searchCalls != 0 {
+			t.Fatalf("wrong catalog work mutated Chaptarr: seed=%d put=%v monitor=%v search=%d", len(upstream.seedBodies), upstream.bookPutIDs, upstream.monitorIDs, upstream.searchCalls)
+		}
+	})
+
+	t.Run("differing ids require a live canonical anchor", func(t *testing.T) {
+		upstream := newVerifiedBookUpstream("Haunting Adeline (Cat and Mouse, #1)", canonicalID)
+		upstream.lookupResultsByTerm = map[string][]map[string]any{
+			lookupTerm: {lookupResult(upstream, catalogID, upstream.foreignAuthorID)},
+		}
+		service, userID := newVerifiedMutationService(t, upstream)
+		catalogOnlySelection := selection(upstream)
+		catalogOnlySelection.ForeignAuthorID = ""
+		catalogOnlySelection.AuthorName = ""
+
+		_, err := service.CreateMediaRequest(userID, &CreateRequest{
+			MediaType: "book", ForeignID: canonicalID, Title: upstream.title, BookFormat: BookFormatAudiobook,
+			BookSelection: catalogOnlySelection,
+		})
+		if !errors.Is(err, ErrBookMatchNotFound) {
+			t.Fatalf("CreateMediaRequest error = %v, want ErrBookMatchNotFound", err)
+		}
+		if len(upstream.lookupTerms) != 0 || len(upstream.seedBodies) != 0 || len(upstream.bookPutIDs) != 0 || len(upstream.monitorIDs) != 0 || upstream.searchCalls != 0 {
+			t.Fatalf("unanchored selection touched mutation flow: lookup=%v seed=%d put=%v monitor=%v search=%d", upstream.lookupTerms, len(upstream.seedBodies), upstream.bookPutIDs, upstream.monitorIDs, upstream.searchCalls)
+		}
+	})
+}
+
 func TestExactPublicationSelectionUsesParentWorkScopeInsteadOfEditionLabel(t *testing.T) {
 	book := chaptarr.Book{
 		ID: 17, AuthorID: 23, ForeignBookID: "hc:work-selected",
@@ -383,6 +514,80 @@ func TestExactPublicationSelectionFailsClosedOutsideSelectedWork(t *testing.T) {
 			matches, _, _, err := selectChaptarrEditionsForTarget([]chaptarr.Edition{matchingEdition}, tc.book, target)
 			if err != nil || len(matches) != 0 {
 				t.Fatalf("matches=%#v err=%v, want publication scoped to selected author/work", matches, err)
+			}
+		})
+	}
+}
+
+func TestFormatlessLocalEditionRequiresExactAuthoritativeParent(t *testing.T) {
+	isEbookFalse := false
+	target := chaptarrBookTarget{
+		authorID: 23, foreignBookID: "hc:work-selected", title: "The Selected Work",
+		mediaType: BookFormatAudiobook,
+	}
+	book := chaptarr.Book{
+		ID: 17, AuthorID: 23, ForeignBookID: "hc:work-selected",
+		ForeignEditionID: "hc:edition-exact", Title: "The Selected Work", MediaType: BookFormatAudiobook,
+	}
+	edition := chaptarr.Edition{
+		ID: 31, BookID: 17, ForeignEditionID: "hc:edition-exact",
+		Title: "The Selected Work", Format: "", IsEbook: &isEbookFalse,
+	}
+
+	matches, _, multiWork, err := selectChaptarrEditionsForTarget([]chaptarr.Edition{edition}, book, target)
+	if err != nil || multiWork || len(matches) != 1 || matches[0].ID != edition.ID {
+		t.Fatalf("authoritative format-less matches=%#v multiWork=%v err=%v, want exact parent edition", matches, multiWork, err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		book     chaptarr.Book
+		editions []chaptarr.Edition
+	}{
+		{
+			name: "isEbook false without authoritative parent medium",
+			book: func() chaptarr.Book {
+				candidate := book
+				candidate.MediaType = ""
+				return candidate
+			}(),
+			editions: []chaptarr.Edition{edition},
+		},
+		{
+			name: "parent points to another edition",
+			book: func() chaptarr.Book {
+				candidate := book
+				candidate.ForeignEditionID = "hc:edition-other"
+				return candidate
+			}(),
+			editions: []chaptarr.Edition{edition},
+		},
+		{
+			name: "explicit physical child is never inferred",
+			book: book,
+			editions: []chaptarr.Edition{func() chaptarr.Edition {
+				candidate := edition
+				candidate.Format = "physical"
+				return candidate
+			}()},
+		},
+		{
+			name: "duplicate parent relationship is ambiguous",
+			book: book,
+			editions: []chaptarr.Edition{
+				edition,
+				func() chaptarr.Edition {
+					candidate := edition
+					candidate.ID = 32
+					return candidate
+				}(),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			matches, _, _, err := selectChaptarrEditionsForTarget(tc.editions, tc.book, target)
+			if err != nil || len(matches) != 0 {
+				t.Fatalf("matches=%#v err=%v, want no inferred audiobook edition", matches, err)
 			}
 		})
 	}
@@ -524,9 +729,10 @@ func TestBookSelectionSurvivesPendingApprovalAndDurableJobReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	selection, err := normalizeBookSelection(&BookSelection{
-		LookupTerm:      "durable select",
-		ForeignAuthorID: upstream.foreignAuthorID,
-		AuthorName:      upstream.authorName,
+		LookupTerm:           "durable select",
+		CatalogForeignBookID: "hc:durable-catalog-selection",
+		ForeignAuthorID:      upstream.foreignAuthorID,
+		AuthorName:           upstream.authorName,
 		Audiobook: &BookPublicationSelection{
 			ForeignEditionID: "hc:durable-edition", ASIN: "B0DURABLE", Publisher: "Lantern Audio",
 		},
@@ -572,7 +778,7 @@ func TestBookSelectionSurvivesPendingApprovalAndDurableJobReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPending: %v", err)
 	}
-	if len(pending) != 1 || pending[0].BookSelection == nil || pending[0].BookSelection.Audiobook == nil ||
+	if len(pending) != 1 || pending[0].BookSelection == nil || pending[0].BookSelection.CatalogForeignBookID != "hc:durable-catalog-selection" || pending[0].BookSelection.Audiobook == nil ||
 		pending[0].BookSelection.Audiobook.ForeignEditionID != "hc:durable-edition" {
 		t.Fatalf("pending approval = %#v", pending)
 	}

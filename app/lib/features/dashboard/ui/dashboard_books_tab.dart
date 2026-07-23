@@ -106,12 +106,6 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     return _search(term, ++_searchGen);
   }
 
-  Future<void> _refreshCurrentSearch() {
-    _debounce?.cancel();
-    final term = _controller.text.trim();
-    return _search(term, ++_searchGen, showLoading: false);
-  }
-
   ChaptarrApiService? _chaptarr() {
     final instance = ref.read(instanceProvider).activeChaptarrInstance;
     if (instance == null) return null;
@@ -313,6 +307,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
         ownershipStatusKnown: match?.statusKnown ?? true,
         sourceIdentity: 'lookup:$lookupIndex',
         lookupTerm: _resultLookupTerm,
+        catalogForeignBookId: lookupId.isEmpty ? null : lookupId,
         cover: cover,
         canonicalForeignId: libraryId.isNotEmpty ? libraryId : lookupId,
       ));
@@ -398,6 +393,9 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
         itemBuilder: (_, i) => _BookResultTile(
           book: ordered[i].result.book,
           canonicalForeignId: ordered[i].result.canonicalForeignId,
+          lookupTerm: ordered[i].result.lookupTerm,
+          catalogForeignBookId:
+              ordered[i].result.catalogForeignBookId,
           ownership: ordered[i].result.ownership,
           ownershipStatusKnown: ordered[i].result.ownershipStatusKnown,
           sourceIdentity: ordered[i].result.sourceIdentity,
@@ -445,6 +443,10 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
                         ordered[candidateIndex].result.canonicalForeignId,
                     lookupTerm:
                         ordered[candidateIndex].result.lookupTerm,
+                    catalogForeignBookId:
+                        ordered[candidateIndex]
+                            .result
+                            .catalogForeignBookId,
                     ownership: ordered[candidateIndex].result.ownership,
                     ownershipStatusKnown:
                         ordered[candidateIndex].result.ownershipStatusKnown,
@@ -460,7 +462,6 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
               ],
             );
           },
-          onCatalogMatchChanged: _refreshCurrentSearch,
           onRequestCompleted: _refreshBookTruth,
         ),
       );
@@ -474,6 +475,7 @@ class _ResolvedBookResult {
   final bool ownershipStatusKnown;
   final String sourceIdentity;
   final String lookupTerm;
+  final String? catalogForeignBookId;
   final String? cover;
   final String canonicalForeignId;
 
@@ -483,6 +485,7 @@ class _ResolvedBookResult {
     required this.ownershipStatusKnown,
     required this.sourceIdentity,
     required this.lookupTerm,
+    this.catalogForeignBookId,
     required this.cover,
     required this.canonicalForeignId,
   });
@@ -501,6 +504,8 @@ class _RankedResolvedBookResult {
 class _BookResultTile extends StatelessWidget {
   final ChaptarrBook book;
   final String canonicalForeignId;
+  final String lookupTerm;
+  final String? catalogForeignBookId;
   final BookOwnership? ownership;
   final bool ownershipStatusKnown;
   final String sourceIdentity;
@@ -513,12 +518,13 @@ class _BookResultTile extends StatelessWidget {
   final BookRequestStatusDetail? statusDetail;
   final ValueChanged<BookRequestStatusDetail> onDetailChanged;
   final BookRequestTargetPicker requestTargetPicker;
-  final Future<void> Function() onCatalogMatchChanged;
   final VoidCallback onRequestCompleted;
 
   const _BookResultTile({
     required this.book,
     required this.canonicalForeignId,
+    required this.lookupTerm,
+    this.catalogForeignBookId,
     this.ownership,
     this.ownershipStatusKnown = true,
     required this.sourceIdentity,
@@ -531,7 +537,6 @@ class _BookResultTile extends StatelessWidget {
     required this.statusDetail,
     required this.onDetailChanged,
     required this.requestTargetPicker,
-    required this.onCatalogMatchChanged,
     required this.onRequestCompleted,
   });
 
@@ -547,6 +552,7 @@ class _BookResultTile extends StatelessWidget {
     // the matched canonical library id while [book] preserves lookup metadata.
     final fid = canonicalForeignId.trim();
     final lookupId = book.foreignBookId?.trim() ?? '';
+    final catalogId = catalogForeignBookId?.trim() ?? '';
     final o = ownership;
     final chip = _ownershipChip(o, statusDetail);
     final canOpen = fid.isNotEmpty;
@@ -572,7 +578,6 @@ class _BookResultTile extends StatelessWidget {
               showCoveredStatus: false,
               onDetailChanged: onDetailChanged,
               requestTargetPicker: requestTargetPicker,
-              onCatalogMatchChanged: onCatalogMatchChanged,
               onRequestCompleted: onRequestCompleted,
             ),
           )
@@ -665,6 +670,8 @@ class _BookResultTile extends StatelessWidget {
           ? () => context.push(
                 '/detail/book/${Uri.encodeComponent(fid)}'
                 '?title=${Uri.encodeQueryComponent(book.title)}'
+                '&lookup_term=${Uri.encodeQueryComponent(lookupTerm)}'
+                '${catalogId.isEmpty ? '' : '&catalog_foreign_book_id=${Uri.encodeQueryComponent(catalogId)}'}'
                 '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId!)}'}',
                 extra: book,
               )

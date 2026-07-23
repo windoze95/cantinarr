@@ -25,11 +25,13 @@ func normalizeBookSelection(input *BookSelection, bookFormat string) (*BookSelec
 		return nil, nil
 	}
 	selection := &BookSelection{
-		LookupTerm:      strings.TrimSpace(input.LookupTerm),
-		ForeignAuthorID: strings.TrimSpace(input.ForeignAuthorID),
-		AuthorName:      strings.TrimSpace(input.AuthorName),
+		LookupTerm:           strings.TrimSpace(input.LookupTerm),
+		CatalogForeignBookID: strings.TrimSpace(input.CatalogForeignBookID),
+		ForeignAuthorID:      strings.TrimSpace(input.ForeignAuthorID),
+		AuthorName:           strings.TrimSpace(input.AuthorName),
 	}
-	if len(selection.ForeignAuthorID) > bookSelectionIdentityLimit ||
+	if len(selection.CatalogForeignBookID) > bookSelectionIdentityLimit ||
+		len(selection.ForeignAuthorID) > bookSelectionIdentityLimit ||
 		len(selection.AuthorName) > bookSelectionTextLimit ||
 		len(selection.LookupTerm) > bookSelectionTextLimit {
 		return nil, ErrBookSelectionInvalid
@@ -53,7 +55,7 @@ func normalizeBookSelection(input *BookSelection, bookFormat string) (*BookSelec
 			return nil, err
 		}
 	}
-	if selection.LookupTerm == "" && selection.ForeignAuthorID == "" && selection.AuthorName == "" && selection.Ebook == nil && selection.Audiobook == nil {
+	if selection.LookupTerm == "" && selection.CatalogForeignBookID == "" && selection.ForeignAuthorID == "" && selection.AuthorName == "" && selection.Ebook == nil && selection.Audiobook == nil {
 		return nil, ErrBookSelectionInvalid
 	}
 	return selection, nil
@@ -103,9 +105,10 @@ func bookSelectionForFormat(selection *BookSelection, format string) *BookSelect
 		return nil
 	}
 	result := &BookSelection{
-		LookupTerm:      selection.LookupTerm,
-		ForeignAuthorID: selection.ForeignAuthorID,
-		AuthorName:      selection.AuthorName,
+		LookupTerm:           selection.LookupTerm,
+		CatalogForeignBookID: selection.CatalogForeignBookID,
+		ForeignAuthorID:      selection.ForeignAuthorID,
+		AuthorName:           selection.AuthorName,
 	}
 	if format == BookFormatBoth || format == BookFormatEbook {
 		result.Ebook = selection.Ebook
@@ -147,6 +150,9 @@ func decodeBookSelection(raw, format string) (*BookSelection, error) {
 func bookSelectionsEquivalent(left, right *BookSelection, format string) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
+	}
+	if strings.TrimSpace(left.CatalogForeignBookID) != strings.TrimSpace(right.CatalogForeignBookID) {
+		return false
 	}
 	leftAuthor := strings.TrimSpace(left.ForeignAuthorID)
 	rightAuthor := strings.TrimSpace(right.ForeignAuthorID)
@@ -256,9 +262,46 @@ func filterChaptarrEditionsForPublication(editions []chaptarr.Edition, book chap
 	return matches, nil
 }
 
+// authoritativeParentEditionID returns one otherwise format-less local edition
+// only when Chaptarr's authoritative parent book declares the requested medium
+// and points back to that exact edition. Lookup isEbook hints are deliberately
+// ignored, as is any explicit non-target (for example physical) child format.
+func authoritativeParentEditionID(book chaptarr.Book, editions []chaptarr.Edition, mediaType string) int {
+	if strictChaptarrFormat(book.MediaType) != mediaType {
+		return 0
+	}
+	foreignEditionID := strings.TrimSpace(book.ForeignEditionID)
+	if foreignEditionID == "" {
+		return 0
+	}
+	matchedRelationships := 0
+	formatlessEditionID := 0
+	for _, edition := range editions {
+		if strings.TrimSpace(edition.ForeignEditionID) != foreignEditionID {
+			continue
+		}
+		matchedRelationships++
+		if edition.ID > 0 && strings.TrimSpace(edition.Format) == "" {
+			formatlessEditionID = edition.ID
+		}
+	}
+	if matchedRelationships != 1 {
+		return 0
+	}
+	return formatlessEditionID
+}
+
+func chaptarrEditionMatchesTargetFormat(edition chaptarr.Edition, mediaType string, authoritativeEditionID int) bool {
+	if format := chaptarrEditionFormat(edition); format != "" {
+		return format == mediaType
+	}
+	return authoritativeEditionID > 0 && edition.ID == authoritativeEditionID && strings.TrimSpace(edition.Format) == ""
+}
+
 func selectChaptarrEditionsForTarget(editions []chaptarr.Edition, book chaptarr.Book, target chaptarrBookTarget) ([]chaptarr.Edition, int, bool, error) {
+	authoritativeEditionID := authoritativeParentEditionID(book, editions, target.mediaType)
 	if target.publication == nil {
-		matching, tier, multiWork := selectChaptarrEditions(editions, target.title, target.mediaType)
+		matching, tier, multiWork := selectChaptarrEditionsWithAuthoritativeParent(editions, target.title, target.mediaType, authoritativeEditionID)
 		return matching, tier, multiWork, nil
 	}
 	// An edition title is a publication label, not necessarily the parent work
@@ -274,7 +317,7 @@ func selectChaptarrEditionsForTarget(editions []chaptarr.Edition, book chaptarr.
 	matches := make([]chaptarr.Edition, 0, 1)
 	matchTier := 0
 	for _, edition := range editions {
-		if edition.ID <= 0 || chaptarrEditionFormat(edition) != target.mediaType {
+		if edition.ID <= 0 || !chaptarrEditionMatchesTargetFormat(edition, target.mediaType, authoritativeEditionID) {
 			continue
 		}
 		if !bookPublicationMatchesEdition(target.publication, edition, book) {
@@ -372,7 +415,7 @@ func bookSelectionMatchesAuthorIdentity(selection *BookSelection, foreignAuthorI
 
 func (s *Service) selectChaptarrLibraryWorkForRequest(ctx context.Context, client *chaptarr.Client, books []chaptarr.Book, foreignBookID, selectedTitle string, selection *BookSelection) (string, []chaptarr.Book, error) {
 	if selection == nil || (selection.ForeignAuthorID == "" && selection.AuthorName == "") {
-		return selectChaptarrLibraryWork(books, foreignBookID, selectedTitle)
+		return selectChaptarrLibraryWorkWithSelection(books, foreignBookID, selectedTitle, selection)
 	}
 	hydrated := append([]chaptarr.Book(nil), books...)
 	for i := range hydrated {

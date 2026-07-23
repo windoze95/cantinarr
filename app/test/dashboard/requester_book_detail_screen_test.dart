@@ -105,7 +105,7 @@ void main() {
     });
 
     router.go(
-      '/detail/book/29749107?title=Ahsoka&instance_id=books',
+      '/detail/book/library-ahsoka?title=Ahsoka&lookup_term=ahsoka&catalog_foreign_book_id=29749107&instance_id=books',
       extra: book,
     );
     await tester.pumpAndSettle();
@@ -140,8 +140,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(adapter.requestBodies, hasLength(1));
+    expect(adapter.requestBodies.single['foreign_id'], 'library-ahsoka');
     expect(adapter.requestBodies.single['book_format'], 'audiobook');
     expect(adapter.requestBodies.single['book_selection'], {
+      'lookup_term': 'ahsoka',
+      'catalog_foreign_book_id': '29749107',
       'foreign_author_id': 'author-1',
       'author_name': 'E. K. Johnston',
       'audiobook': {
@@ -151,6 +154,42 @@ void main() {
         'publisher': 'Example Anniversary Audio',
         'year': 2016,
       },
+    });
+  });
+
+  testWidgets(
+      'restored detail uses the saved partial lookup and exact catalog id',
+      (tester) async {
+    final adapter = _BooksAdapter(restoredCatalogLookup: true);
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: adapter,
+    );
+
+    router.go(
+      '/detail/book/library-haunting?title=Haunting%20Adeline%20(Cat%20and%20Mouse%2C%20%231)&lookup_term=haunting%20Adelin&catalog_foreign_book_id=catalog-haunting&instance_id=books',
+    );
+    await tester.pumpAndSettle();
+
+    expect(adapter.lookupTerms, ['haunting Adelin']);
+    expect(find.text('Haunting Adeline (Cat and Mouse, #1)'), findsOneWidget);
+    expect(find.text('H.D. Carlton'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Request eBook'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    await tester.tap(find.text('Request eBook'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.requestBodies, hasLength(1));
+    expect(adapter.requestBodies.single['foreign_id'], 'library-haunting');
+    expect(adapter.requestBodies.single['book_format'], 'ebook');
+    expect(adapter.requestBodies.single['book_selection'], {
+      'lookup_term': 'haunting Adelin',
+      'catalog_foreign_book_id': 'catalog-haunting',
+      'foreign_author_id': 'author-hd-carlton',
+      'author_name': 'H.D. Carlton',
     });
   });
 
@@ -609,9 +648,11 @@ class _BooksAdapter implements HttpClientAdapter {
   final bool partiallyUnknownStatus;
   final bool bareMonitorOnly;
   final bool bookFiles;
+  final bool restoredCatalogLookup;
   final String? unknownReason;
   final libraryInstanceIds = <String>[];
   final statusInstanceIds = <String>[];
+  final lookupTerms = <String>[];
   final requestBodies = <Map<String, dynamic>>[];
 
   _BooksAdapter({
@@ -622,6 +663,7 @@ class _BooksAdapter implements HttpClientAdapter {
     this.partiallyUnknownStatus = false,
     this.bareMonitorOnly = false,
     this.bookFiles = false,
+    this.restoredCatalogLookup = false,
     this.unknownReason,
   });
 
@@ -689,6 +731,22 @@ class _BooksAdapter implements HttpClientAdapter {
                 'downloaded': false,
               },
             },
+          if (restoredCatalogLookup)
+            {
+              'title': 'Haunting Adeline (Cat and Mouse, #1)',
+              'author': 'H.D. Carlton',
+              'year': 2021,
+              'cover': '',
+              'foreign_book_id': 'library-haunting',
+              'ebook': {
+                'monitored': false,
+                'downloaded': false,
+              },
+              'audiobook': {
+                'monitored': true,
+                'downloaded': false,
+              },
+            },
         ],
       };
     } else if (options.path == '/api/requests/book-status') {
@@ -747,27 +805,61 @@ class _BooksAdapter implements HttpClientAdapter {
                     'audiobook': 'requested',
                   },
           },
+        'library-haunting' => requestBodies.isNotEmpty
+            ? {
+                'status': 'requested',
+                'book_formats': {
+                  if (requestBodies.last['book_format'] == 'ebook' ||
+                      requestBodies.last['book_format'] == 'both')
+                    'ebook': 'requested',
+                  if (requestBodies.last['book_format'] == 'audiobook' ||
+                      requestBodies.last['book_format'] == 'both')
+                    'audiobook': 'requested',
+                },
+              }
+            : {
+                'status': 'requested',
+                'book_formats': {'audiobook': 'requested'},
+              },
         _ => {'status': 'unavailable'},
       };
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
-      body = [
-        {
-          'title': 'Dune Messiah',
-          'foreignBookId': mismatchedLookupId ? 'lookup-555' : '555',
-          'year': 1969,
-          'pageCount': 336,
-          'overview': '<b>The desert planet has a new emperor.</b><br/><br/>'
-              'A second chapter &amp; more.',
-          'genres': ['Science Fiction'],
-          'author': {
-            'id': 0,
-            'authorName': mismatchedLookupAuthor
-                ? 'Brian Herbert'
-                : 'Frank Herbert',
-            'foreignAuthorId': 'author-2',
-          },
-        },
-      ];
+      final term = options.queryParameters['term']?.toString() ?? '';
+      lookupTerms.add(term);
+      body = restoredCatalogLookup
+          ? term == 'haunting Adelin'
+              ? [
+                  {
+                    'title': 'Haunting Adeline (Cat and Mouse, #1)',
+                    'foreignBookId': 'catalog-haunting',
+                    'year': 2021,
+                    'author': {
+                      'id': 0,
+                      'authorName': 'H.D. Carlton',
+                      'foreignAuthorId': 'author-hd-carlton',
+                    },
+                  },
+                ]
+              : <Object>[]
+          : [
+              {
+                'title': 'Dune Messiah',
+                'foreignBookId': mismatchedLookupId ? 'lookup-555' : '555',
+                'year': 1969,
+                'pageCount': 336,
+                'overview':
+                    '<b>The desert planet has a new emperor.</b><br/><br/>'
+                    'A second chapter &amp; more.',
+                'genres': ['Science Fiction'],
+                'author': {
+                  'id': 0,
+                  'authorName': mismatchedLookupAuthor
+                      ? 'Brian Herbert'
+                      : 'Frank Herbert',
+                  'foreignAuthorId': 'author-2',
+                },
+              },
+            ];
     } else if (options.path.endsWith('/api/v1/book/42')) {
       body = _liveBook(id: 42, mediaType: 'ebook');
     } else if (options.path.endsWith('/api/v1/book/43')) {

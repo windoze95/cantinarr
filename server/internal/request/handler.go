@@ -232,7 +232,7 @@ func bookRequestErrorResponse(err error, format string) (int, map[string]string)
 		message = "This edition is not identified as an eBook or audiobook."
 	case errors.Is(err, ErrBookMatchNotFound):
 		code = "book_match_not_found"
-		message = "This catalog match changed. Search for the book again and retry."
+		message = "Cantinarr couldn’t verify this book match. Try again."
 	case errors.Is(err, ErrBookMultiWorkUnsupported):
 		code = "book_multi_work_unsupported"
 		message = "This result contains multiple books. Choose an individual title instead."

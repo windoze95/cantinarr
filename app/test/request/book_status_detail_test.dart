@@ -392,9 +392,11 @@ class _CatalogMismatchSubmissionAdapter implements HttpClientAdapter {
     }
     return ResponseBody.fromString(
       jsonEncode({
-        'status': 'partial',
+        'status': 'unavailable',
+        'status_known': false,
+        'unknown_reason': 'request_failed',
+        'failure_code': 'book_match_not_found',
         'book_formats': {
-          'ebook': 'available',
           'audiobook': 'unavailable',
         },
       }),
@@ -693,14 +695,13 @@ void main() {
     );
   });
 
-  testWidgets('changed catalog match refreshes before another request',
+  testWidgets('book match failure exposes one stable retry action',
       (tester) async {
     final adapter = _TerminalFailureRetryAdapter(
       failureCode: 'book_match_not_found',
     );
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
-    var refreshes = 0;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -708,36 +709,37 @@ void main() {
             foreignId: 'fb',
             title: 'Flock',
             service: RequestService(backendDio: dio),
-            onCatalogMatchChanged: () => refreshes++,
           ),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Refresh matches'), findsOneWidget);
-    await tester.tap(find.text('Refresh matches'));
-    await tester.pumpAndSettle();
+    expect(find.text('Couldn’t add · Try again'), findsOneWidget);
+    expect(find.text('Refresh matches'), findsNothing);
+    expect(find.text('Choose again'), findsNothing);
 
-    expect(refreshes, 1);
-    expect(adapter.postCount, 0);
-    expect(find.text('Choose again'), findsOneWidget);
-
-    await tester.tap(find.text('Choose again'));
+    await tester.tap(find.text('Couldn’t add · Try again'));
     for (var attempt = 0;
         attempt < 50 && adapter.submittedBody.isEmpty;
         attempt++) {
       await tester.pump(const Duration(milliseconds: 1));
     }
     expect(adapter.postCount, 1);
+    expect(find.text('Refresh matches'), findsNothing);
+    expect(find.text('Choose again'), findsNothing);
+
+    adapter.completeRetry();
+    await tester.pumpAndSettle();
+    expect(find.text('Refresh matches'), findsNothing);
+    expect(find.text('Choose again'), findsNothing);
   });
 
-  testWidgets('a rejected catalog match refreshes instead of blind retrying',
+  testWidgets('a rejected book match returns to the same retry action',
       (tester) async {
     final adapter = _CatalogMismatchSubmissionAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
-    var refreshes = 0;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -745,19 +747,21 @@ void main() {
             foreignId: 'haunting-adeline',
             title: 'Haunting Adeline',
             service: RequestService(backendDio: dio),
-            onCatalogMatchChanged: () async => refreshes++,
           ),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Request Audiobook'));
+    expect(find.text('Couldn’t add · Try again'), findsOneWidget);
+    await tester.tap(find.text('Couldn’t add · Try again'));
     await tester.pumpAndSettle();
 
     expect(adapter.postCount, 1);
-    expect(refreshes, 1);
-    expect(find.text('Book matches refreshed. Choose the title again.'),
+    expect(find.text('Couldn’t add · Try again'), findsOneWidget);
+    expect(find.text('Refresh matches'), findsNothing);
+    expect(find.text('Choose again'), findsNothing);
+    expect(find.text('Cantinarr couldn’t verify this book match. Try again.'),
         findsOneWidget);
   });
 
