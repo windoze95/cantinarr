@@ -11,6 +11,7 @@ import '../logic/book_search_ranking.dart';
 class BookRequestWizardCandidate {
   final ChaptarrBook book;
   final String foreignId;
+  final String? lookupTerm;
   final BookOwnership? ownership;
   final bool ownershipStatusKnown;
   final BookRequestStatusDetail? statusDetail;
@@ -21,6 +22,7 @@ class BookRequestWizardCandidate {
   const BookRequestWizardCandidate({
     required this.book,
     required this.foreignId,
+    this.lookupTerm,
     this.ownership,
     this.ownershipStatusKnown = true,
     this.statusDetail,
@@ -46,15 +48,24 @@ Future<BookRequestTarget?> showBookRequestWizard(
           sameBookWork(selectedBook, candidate.book))
       .toList()
     ..sort((a, b) => a.rank.compareTo(b.rank));
+  BookRequestWizardCandidate? selectedCandidate;
+  for (final candidate in candidates) {
+    if (identical(candidate.book, selectedBook) &&
+        candidate.foreignId == request.foreignId) {
+      selectedCandidate = candidate;
+      break;
+    }
+  }
   final usable = related.isEmpty
       ? [
-          BookRequestWizardCandidate(
-            book: selectedBook,
-            foreignId: request.foreignId,
-            statusDetail: request.detail,
-            rank: 0,
-            matchEvidence: 'Selected title',
-          ),
+          selectedCandidate ??
+              BookRequestWizardCandidate(
+                book: selectedBook,
+                foreignId: request.foreignId,
+                statusDetail: request.detail,
+                rank: 0,
+                matchEvidence: 'Selected title',
+              ),
         ]
       : related;
   final formats = _formatChoices(request.requestableFormats);
@@ -147,6 +158,7 @@ List<_EditionChoice> _editionChoices(
       expanded.add(_EditionChoice(
         candidate: candidate,
         selection: BookRequestSelection(
+          lookupTerm: candidate.lookupTerm,
           foreignAuthorId: author?.foreignAuthorId?.trim(),
           authorName: author?.authorName.trim(),
           ebook: variant.ebook,
@@ -207,6 +219,7 @@ _EditionChoice _groupedChoice(
     // id; they never substitute another row's edition id.
     candidate: representative.candidate,
     selection: BookRequestSelection(
+      lookupTerm: representative.selection.lookupTerm,
       foreignAuthorId: strongestAuthor.selection.foreignAuthorId,
       authorName: representative.selection.authorName ??
           strongestAuthor.selection.authorName,
@@ -263,7 +276,10 @@ List<(BookPublicationSelection?, List<String>)> _publicationChoices(
   BookFormat format,
 ) {
   final editions = book.editions
-      .where((edition) => edition.bookFormat == format)
+      // A discovery-only `isEbook` hint is not authoritative enough to pin a
+      // publication. The server deliberately validates only Chaptarr's exact
+      // format enum before mutation, so the picker must use that same contract.
+      .where((edition) => _authoritativeEditionFormat(edition) == format)
       .toList();
   final choices = <(BookPublicationSelection?, List<String>)>[];
   final seen = <String>{};
@@ -275,7 +291,7 @@ List<(BookPublicationSelection?, List<String>)> _publicationChoices(
   }
   if (choices.isNotEmpty) return choices;
 
-  final bookFormat = book.format;
+  final bookFormat = _authoritativeBookFormat(book);
   final foreignEditionId = book.foreignEditionId?.trim() ?? '';
   if (bookFormat == format && foreignEditionId.isNotEmpty) {
     final selection = BookPublicationSelection(
@@ -290,6 +306,28 @@ List<(BookPublicationSelection?, List<String>)> _publicationChoices(
   // one work-level option; the server will still revalidate the author/work
   // and choose deterministically instead of accepting a made-up client ID.
   return const [(null, <String>[])];
+}
+
+BookFormat _authoritativeEditionFormat(ChaptarrEdition edition) =>
+    switch (edition.format?.trim().toLowerCase()) {
+      'ebook' => BookFormat.ebook,
+      'audiobook' => BookFormat.audiobook,
+      _ => BookFormat.unknown,
+    };
+
+BookFormat _authoritativeBookFormat(ChaptarrBook book) {
+  final recordFormat = switch (book.mediaType?.trim().toLowerCase()) {
+    'ebook' => BookFormat.ebook,
+    'audiobook' => BookFormat.audiobook,
+    _ => BookFormat.unknown,
+  };
+  if (recordFormat != BookFormat.unknown) return recordFormat;
+
+  final formats = book.editions
+      .map(_authoritativeEditionFormat)
+      .where((format) => format != BookFormat.unknown)
+      .toSet();
+  return formats.length == 1 ? formats.single : BookFormat.unknown;
 }
 
 BookPublicationSelection _publicationSelection(
@@ -831,7 +869,7 @@ class _EditionCard extends StatelessWidget {
     return Semantics(
       button: true,
       label: recommended
-          ? 'Recommended book match, ${candidate.book.title}'
+          ? 'Closest catalog match, ${candidate.book.title}'
           : 'Book match, ${candidate.book.title}',
       child: Material(
         color: AppTheme.surfaceVariant,
@@ -865,7 +903,7 @@ class _EditionCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if (recommended) ...[
-                        const _RecommendedBadge(),
+                        const _ClosestMatchBadge(),
                         const SizedBox(height: 8),
                       ],
                       Text(
@@ -919,8 +957,8 @@ class _EditionCard extends StatelessWidget {
   }
 }
 
-class _RecommendedBadge extends StatelessWidget {
-  const _RecommendedBadge();
+class _ClosestMatchBadge extends StatelessWidget {
+  const _ClosestMatchBadge();
 
   @override
   Widget build(BuildContext context) {
@@ -931,7 +969,7 @@ class _RecommendedBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppTheme.radiusPill),
       ),
       child: const Text(
-        'Recommended',
+        'Closest match',
         style: TextStyle(
           color: AppTheme.accent,
           fontSize: 11,

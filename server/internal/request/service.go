@@ -292,9 +292,10 @@ type CreateRequest struct {
 	// have no TMDB id. Required when media_type == "book"; ignored otherwise.
 	ForeignID  string `json:"foreign_id"`
 	BookFormat string `json:"book_format"`
-	// BookSelection carries only stable external author/publication evidence
-	// from the requester-facing match chooser. Chaptarr-local numeric IDs are
-	// intentionally excluded because they can change while the catalog settles.
+	// BookSelection carries the discovery query plus stable external
+	// author/publication evidence from the requester-facing match chooser. The
+	// query is only a locator; Chaptarr-local numeric IDs are intentionally
+	// excluded because they can change while the catalog settles.
 	BookSelection *BookSelection `json:"book_selection,omitempty"`
 	// InstanceID pins book operations to the Chaptarr instance the requester is
 	// viewing. It is optional for backward compatibility; omitted uses the
@@ -321,6 +322,10 @@ type BookPublicationSelection struct {
 }
 
 type BookSelection struct {
+	// LookupTerm is the catalog query that originally produced the selected
+	// result. It is a locator, not identity: every lookup replay is still pinned
+	// to the exact work, author, and publication before any mutation.
+	LookupTerm      string                    `json:"lookup_term,omitempty"`
 	ForeignAuthorID string                    `json:"foreign_author_id,omitempty"`
 	AuthorName      string                    `json:"author_name,omitempty"`
 	Ebook           *BookPublicationSelection `json:"ebook,omitempty"`
@@ -1265,7 +1270,13 @@ func (s *Service) addToChaptarrWithClientContext(parent context.Context, r *reso
 		if match.TitleSlug == "" {
 			match.TitleSlug = fallbackTitleSlug(title)
 		}
-		lookupResults, lookupErr := client.LookupBookContext(ctx, title)
+		lookupResults, lookupErr := lookupChaptarrBookResultsForRequest(
+			ctx,
+			client,
+			r.foreignID,
+			title,
+			r.bookSelection,
+		)
 		if lookupErr != nil {
 			return s.finishBookSetupFailure(
 				r,
@@ -1320,7 +1331,13 @@ func (s *Service) addToChaptarrWithClientContext(parent context.Context, r *reso
 		return "", "", errBookTitleRequired
 	}
 
-	results, err := client.LookupBookContext(ctx, r.title)
+	results, err := lookupChaptarrBookResultsForRequest(
+		ctx,
+		client,
+		r.foreignID,
+		r.title,
+		r.bookSelection,
+	)
 	if err != nil {
 		if len(missing) > 0 {
 			return "", "", fmt.Errorf("book lookup failed: %w", err)
@@ -1909,6 +1926,67 @@ func selectChaptarrLibraryWorkWithSelection(books []chaptarr.Book, foreignBookID
 
 func selectChaptarrLookupResult(results []chaptarr.LookupResult, foreignBookID, selectedTitle string) (*chaptarr.LookupResult, error) {
 	return selectChaptarrLookupResultWithSelection(results, foreignBookID, selectedTitle, nil)
+}
+
+// lookupChaptarrBookResultsForRequest replays the discovery query before
+// falling back to the display title. Chaptarr can return a useful result for a
+// partial query and an empty list for the complete title, so changing terms at
+// submission time makes a real selection impossible to revalidate. The lookup
+// term is never trusted as identity: this helper returns early only after the
+// existing foreign-book, title, author, and publication checks accept a row.
+func lookupChaptarrBookResultsForRequest(
+	ctx context.Context,
+	client *chaptarr.Client,
+	foreignBookID, selectedTitle string,
+	selection *BookSelection,
+) ([]chaptarr.LookupResult, error) {
+	terms := make([]string, 0, 2)
+	seen := make(map[string]bool, 2)
+	addTerm := func(value string) {
+		value = strings.TrimSpace(value)
+		key := normalizeBookIdentity(value)
+		if value == "" || key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		terms = append(terms, value)
+	}
+	if selection != nil {
+		addTerm(selection.LookupTerm)
+	}
+	addTerm(selectedTitle)
+
+	var combined []chaptarr.LookupResult
+	var lastErr error
+	hadSuccessfulLookup := false
+	for _, term := range terms {
+		results, err := client.LookupBookContext(ctx, term)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		hadSuccessfulLookup = true
+		combined = append(combined, results...)
+		match, matchErr := selectChaptarrLookupResultWithSelection(
+			combined,
+			foreignBookID,
+			selectedTitle,
+			selection,
+		)
+		if matchErr != nil {
+			return nil, matchErr
+		}
+		if match != nil {
+			return combined, nil
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	if hadSuccessfulLookup {
+		return combined, nil
+	}
+	return combined, nil
 }
 
 func selectChaptarrLookupResultWithSelection(results []chaptarr.LookupResult, foreignBookID, selectedTitle string, selection *BookSelection) (*chaptarr.LookupResult, error) {

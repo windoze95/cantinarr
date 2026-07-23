@@ -70,6 +70,8 @@ type verifiedBookUpstream struct {
 	bookUpdateStatus          int
 	monitorUpdateStatus       int
 	lookupResults             []map[string]any
+	lookupResultsByTerm       map[string][]map[string]any
+	lookupTerms               []string
 }
 
 type verifiedBookRow struct {
@@ -164,6 +166,12 @@ func (u *verifiedBookUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+		term := r.URL.Query().Get("term")
+		u.lookupTerms = append(u.lookupTerms, term)
+		if u.lookupResultsByTerm != nil {
+			_ = json.NewEncoder(w).Encode(u.lookupResultsByTerm[term])
+			return
+		}
 		if u.lookupResults != nil {
 			_ = json.NewEncoder(w).Encode(u.lookupResults)
 			return

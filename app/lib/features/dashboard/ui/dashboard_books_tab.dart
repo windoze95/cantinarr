@@ -42,7 +42,8 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
   bool _searched = false;
   String? _error;
   int _searchGen = 0; // guards against superseded async results
-  String _searchedTerm = ''; // term the current _results belong to
+  String _searchedTerm = ''; // full user query the current _results satisfy
+  String _resultLookupTerm = ''; // exact or fallback term that returned them
   final Map<String, BookRequestStatusDetail> _requestDetails = {};
 
   @override
@@ -75,9 +76,40 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
   // Search as the user types (debounced) so results appear without having to
   // hit the keyboard's submit key; also refreshes the clear-button affordance.
   void _onChanged() {
-    setState(() {});
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 400), _search);
+    final term = _controller.text.trim();
+    final gen = ++_searchGen;
+    if (term.isEmpty) {
+      setState(() {
+        _results = [];
+        _searchedTerm = '';
+        _resultLookupTerm = '';
+        _isSearching = false;
+        _searched = false;
+        _error = null;
+      });
+      return;
+    }
+    setState(() {
+      _isSearching = true;
+      _error = null;
+    });
+    _debounce = Timer(
+      const Duration(milliseconds: 400),
+      () => _search(term, gen),
+    );
+  }
+
+  Future<void> _searchNow() {
+    _debounce?.cancel();
+    final term = _controller.text.trim();
+    return _search(term, ++_searchGen);
+  }
+
+  Future<void> _refreshCurrentSearch() {
+    _debounce?.cancel();
+    final term = _controller.text.trim();
+    return _search(term, ++_searchGen, showLoading: false);
   }
 
   ChaptarrApiService? _chaptarr() {
@@ -89,13 +121,17 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     );
   }
 
-  Future<void> _search() async {
-    final term = _controller.text.trim();
+  Future<void> _search(
+    String term,
+    int gen, {
+    bool showLoading = true,
+  }) async {
+    if (!mounted || gen != _searchGen) return;
     if (term.isEmpty) {
-      _searchGen++;
       setState(() {
         _results = [];
         _searchedTerm = '';
+        _resultLookupTerm = '';
         _isSearching = false;
         _searched = false;
         _error = null;
@@ -104,20 +140,39 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     }
     final service = _chaptarr();
     if (service == null) {
-      setState(() => _error = 'No Chaptarr instance is available.');
+      setState(() {
+        _isSearching = false;
+        _searched = true;
+        _error = 'No Chaptarr instance is available.';
+      });
       return;
     }
-    final gen = ++_searchGen;
     setState(() {
-      _isSearching = true;
+      _isSearching = showLoading;
       _error = null;
     });
     try {
-      final books = await service.lookupBook(term);
+      var books = await service.lookupBook(term);
       if (!mounted || gen != _searchGen) return;
+      var resultLookupTerm = term;
+      if (books.isEmpty) {
+        final fallbackTerm = bookSearchPrefixFallbackTerm(term);
+        if (fallbackTerm != null) {
+          final fallbackBooks = await service.lookupBook(fallbackTerm);
+          if (!mounted || gen != _searchGen) return;
+          final matchingBooks = fallbackBooks
+              .where((book) => stronglyMatchesBookSearch(term, book))
+              .toList();
+          if (matchingBooks.isNotEmpty) {
+            books = matchingBooks;
+            resultLookupTerm = fallbackTerm;
+          }
+        }
+      }
       setState(() {
         _results = books;
         _searchedTerm = term;
+        _resultLookupTerm = resultLookupTerm;
         _requestDetails.clear();
         _isSearching = false;
         _searched = true;
@@ -157,13 +212,14 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
           setState(() {
             _results = [];
             _searchedTerm = '';
+            _resultLookupTerm = '';
             _searched = false;
             _isSearching = false;
             _error = null;
             _requestDetails.clear();
           });
           ref.invalidate(ownedBooksProvider);
-          if (_controller.text.trim().isNotEmpty) _search();
+          if (_controller.text.trim().isNotEmpty) _searchNow();
         });
       },
     );
@@ -175,10 +231,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
             controller: _controller,
             textInputAction: TextInputAction.search,
             onChanged: (_) => _onChanged(),
-            onSubmitted: (_) {
-              _debounce?.cancel();
-              _search();
-            },
+            onSubmitted: (_) => _searchNow(),
             style: const TextStyle(color: AppTheme.textPrimary),
             decoration: InputDecoration(
               hintText: 'Search books or authors…',
@@ -192,7 +245,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
                           color: AppTheme.textSecondary),
                       onPressed: () {
                         _controller.clear();
-                        _search();
+                        _onChanged();
                       },
                     ),
               filled: true,
@@ -259,6 +312,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
         ownership: match?.ownership,
         ownershipStatusKnown: match?.statusKnown ?? true,
         sourceIdentity: 'lookup:$lookupIndex',
+        lookupTerm: _resultLookupTerm,
         cover: cover,
         canonicalForeignId: libraryId.isNotEmpty ? libraryId : lookupId,
       ));
@@ -272,6 +326,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
           ownership: injected[libraryIndex].ownership,
           ownershipStatusKnown: injected[libraryIndex].statusKnown,
           sourceIdentity: 'library:$libraryIndex',
+          lookupTerm: _resultLookupTerm,
           cover: injected[libraryIndex].cover.isNotEmpty
               ? injected[libraryIndex].cover
               : null,
@@ -388,6 +443,8 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
                     book: ordered[candidateIndex].result.book,
                     foreignId:
                         ordered[candidateIndex].result.canonicalForeignId,
+                    lookupTerm:
+                        ordered[candidateIndex].result.lookupTerm,
                     ownership: ordered[candidateIndex].result.ownership,
                     ownershipStatusKnown:
                         ordered[candidateIndex].result.ownershipStatusKnown,
@@ -403,6 +460,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
               ],
             );
           },
+          onCatalogMatchChanged: _refreshCurrentSearch,
           onRequestCompleted: _refreshBookTruth,
         ),
       );
@@ -415,6 +473,7 @@ class _ResolvedBookResult {
   final BookOwnership? ownership;
   final bool ownershipStatusKnown;
   final String sourceIdentity;
+  final String lookupTerm;
   final String? cover;
   final String canonicalForeignId;
 
@@ -423,6 +482,7 @@ class _ResolvedBookResult {
     required this.ownership,
     required this.ownershipStatusKnown,
     required this.sourceIdentity,
+    required this.lookupTerm,
     required this.cover,
     required this.canonicalForeignId,
   });
@@ -453,6 +513,7 @@ class _BookResultTile extends StatelessWidget {
   final BookRequestStatusDetail? statusDetail;
   final ValueChanged<BookRequestStatusDetail> onDetailChanged;
   final BookRequestTargetPicker requestTargetPicker;
+  final Future<void> Function() onCatalogMatchChanged;
   final VoidCallback onRequestCompleted;
 
   const _BookResultTile({
@@ -470,6 +531,7 @@ class _BookResultTile extends StatelessWidget {
     required this.statusDetail,
     required this.onDetailChanged,
     required this.requestTargetPicker,
+    required this.onCatalogMatchChanged,
     required this.onRequestCompleted,
   });
 
@@ -510,6 +572,7 @@ class _BookResultTile extends StatelessWidget {
               showCoveredStatus: false,
               onDetailChanged: onDetailChanged,
               requestTargetPicker: requestTargetPicker,
+              onCatalogMatchChanged: onCatalogMatchChanged,
               onRequestCompleted: onRequestCompleted,
             ),
           )
@@ -696,7 +759,7 @@ class _SearchRecommendation extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppTheme.radiusPill),
           ),
           child: const Text(
-            'Recommended',
+            'Closest match',
             style: TextStyle(
               color: AppTheme.accent,
               fontSize: 10.5,

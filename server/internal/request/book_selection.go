@@ -25,10 +25,13 @@ func normalizeBookSelection(input *BookSelection, bookFormat string) (*BookSelec
 		return nil, nil
 	}
 	selection := &BookSelection{
+		LookupTerm:      strings.TrimSpace(input.LookupTerm),
 		ForeignAuthorID: strings.TrimSpace(input.ForeignAuthorID),
 		AuthorName:      strings.TrimSpace(input.AuthorName),
 	}
-	if len(selection.ForeignAuthorID) > bookSelectionIdentityLimit || len(selection.AuthorName) > bookSelectionTextLimit {
+	if len(selection.ForeignAuthorID) > bookSelectionIdentityLimit ||
+		len(selection.AuthorName) > bookSelectionTextLimit ||
+		len(selection.LookupTerm) > bookSelectionTextLimit {
 		return nil, ErrBookSelectionInvalid
 	}
 	var err error
@@ -50,7 +53,7 @@ func normalizeBookSelection(input *BookSelection, bookFormat string) (*BookSelec
 			return nil, err
 		}
 	}
-	if selection.ForeignAuthorID == "" && selection.AuthorName == "" && selection.Ebook == nil && selection.Audiobook == nil {
+	if selection.LookupTerm == "" && selection.ForeignAuthorID == "" && selection.AuthorName == "" && selection.Ebook == nil && selection.Audiobook == nil {
 		return nil, ErrBookSelectionInvalid
 	}
 	return selection, nil
@@ -100,6 +103,7 @@ func bookSelectionForFormat(selection *BookSelection, format string) *BookSelect
 		return nil
 	}
 	result := &BookSelection{
+		LookupTerm:      selection.LookupTerm,
 		ForeignAuthorID: selection.ForeignAuthorID,
 		AuthorName:      selection.AuthorName,
 	}
@@ -357,7 +361,7 @@ func lookupResultMatchesPublication(result chaptarr.LookupResult, format string,
 }
 
 func bookSelectionMatchesAuthorIdentity(selection *BookSelection, foreignAuthorID, authorName string) bool {
-	if selection == nil {
+	if selection == nil || (selection.ForeignAuthorID == "" && selection.AuthorName == "") {
 		return true
 	}
 	if selection.ForeignAuthorID != "" && strings.TrimSpace(foreignAuthorID) == selection.ForeignAuthorID {

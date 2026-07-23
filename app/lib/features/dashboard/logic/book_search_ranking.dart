@@ -46,6 +46,43 @@ List<RankedBookSearchResult> rankBookSearchResults(
   return ranked;
 }
 
+/// Returns one autocomplete-style fallback by removing the final Unicode code
+/// point from [query]. This is deliberately bounded to one retry: Chaptarr can
+/// cache an empty exact lookup even while the immediately shorter prefix still
+/// returns the intended work.
+String? bookSearchPrefixFallbackTerm(String query) {
+  final trimmed = query.trim();
+  final codePoints = trimmed.runes.toList(growable: false);
+  if (codePoints.length <= 1) return null;
+
+  final prefix = String.fromCharCodes(
+    codePoints.take(codePoints.length - 1),
+  ).trimRight();
+  return prefix.isEmpty ? null : prefix;
+}
+
+/// Whether a fallback row still contains the requester's complete query as a
+/// normalized title or author phrase. The prefix retry may be broader than the
+/// exact lookup, so unrelated autocomplete rows must not leak into the result
+/// list. Every distinct row that passes remains visible.
+bool stronglyMatchesBookSearch(String query, ChaptarrBook book) {
+  final queryText = _normalizedText(query);
+  if (queryText.isEmpty) return false;
+
+  return _containsNormalizedPhrase(_normalizedText(book.title), queryText) ||
+      _containsNormalizedPhrase(
+        _normalizedText(book.author?.authorName ?? ''),
+        queryText,
+      );
+}
+
+bool _containsNormalizedPhrase(String candidate, String query) {
+  if (candidate == query) return true;
+  return candidate.startsWith('$query ') ||
+      candidate.endsWith(' $query') ||
+      candidate.contains(' $query ');
+}
+
 ({int score, String evidence, bool recommendationEligible}) _scoreBook(
   String query,
   ChaptarrBook book,
@@ -63,15 +100,19 @@ List<RankedBookSearchResult> rankBookSearchResults(
 
   var score = 0;
   var evidence = 'Closest title match';
+  var confidentMatch = false;
   if (queryText.isNotEmpty && titleText == queryText) {
     score += 1200;
     evidence = 'Exact title match';
+    confidentMatch = true;
   } else if (queryText.isNotEmpty && titleText.startsWith(queryText)) {
     score += 900;
     evidence = 'Title starts with your search';
+    confidentMatch = true;
   } else if (queryText.isNotEmpty && titleText.contains(queryText)) {
     score += 720;
     evidence = 'Strong title match';
+    confidentMatch = true;
   }
 
   if (queryTokens.isNotEmpty) {
@@ -83,11 +124,13 @@ List<RankedBookSearchResult> rankBookSearchResults(
     final bestTitleCoverage =
         titleCoverage > strippedCoverage ? titleCoverage : strippedCoverage;
     score += (bestTitleCoverage * 420).round();
+    if (bestTitleCoverage == 1) confidentMatch = true;
 
     final authorCoverage =
         queryTokens.where(authorTokens.contains).length / queryTokens.length;
     if (authorCoverage == 1) {
       score += authorText == queryText ? 1050 : 620;
+      confidentMatch = true;
       if (titleText != queryText) {
         evidence = authorText == queryText
             ? 'Exact author match'
@@ -107,7 +150,9 @@ List<RankedBookSearchResult> rankBookSearchResults(
   if (book.editions.isNotEmpty) score += 5;
   if (book.author?.authorName.isNotEmpty ?? false) score += 4;
 
-  final companion = _isObviousCompanionTitle(titleText);
+  final companion = _isObviousCompanionTitle(titleText) ||
+      RegExp(r'^\s*summary\s+of\b', caseSensitive: false)
+          .hasMatch(book.title);
   final multiBookSet = _isObviousMultiBookSet(book.title, titleText);
   if (companion) {
     score -= 10000;
@@ -121,7 +166,8 @@ List<RankedBookSearchResult> rankBookSearchResults(
   return (
     score: score,
     evidence: evidence,
-    recommendationEligible: !companion && !multiBookSet,
+    recommendationEligible:
+        confidentMatch && !companion && !multiBookSet,
   );
 }
 
