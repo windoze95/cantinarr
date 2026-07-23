@@ -823,6 +823,79 @@ func TestLookupPublicationCanUseStableTopLevelEditionIdentity(t *testing.T) {
 	}
 }
 
+func TestLookupPublicationAcceptsExactFormatlessChildFromAuthoritativeParent(t *testing.T) {
+	formatlessChild, err := json.Marshal(map[string]any{
+		"foreignEditionId": "58763686",
+		"title":            "Haunting Adeline (Cat and Mouse, #1)",
+		"format":           nil,
+		"isEbook":          false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := chaptarr.LookupResult{
+		Title:            "Haunting Adeline (Cat and Mouse, #1)",
+		ForeignBookID:    "gr:91913524",
+		ForeignEditionID: "58763686",
+		MediaType:        BookFormatAudiobook,
+		PageCount:        629,
+		Editions:         []json.RawMessage{formatlessChild},
+	}
+	selection := &BookPublicationSelection{
+		ForeignEditionID: "58763686",
+		PageCount:        629,
+	}
+
+	matched, err := lookupResultMatchesPublication(
+		result,
+		BookFormatAudiobook,
+		selection,
+	)
+	if err != nil || !matched {
+		t.Fatalf("authoritative format-less child = %v, %v; want exact audiobook match", matched, err)
+	}
+
+	wrongMedium := result
+	wrongMedium.MediaType = BookFormatEbook
+	matched, err = lookupResultMatchesPublication(
+		wrongMedium,
+		BookFormatAudiobook,
+		selection,
+	)
+	if err != nil || matched {
+		t.Fatalf("wrong parent medium = %v, %v; want false", matched, err)
+	}
+
+	explicitConflict, err := json.Marshal(map[string]any{
+		"foreignEditionId": "58763686",
+		"format":           BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictingChild := result
+	conflictingChild.Editions = []json.RawMessage{explicitConflict}
+	matched, err = lookupResultMatchesPublication(
+		conflictingChild,
+		BookFormatAudiobook,
+		selection,
+	)
+	if err != nil || matched {
+		t.Fatalf("conflicting child medium = %v, %v; want false", matched, err)
+	}
+
+	duplicateChild := result
+	duplicateChild.Editions = []json.RawMessage{formatlessChild, formatlessChild}
+	matched, err = lookupResultMatchesPublication(
+		duplicateChild,
+		BookFormatAudiobook,
+		selection,
+	)
+	if err != nil || matched {
+		t.Fatalf("duplicate child identity = %v, %v; want false", matched, err)
+	}
+}
+
 func TestPendingBookSelectionsForSameWorkRemainDistinct(t *testing.T) {
 	service, userID := newBookTestService(t)
 	first, err := normalizeBookSelection(&BookSelection{

@@ -384,6 +384,25 @@ func lookupResultMatchesPublication(result chaptarr.LookupResult, format string,
 			matches++
 		}
 	}
+	// This Chaptarr fork can return an authoritative top-level medium and
+	// edition identity together with one otherwise format-less child edition.
+	// Accept that exact parent-child relationship just as the later local-row
+	// verifier does. An isEbook hint alone is not authoritative, and an
+	// explicitly conflicting or duplicate child still fails closed.
+	if matches == 0 && len(editions) == 1 &&
+		strictChaptarrFormat(result.MediaType) == format &&
+		selection.ForeignEditionID != "" &&
+		strings.TrimSpace(result.ForeignEditionID) == selection.ForeignEditionID {
+		edition := editions[0]
+		if strings.TrimSpace(edition.Format) == "" &&
+			strings.TrimSpace(edition.ForeignEditionID) == strings.TrimSpace(result.ForeignEditionID) {
+			candidateSelection := *selection
+			candidateSelection.Year = 0
+			if bookPublicationMatchesEdition(&candidateSelection, edition, lookupBook) {
+				matches++
+			}
+		}
+	}
 	if len(editions) == 0 && strictChaptarrFormat(result.MediaType) == format {
 		candidateSelection := *selection
 		candidateSelection.Year = 0
