@@ -33,6 +33,8 @@ import 'book_request_wizard.dart';
 class RequesterBookDetailScreen extends ConsumerStatefulWidget {
   final String foreignId;
   final String? titleHint;
+  final String? lookupTerm;
+  final String? catalogForeignBookId;
   final ChaptarrBook? initialBook;
   final String? instanceId;
 
@@ -40,6 +42,8 @@ class RequesterBookDetailScreen extends ConsumerStatefulWidget {
     super.key,
     required this.foreignId,
     this.titleHint,
+    this.lookupTerm,
+    this.catalogForeignBookId,
     this.initialBook,
     this.instanceId,
   });
@@ -88,6 +92,8 @@ class _RequesterBookDetailScreenState
     if (oldWidget.foreignId != widget.foreignId ||
         oldWidget.initialBook != widget.initialBook ||
         oldWidget.titleHint != widget.titleHint ||
+        oldWidget.lookupTerm != widget.lookupTerm ||
+        oldWidget.catalogForeignBookId != widget.catalogForeignBookId ||
         oldWidget.instanceId != widget.instanceId) {
       _startLoads();
     }
@@ -103,7 +109,8 @@ class _RequesterBookDetailScreenState
     _filesByBook = const {};
     _requestDetail = null;
     _metadataLoading = widget.initialBook == null &&
-        (widget.titleHint?.trim().isNotEmpty ?? false);
+        ((widget.lookupTerm?.trim().isNotEmpty ?? false) ||
+            (widget.titleHint?.trim().isNotEmpty ?? false));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _resolveMetadata(generation);
       _resolveChaptarrRecords(generation);
@@ -126,24 +133,25 @@ class _RequesterBookDetailScreenState
   /// matches both that row's title and author.
   Future<void> _resolveMetadata(int generation) async {
     if (_metadata != null) return;
-    final term = widget.titleHint?.trim() ?? '';
+    final terms = <String>[];
+    void addTerm(String? value) {
+      final term = value?.trim() ?? '';
+      if (term.isNotEmpty && !terms.contains(term)) terms.add(term);
+    }
+    addTerm(widget.lookupTerm);
+    addTerm(widget.titleHint);
     final service = _chaptarrService();
-    if (term.isEmpty || service == null) {
+    if (terms.isEmpty || service == null) {
       if (mounted && generation == _loadGeneration) {
         setState(() => _metadataLoading = false);
       }
       return;
     }
     ChaptarrBook? match;
-    try {
-      final results = await service.lookupBook(term);
-      for (final book in results) {
-        if (book.foreignBookId == widget.foreignId) {
-          match = book;
-          break;
-        }
-      }
-      if (match == null) {
+    final catalogId = widget.catalogForeignBookId?.trim() ?? '';
+    OwnedTitle? canonical;
+    if (catalogId.isEmpty) {
+      try {
         final digest = await ref.read(
           ownedBooksForInstanceProvider(_instanceId).future,
         );
@@ -151,23 +159,42 @@ class _RequesterBookDetailScreenState
             .where((owned) =>
                 owned.foreignBookId.trim() == widget.foreignId.trim())
             .toList(growable: false);
-        if (canonicalRows.length == 1) {
-          final canonical = canonicalRows.single;
-          final strongIdentityMatches = results
-              .where((book) =>
-                  strongNormalizedTitleMatch(book.title, canonical.title) &&
-                  strongAuthorMatch(
-                    book.author?.authorName,
-                    canonical.author,
-                  ))
-              .toList(growable: false);
-          if (strongIdentityMatches.length == 1) {
-            match = strongIdentityMatches.single;
-          }
+        if (canonicalRows.length == 1) canonical = canonicalRows.single;
+      } catch (_) {
+        // Exact provider-id matching below can still recover metadata.
+      }
+    }
+    for (final term in terms) {
+      List<ChaptarrBook> results;
+      try {
+        results = await service.lookupBook(term);
+      } catch (_) {
+        continue;
+      }
+      final exactId = catalogId.isNotEmpty
+          ? catalogId
+          : widget.foreignId.trim();
+      for (final book in results) {
+        if (book.foreignBookId?.trim() == exactId) {
+          match = book;
+          break;
         }
       }
-    } catch (_) {
-      // The title hint still gives the requester a useful fallback.
+      if (match != null) break;
+      final canonicalMatch = canonical;
+      if (catalogId.isNotEmpty || canonicalMatch == null) continue;
+      final strongIdentityMatches = results
+          .where((book) =>
+              strongNormalizedTitleMatch(book.title, canonicalMatch.title) &&
+              strongAuthorMatch(
+                book.author?.authorName,
+                canonicalMatch.author,
+              ))
+          .toList(growable: false);
+      if (strongIdentityMatches.length == 1) {
+        match = strongIdentityMatches.single;
+        break;
+      }
     }
     if (!mounted || generation != _loadGeneration) return;
     setState(() {
@@ -459,6 +486,9 @@ class _RequesterBookDetailScreenState
                             BookRequestWizardCandidate(
                               book: requestBook,
                               foreignId: widget.foreignId,
+                              lookupTerm: widget.lookupTerm,
+                              catalogForeignBookId:
+                                  widget.catalogForeignBookId,
                               ownership: ownership,
                               ownershipStatusKnown:
                                   owned?.statusKnown ?? true,

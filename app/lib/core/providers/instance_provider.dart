@@ -123,11 +123,30 @@ class InstanceState {
 }
 
 class InstanceNotifier extends Notifier<InstanceState> {
+  String? _selectionServerUrl;
+  int? _selectionUserId;
+  String? _selectedRadarrInstanceId;
+  String? _selectedSonarrInstanceId;
+  String? _selectedChaptarrInstanceId;
+
   @override
   InstanceState build() {
     final auth = ref.watch(authProvider).valueOrNull;
     final connection = auth?.connection;
-    if (connection == null) return const InstanceState();
+    final user = auth?.user;
+    if (connection == null || user == null) {
+      _clearMediaSelections();
+      return const InstanceState();
+    }
+
+    if (_selectionServerUrl != connection.serverUrl ||
+        _selectionUserId != user.id) {
+      _selectedRadarrInstanceId = null;
+      _selectedSonarrInstanceId = null;
+      _selectedChaptarrInstanceId = null;
+      _selectionServerUrl = connection.serverUrl;
+      _selectionUserId = user.id;
+    }
 
     final radarr = connection.radarrInstances;
     final sonarr = connection.sonarrInstances;
@@ -135,25 +154,22 @@ class InstanceNotifier extends Notifier<InstanceState> {
     final downloads = connection.downloadInstances;
     final tautulli = connection.tautulliInstances;
 
+    _selectedRadarrInstanceId =
+        _validSelectionOrDefault(radarr, _selectedRadarrInstanceId);
+    _selectedSonarrInstanceId =
+        _validSelectionOrDefault(sonarr, _selectedSonarrInstanceId);
+    _selectedChaptarrInstanceId =
+        _validSelectionOrDefault(chaptarr, _selectedChaptarrInstanceId);
+
     return InstanceState(
       radarrInstances: radarr,
       sonarrInstances: sonarr,
       chaptarrInstances: chaptarr,
       downloadInstances: downloads,
       tautulliInstances: tautulli,
-      activeRadarrInstanceId: radarr.isNotEmpty
-          ? (radarr.firstWhere((i) => i.isDefault, orElse: () => radarr.first))
-              .id
-          : null,
-      activeSonarrInstanceId: sonarr.isNotEmpty
-          ? (sonarr.firstWhere((i) => i.isDefault, orElse: () => sonarr.first))
-              .id
-          : null,
-      activeChaptarrInstanceId: chaptarr.isNotEmpty
-          ? (chaptarr.firstWhere((i) => i.isDefault,
-                  orElse: () => chaptarr.first))
-              .id
-          : null,
+      activeRadarrInstanceId: _selectedRadarrInstanceId,
+      activeSonarrInstanceId: _selectedSonarrInstanceId,
+      activeChaptarrInstanceId: _selectedChaptarrInstanceId,
       activeDownloadInstanceId: downloads.isNotEmpty
           ? (downloads.firstWhere((i) => i.isDefault,
               orElse: () => downloads.first)).id
@@ -166,14 +182,17 @@ class InstanceNotifier extends Notifier<InstanceState> {
   }
 
   void setActiveRadarrInstance(String instanceId) {
+    _selectedRadarrInstanceId = instanceId;
     state = state.copyWith(activeRadarrInstanceId: instanceId);
   }
 
   void setActiveSonarrInstance(String instanceId) {
+    _selectedSonarrInstanceId = instanceId;
     state = state.copyWith(activeSonarrInstanceId: instanceId);
   }
 
   void setActiveChaptarrInstance(String instanceId) {
+    _selectedChaptarrInstanceId = instanceId;
     state = state.copyWith(activeChaptarrInstanceId: instanceId);
   }
 
@@ -183,6 +202,29 @@ class InstanceNotifier extends Notifier<InstanceState> {
 
   void setActiveTautulliInstance(String instanceId) {
     state = state.copyWith(activeTautulliInstanceId: instanceId);
+  }
+
+  void _clearMediaSelections() {
+    _selectionServerUrl = null;
+    _selectionUserId = null;
+    _selectedRadarrInstanceId = null;
+    _selectedSonarrInstanceId = null;
+    _selectedChaptarrInstanceId = null;
+  }
+
+  String? _validSelectionOrDefault(
+    List<ServiceInstance> instances,
+    String? selectedInstanceId,
+  ) {
+    if (instances.isEmpty) return null;
+    if (selectedInstanceId != null &&
+        instances.any((instance) => instance.id == selectedInstanceId)) {
+      return selectedInstanceId;
+    }
+    return instances
+        .firstWhere((instance) => instance.isDefault,
+            orElse: () => instances.first)
+        .id;
   }
 }
 

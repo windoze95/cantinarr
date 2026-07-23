@@ -126,7 +126,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
       }
     }
     if (code == 'book_match_not_found') {
-      return 'This catalog match changed. Ask the requester to search for the book again.';
+      return 'Cantinarr couldn’t verify this book match. Ask the requester to try again.';
     }
     if (code == 'book_selection_invalid') {
       return 'This version choice is no longer valid. Deny this request and ask the requester to search for the book again.';

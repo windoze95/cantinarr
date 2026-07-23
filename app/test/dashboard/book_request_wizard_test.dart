@@ -293,7 +293,7 @@ void main() {
   });
 
   testWidgets(
-      'equivalent author rows keep the external id without another choice',
+      'equivalent hidden ids keep the clicked library row as representative',
       (tester) async {
     final lookup = ChaptarrBook.fromJson({
       'title': 'Flock',
@@ -329,6 +329,7 @@ void main() {
                   BookRequestWizardCandidate(
                     book: lookup,
                     foreignId: 'lookup-flock',
+                    catalogForeignBookId: 'lookup-flock',
                     rank: 0,
                     matchEvidence: 'Exact title and author',
                   ),
@@ -352,6 +353,7 @@ void main() {
 
     expect(find.text('Which match looks right?'), findsNothing);
     expect(selected?.foreignId, 'library-flock');
+    expect(selected?.selection?.catalogForeignBookId, isNull);
     expect(selected?.selection?.foreignAuthorId, 'author-flock');
     expect(selected?.selection?.authorName, 'Kate Stewart');
   });
@@ -424,7 +426,7 @@ void main() {
       (tester) async {
     final book = ChaptarrBook.fromJson({
       'title': 'Haunting Adeline (Cat and Mouse, #1)',
-      'foreignBookId': 'haunting-adeline',
+      'foreignBookId': 'catalog-haunting-adeline',
       'author': {
         'authorName': 'H.D. Carlton',
         'foreignAuthorId': 'author-hd-carlton',
@@ -448,7 +450,7 @@ void main() {
               selected = await showBookRequestWizard(
                 context,
                 request: const BookRequestPickerContext(
-                  foreignId: 'haunting-adeline',
+                  foreignId: 'library-haunting-adeline',
                   title: 'Haunting Adeline (Cat and Mouse, #1)',
                   instanceId: 'books',
                   detail: BookRequestStatusDetail(),
@@ -458,8 +460,9 @@ void main() {
                 candidates: [
                   BookRequestWizardCandidate(
                     book: book,
-                    foreignId: 'haunting-adeline',
+                    foreignId: 'library-haunting-adeline',
                     lookupTerm: 'haunting Adelin',
+                    catalogForeignBookId: 'catalog-haunting-adeline',
                     rank: 0,
                     matchEvidence: 'Title starts with your search',
                   ),
@@ -476,8 +479,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Which match looks right?'), findsNothing);
-    expect(selected?.foreignId, 'haunting-adeline');
+    expect(selected?.foreignId, 'library-haunting-adeline');
     expect(selected?.selection?.lookupTerm, 'haunting Adelin');
+    expect(
+      selected?.selection?.catalogForeignBookId,
+      'catalog-haunting-adeline',
+    );
     expect(selected?.selection?.foreignAuthorId, 'author-hd-carlton');
     // `isEbook: false` is useful discovery metadata, but the server cannot
     // safely validate it as Chaptarr's authoritative publication format.
@@ -513,6 +520,7 @@ void main() {
                     book: book,
                     foreignId: 'lost-chronicle',
                     lookupTerm: 'lost chronicl',
+                    catalogForeignBookId: 'lost-chronicle',
                     rank: 0,
                     matchEvidence: 'Title starts with your search',
                   ),
@@ -530,6 +538,7 @@ void main() {
 
     expect(selected?.foreignId, 'lost-chronicle');
     expect(selected?.selection?.lookupTerm, 'lost chronicl');
+    expect(selected?.selection?.catalogForeignBookId, 'lost-chronicle');
     expect(selected?.selection?.foreignAuthorId, isNull);
     expect(selected?.selection?.authorName, isNull);
   });

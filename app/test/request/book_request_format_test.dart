@@ -41,6 +41,8 @@ void main() {
       title: 'A Book',
       format: BookRequestFormat.audiobook,
       selection: const BookRequestSelection(
+        lookupTerm: 'a book',
+        catalogForeignBookId: 'catalog-book-123',
         foreignAuthorId: 'author-456',
         authorName: 'The Author',
         audiobook: BookPublicationSelection(
@@ -57,6 +59,8 @@ void main() {
     );
 
     expect(adapter.body['book_selection'], {
+      'lookup_term': 'a book',
+      'catalog_foreign_book_id': 'catalog-book-123',
       'foreign_author_id': 'author-456',
       'author_name': 'The Author',
       'audiobook': {
@@ -75,6 +79,20 @@ void main() {
           .containsKey('ebook'),
       isFalse,
     );
+  });
+
+  test('catalog book identity is normalized and counts as selection evidence',
+      () {
+    final selection = BookRequestSelection.tryFromJson({
+      'catalog_foreign_book_id': '  catalog-book-123  ',
+    });
+
+    expect(selection, isNotNull);
+    expect(selection!.catalogForeignBookId, 'catalog-book-123');
+    expect(selection.hasEvidence, isTrue);
+    expect(selection.toJson(), {
+      'catalog_foreign_book_id': 'catalog-book-123',
+    });
   });
 
   test('requestBook pins the selected instance and preserves partial formats',
@@ -242,8 +260,7 @@ void main() {
       (
         code: 'book_match_not_found',
         status: 409,
-        message:
-            'This catalog match changed. Search for the book again and retry.',
+        message: 'Cantinarr couldn’t verify this book match. Try again.',
         definitive: true,
       ),
       (

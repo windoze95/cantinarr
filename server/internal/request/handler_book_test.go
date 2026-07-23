@@ -105,12 +105,12 @@ func TestBookRequestErrorResponseUsesStableRequesterSafeCodes(t *testing.T) {
 			wantError:  "An admin needs to check this book library’s connection.",
 		},
 		{
-			name:       "catalog match changed",
+			name:       "book match not verified",
 			err:        ErrBookMatchNotFound,
 			format:     BookFormatEbook,
 			wantStatus: http.StatusConflict,
 			wantCode:   "book_match_not_found",
-			wantError:  "This catalog match changed. Search for the book again and retry.",
+			wantError:  "Cantinarr couldn’t verify this book match. Try again.",
 		},
 		{
 			name:       "multi-book result",

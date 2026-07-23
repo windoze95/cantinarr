@@ -60,7 +60,6 @@ class BookRequestButton extends StatefulWidget {
   final ValueChanged<BookRequestStatusDetail>? onDetailChanged;
   final FutureOr<void> Function()? onRequestCompleted;
   final BookRequestTargetPicker? requestTargetPicker;
-  final FutureOr<void> Function()? onCatalogMatchChanged;
 
   const BookRequestButton({
     super.key,
@@ -75,7 +74,6 @@ class BookRequestButton extends StatefulWidget {
     this.onDetailChanged,
     this.onRequestCompleted,
     this.requestTargetPicker,
-    this.onCatalogMatchChanged,
   });
 
   @override
@@ -98,7 +96,6 @@ class _BookRequestButtonState extends State<BookRequestButton> {
   bool _loading = true;
   bool _busy = false;
   bool _submitting = false;
-  bool _catalogMatchesRefreshed = false;
   int _activeChecks = 0;
   int _checkGeneration = 0;
   Timer? _pendingRecheckTimer;
@@ -124,7 +121,6 @@ class _BookRequestButtonState extends State<BookRequestButton> {
     if (oldWidget.foreignId != widget.foreignId ||
         oldWidget.instanceId != widget.instanceId) {
       _loading = true;
-      _catalogMatchesRefreshed = false;
       _serverDetail = const BookRequestStatusDetail();
       _check();
     } else if (oldWidget.refreshTick != widget.refreshTick && !_busy) {
@@ -255,21 +251,6 @@ class _BookRequestButtonState extends State<BookRequestButton> {
       }
       if (!mounted) return;
       if (submission == null) {
-        if (definitiveFailure &&
-            failureCode == 'book_match_not_found' &&
-            widget.onCatalogMatchChanged != null) {
-          await widget.onCatalogMatchChanged?.call();
-          if (!mounted) return;
-          setState(() => _catalogMatchesRefreshed = true);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Book matches refreshed. Choose the title again.',
-              ),
-            ),
-          );
-          return;
-        }
         BookRequestStatusDetail? reconciled;
         if (!definitiveFailure) {
           reconciled = await _reconcileUnknownOutcome(target);
@@ -358,23 +339,6 @@ class _BookRequestButtonState extends State<BookRequestButton> {
       selectedForeignId,
       instanceId: widget.instanceId,
     );
-  }
-
-  Future<void> _refreshCatalogMatches() async {
-    if (_busy || widget.onCatalogMatchChanged == null) return;
-    setState(() => _busy = true);
-    try {
-      await widget.onCatalogMatchChanged?.call();
-      if (!mounted) return;
-      setState(() => _catalogMatchesRefreshed = true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Book matches refreshed. Choose the title again.'),
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
   }
 
   Future<BookRequestStatusDetail?> _refreshAfterSubmission(
@@ -513,27 +477,18 @@ class _BookRequestButtonState extends State<BookRequestButton> {
     if (!_detail.isKnown) {
       if (_detail.effectiveUnknownReason ==
           BookStatusUnknownReason.requestFailed) {
-        final catalogChanged =
-            _detail.failureCode == 'book_match_not_found' &&
-                widget.onCatalogMatchChanged != null;
         final needsAdmin = _detail.failureCode ==
                 'book_configuration_invalid' ||
             _detail.failureCode == 'book_connection_invalid' ||
             _detail.failureCode == 'book_search_rejected';
         return TextButton.icon(
-          onPressed: _busy
-              ? null
-              : catalogChanged && !_catalogMatchesRefreshed
-                  ? _refreshCatalogMatches
-                  : _chooseAndRequest,
+          onPressed: _busy ? null : _chooseAndRequest,
           icon: const Icon(Icons.error_outline_rounded, size: 18),
-          label: Text(catalogChanged
-              ? _catalogMatchesRefreshed
-                  ? 'Choose again'
-                  : 'Refresh matches'
-              : needsAdmin
-                  ? 'Ask an admin, then retry'
-                  : 'Couldn’t add · Try again'),
+          label: Text(
+            needsAdmin
+                ? 'Ask an admin, then retry'
+                : 'Couldn’t add · Try again',
+          ),
         );
       }
       if (_detail.effectiveUnknownReason ==

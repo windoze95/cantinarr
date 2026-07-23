@@ -12,6 +12,7 @@ class BookRequestWizardCandidate {
   final ChaptarrBook book;
   final String foreignId;
   final String? lookupTerm;
+  final String? catalogForeignBookId;
   final BookOwnership? ownership;
   final bool ownershipStatusKnown;
   final BookRequestStatusDetail? statusDetail;
@@ -23,6 +24,7 @@ class BookRequestWizardCandidate {
     required this.book,
     required this.foreignId,
     this.lookupTerm,
+    this.catalogForeignBookId,
     this.ownership,
     this.ownershipStatusKnown = true,
     this.statusDetail,
@@ -68,11 +70,17 @@ Future<BookRequestTarget?> showBookRequestWizard(
               ),
         ]
       : related;
+  final preferredCandidate = selectedCandidate ?? usable.first;
   final formats = _formatChoices(request.requestableFormats);
   if (formats.isEmpty) return null;
 
   if (formats.length == 1) {
-    final choices = _editionChoices(usable, formats.single, request);
+    final choices = _editionChoices(
+      usable,
+      formats.single,
+      request,
+      preferredCandidate,
+    );
     if (choices.length == 1) {
       return _targetFor(
         choices.single.candidate,
@@ -90,6 +98,7 @@ Future<BookRequestTarget?> showBookRequestWizard(
       request: request,
       selectedBook: selectedBook,
       candidates: usable,
+      preferredCandidate: preferredCandidate,
       formats: formats,
     ),
   );
@@ -140,6 +149,7 @@ List<_EditionChoice> _editionChoices(
   List<BookRequestWizardCandidate> candidates,
   BookRequestFormat format,
   BookRequestPickerContext request,
+  BookRequestWizardCandidate preferredCandidate,
 ) {
   final requestable = candidates
       .where((candidate) => _candidateSupports(candidate, format, request))
@@ -159,6 +169,7 @@ List<_EditionChoice> _editionChoices(
         candidate: candidate,
         selection: BookRequestSelection(
           lookupTerm: candidate.lookupTerm,
+          catalogForeignBookId: candidate.catalogForeignBookId?.trim(),
           foreignAuthorId: author?.foreignAuthorId?.trim(),
           authorName: author?.authorName.trim(),
           ebook: variant.ebook,
@@ -174,11 +185,9 @@ List<_EditionChoice> _editionChoices(
   for (final choice in expanded) {
     List<_EditionChoice>? matchingGroup;
     for (final group in groups) {
-      // Never expose two clickable cards that serialize to the same server
-      // selection or whose user-visible publication facts are identical.
-      // Search rows stay distinct, but the request sheet must not ask someone
-      // to choose between hidden catalog ids. The whole-group check keeps the
-      // presentation grouping transitive and stable.
+      // Search rows remain distinct in the result list. Here, publication-
+      // equivalent hidden catalog identities share one request choice; the
+      // exact row the requester clicked remains the representative.
       if (group.every((existing) =>
           sameBookWork(existing.candidate.book, choice.candidate.book) &&
           _sameSelection(
@@ -197,16 +206,23 @@ List<_EditionChoice> _editionChoices(
       matchingGroup.add(choice);
     }
   }
-  return [for (final group in groups) _groupedChoice(group, request)];
+  return [
+    for (final group in groups)
+      _groupedChoice(group, request, preferredCandidate),
+  ];
 }
 
 _EditionChoice _groupedChoice(
   List<_EditionChoice> group,
   BookRequestPickerContext request,
+  BookRequestWizardCandidate preferredCandidate,
 ) {
   final representative = group.firstWhere(
-    (choice) => choice.candidate.foreignId == request.foreignId,
-    orElse: () => group.first,
+    (choice) => identical(choice.candidate, preferredCandidate),
+    orElse: () => group.firstWhere(
+      (choice) => choice.candidate.foreignId == request.foreignId,
+      orElse: () => group.first,
+    ),
   );
   final strongestAuthor = group.firstWhere(
     (choice) =>
@@ -220,6 +236,8 @@ _EditionChoice _groupedChoice(
     candidate: representative.candidate,
     selection: BookRequestSelection(
       lookupTerm: representative.selection.lookupTerm,
+      catalogForeignBookId:
+          representative.selection.catalogForeignBookId,
       foreignAuthorId: strongestAuthor.selection.foreignAuthorId,
       authorName: representative.selection.authorName ??
           strongestAuthor.selection.authorName,
@@ -476,12 +494,14 @@ class _BookRequestWizardSheet extends StatefulWidget {
   final BookRequestPickerContext request;
   final ChaptarrBook selectedBook;
   final List<BookRequestWizardCandidate> candidates;
+  final BookRequestWizardCandidate preferredCandidate;
   final List<BookRequestFormat> formats;
 
   const _BookRequestWizardSheet({
     required this.request,
     required this.selectedBook,
     required this.candidates,
+    required this.preferredCandidate,
     required this.formats,
   });
 
@@ -506,6 +526,7 @@ class _BookRequestWizardSheetState extends State<_BookRequestWizardSheet> {
           widget.candidates,
           _selectedFormat!,
           widget.request,
+          widget.preferredCandidate,
         );
 
   void _selectFormat(BookRequestFormat format) {
@@ -513,6 +534,7 @@ class _BookRequestWizardSheetState extends State<_BookRequestWizardSheet> {
       widget.candidates,
       format,
       widget.request,
+      widget.preferredCandidate,
     );
     if (choices.length == 1) {
       Navigator.of(context).pop(
@@ -867,6 +889,9 @@ class _EditionCard extends StatelessWidget {
       ...facts,
     ].join(' · ');
     return Semantics(
+      key: ValueKey(
+        'book-match:${candidate.book.foreignBookId ?? ''}:${candidate.foreignId}',
+      ),
       button: true,
       label: recommended
           ? 'Closest catalog match, ${candidate.book.title}'

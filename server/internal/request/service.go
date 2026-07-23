@@ -325,11 +325,15 @@ type BookSelection struct {
 	// LookupTerm is the catalog query that originally produced the selected
 	// result. It is a locator, not identity: every lookup replay is still pinned
 	// to the exact work, author, and publication before any mutation.
-	LookupTerm      string                    `json:"lookup_term,omitempty"`
-	ForeignAuthorID string                    `json:"foreign_author_id,omitempty"`
-	AuthorName      string                    `json:"author_name,omitempty"`
-	Ebook           *BookPublicationSelection `json:"ebook,omitempty"`
-	Audiobook       *BookPublicationSelection `json:"audiobook,omitempty"`
+	LookupTerm string `json:"lookup_term,omitempty"`
+	// CatalogForeignBookID is the provider identity on the lookup row the user
+	// selected. It can differ from the canonical foreign_id on an already-local
+	// Chaptarr record; foreign_id remains the ownership and mutation identity.
+	CatalogForeignBookID string                    `json:"catalog_foreign_book_id,omitempty"`
+	ForeignAuthorID      string                    `json:"foreign_author_id,omitempty"`
+	AuthorName           string                    `json:"author_name,omitempty"`
+	Ebook                *BookPublicationSelection `json:"ebook,omitempty"`
+	Audiobook            *BookPublicationSelection `json:"audiobook,omitempty"`
 }
 
 func (s *BookSelection) publication(format string) *BookPublicationSelection {
@@ -1842,6 +1846,10 @@ func selectChaptarrLibraryWorkWithSelection(books []chaptarr.Book, foreignBookID
 		}
 	}
 	if len(sameID) == 0 {
+		catalogForeignBookID := catalogForeignBookIDForSelection(foreignBookID, selection)
+		if catalogForeignBookID != "" && catalogForeignBookID != foreignBookID {
+			return selectedTitle, nil, fmt.Errorf("%w: catalog identity is not anchored by the canonical library work", ErrBookMatchNotFound)
+		}
 		return selectedTitle, nil, nil
 	}
 	if selectedTitle == "" {
@@ -1928,12 +1936,21 @@ func selectChaptarrLookupResult(results []chaptarr.LookupResult, foreignBookID, 
 	return selectChaptarrLookupResultWithSelection(results, foreignBookID, selectedTitle, nil)
 }
 
+func catalogForeignBookIDForSelection(foreignBookID string, selection *BookSelection) string {
+	if selection != nil {
+		if catalogForeignBookID := strings.TrimSpace(selection.CatalogForeignBookID); catalogForeignBookID != "" {
+			return catalogForeignBookID
+		}
+	}
+	return strings.TrimSpace(foreignBookID)
+}
+
 // lookupChaptarrBookResultsForRequest replays the discovery query before
 // falling back to the display title. Chaptarr can return a useful result for a
 // partial query and an empty list for the complete title, so changing terms at
 // submission time makes a real selection impossible to revalidate. The lookup
 // term is never trusted as identity: this helper returns early only after the
-// existing foreign-book, title, author, and publication checks accept a row.
+// existing catalog-work, title, author, and publication checks accept a row.
 func lookupChaptarrBookResultsForRequest(
 	ctx context.Context,
 	client *chaptarr.Client,
@@ -1997,8 +2014,9 @@ func selectChaptarrLookupResultWithSelection(results []chaptarr.LookupResult, fo
 	}
 	candidates := make([]rankedLookup, 0, len(results))
 	bestTier := 0
+	catalogForeignBookID := catalogForeignBookIDForSelection(foreignBookID, selection)
 	for _, result := range results {
-		if result.ForeignBookID != foreignBookID {
+		if result.ForeignBookID != catalogForeignBookID {
 			continue
 		}
 		tier := bookTitleIdentityTier(result.Title, selectedTitle)
@@ -2105,6 +2123,11 @@ func selectChaptarrSeedEditions(results []chaptarr.LookupResult, foreignBookID, 
 			return nil, fmt.Errorf("%w: missing-format seed author identity changed", ErrBookMutationUnverified)
 		}
 		return append([]json.RawMessage(nil), exact.Editions...), nil
+	}
+	// A current client supplied the exact lookup-row identity. Never let the
+	// legacy title/author fallback silently substitute another provider work.
+	if selection != nil && strings.TrimSpace(selection.CatalogForeignBookID) != "" {
+		return nil, fmt.Errorf("%w: selected catalog work has no seed editions", ErrBookMatchNotFound)
 	}
 
 	bestTitleTier := 0
@@ -3341,8 +3364,8 @@ func chaptarrCandidateBetter(left, right chaptarrBookCandidate, mediaType string
 	// Prefer that partial selection on retry even while the book-level monitor
 	// flag is still false, then repair the same pocket instead of selecting a
 	// second duplicate row.
-	leftSelected := countMonitoredChaptarrEditions(left.editions, mediaType) == 1
-	rightSelected := countMonitoredChaptarrEditions(right.editions, mediaType) == 1
+	leftSelected := countMonitoredChaptarrEditions(left.book, left.editions, mediaType) == 1
+	rightSelected := countMonitoredChaptarrEditions(right.book, right.editions, mediaType) == 1
 	if leftSelected != rightSelected {
 		return leftSelected
 	}
@@ -3365,12 +3388,16 @@ func chaptarrCandidateBetter(left, right chaptarrBookCandidate, mediaType string
 }
 
 func selectChaptarrEditions(editions []chaptarr.Edition, targetTitle, mediaType string) ([]chaptarr.Edition, int, bool) {
+	return selectChaptarrEditionsWithAuthoritativeParent(editions, targetTitle, mediaType, 0)
+}
+
+func selectChaptarrEditionsWithAuthoritativeParent(editions []chaptarr.Edition, targetTitle, mediaType string, authoritativeEditionID int) ([]chaptarr.Edition, int, bool) {
 	bestSafeTier := 0
 	bestUnsafeTier := 0
 	safe := make([]chaptarr.Edition, 0, len(editions))
 	unsafe := make([]chaptarr.Edition, 0, len(editions))
 	for _, edition := range editions {
-		if edition.ID <= 0 || chaptarrEditionFormat(edition) != mediaType {
+		if edition.ID <= 0 || !chaptarrEditionMatchesTargetFormat(edition, mediaType, authoritativeEditionID) {
 			continue
 		}
 		tier := 0
@@ -3413,6 +3440,10 @@ func chooseChaptarrEdition(editions []chaptarr.Edition, targetTitle, mediaType s
 	if multiWork {
 		return nil, ErrBookMultiWorkUnsupported
 	}
+	return chooseBestChaptarrEdition(matching), nil
+}
+
+func chooseBestChaptarrEdition(matching []chaptarr.Edition) *chaptarr.Edition {
 	best := -1
 	bestScore := -1
 	for i := range matching {
@@ -3441,9 +3472,9 @@ func chooseChaptarrEdition(editions []chaptarr.Edition, targetTitle, mediaType s
 		}
 	}
 	if best == -1 {
-		return nil, nil
+		return nil
 	}
-	return &matching[best], nil
+	return &matching[best]
 }
 
 func chooseChaptarrEditionForTarget(editions []chaptarr.Edition, target chaptarrBookTarget) (*chaptarr.Edition, error) {
@@ -3457,13 +3488,14 @@ func chooseChaptarrEditionForTarget(editions []chaptarr.Edition, target chaptarr
 		chosen := editions[0]
 		return &chosen, nil
 	}
-	return chooseChaptarrEdition(editions, target.title, target.mediaType)
+	return chooseBestChaptarrEdition(editions), nil
 }
 
-func countMonitoredChaptarrEditions(editions []chaptarr.Edition, mediaType string) int {
+func countMonitoredChaptarrEditions(book chaptarr.Book, editions []chaptarr.Edition, mediaType string) int {
+	authoritativeEditionID := authoritativeParentEditionID(book, editions, mediaType)
 	count := 0
 	for _, edition := range editions {
-		if edition.Monitored && chaptarrEditionFormat(edition) == mediaType {
+		if edition.Monitored && chaptarrEditionMatchesTargetFormat(edition, mediaType, authoritativeEditionID) {
 			count++
 		}
 	}
@@ -3498,12 +3530,13 @@ func chaptarrBookSelectionVerified(book chaptarr.Book, editions []chaptarr.Editi
 	}
 	monitored := 0
 	chosen := false
+	authoritativeEditionID := authoritativeParentEditionID(book, editions, target.mediaType)
 	for _, edition := range editions {
 		if !edition.Monitored {
 			continue
 		}
 		monitored++
-		if edition.ID == editionID && chaptarrEditionFormat(edition) == target.mediaType {
+		if edition.ID == editionID && chaptarrEditionMatchesTargetFormat(edition, target.mediaType, authoritativeEditionID) {
 			chosen = true
 		}
 	}

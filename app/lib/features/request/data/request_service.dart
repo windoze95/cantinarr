@@ -121,6 +121,9 @@ class BookRequestSelection {
   /// locator; the server still requires the selected work, author, and
   /// publication identities to match before changing Chaptarr.
   final String? lookupTerm;
+  /// The provider catalog identity on the row the requester actually chose.
+  /// This can differ from the canonical library identity used by the request.
+  final String? catalogForeignBookId;
   final String? foreignAuthorId;
   final String? authorName;
   final BookPublicationSelection? ebook;
@@ -128,6 +131,7 @@ class BookRequestSelection {
 
   const BookRequestSelection({
     this.lookupTerm,
+    this.catalogForeignBookId,
     this.foreignAuthorId,
     this.authorName,
     this.ebook,
@@ -138,6 +142,8 @@ class BookRequestSelection {
     if (value is! Map) return null;
     final selection = BookRequestSelection(
       lookupTerm: _bookSelectionString(value['lookup_term']),
+      catalogForeignBookId:
+          _bookSelectionString(value['catalog_foreign_book_id']),
       foreignAuthorId: _bookSelectionString(value['foreign_author_id']),
       authorName: _bookSelectionString(value['author_name']),
       ebook: BookPublicationSelection.tryFromJson(value['ebook']),
@@ -148,6 +154,7 @@ class BookRequestSelection {
 
   bool get hasEvidence =>
       (lookupTerm?.isNotEmpty ?? false) ||
+      (catalogForeignBookId?.isNotEmpty ?? false) ||
       (foreignAuthorId?.isNotEmpty ?? false) ||
       (authorName?.isNotEmpty ?? false) ||
       ebook != null ||
@@ -155,6 +162,8 @@ class BookRequestSelection {
 
   Map<String, dynamic> toJson() => {
         if (lookupTerm?.isNotEmpty ?? false) 'lookup_term': lookupTerm,
+        if (catalogForeignBookId?.isNotEmpty ?? false)
+          'catalog_foreign_book_id': catalogForeignBookId,
         if (foreignAuthorId?.isNotEmpty ?? false)
           'foreign_author_id': foreignAuthorId,
         if (authorName?.isNotEmpty ?? false) 'author_name': authorName,
@@ -368,7 +377,7 @@ String? bookRequestFailureMessage(
     case 'book_format_unresolved':
       return 'This version is not identified as an eBook or audiobook. Search again and choose a version with a clear format.';
     case 'book_match_not_found':
-      return 'This catalog match changed. Search for the book again and retry.';
+      return 'Cantinarr couldn’t verify this book match. Try again.';
     case 'book_multi_work_unsupported':
       return 'This result contains multiple books. Choose an individual title instead.';
     case 'book_configuration_invalid':
