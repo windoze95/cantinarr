@@ -20,9 +20,15 @@ import (
 const (
 	bookRequestJobPollInterval = time.Second
 	bookRequestJobMaxParallel  = 4
+	bookRequestJobMaxLifetime  = defaultBookSeedOutcomeTTL
+	bookRequestJobClaimLease   = 5 * time.Minute
 )
 
-var errDurableBookSearchTargetInvalid = errors.New("durable searched book target is no longer valid")
+var (
+	errDurableBookSearchTargetInvalid = errors.New("durable searched book target is no longer valid")
+	errBookReconciliationExpired      = fmt.Errorf("%w: the request could not be reconciled before its recovery deadline", ErrBookMutationUnverified)
+	errBookInstanceChanged            = errors.New("Chaptarr instance settings changed while the request was in progress")
+)
 
 type bookRequestJob struct {
 	ID                  int64
@@ -47,6 +53,7 @@ type bookRequestJob struct {
 	AudiobookStatus     string
 	SettingsFingerprint []byte
 	PhaseStartedAt      time.Time
+	CreatedAt           time.Time
 	AttemptCount        int
 }
 
@@ -394,6 +401,21 @@ func (s *Service) setBookJobPhase(jobID int64, phase, format string, authorID in
 	return nil
 }
 
+func (s *Service) acknowledgeDurableBookSearch(jobID int64) error {
+	result, err := s.db.Exec(
+		`UPDATE book_request_jobs SET search_acknowledged = 1, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND state = 'running' AND phase = 'search_inflight'`,
+		jobID,
+	)
+	if err != nil {
+		return fmt.Errorf("persist book search acknowledgement: %w", err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return errors.New("book search acknowledgement changed concurrently")
+	}
+	return nil
+}
+
 func (s *Service) deferDirectBookJob(jobID int64, cause error) bool {
 	if jobID == 0 || s.db == nil {
 		return false
@@ -401,28 +423,67 @@ func (s *Service) deferDirectBookJob(jobID int64, cause error) bool {
 	var phase string
 	var attemptCount int
 	var userID, requestID int64
-	var format, instanceID, foreignID, title string
+	var format, instanceID, foreignID, title, phaseFormat string
+	var bookID, searchAcknowledged int
+	var phaseStartedAt, createdAt time.Time
 	if err := s.db.QueryRow(
-		`SELECT phase, attempt_count, user_id, COALESCE(request_id, 0),
-		        book_format, instance_id, foreign_id, title
+		`SELECT phase, CAST(attempt_count AS INTEGER), user_id, COALESCE(request_id, 0),
+		        book_format, instance_id, foreign_id, title, phase_format,
+		        CAST(book_id AS INTEGER), CAST(search_acknowledged AS INTEGER),
+		        phase_started_at, created_at
 		 FROM book_request_jobs WHERE id = ?`,
 		jobID,
-	).Scan(&phase, &attemptCount, &userID, &requestID, &format, &instanceID, &foreignID, &title); err != nil {
+	).Scan(&phase, &attemptCount, &userID, &requestID, &format, &instanceID, &foreignID, &title,
+		&phaseFormat, &bookID, &searchAcknowledged, &phaseStartedAt, &createdAt); err != nil {
 		return false
 	}
-	if bookJobErrorIsTerminalAtPhase(cause, phase) {
+	deadlineJob := &bookRequestJob{
+		Phase: phase, PhaseFormat: phaseFormat, BookID: bookID,
+		SearchAcknowledged: searchAcknowledged != 0,
+		PhaseStartedAt:     phaseStartedAt, CreatedAt: createdAt,
+	}
+	now := time.Now()
+	expired := bookRequestJobExpired(deadlineJob, now)
+	ambiguousAuth := bookJobAuthMayHideMutation(cause)
+	terminal := bookJobErrorIsTerminalAtPhase(cause, phase)
+	if terminal && ambiguousAuth && bookRequestJobSafetyGuardActive(deadlineJob, now) {
+		terminal = false
+	}
+	if expired && (!terminal || ambiguousAuth) {
+		cause = errBookReconciliationExpired
+		terminal = true
+	}
+	if terminal {
 		_, body := bookRequestErrorResponse(cause, format)
 		code := body["code"]
-		result, err := s.db.Exec(
-			`UPDATE book_request_jobs SET state = 'failed', next_attempt_at = CURRENT_TIMESTAMP,
-			 last_error_code = ?, last_error_text = ?, updated_at = CURRENT_TIMESTAMP
-			 WHERE id = ?`,
-			code, boundedBookJobError(cause), jobID,
-		)
+		set := `state = 'failed', proc_generation = '', next_attempt_at = CURRENT_TIMESTAMP,
+			 last_error_code = ?, last_error_text = ?, updated_at = CURRENT_TIMESTAMP`
+		args := []any{code, boundedBookJobError(cause)}
+		if searchAcknowledged != 0 {
+			column := ""
+			switch phaseFormat {
+			case BookFormatEbook:
+				column = "ebook_status"
+			case BookFormatAudiobook:
+				column = "audiobook_status"
+			}
+			if column != "" {
+				set += `, ` + column + ` = CASE WHEN TRIM(` + column + `) = '' THEN ? ELSE ` + column + ` END`
+				args = append(args, StatusRequested)
+			}
+		}
+		args = append(args, jobID)
+		result, err := s.db.Exec(`UPDATE book_request_jobs SET `+set+` WHERE id = ?`, args...)
 		if err != nil {
 			return false
 		}
 		changed, _ := result.RowsAffected()
+		if changed == 1 {
+			s.clearBookJobTransientIdentity(&bookRequestJob{
+				InstanceID: instanceID, ForeignID: foreignID,
+				PhaseFormat: phaseFormat, BookID: bookID,
+			})
+		}
 		if changed == 1 && s.notifier != nil {
 			data := map[string]interface{}{
 				"media_type": "book", "foreign_id": foreignID, "instance_id": instanceID,
@@ -438,12 +499,12 @@ func (s *Service) deferDirectBookJob(jobID int64, cause error) bool {
 		return false
 	}
 	state := "retry_wait"
-	if phase == "seed_inflight" || phase == "search_inflight" || errors.Is(cause, ErrBookOutcomePending) {
+	if phase == "seed_inflight" || phase == "search_inflight" || errors.Is(cause, ErrBookOutcomePending) || errors.Is(cause, errBookInstanceChanged) {
 		state = "outcome_unknown"
 	}
 	delay := bookJobRetryDelay(attemptCount)
 	result, err := s.db.Exec(
-		`UPDATE book_request_jobs SET state = ?, next_attempt_at = datetime('now', ?),
+		`UPDATE book_request_jobs SET state = ?, proc_generation = '', next_attempt_at = datetime('now', ?),
 		 last_error_code = ?, last_error_text = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
 		state, fmt.Sprintf("+%d seconds", int(delay/time.Second)), bookJobErrorCode(cause), boundedBookJobError(cause), jobID,
@@ -454,6 +515,66 @@ func (s *Service) deferDirectBookJob(jobID int64, cause error) bool {
 	retained, _ := result.RowsAffected()
 	s.wakeBookRequestWorker()
 	return retained == 1
+}
+
+func bookRequestJobExpired(job *bookRequestJob, now time.Time) bool {
+	if job == nil || job.CreatedAt.IsZero() || now.Before(job.CreatedAt.Add(bookRequestJobMaxLifetime)) {
+		return false
+	}
+	phaseStartedAt := job.PhaseStartedAt
+	if phaseStartedAt.IsZero() {
+		phaseStartedAt = job.CreatedAt
+	}
+	switch job.Phase {
+	case "seed_inflight":
+		return !now.Before(phaseStartedAt.Add(defaultBookSeedOutcomeTTL))
+	case "search_inflight":
+		if job.SearchAcknowledged {
+			return true
+		}
+		return !now.Before(phaseStartedAt.Add(defaultBookSearchAckTTL))
+	default:
+		return true
+	}
+}
+
+func bookRequestJobSafetyGuardActive(job *bookRequestJob, now time.Time) bool {
+	if job == nil {
+		return false
+	}
+	phaseStartedAt := job.PhaseStartedAt
+	if phaseStartedAt.IsZero() {
+		phaseStartedAt = job.CreatedAt
+	}
+	switch job.Phase {
+	case "seed_inflight":
+		return phaseStartedAt.IsZero() || now.Before(phaseStartedAt.Add(defaultBookSeedOutcomeTTL))
+	case "search_inflight":
+		return !job.SearchAcknowledged && (phaseStartedAt.IsZero() || now.Before(phaseStartedAt.Add(defaultBookSearchAckTTL)))
+	default:
+		return false
+	}
+}
+
+func bookJobAuthMayHideMutation(err error) bool {
+	return bookUpstreamAuthFailure(err) && !errors.Is(err, ErrBookMutationRejected) &&
+		!errors.Is(err, ErrBookSearchRejected)
+}
+
+func bookRequestJobExpirySQL() (string, []any) {
+	predicate := `created_at <= datetime('now', ?) AND (
+		 phase NOT IN ('seed_inflight','search_inflight')
+		 OR (phase = 'seed_inflight' AND phase_started_at <= datetime('now', ?))
+		 OR (phase = 'search_inflight' AND (
+		      search_acknowledged <> 0 OR phase_started_at <= datetime('now', ?)
+		    ))
+	)`
+	args := []any{
+		fmt.Sprintf("-%d seconds", int(bookRequestJobMaxLifetime/time.Second)),
+		fmt.Sprintf("-%d seconds", int(defaultBookSeedOutcomeTTL/time.Second)),
+		fmt.Sprintf("-%d seconds", int(defaultBookSearchAckTTL/time.Second)),
+	}
+	return predicate, args
 }
 
 func bookJobRetryDelay(attemptCount int) time.Duration {
@@ -485,6 +606,9 @@ func bookJobErrorIsTerminal(err error) bool {
 }
 
 func bookJobErrorIsTerminalAtPhase(err error, phase string) bool {
+	if errors.Is(err, errBookReconciliationExpired) {
+		return true
+	}
 	if bookJobErrorIsTerminal(err) {
 		return true
 	}
@@ -502,8 +626,12 @@ func bookJobErrorCode(err error) string {
 		return "book_catalog_pending"
 	case errors.Is(err, ErrBookSearchUnconfirmed):
 		return "book_search_unconfirmed"
+	case bookUpstreamAuthFailure(err):
+		return "book_connection_invalid"
 	case errors.Is(err, ErrBookMutationUnverified):
 		return "book_request_unverified"
+	case errors.Is(err, errBookInstanceChanged):
+		return "book_instance_changed"
 	default:
 		return "book_request_retry"
 	}
@@ -892,11 +1020,43 @@ func (s *Service) reclaimStaleBookRequestJobClaims() error {
 	return err
 }
 
+// reclaimExpiredBookRequestJobClaims is the same-process lease fallback. The
+// normal worker and synchronous paths release every claim explicitly, but a
+// recovered handler panic or failed final persistence must not retain title
+// ownership until the container restarts. The lease exceeds the complete
+// intended request budget; the per-title lock still serializes a late owner
+// against the reclaimed candidate.
+func (s *Service) reclaimExpiredBookRequestJobClaims() error {
+	if s.db == nil {
+		return nil
+	}
+	modifier := fmt.Sprintf("-%d seconds", int(bookRequestJobClaimLease/time.Second))
+	_, err := s.db.Exec(
+		`UPDATE book_request_jobs SET
+		 state = CASE
+		   WHEN phase IN ('seed_inflight','search_inflight') THEN 'outcome_unknown'
+		   ELSE 'retry_wait'
+		 END,
+		 proc_generation = '', next_attempt_at = CURRENT_TIMESTAMP,
+		 last_error_code = CASE WHEN last_error_code = '' THEN 'book_request_retry' ELSE last_error_code END,
+		 last_error_text = CASE WHEN last_error_text = '' THEN 'Book request worker reclaimed an abandoned claim' ELSE last_error_text END,
+		 updated_at = CURRENT_TIMESTAMP
+		 WHERE state = 'running' AND updated_at <= datetime('now', ?)`,
+		modifier,
+	)
+	return err
+}
+
 func (s *Service) runDueBookRequestJobs(ctx context.Context) {
+	if s.reclaimExpiredBookRequestJobClaims() != nil {
+		return
+	}
+	expirySQL, expiryArgs := bookRequestJobExpirySQL()
 	rows, err := s.db.Query(
 		`SELECT id, instance_id, foreign_id FROM book_request_jobs
-		 WHERE state IN ('retry_wait','outcome_unknown') AND next_attempt_at <= CURRENT_TIMESTAMP
-		 ORDER BY id LIMIT 16`,
+		 WHERE state IN ('retry_wait','outcome_unknown')
+		   AND (next_attempt_at <= CURRENT_TIMESTAMP OR (`+expirySQL+`))
+		 ORDER BY id LIMIT 16`, expiryArgs...,
 	)
 	if err != nil {
 		return
@@ -967,12 +1127,15 @@ func (s *Service) runDueBookRequestJob(ctx context.Context, item bookRequestJobC
 	defer lock.Unlock()
 	// Claim only after obtaining the work lock. The synchronous owner may have
 	// completed/deleted the row while this worker was waiting.
+	expirySQL, expiryArgs := bookRequestJobExpirySQL()
+	claimArgs := []any{s.bookWorkerGeneration, item.id}
+	claimArgs = append(claimArgs, expiryArgs...)
 	result, err := s.db.Exec(
 		`UPDATE book_request_jobs SET state = 'running', proc_generation = ?,
 		 attempt_count = attempt_count + 1, updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND state IN ('retry_wait','outcome_unknown')
-		   AND next_attempt_at <= CURRENT_TIMESTAMP`,
-		s.bookWorkerGeneration, item.id,
+		   AND (next_attempt_at <= CURRENT_TIMESTAMP OR (`+expirySQL+`))`,
+		claimArgs...,
 	)
 	claimed := int64(0)
 	if err == nil {
@@ -990,6 +1153,11 @@ func (s *Service) runClaimedBookRequestJob(parent context.Context, jobID int64) 
 	defer s.releaseClaimedBookRequestJob(jobID)
 	job, err := s.loadBookRequestJob(jobID)
 	if err != nil {
+		s.deferDirectBookJob(jobID, err)
+		return
+	}
+	if job.Phase == "queued" && bookRequestJobExpired(job, time.Now()) {
+		s.deferDirectBookJob(job.ID, errBookReconciliationExpired)
 		return
 	}
 	timeout := s.bookMutationTimeout
@@ -1015,24 +1183,66 @@ func (s *Service) runClaimedBookRequestJob(parent context.Context, jobID int64) 
 		}
 		job, err = s.loadBookRequestJob(job.ID)
 		if err != nil {
+			s.deferDirectBookJob(jobID, err)
 			return
 		}
 	}
 	if job.Phase == "seed_inflight" {
+		seedDeadlineReached := bookRequestJobExpired(job, time.Now())
 		if err := s.reconcileDurableSeed(ctx, client, job); err != nil {
 			s.deferDirectBookJob(job.ID, err)
 			return
 		}
 		job, err = s.loadBookRequestJob(job.ID)
 		if err != nil {
+			s.deferDirectBookJob(jobID, err)
 			return
 		}
+		if seedDeadlineReached {
+			s.deferDirectBookJob(job.ID, errBookReconciliationExpired)
+			return
+		}
+	}
+	if job.Phase == "converging" && bookRequestJobExpired(job, time.Now()) {
+		if _, err := s.inspectFreshBookJobTarget(ctx, client, job); err != nil {
+			s.deferDirectBookJob(job.ID, err)
+		} else {
+			s.deferDirectBookJob(job.ID, errBookReconciliationExpired)
+		}
+		return
 	}
 	if job.Phase == "search_inflight" {
 		if err := s.restoreDurableSearchGuard(ctx, client, job); err != nil {
 			s.deferDirectBookJob(job.ID, err)
 			return
 		}
+		if !job.SearchAcknowledged {
+			s.deferDirectBookJob(job.ID, fmt.Errorf("%w: prior search outcome remains unknown", ErrBookSearchUnconfirmed))
+			return
+		}
+		// Durable acknowledgement finishes this format from read-only evidence;
+		// it never re-enters that format's mutation path after a restart. A both
+		// job may continue only with an unfinished sibling while still in time.
+		if _, err := s.durableSearchEvidence(ctx, client, job); err != nil {
+			s.deferDirectBookJob(job.ID, err)
+			return
+		}
+		finished, err := s.checkpointAcknowledgedBookSearch(job)
+		if err != nil {
+			s.deferDirectBookJob(job.ID, err)
+			return
+		}
+		if finished {
+			return
+		}
+		if bookRequestJobExpired(job, time.Now()) {
+			s.deferDirectBookJob(job.ID, errBookReconciliationExpired)
+			return
+		}
+	}
+	if bookRequestJobExpired(job, time.Now()) {
+		s.deferDirectBookJob(job.ID, errBookReconciliationExpired)
+		return
 	}
 	r := &resolvedRequest{
 		userID: job.UserID, actorID: job.ApprovedBy, foreignID: job.ForeignID, bookFormat: job.BookFormat,
@@ -1053,6 +1263,40 @@ func (s *Service) runClaimedBookRequestJob(parent context.Context, jobID int64) 
 	if err != nil {
 		s.deferDirectBookJob(job.ID, err)
 	}
+}
+
+// checkpointAcknowledgedBookSearch turns durable command acknowledgement into
+// a local checkpoint without issuing another Chaptarr write. It returns true
+// when every requested format is complete and the durable job was finalized.
+func (s *Service) checkpointAcknowledgedBookSearch(job *bookRequestJob) (bool, error) {
+	r := &resolvedRequest{
+		userID: job.UserID, actorID: job.ApprovedBy, foreignID: job.ForeignID,
+		bookFormat: job.BookFormat, bookSelection: job.BookSelection,
+		instanceID: job.InstanceID, mediaType: "book", title: job.Title,
+		bookJobID: job.ID, bookFormats: map[string]string{},
+	}
+	applyBookJobCheckpoints(r, job)
+	if err := s.completeBookJobFormat(r, job.PhaseFormat, StatusRequested); err != nil {
+		return false, err
+	}
+	switch job.PhaseFormat {
+	case BookFormatEbook:
+		job.EbookStatus = StatusRequested
+	case BookFormatAudiobook:
+		job.AudiobookStatus = StatusRequested
+	}
+	for _, format := range expandBookFormat(job.BookFormat) {
+		if status := strings.TrimSpace(r.bookFormats[format]); status == "" || status == StatusUnavailable {
+			return false, nil
+		}
+	}
+	status := collapseBookStatuses(r.bookFormats, StatusRequested)
+	if job.RequestID != 0 {
+		_, err := s.completeApprovedBookJob(job, r, job.Title, status)
+		return err == nil, err
+	}
+	err := s.completeDirectBookJob(job.ID, r, job.Title)
+	return err == nil, err
 }
 
 func (s *Service) releaseClaimedBookRequestJob(jobID int64) {
@@ -1082,13 +1326,13 @@ func (s *Service) loadBookRequestJob(id int64) (*bookRequestJob, error) {
 		 instance_id, foreign_id, title, book_format, COALESCE(book_selection_json, ''), state, phase,
 		 phase_format, author_id, foreign_author_id, author_name, book_id,
 		 search_acknowledged, ebook_status, audiobook_status, settings_fingerprint,
-		 phase_started_at, attempt_count
+		 phase_started_at, created_at, attempt_count
 		 FROM book_request_jobs WHERE id = ?`, id,
 	).Scan(&job.ID, &job.UserID, &job.RequestID, &job.ApprovedBy,
 		&job.InstanceID, &job.ForeignID, &job.Title, &job.BookFormat, &job.BookSelectionJSON,
 		&job.State, &job.Phase, &job.PhaseFormat, &job.AuthorID, &job.ForeignAuthorID,
 		&job.AuthorName, &job.BookID, &ack, &job.EbookStatus, &job.AudiobookStatus,
-		&job.SettingsFingerprint, &job.PhaseStartedAt, &job.AttemptCount)
+		&job.SettingsFingerprint, &job.PhaseStartedAt, &job.CreatedAt, &job.AttemptCount)
 	if err != nil {
 		return &job, err
 	}
@@ -1104,9 +1348,7 @@ func (s *Service) reconcileDurableSeed(ctx context.Context, client *chaptarr.Cli
 		return fmt.Errorf("read seeded book catalog: %w", err)
 	}
 	matches := make([]chaptarr.Book, 0, 1)
-	plausibleFootprint := false
 	for _, book := range books {
-		plausibleFootprint = plausibleFootprint || bookJobHasPlausibleTargetFootprint(book, job)
 		if book.ForeignBookID != job.ForeignID || recordFormat(book) != job.PhaseFormat ||
 			!bookTitlesMatch(book.Title, job.Title) || chaptarrTitleIsMultiWork(book.Title) ||
 			!chaptarrBookResolved(book) {
@@ -1118,16 +1360,10 @@ func (s *Service) reconcileDurableSeed(ctx context.Context, client *chaptarr.Cli
 		matches = append(matches, book)
 	}
 	if len(matches) == 0 {
-		if !plausibleFootprint && time.Since(job.PhaseStartedAt) >= defaultBookSeedOutcomeTTL {
-			reset, resetErr := s.resetBookJobForExactPreflight(job, nil, false, defaultBookSeedOutcomeTTL)
-			if resetErr != nil {
-				return resetErr
-			}
-			if reset {
-				s.clearBookJobTransientIdentity(job)
-				return nil
-			}
-		}
+		// An uncertain POST is never replayed automatically. The durable job keeps
+		// reconciling read-only until its total lifetime expires, then releases the
+		// title as an explicit retry. This prevents both duplicate adds and the old
+		// 30-minute reset/reseed loop.
 		return fmt.Errorf("%w: seeded %s row is not visible yet", ErrBookCatalogPending, job.PhaseFormat)
 	}
 	authorID, err := chaptarrRecordAuthorID(matches)
@@ -1175,17 +1411,16 @@ func (s *Service) restoreDurableSearchGuard(ctx context.Context, client *chaptar
 			s.recordUncertainBookSearchAt(job.InstanceID, job.BookID, job.PhaseStartedAt)
 			return fmt.Errorf("%w: guarded searched book cannot be re-resolved yet: %w", ErrBookSearchUnconfirmed, err)
 		}
-		reset, resetErr := s.resetBookJobForExactPreflight(job, nil, false, defaultBookSearchAckTTL)
-		if resetErr != nil {
-			return resetErr
+		if bookRequestJobExpired(job, time.Now()) {
+			return errBookReconciliationExpired
 		}
-		if !reset {
-			return fmt.Errorf("%w: expired searched book guard changed concurrently", ErrBookOutcomePending)
-		}
-		s.clearBookJobTransientIdentity(job)
-		return nil
+		return fmt.Errorf("%w: searched book remains unresolved after its evidence window: %w", ErrBookSearchUnconfirmed, err)
 	}
 	if proved {
+		if err := s.acknowledgeDurableBookSearch(job.ID); err != nil {
+			return err
+		}
+		job.SearchAcknowledged = true
 		s.recordBookSearchAckAt(job.InstanceID, job.BookID, time.Now())
 		return nil
 	}
@@ -1193,8 +1428,10 @@ func (s *Service) restoreDurableSearchGuard(ctx context.Context, client *chaptar
 		s.recordUncertainBookSearchAt(job.InstanceID, job.BookID, job.PhaseStartedAt)
 		return nil
 	}
-	s.clearUncertainBookSearch(job.InstanceID, job.BookID)
-	return s.setBookJobPhase(job.ID, "converging", job.PhaseFormat, job.AuthorID, job.ForeignAuthorID, job.AuthorName, job.BookID, false)
+	if bookRequestJobExpired(job, time.Now()) {
+		return errBookReconciliationExpired
+	}
+	return fmt.Errorf("%w: prior search outcome remains unknown", ErrBookSearchUnconfirmed)
 }
 
 func (s *Service) durableSearchEvidence(ctx context.Context, client *chaptarr.Client, job *bookRequestJob) (bool, error) {
@@ -1501,10 +1738,17 @@ func (s *Service) rebindBookJobForFreshInstance(ctx context.Context, client *cha
 	if err != nil {
 		return false, err
 	}
+	expired := bookRequestJobExpired(job, time.Now())
+	if job.Phase == "queued" && expired {
+		return false, errBookReconciliationExpired
+	}
 	if job.Phase != "queued" {
 		footprint, inspectErr := s.inspectFreshBookJobTarget(ctx, client, job)
 		if inspectErr != nil {
 			return false, inspectErr
+		}
+		if expired && footprint != bookJobTargetExact {
+			return false, errBookReconciliationExpired
 		}
 		if footprint == bookJobTargetExact && job.Phase != "search_inflight" {
 			wait = 0
@@ -1674,12 +1918,5 @@ func (s *Service) hasDurableAuthorSeedOwner(instanceID, foreignAuthorID, authorN
 }
 
 func (s *Service) deferBookJobForInstanceDrift(job *bookRequestJob) {
-	modifier := fmt.Sprintf("+%d seconds", int(bookJobRetryDelay(job.AttemptCount)/time.Second))
-	_, _ = s.db.Exec(
-		`UPDATE book_request_jobs SET state = 'outcome_unknown',
-		 next_attempt_at = datetime('now', ?), last_error_code = 'book_instance_changed',
-		 last_error_text = 'Chaptarr instance settings changed while the request was in progress',
-		 updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		modifier, job.ID,
-	)
+	s.deferDirectBookJob(job.ID, errBookInstanceChanged)
 }

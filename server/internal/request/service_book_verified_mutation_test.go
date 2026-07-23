@@ -1600,28 +1600,59 @@ func TestVerifiedBookWaitsForAcknowledgedAuthorToBecomeReadable(t *testing.T) {
 	}
 }
 
-func TestVerifiedBookAuthorAuthenticationFailureIsDefinitive(t *testing.T) {
+func TestVerifiedBookAuthorAuthenticationFailureAfterSeedStaysGuarded(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			upstream := newVerifiedBookUpstream("Protected Author", "protected-author")
 			upstream.authorReadStatus = status
 			service, userID := newVerifiedMutationService(t, upstream)
-			started := time.Now()
 			_, err := service.CreateMediaRequest(userID, &CreateRequest{
 				MediaType: "book", ForeignID: upstream.foreignBookID, Title: upstream.title, BookFormat: BookFormatEbook,
 			})
-			if !bookUpstreamAuthFailure(err) || !errors.Is(err, ErrBookMutationUnverified) || errors.Is(err, ErrBookCatalogPending) {
-				t.Fatalf("error = %v, want immediate typed authentication failure", err)
+			if !errors.Is(err, ErrBookOutcomePending) {
+				t.Fatalf("error = %v, want guarded outcome_pending", err)
 			}
-			statusCode, body := bookRequestErrorResponse(err, BookFormatEbook)
-			if statusCode != http.StatusServiceUnavailable || body["code"] != "book_connection_invalid" {
-				t.Fatalf("public error = %d %#v", statusCode, body)
+			var jobID int64
+			var state, phase, code string
+			if err := service.db.QueryRow(
+				`SELECT id, state, phase, last_error_code FROM book_request_jobs WHERE foreign_id = ?`,
+				upstream.foreignBookID,
+			).Scan(&jobID, &state, &phase, &code); err != nil {
+				t.Fatal(err)
 			}
-			if upstream.searchCalls != 0 {
-				t.Fatalf("authentication failure queued %d searches", upstream.searchCalls)
+			if state != "outcome_unknown" || phase != "seed_inflight" || code != "book_connection_invalid" {
+				t.Fatalf("guarded authentication state=%s phase=%s code=%s", state, phase, code)
 			}
-			if time.Since(started) >= service.bookMutationTimeout {
-				t.Fatalf("authentication failure waited for mutation timeout")
+			upstream.mu.Lock()
+			seedCalls, searchCalls := len(upstream.seedBodies), upstream.searchCalls
+			upstream.mu.Unlock()
+			if seedCalls != 1 || searchCalls != 0 {
+				t.Fatalf("guarded authentication seed=%d search=%d, want 1/0", seedCalls, searchCalls)
+			}
+
+			if _, err := service.db.Exec(
+				`UPDATE book_request_jobs SET created_at = datetime('now', '-31 minutes'),
+				 phase_started_at = datetime('now', '-31 minutes'), state = 'retry_wait',
+				 next_attempt_at = datetime('now', '+1 day') WHERE id = ?`,
+				jobID,
+			); err != nil {
+				t.Fatal(err)
+			}
+			service.bookWorkerGeneration = newBookWorkerGeneration()
+			service.runDueBookRequestJobs(context.Background())
+			if err := service.db.QueryRow(
+				"SELECT state, last_error_code FROM book_request_jobs WHERE id = ?", jobID,
+			).Scan(&state, &code); err != nil {
+				t.Fatal(err)
+			}
+			if state != "failed" || code != "book_request_unverified" {
+				t.Fatalf("expired authentication state=%s code=%s", state, code)
+			}
+			upstream.mu.Lock()
+			seedCalls = len(upstream.seedBodies)
+			upstream.mu.Unlock()
+			if seedCalls != 1 {
+				t.Fatalf("expired authentication replayed seed %d times", seedCalls)
 			}
 		})
 	}
