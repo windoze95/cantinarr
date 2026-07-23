@@ -56,7 +56,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Movies / TV tabs** -- discovery rows plus live library rows from the user's default instances: Downloading Soon, Recently Downloaded, Airing Next.
 - **Cinematic title pages** -- movie/show detail opens under a full-bleed, unblurred backdrop hero: the image parallaxes at half scroll speed (with an iOS overscroll stretch-zoom and a settle-in on load), then hands off to a pinned marquee bar carrying the title and back control. Titles without artwork get a warm ambient-glow stage instead.
 - **Releases tab** -- a unified movie + episode release timeline with list and month-calendar views.
-- **Books tab** -- appears only for users with a Chaptarr grant: owned-aware book search with per-format request buttons and tappable results that open a richer book detail (see Books).
+- **Books tab** -- appears only for users with a Chaptarr grant: owned-aware book search whose tappable results open the richer book detail, where per-format request controls live (see Books).
 
 ### Requests
 - **One-tap requesting** with status-aware labels: Request → Pending (awaiting approval) → Requested → Downloading → **Available**; partially-available shows get **Request More**, which jumps to the season picker. The ready state stays provider-neutral rather than assuming a particular playback app.

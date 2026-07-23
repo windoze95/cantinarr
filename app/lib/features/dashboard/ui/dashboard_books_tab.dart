@@ -16,8 +16,6 @@ import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
 import '../../request/data/book_ownership.dart';
-import '../../request/data/request_service.dart';
-import '../../request/ui/book_request_button.dart';
 import '../data/book_library_service.dart';
 import '../logic/book_ownership_matcher.dart';
 
@@ -257,7 +255,6 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
           .add(_ResolvedBookResult(
             book: book,
             ownership: match?.ownership,
-            ownershipStatusKnown: match?.statusKnown ?? true,
             identityAmbiguous: identityAmbiguous,
             sourceIdentity: 'lookup:$lookupIndex',
             cover: cover,
@@ -272,7 +269,6 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
         _ResolvedBookResult(
           book: _ownedTitleAsBook(injected[libraryIndex]),
           ownership: injected[libraryIndex].ownership,
-          ownershipStatusKnown: injected[libraryIndex].statusKnown,
           identityAmbiguous: false,
           sourceIdentity: 'library:$libraryIndex',
           cover: injected[libraryIndex].cover.isNotEmpty
@@ -312,11 +308,6 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
         ),
       );
     }
-    // One RequestService for the whole result list (requests go through the
-    // backend's /requests endpoint, not the Chaptarr proxy).
-    final requestService =
-        RequestService(backendDio: ref.read(backendClientProvider));
-    final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
     final instanceId = ref.read(instanceProvider).activeChaptarrInstance?.id;
     // Full-width scroll surface; the result column is capped and centered so
     // rows stay readable on desktop widths.
@@ -334,16 +325,12 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
           book: ordered[i].book,
           canonicalForeignId: ordered[i].canonicalForeignId,
           ownership: ordered[i].ownership,
-          ownershipStatusKnown: ordered[i].ownershipStatusKnown,
           identityAmbiguous: ordered[i].identityAmbiguous,
           sourceIdentity: ordered[i].sourceIdentity,
           cover: instanceId == null
               ? null
               : chaptarrImageSource(ref, ordered[i].cover, instanceId),
-          requestService: requestService,
-          requestRefreshTick: requestRefreshTick,
           instanceId: instanceId,
-          onRequestCompleted: _refreshBookTruth,
         ),
       );
     });
@@ -353,7 +340,6 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
 class _ResolvedBookResult {
   final ChaptarrBook book;
   final BookOwnership? ownership;
-  final bool ownershipStatusKnown;
   final bool identityAmbiguous;
   final String sourceIdentity;
   final String? cover;
@@ -362,7 +348,6 @@ class _ResolvedBookResult {
   const _ResolvedBookResult({
     required this.book,
     required this.ownership,
-    required this.ownershipStatusKnown,
     required this.identityAmbiguous,
     required this.sourceIdentity,
     required this.cover,
@@ -374,27 +359,19 @@ class _BookResultTile extends StatelessWidget {
   final ChaptarrBook book;
   final String canonicalForeignId;
   final BookOwnership? ownership;
-  final bool ownershipStatusKnown;
   final bool identityAmbiguous;
   final String sourceIdentity;
   final ChaptarrImageSource? cover;
-  final RequestService requestService;
-  final int requestRefreshTick;
   final String? instanceId;
-  final VoidCallback onRequestCompleted;
 
   const _BookResultTile({
     required this.book,
     required this.canonicalForeignId,
     this.ownership,
-    this.ownershipStatusKnown = true,
     this.identityAmbiguous = false,
     required this.sourceIdentity,
     this.cover,
-    required this.requestService,
-    required this.requestRefreshTick,
     required this.instanceId,
-    required this.onRequestCompleted,
   });
 
   @override
@@ -417,34 +394,10 @@ class _BookResultTile extends StatelessWidget {
         : fid.isEmpty
             ? 'Ask an admin to check this book’s library record'
             : null;
-    final stackAction = MediaQuery.textScalerOf(context).scale(1) > 1.3 ||
-        MediaQuery.sizeOf(context).width < 360;
-    final requestControl = canOpen
-        ? ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: stackAction ? 288 : 180),
-            child: BookRequestButton(
-              key: ValueKey(
-                'book-request:$lookupId:$fid:$sourceIdentity:$requestRefreshTick',
-              ),
-              foreignId: fid,
-              title: book.title,
-              instanceId: instanceId,
-              service: requestService,
-              ownership: o,
-              ownershipStatusKnown: ownershipStatusKnown,
-              refreshTick: requestRefreshTick,
-              showCoveredStatus: false,
-              onRequestCompleted: onRequestCompleted,
-            ),
-          )
-        : null;
-
     final resultKey = ValueKey('book-result:$lookupId:$fid:$sourceIdentity');
-    final tile = ListTile(
-      key: canOpen && stackAction ? null : resultKey,
+    return ListTile(
+      key: resultKey,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      isThreeLine: stackAction,
-      minVerticalPadding: stackAction ? 12 : null,
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(4),
         child: CachedImage(
@@ -496,21 +449,10 @@ class _BookResultTile extends StatelessWidget {
                 ],
               ),
             ),
-      // The whole row remains an entry point before and after requesting. The
-      // chevron makes that destination visible even while the trailing request
-      // control is disabled because both formats are already covered.
+      // Requests belong on the detail page. The search row has one clear action:
+      // open that book, where the requester can review metadata and formats.
       trailing: canOpen
-          ? stackAction
-              ? const Icon(Icons.chevron_right,
-                  color: AppTheme.textSecondary)
-              : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                requestControl!,
-                const Icon(Icons.chevron_right,
-                    color: AppTheme.textSecondary),
-              ],
-            )
+          ? const Icon(Icons.chevron_right, color: AppTheme.textSecondary)
           : null,
       onTap: canOpen
           ? () => context.push(
@@ -520,26 +462,6 @@ class _BookResultTile extends StatelessWidget {
                 extra: book,
               )
           : null,
-    );
-    if (!canOpen || !stackAction) return tile;
-
-    // At narrow widths and large text scales, keeping request guidance in the
-    // ListTile subtitle constrains it to the small column beside the cover and
-    // can transiently overflow while status loads. Give it the full row below
-    // the book summary so neither guidance nor format actions are truncated.
-    return Column(
-      key: resultKey,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        tile,
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: requestControl!,
-          ),
-        ),
-      ],
     );
   }
 }

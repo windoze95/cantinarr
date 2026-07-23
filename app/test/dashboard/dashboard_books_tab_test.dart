@@ -40,10 +40,10 @@ void main() {
     expect(find.text('Requested'), findsNothing);
     expect(find.byIcon(Icons.chevron_right), findsWidgets);
 
-    final statusRequestsBeforeRefresh = adapter.statusRequests;
+    expect(adapter.statusRequests, 0);
     container.read(libraryRefreshTickProvider.notifier).state++;
     await tester.pumpAndSettle();
-    expect(adapter.statusRequests, greaterThan(statusRequestsBeforeRefresh));
+    expect(adapter.statusRequests, 0);
 
     await tester.tap(
       find.byKey(const ValueKey('book-result:book-1:book-1:lookup:0')),
@@ -51,13 +51,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
+    expect(adapter.statusRequests, greaterThan(0));
     expect(find.text('Marcus Aurelius'), findsOneWidget);
     expect(find.text('2002 · 304 pages'), findsOneWidget);
     expect(find.text('A practical guide to Stoic philosophy.'), findsOneWidget);
     expect(find.text('Requested'), findsNWidgets(2));
   });
 
-  testWidgets('the trailing Request control does not open book detail',
+  testWidgets('request controls live on book detail, not search results',
       (tester) async {
     _usePhoneSize(tester);
     final (:router, container: _, :adapter) = await _pumpRouter(tester);
@@ -73,21 +74,25 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
+    expect(find.text('Choose format'), findsNothing);
+
     final secondResult =
         find.byKey(const ValueKey('book-result:book-2:book-2:lookup:1'));
-    await tester.tap(
-      find.descendant(of: secondResult, matching: find.text('Choose format')),
-    );
+    await tester.tap(secondResult);
     await tester.pumpAndSettle();
 
-    expect(find.byType(RequesterBookDetailScreen), findsNothing);
-    expect(find.text('Letters from a Stoic'), findsWidgets);
-    expect(find.text('eBook'), findsOneWidget);
-    expect(find.text('Audiobook'), findsOneWidget);
+    expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
+    expect(find.text('Letters from a Stoic'), findsOneWidget);
+    expect(find.text('Choose format'), findsOneWidget);
+
+    await tester.tap(find.text('Choose format'));
+    await tester.pumpAndSettle();
+    expect(find.text('eBook'), findsNWidgets(2));
+    expect(find.text('Audiobook'), findsNWidgets(2));
     expect(find.text('eBook + Audiobook'), findsOneWidget);
 
     final libraryRequestsBefore = adapter.libraryRequests;
-    await tester.tap(find.text('eBook'));
+    await tester.tap(find.text('eBook').last);
     await tester.pumpAndSettle();
     expect(adapter.libraryRequests, greaterThan(libraryRequestsBefore));
   });
@@ -110,8 +115,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
-    expect(adapter.statusForeignIds, isNotEmpty);
-    expect(adapter.statusForeignIds, everyElement('library-flock'));
+    expect(adapter.statusForeignIds, isEmpty);
     expect(
       find.byKey(
         const ValueKey(
@@ -132,6 +136,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(adapter.statusForeignIds, isNotEmpty);
+    expect(adapter.statusForeignIds, everyElement('library-flock'));
     expect(router.routeInformationProvider.value.uri.path,
         '/detail/book/library-flock');
     expect(
@@ -183,14 +189,13 @@ void main() {
       const ValueKey('book-result:lookup-flock:library-flock:lookup:0'),
     );
     expect(row, findsOneWidget);
-    expect(adapter.statusForeignIds, isNotEmpty);
-    expect(adapter.statusForeignIds, everyElement('library-flock'));
+    expect(adapter.statusForeignIds, isEmpty);
     expect(
       find.descendant(
         of: row,
         matching: find.text('Ask an admin to check this book’s format'),
       ),
-      findsOneWidget,
+      findsNothing,
     );
     expect(find.text('Request eBook'), findsNothing);
 
@@ -204,6 +209,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(adapter.statusForeignIds, isNotEmpty);
+    expect(adapter.statusForeignIds, everyElement('library-flock'));
     expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
     expect(find.text('Format needs attention'), findsNWidgets(2));
     expect(
@@ -274,8 +281,7 @@ void main() {
           'book-result:library-flock:library-flock:library:0')),
       findsOneWidget,
     );
-    expect(adapter.statusForeignIds, isNotEmpty);
-    expect(adapter.statusForeignIds, everyElement('library-flock'));
+    expect(adapter.statusForeignIds, isEmpty);
   });
 
   testWidgets('same-title library records are surfaced separately',
@@ -309,8 +315,7 @@ void main() {
           const ValueKey('book-result:library-b:library-b:library:1')),
       findsOneWidget,
     );
-    expect(adapter.statusForeignIds, containsAll(['library-a', 'library-b']));
-    expect(adapter.statusForeignIds, isNot(contains('lookup-flock')));
+    expect(adapter.statusForeignIds, isEmpty);
   });
 
   testWidgets('a lookup row without a canonical id explains why it is blocked',
@@ -370,10 +375,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    expect(
-      find.text('Ask an admin to check this book’s format'),
-      findsOneWidget,
-    );
+    expect(find.text('Ask an admin to check this book’s format'), findsNothing);
 
     router.go('/detail/book/library-flock?title=Flock&instance_id=books');
     await tester.pumpAndSettle();
