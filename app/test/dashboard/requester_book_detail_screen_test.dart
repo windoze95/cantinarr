@@ -7,6 +7,7 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/providers/instance_provider.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
 import 'package:cantinarr/features/chaptarr/ui/chaptarr_book_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/navigation/app_router.dart';
@@ -36,7 +37,7 @@ void main() {
     expect(find.text('Audiobook'), findsOneWidget);
     expect(find.text('Requested'), findsOneWidget);
     expect(find.text('Not requested'), findsOneWidget);
-    // Flock-style mixed truth: a monitored audiobook is Requested while the
+    // Verified per-format truth marks the audiobook Requested while the
     // untouched eBook remains the one exact action.
     await tester.scrollUntilVisible(
       find.text('Request eBook'),
@@ -45,6 +46,151 @@ void main() {
     );
     expect(find.text('Request eBook'), findsOneWidget);
     expect(find.text('Manage book'), findsNothing);
+  });
+
+  testWidgets('a bare monitor flag is not presented as a completed request',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(bareMonitorOnly: true),
+    );
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Requested'), findsNothing);
+    expect(find.text('Not requested'), findsNWidgets(2));
+    await tester.scrollUntilVisible(
+      find.text('Choose format'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.text('Choose format'), findsOneWidget);
+  });
+
+  testWidgets(
+      'a detail request chooses and serializes an exact audiobook publication',
+      (tester) async {
+    final adapter = _BooksAdapter(bareMonitorOnly: true);
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: adapter,
+    );
+    final book = ChaptarrBook.fromJson({
+      'title': 'Ahsoka',
+      'foreignBookId': '29749107',
+      'year': 2016,
+      'author': {
+        'authorName': 'E. K. Johnston',
+        'foreignAuthorId': 'author-1',
+      },
+      'editions': [
+        {
+          'id': 1,
+          'foreignEditionId': 'audio-original',
+          'title': 'Original narration',
+          'format': 'audiobook',
+          'publisher': 'Example Audio',
+          'asin': 'B00ORIGINAL',
+        },
+        {
+          'id': 2,
+          'foreignEditionId': 'audio-anniversary',
+          'title': 'Anniversary narration',
+          'format': 'audiobook',
+          'publisher': 'Example Anniversary Audio',
+          'asin': 'B00ANNIVERSARY',
+        },
+      ],
+    });
+
+    router.go(
+      '/detail/book/29749107?title=Ahsoka&instance_id=books',
+      extra: book,
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Choose format'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    await tester.tap(find.text('Choose format'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Audiobook').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Which match looks right?'), findsOneWidget);
+    expect(find.textContaining('Original narration'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.textContaining('Anniversary narration'),
+      180,
+      scrollable: find.descendant(
+        of: find.byType(DraggableScrollableSheet),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(find.textContaining('Anniversary narration'), findsOneWidget);
+    await tester.ensureVisible(find.textContaining('Anniversary narration'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.ancestor(
+      of: find.textContaining('Anniversary narration'),
+      matching: find.byType(InkWell),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(adapter.requestBodies, hasLength(1));
+    expect(adapter.requestBodies.single['book_format'], 'audiobook');
+    expect(adapter.requestBodies.single['book_selection'], {
+      'foreign_author_id': 'author-1',
+      'author_name': 'E. K. Johnston',
+      'audiobook': {
+        'foreign_edition_id': 'audio-anniversary',
+        'asin': 'B00ANNIVERSARY',
+        'edition_title': 'Anniversary narration',
+        'publisher': 'Example Anniversary Audio',
+        'year': 2016,
+      },
+    });
+  });
+
+  testWidgets('a durable request still being reconciled says still checking',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(unknownReason: 'outcome_pending'),
+    );
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Still checking'), findsNWidgets(2));
+    await tester.scrollUntilVisible(
+      find.text('Still checking · Refresh'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.text('Still checking · Refresh'), findsOneWidget);
+  });
+
+  testWidgets('a terminal request failure says the book could not be added',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(unknownReason: 'request_failed'),
+    );
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Not requested'), findsOneWidget);
+    expect(find.text('Couldn’t add'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Couldn’t add · Try again'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.text('Couldn’t add · Try again'), findsOneWidget);
   });
 
   testWidgets('a deep link resolves rich metadata and both requested formats',
@@ -461,9 +607,12 @@ class _BooksAdapter implements HttpClientAdapter {
   final bool mismatchedLookupId;
   final bool mismatchedLookupAuthor;
   final bool partiallyUnknownStatus;
+  final bool bareMonitorOnly;
   final bool bookFiles;
+  final String? unknownReason;
   final libraryInstanceIds = <String>[];
   final statusInstanceIds = <String>[];
+  final requestBodies = <Map<String, dynamic>>[];
 
   _BooksAdapter({
     this.ownedCover = '',
@@ -471,7 +620,9 @@ class _BooksAdapter implements HttpClientAdapter {
     this.mismatchedLookupId = false,
     this.mismatchedLookupAuthor = false,
     this.partiallyUnknownStatus = false,
+    this.bareMonitorOnly = false,
     this.bookFiles = false,
+    this.unknownReason,
   });
 
   @override
@@ -481,7 +632,26 @@ class _BooksAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final Object body;
-    if (options.path == '/api/requests/book-library') {
+    if (options.method == 'POST' && options.path == '/api/requests') {
+      final bytes = <int>[];
+      if (requestStream != null) {
+        await for (final chunk in requestStream) {
+          bytes.addAll(chunk);
+        }
+      }
+      requestBodies.add(
+        jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>,
+      );
+      final format = requestBodies.last['book_format'] as String;
+      body = {
+        'status': 'requested',
+        'book_formats': {
+          if (format == 'ebook' || format == 'both') 'ebook': 'requested',
+          if (format == 'audiobook' || format == 'both')
+            'audiobook': 'requested',
+        },
+      };
+    } else if (options.path == '/api/requests/book-library') {
       final instanceId = options.queryParameters['instance_id'].toString();
       libraryInstanceIds.add(instanceId);
       final otherLibrary = divergentLibraries && instanceId == 'books-two';
@@ -526,10 +696,44 @@ class _BooksAdapter implements HttpClientAdapter {
         options.queryParameters['instance_id'].toString(),
       );
       body = switch (options.queryParameters['foreign_id']) {
-        '29749107' => {
-            'status': 'requested',
-            'book_formats': {'audiobook': 'requested'},
-          },
+        '29749107' => requestBodies.isNotEmpty
+            ? {
+                'status': 'requested',
+                'book_formats': {
+                  if (requestBodies.last['book_format'] == 'ebook' ||
+                      requestBodies.last['book_format'] == 'both')
+                    'ebook': 'requested',
+                  if (requestBodies.last['book_format'] == 'audiobook' ||
+                      requestBodies.last['book_format'] == 'both')
+                    'audiobook': 'requested',
+                },
+              }
+            : unknownReason != null
+            ? {
+                'status': 'unavailable',
+                'status_known': false,
+                'unknown_reason': unknownReason,
+                if (unknownReason == 'request_failed')
+                  'failure_code': 'book_request_rejected',
+                'book_formats': unknownReason == 'request_failed'
+                    ? {'audiobook': 'unavailable'}
+                    : {
+                        'ebook': 'unavailable',
+                        'audiobook': 'unavailable',
+                      },
+              }
+            : bareMonitorOnly
+            ? {
+                'status': 'unavailable',
+                'book_formats': {
+                  'ebook': 'unavailable',
+                  'audiobook': 'unavailable',
+                },
+              }
+            : {
+                'status': 'requested',
+                'book_formats': {'audiobook': 'requested'},
+              },
         '555' => {
             'status': partiallyUnknownStatus ? 'partial' : 'requested',
             'status_known': !partiallyUnknownStatus,

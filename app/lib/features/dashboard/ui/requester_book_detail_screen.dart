@@ -23,6 +23,7 @@ import '../../request/data/request_service.dart';
 import '../../request/ui/book_request_button.dart';
 import '../data/book_library_service.dart';
 import '../logic/book_ownership_matcher.dart';
+import 'book_request_wizard.dart';
 
 /// Requester-facing detail for one book, addressed by its Chaptarr/Readarr
 /// foreignBookId. Search navigation supplies [initialBook] for an immediate,
@@ -344,6 +345,7 @@ class _RequesterBookDetailScreenState
     final ebookFiles = _downloadChoicesFor(BookFormat.ebook);
     final audiobookFiles = _downloadChoicesFor(BookFormat.audiobook);
     final isAdmin = auth?.user?.isAdmin ?? false;
+    final requestBook = _metadata ?? live;
 
     final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
     ChaptarrImageSource? cover;
@@ -447,6 +449,25 @@ class _RequesterBookDetailScreenState
                 showCoveredStatus: false,
                 onDetailChanged: _onRequestDetailChanged,
                 onRequestCompleted: _onRequestCompleted,
+                requestTargetPicker: requestBook == null
+                    ? null
+                    : (context, request) => showBookRequestWizard(
+                          context,
+                          request: request,
+                          selectedBook: requestBook,
+                          candidates: [
+                            BookRequestWizardCandidate(
+                              book: requestBook,
+                              foreignId: widget.foreignId,
+                              ownership: ownership,
+                              ownershipStatusKnown:
+                                  owned?.statusKnown ?? true,
+                              statusDetail: request.detail,
+                              rank: 0,
+                              matchEvidence: 'Selected book',
+                            ),
+                          ],
+                        ),
               ),
               if (isAdmin && _chaptarrRecords.isNotEmpty)
                 OutlinedButton.icon(
@@ -706,11 +727,14 @@ String _bookFileLabel(ChaptarrBookFile file, int index) {
     return (label: 'Available', color: AppTheme.available);
   }
 
-  if (owned?.monitored ?? false) {
-    return (label: 'Requested', color: AppTheme.requested);
+  // A bare Chaptarr monitor flag is not proof that an add/search succeeded.
+  // Wait for the server's verified per-format request truth before labeling a
+  // missing format Requested.
+  if (!statusLoaded) {
+    return (label: 'Checking…', color: AppTheme.textSecondary);
   }
 
-  final status = detail.statusFor(format);
+  final status = detail.formats[format];
   if (status != null && status != RequestStatus.unavailable) {
     return switch (status) {
       RequestStatus.available =>
@@ -729,20 +753,21 @@ String _bookFileLabel(ChaptarrBookFile file, int index) {
     };
   }
 
-  // Until request history resolves, an empty ownership row does not prove the
-  // format was never requested. Keep the neutral loading state instead of
-  // briefly claiming "Not requested" for a pending or denied request.
-  if (!statusLoaded) {
-    return (label: 'Checking…', color: AppTheme.textSecondary);
-  }
-
   if (!detail.isKnown) {
-    return detail.effectiveUnknownReason ==
-            BookStatusUnknownReason.formatNeedsAttention
-        ? (label: 'Format needs attention', color: AppTheme.requested)
-        : (label: 'Couldn’t check', color: AppTheme.error);
+    return switch (detail.effectiveUnknownReason) {
+      BookStatusUnknownReason.outcomePending =>
+        (label: 'Still checking', color: AppTheme.requested),
+      BookStatusUnknownReason.requestFailed =>
+        status == RequestStatus.unavailable
+            ? (label: 'Couldn’t add', color: AppTheme.error)
+            : (label: 'Not requested', color: AppTheme.textSecondary),
+      BookStatusUnknownReason.formatNeedsAttention =>
+        (label: 'Format needs attention', color: AppTheme.requested),
+      BookStatusUnknownReason.transient || null =>
+        (label: 'Couldn’t check', color: AppTheme.error),
+    };
   }
-  if (status == RequestStatus.unavailable) {
+  if (status == null || status == RequestStatus.unavailable) {
     return (label: 'Not requested', color: AppTheme.textSecondary);
   }
   return (label: 'Couldn’t check', color: AppTheme.error);

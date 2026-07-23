@@ -148,6 +148,21 @@ void main() {
           'book_format': 'both',
           'instance_name': 'Family Books',
           'requester_count': 3,
+          'book_selection': {
+            'foreign_author_id': 'author-external-17',
+            'author_name': 'Tarryn Fisher',
+            'ebook': {
+              'foreign_edition_id': 'edition-ebook-2',
+              'edition_title': 'Anniversary Edition',
+              'publisher': 'Graydon House',
+              'isbn13': '9781525809781',
+            },
+            'audiobook': {
+              'foreign_edition_id': 'edition-audio-3',
+              'publisher': 'Harlequin Audio',
+              'asin': 'B08WJQ3M2L',
+            },
+          },
         },
       ],
       approvalResponse: const {
@@ -181,6 +196,19 @@ void main() {
 
     expect(find.text('Library: Family Books'), findsOneWidget);
     expect(find.text('Requested by reader and 2 others'), findsOneWidget);
+    expect(find.text('Author: Tarryn Fisher'), findsOneWidget);
+    expect(
+      find.text(
+        'eBook: Anniversary Edition · Graydon House · ISBN 9781525809781',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Audiobook: Harlequin Audio · ASIN B08WJQ3M2L'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('author-external-17'), findsNothing);
+    expect(find.textContaining('edition-ebook-2'), findsNothing);
     await tester.tap(find.byIcon(Icons.check_circle_outline));
     await tester.pumpAndSettle();
 
@@ -202,6 +230,38 @@ void main() {
       find.descendant(
         of: dialog,
         matching: find.text('Requested by reader and 2 others'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text('Selected publication'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text('Author: Tarryn Fisher'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text(
+          'eBook: Anniversary Edition · Graydon House · ISBN 9781525809781',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text(
+          'Audiobook: Harlequin Audio · ASIN B08WJQ3M2L',
+        ),
       ),
       findsOneWidget,
     );
@@ -290,6 +350,102 @@ void main() {
       find.text('Check this book library’s paths and profiles, then try again.'),
       findsOneWidget,
     );
+
+    final codedFailures = <(String, String)>[
+      (
+        'book_selection_invalid',
+        'This version choice is no longer valid. Deny this request and ask the requester to search for the book again.',
+      ),
+      (
+        'book_edition_unavailable',
+        'The selected edition is no longer available. Deny this request and ask the requester to choose another version.',
+      ),
+      (
+        'book_format_unresolved',
+        'The selected version is not identified as an eBook or audiobook. Deny this request and ask the requester to choose another version.',
+      ),
+      (
+        'book_multi_work_unsupported',
+        'This result contains multiple books. Deny this request and ask the requester to choose one individual title.',
+      ),
+      (
+        'book_request_unverified',
+        'Cantinarr could not verify the selected edition, so no download search started. Try approval again; if it keeps failing, check the book library.',
+      ),
+    ];
+    for (final (code, message) in codedFailures) {
+      tester
+          .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+          .removeCurrentSnackBar();
+      await tester.pumpAndSettle();
+      adapter.approvalResponse = {
+        'code': code,
+        'error': 'server wording intentionally ignored',
+      };
+
+      await approve();
+
+      expect(find.text(message), findsOneWidget, reason: code);
+      if (code == 'book_request_unverified') {
+        expect(find.textContaining('still confirming'), findsNothing);
+      }
+    }
+  });
+
+  testWidgets('an interrupted book approval reconciles the queue without retrying',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final adapter = _ApprovalsAdapter(
+      pending: const [
+        {
+          'id': 7,
+          'user_id': 2,
+          'username': 'reader',
+          'media_type': 'book',
+          'title': 'Flock',
+          'book_format': 'audiobook',
+        },
+      ],
+      approvalStatusCode: 500,
+      approvalResponse: const {'error': 'response was interrupted'},
+      removePendingBeforeApprovalError: true,
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.check_circle_outline));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.approvalBodies, hasLength(1));
+    expect(find.text('No pending requests.'), findsOneWidget);
+    expect(
+      find.text('Approval completed. The remaining queue was refreshed.'),
+      findsOneWidget,
+    );
   });
 }
 
@@ -309,13 +465,15 @@ class _ApprovalsAdapter implements HttpClientAdapter {
   final List<Map<String, dynamic>> pending;
   Map<String, dynamic> approvalResponse;
   final int approvalStatusCode;
+  final bool removePendingBeforeApprovalError;
   final List<Map<String, dynamic>> approvalBodies = [];
 
   _ApprovalsAdapter({
-    this.pending = const [],
+    List<Map<String, dynamic>> pending = const [],
     this.approvalResponse = const {},
     this.approvalStatusCode = 200,
-  });
+    this.removePendingBeforeApprovalError = false,
+  }) : pending = List.of(pending);
 
   @override
   Future<ResponseBody> fetch(
@@ -336,6 +494,7 @@ class _ApprovalsAdapter implements HttpClientAdapter {
             ? <String, dynamic>{}
             : jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>,
       );
+      if (removePendingBeforeApprovalError) pending.clear();
     }
     final body = switch (options.uri.path) {
       '/api/admin/requests' => pending,

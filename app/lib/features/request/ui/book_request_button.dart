@@ -6,6 +6,44 @@ import '../../../core/theme/app_theme.dart';
 import '../data/book_ownership.dart';
 import '../data/request_service.dart';
 
+/// The exact book and format chosen by an optional request picker.
+class BookRequestTarget {
+  final String foreignId;
+  final String title;
+  final BookRequestFormat format;
+  final BookRequestSelection? selection;
+
+  const BookRequestTarget({
+    required this.foreignId,
+    required this.title,
+    required this.format,
+    this.selection,
+  });
+}
+
+/// Current request truth supplied to a custom picker. The dashboard uses this
+/// to add a catalog-match step without duplicating submission or reconciliation.
+class BookRequestPickerContext {
+  final String foreignId;
+  final String title;
+  final String? instanceId;
+  final BookRequestStatusDetail detail;
+  final List<BookRequestFormat> requestableFormats;
+
+  const BookRequestPickerContext({
+    required this.foreignId,
+    required this.title,
+    required this.instanceId,
+    required this.detail,
+    required this.requestableFormats,
+  });
+}
+
+typedef BookRequestTargetPicker = Future<BookRequestTarget?> Function(
+  BuildContext context,
+  BookRequestPickerContext request,
+);
+
 /// Per-book request affordance shared by the Books search tab and the
 /// requester book detail screen: loads the user's request state on build, and
 /// on tap submits a request (which may land as pending when approval is
@@ -21,6 +59,7 @@ class BookRequestButton extends StatefulWidget {
   final bool showCoveredStatus;
   final ValueChanged<BookRequestStatusDetail>? onDetailChanged;
   final FutureOr<void> Function()? onRequestCompleted;
+  final BookRequestTargetPicker? requestTargetPicker;
 
   const BookRequestButton({
     super.key,
@@ -34,6 +73,7 @@ class BookRequestButton extends StatefulWidget {
     this.showCoveredStatus = false,
     this.onDetailChanged,
     this.onRequestCompleted,
+    this.requestTargetPicker,
   });
 
   @override
@@ -41,6 +81,12 @@ class BookRequestButton extends StatefulWidget {
 }
 
 class _BookRequestButtonState extends State<BookRequestButton> {
+  static const _outcomeRecheckDelays = [
+    Duration.zero,
+    Duration(milliseconds: 500),
+    Duration(milliseconds: 1500),
+  ];
+
   // The async-loaded request state (no ownership). Ownership is layered on in
   // [_detail] on every read, so the button reflects the owned-books digest even
   // when it loads AFTER this button was first built (the chip already does) —
@@ -49,6 +95,7 @@ class _BookRequestButtonState extends State<BookRequestButton> {
   BookRequestStatusDetail _serverDetail = const BookRequestStatusDetail();
   bool _loading = true;
   bool _busy = false;
+  bool _submitting = false;
   int _activeChecks = 0;
   int _checkGeneration = 0;
   Timer? _pendingRecheckTimer;
@@ -95,7 +142,7 @@ class _BookRequestButtonState extends State<BookRequestButton> {
     super.dispose();
   }
 
-  Future<void> _check() async {
+  Future<BookRequestStatusDetail?> _check() async {
     _activeChecks++;
     final foreignId = widget.foreignId;
     final generation = ++_checkGeneration;
@@ -107,7 +154,7 @@ class _BookRequestButtonState extends State<BookRequestButton> {
       if (!mounted ||
           generation != _checkGeneration ||
           foreignId != widget.foreignId) {
-        return;
+        return null;
       }
       setState(() {
         _serverDetail = detail;
@@ -115,6 +162,7 @@ class _BookRequestButtonState extends State<BookRequestButton> {
       });
       _syncPendingRecheck();
       widget.onDetailChanged?.call(_detail);
+      return detail;
     } finally {
       _activeChecks--;
     }
@@ -125,7 +173,10 @@ class _BookRequestButtonState extends State<BookRequestButton> {
       BookRequestFormat.ebook,
       BookRequestFormat.audiobook,
     ].any((format) => _detail.statusFor(format) == RequestStatus.pending);
-    if (!hasPending) {
+    final outcomePending = !_detail.isKnown &&
+        _detail.effectiveUnknownReason ==
+            BookStatusUnknownReason.outcomePending;
+    if (!hasPending && !outcomePending) {
       _pendingRecheckTimer?.cancel();
       _pendingRecheckTimer = null;
       return;
@@ -140,71 +191,126 @@ class _BookRequestButtonState extends State<BookRequestButton> {
 
   Future<void> _chooseAndRequest() async {
     if (_busy) return;
-    final requestable = _requestableFormats;
-    final selected = requestable.length == 1
-        ? requestable.first
-        : await showModalBottomSheet<BookRequestFormat>(
-            context: context,
-            backgroundColor: Colors.transparent,
-            builder: (_) => _BookFormatSheet(
-              title: widget.title,
-              detail: _detail,
-            ),
-          );
-    if (selected == null) return;
-    if (!mounted) return;
     setState(() => _busy = true);
+    // Search results are commonly requested while the search field still owns
+    // focus. Clear it before opening the bottom sheet so the keyboard cannot
+    // cover the format or publication choices on a phone.
+    FocusScope.of(context).unfocus();
     try {
+      final requestable = _requestableFormats;
+      final BookRequestTarget? target;
+      if (widget.requestTargetPicker != null) {
+        target = await widget.requestTargetPicker!(
+          context,
+          BookRequestPickerContext(
+            foreignId: widget.foreignId,
+            title: widget.title,
+            instanceId: widget.instanceId,
+            detail: _detail,
+            requestableFormats: List.unmodifiable(requestable),
+          ),
+        );
+      } else {
+        final selected = requestable.length == 1
+            ? requestable.first
+            : await showModalBottomSheet<BookRequestFormat>(
+                context: context,
+                backgroundColor: Colors.transparent,
+                builder: (_) => _BookFormatSheet(
+                  title: widget.title,
+                  detail: _detail,
+                ),
+              );
+        target = selected == null
+            ? null
+            : BookRequestTarget(
+                foreignId: widget.foreignId,
+                title: widget.title,
+                format: selected,
+              );
+      }
+      if (target == null || target.foreignId.trim().isEmpty) return;
+      if (!mounted) return;
+      setState(() => _submitting = true);
       BookRequestSubmission? submission;
       String? failureMessage;
+      String? failureCode;
       var definitiveFailure = false;
       try {
         submission = await widget.service.requestBook(
-          foreignId: widget.foreignId,
-          title: widget.title,
-          format: selected,
+          foreignId: target.foreignId,
+          title: target.title,
+          format: target.format,
           instanceId: widget.instanceId,
+          selection: target.selection,
         );
       } on RequestSubmissionException catch (e) {
         failureMessage = e.message;
+        failureCode = e.code;
         definitiveFailure = e.definitive;
       }
       if (!mounted) return;
       if (submission == null) {
-        await _refreshAfterSubmission();
+        BookRequestStatusDetail? reconciled;
+        if (!definitiveFailure) {
+          reconciled = await _reconcileUnknownOutcome(target);
+          if (!mounted) return;
+          if (_hasReconciledOutcome(reconciled, target.format)) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(_reconciledOutcome(target.format, reconciled!)),
+              ),
+            );
+            return;
+          }
+        } else {
+          await _refreshAfterSubmission(target.foreignId);
+        }
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(definitiveFailure && failureMessage != null
                 ? failureMessage
-                : 'The request outcome couldn’t be confirmed. The book status was refreshed.'),
+                : _unconfirmedOutcomeMessage(
+                    reconciled,
+                    requestedFormat: target.format,
+                    failureCode: failureCode,
+                    failureMessage: failureMessage,
+                  )),
           ),
         );
         return;
       }
       if (!submission.isKnown) {
-        await _refreshAfterSubmission();
+        final reconciled = await _reconcileUnknownOutcome(target);
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'The request was sent, but its result could not be confirmed. The book status was refreshed.',
+        if (_hasReconciledOutcome(reconciled, target.format)) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_reconciledOutcome(target.format, reconciled!)),
             ),
-          ),
-        );
+          );
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(_unconfirmedOutcomeMessage(
+            reconciled,
+            requestedFormat: target.format,
+          )),
+        ));
         return;
       }
       String? partialMessage;
       if (submission.status == RequestStatus.partial) {
-        final requestedFormats = selected == BookRequestFormat.both
+        final requestedFormats = target.format == BookRequestFormat.both
             ? [BookRequestFormat.ebook, BookRequestFormat.audiobook]
-            : [selected];
+            : [target.format];
         partialMessage = requestedFormats
             .map((format) =>
                 _formatOutcome(format, submission!.formats[format]))
             .join(' ');
       }
-      await _refreshAfterSubmission();
+      await _refreshAfterSubmission(target.foreignId);
       if (!mounted) return;
       if (partialMessage != null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -212,19 +318,126 @@ class _BookRequestButtonState extends State<BookRequestButton> {
         );
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _submitting = false;
+        });
+      }
     }
   }
 
-  Future<void> _refreshAfterSubmission() async {
+  Future<BookRequestStatusDetail?> _refreshSelectedStatus(
+    String selectedForeignId,
+  ) async {
     // Re-pull per-format truth before re-enabling the CTA so a fast second tap
     // cannot submit the same format against stale pre-request state.
-    await _check();
-    if (!mounted) return;
+    if (selectedForeignId == widget.foreignId) {
+      return _check();
+    }
+    return widget.service.checkBookStatusDetail(
+      selectedForeignId,
+      instanceId: widget.instanceId,
+    );
+  }
+
+  Future<BookRequestStatusDetail?> _refreshAfterSubmission(
+    String selectedForeignId,
+  ) async {
+    final detail = await _refreshSelectedStatus(selectedForeignId);
+    if (!mounted) return null;
     // Parent ownership/live-record invalidation can change [refreshTick]. Keep
     // [_busy] set while it runs; didUpdateWidget suppresses a redundant status
     // check until this accepted refresh has fully completed.
     await widget.onRequestCompleted?.call();
+    return detail;
+  }
+
+  Future<BookRequestStatusDetail?> _reconcileUnknownOutcome(
+    BookRequestTarget target,
+  ) async {
+    BookRequestStatusDetail? lastDetail;
+    for (final delay in _outcomeRecheckDelays) {
+      if (delay != Duration.zero) await Future<void>.delayed(delay);
+      if (!mounted) return null;
+      final detail = await _refreshSelectedStatus(target.foreignId);
+      lastDetail = detail;
+      if (_hasReconciledOutcome(detail, target.format)) {
+        if (mounted) await widget.onRequestCompleted?.call();
+        return detail;
+      }
+      if (detail != null &&
+          !detail.isKnown &&
+          detail.effectiveUnknownReason ==
+              BookStatusUnknownReason.requestFailed) {
+        if (mounted) await widget.onRequestCompleted?.call();
+        return detail;
+      }
+    }
+    if (mounted) await widget.onRequestCompleted?.call();
+    return lastDetail;
+  }
+
+  String _unconfirmedOutcomeMessage(
+    BookRequestStatusDetail? detail, {
+    required BookRequestFormat requestedFormat,
+    String? failureCode,
+    String? failureMessage,
+  }) {
+    final stillChecking = detail != null &&
+        !detail.isKnown &&
+        detail.effectiveUnknownReason ==
+            BookStatusUnknownReason.outcomePending;
+    if (stillChecking) {
+      return 'The book library is still confirming this request. Cantinarr will keep checking it.';
+    }
+    final terminalFailure = detail != null &&
+        !detail.isKnown &&
+        detail.effectiveUnknownReason == BookStatusUnknownReason.requestFailed;
+    if (terminalFailure) {
+      return bookRequestFailureMessage(
+            detail.failureCode ?? failureCode,
+            requestedFormat,
+          ) ??
+          failureMessage ??
+          'Cantinarr could not add this book. Try again, or ask an admin to check the book library.';
+    }
+    if (failureCode == 'book_outcome_pending' && failureMessage != null) {
+      return failureMessage;
+    }
+    return 'Cantinarr couldn’t confirm whether this request reached the server. Nothing was sent again; refresh before retrying.';
+  }
+
+  bool _hasReconciledOutcome(
+    BookRequestStatusDetail? detail,
+    BookRequestFormat requestedFormat,
+  ) {
+    if (detail == null || !detail.isKnown) return false;
+    final formats = requestedFormat == BookRequestFormat.both
+        ? [BookRequestFormat.ebook, BookRequestFormat.audiobook]
+        : [requestedFormat];
+    final states = formats.map((format) => detail.formats[format]).toList();
+    if (states.any((status) => status == null)) return false;
+    return states.any((status) => switch (status) {
+          RequestStatus.available ||
+          RequestStatus.downloading ||
+          RequestStatus.requested ||
+          RequestStatus.pending ||
+          RequestStatus.partial => true,
+          RequestStatus.denied || RequestStatus.unavailable || null => false,
+        });
+  }
+
+  String _reconciledOutcome(
+    BookRequestFormat requestedFormat,
+    BookRequestStatusDetail detail,
+  ) {
+    final formats = requestedFormat == BookRequestFormat.both
+        ? [BookRequestFormat.ebook, BookRequestFormat.audiobook]
+        : [requestedFormat];
+    return formats
+        .map((format) => _formatOutcome(format, detail.formats[format]))
+        .join(' ');
   }
 
   List<BookRequestFormat> get _requestableFormats => [
@@ -263,6 +476,20 @@ class _BookRequestButtonState extends State<BookRequestButton> {
     }
     if (!_detail.isKnown) {
       if (_detail.effectiveUnknownReason ==
+          BookStatusUnknownReason.requestFailed) {
+        final needsAdmin = _detail.failureCode ==
+                'book_configuration_invalid' ||
+            _detail.failureCode == 'book_connection_invalid' ||
+            _detail.failureCode == 'book_search_rejected';
+        return TextButton.icon(
+          onPressed: _busy ? null : _chooseAndRequest,
+          icon: const Icon(Icons.error_outline_rounded, size: 18),
+          label: Text(needsAdmin
+              ? 'Ask an admin, then retry'
+              : 'Couldn’t add · Try again'),
+        );
+      }
+      if (_detail.effectiveUnknownReason ==
           BookStatusUnknownReason.formatNeedsAttention) {
         return const Row(
           mainAxisSize: MainAxisSize.min,
@@ -286,7 +513,10 @@ class _BookRequestButtonState extends State<BookRequestButton> {
       return TextButton.icon(
         onPressed: _busy ? null : _check,
         icon: const Icon(Icons.refresh_rounded, size: 18),
-        label: const Text('Couldn’t check · Retry'),
+        label: Text(_detail.effectiveUnknownReason ==
+                BookStatusUnknownReason.outcomePending
+            ? 'Still checking · Refresh'
+            : 'Couldn’t check · Retry'),
       );
     }
     final requestable = _requestableFormats;
@@ -313,11 +543,14 @@ class _BookRequestButtonState extends State<BookRequestButton> {
     return TextButton(
       onPressed: !_busy ? _chooseAndRequest : null,
       style: TextButton.styleFrom(foregroundColor: AppTheme.accent),
-      child: _busy
-          ? const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
+      child: _submitting
+          ? Semantics(
+              label: 'Preparing request',
+              child: const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
             )
           : Text(buttonText),
     );

@@ -50,7 +50,132 @@ enum BookRequestFormat {
   }
 }
 
-enum BookStatusUnknownReason { transient, formatNeedsAttention }
+/// Stable external publication evidence selected in the request wizard.
+/// Chaptarr-local numeric IDs are deliberately excluded because they can
+/// change while its catalog materializes or when an instance is repointed.
+class BookPublicationSelection {
+  final String? foreignEditionId;
+  final String? isbn13;
+  final String? asin;
+  final String? editionTitle;
+  final String? publisher;
+  final String? language;
+  final int? year;
+  final int? pageCount;
+
+  const BookPublicationSelection({
+    this.foreignEditionId,
+    this.isbn13,
+    this.asin,
+    this.editionTitle,
+    this.publisher,
+    this.language,
+    this.year,
+    this.pageCount,
+  });
+
+  static BookPublicationSelection? tryFromJson(Object? value) {
+    if (value is! Map) return null;
+    final selection = BookPublicationSelection(
+      foreignEditionId: _bookSelectionString(value['foreign_edition_id']),
+      isbn13: _bookSelectionString(value['isbn13']),
+      asin: _bookSelectionString(value['asin']),
+      editionTitle: _bookSelectionString(value['edition_title']),
+      publisher: _bookSelectionString(value['publisher']),
+      language: _bookSelectionString(value['language']),
+      year: _bookSelectionPositiveInt(value['year']),
+      pageCount: _bookSelectionPositiveInt(value['page_count']),
+    );
+    return selection.hasEvidence ? selection : null;
+  }
+
+  bool get hasEvidence =>
+      (foreignEditionId?.isNotEmpty ?? false) ||
+      (isbn13?.isNotEmpty ?? false) ||
+      (asin?.isNotEmpty ?? false) ||
+      (editionTitle?.isNotEmpty ?? false) ||
+      (publisher?.isNotEmpty ?? false) ||
+      (language?.isNotEmpty ?? false) ||
+      year != null ||
+      pageCount != null;
+
+  Map<String, dynamic> toJson() => {
+        if (foreignEditionId?.isNotEmpty ?? false)
+          'foreign_edition_id': foreignEditionId,
+        if (isbn13?.isNotEmpty ?? false) 'isbn13': isbn13,
+        if (asin?.isNotEmpty ?? false) 'asin': asin,
+        if (editionTitle?.isNotEmpty ?? false) 'edition_title': editionTitle,
+        if (publisher?.isNotEmpty ?? false) 'publisher': publisher,
+        if (language?.isNotEmpty ?? false) 'language': language,
+        if (year != null && year! > 0) 'year': year,
+        if (pageCount != null && pageCount! > 0) 'page_count': pageCount,
+      };
+}
+
+/// The author and per-format publication identity the requester confirmed.
+/// A missing publication selector means the wizard exposed no stable
+/// publication distinction for that format, so the server may choose its
+/// deterministic best matching edition after revalidating the work/author.
+class BookRequestSelection {
+  final String? foreignAuthorId;
+  final String? authorName;
+  final BookPublicationSelection? ebook;
+  final BookPublicationSelection? audiobook;
+
+  const BookRequestSelection({
+    this.foreignAuthorId,
+    this.authorName,
+    this.ebook,
+    this.audiobook,
+  });
+
+  static BookRequestSelection? tryFromJson(Object? value) {
+    if (value is! Map) return null;
+    final selection = BookRequestSelection(
+      foreignAuthorId: _bookSelectionString(value['foreign_author_id']),
+      authorName: _bookSelectionString(value['author_name']),
+      ebook: BookPublicationSelection.tryFromJson(value['ebook']),
+      audiobook: BookPublicationSelection.tryFromJson(value['audiobook']),
+    );
+    return selection.hasEvidence ? selection : null;
+  }
+
+  bool get hasEvidence =>
+      (foreignAuthorId?.isNotEmpty ?? false) ||
+      (authorName?.isNotEmpty ?? false) ||
+      ebook != null ||
+      audiobook != null;
+
+  Map<String, dynamic> toJson() => {
+        if (foreignAuthorId?.isNotEmpty ?? false)
+          'foreign_author_id': foreignAuthorId,
+        if (authorName?.isNotEmpty ?? false) 'author_name': authorName,
+        if (ebook != null) 'ebook': ebook!.toJson(),
+        if (audiobook != null) 'audiobook': audiobook!.toJson(),
+      };
+}
+
+String? _bookSelectionString(Object? value) {
+  if (value is! String) return null;
+  final trimmed = value.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
+
+int? _bookSelectionPositiveInt(Object? value) {
+  final parsed = value is num
+      ? value.toInt()
+      : value is String
+          ? int.tryParse(value.trim())
+          : null;
+  return parsed != null && parsed > 0 ? parsed : null;
+}
+
+enum BookStatusUnknownReason {
+  transient,
+  outcomePending,
+  requestFailed,
+  formatNeedsAttention,
+}
 
 /// A user's per-format request state for a book. [formats] contains the server's
 /// live/request-history projection and [ownership] is the current Chaptarr
@@ -63,6 +188,7 @@ class BookRequestStatusDetail {
   final BookOwnership? ownership;
   final bool isKnown;
   final BookStatusUnknownReason? unknownReason;
+  final String? failureCode;
 
   const BookRequestStatusDetail({
     this.status = RequestStatus.unavailable,
@@ -70,6 +196,7 @@ class BookRequestStatusDetail {
     this.ownership,
     this.isKnown = true,
     this.unknownReason,
+    this.failureCode,
   });
 
   BookStatusUnknownReason? get effectiveUnknownReason =>
@@ -90,12 +217,15 @@ class BookRequestStatusDetail {
         unknownReason: !ownershipStatusKnown
             ? BookStatusUnknownReason.formatNeedsAttention
             : unknownReason,
+        failureCode: failureCode,
       );
 
-  /// User-facing state precedence: a file is Available; an active queue item is
-  /// Downloading; a monitored record is Requested; only then do pending/denied
-  /// history states apply. Live Chaptarr truth therefore heals stale request
-  /// history without exposing arr vocabulary to requesters.
+  /// User-facing state precedence: a file is Available, then verified live
+  /// request state, then approval history. An explicit server-side
+  /// `unavailable` is authoritative over a digest's bare monitor flag because
+  /// Chaptarr can retain that flag even when edition selection or BookSearch
+  /// failed. Digest monitoring remains a compatibility fallback when an older
+  /// status response has no concrete format entry.
   RequestStatus? statusFor(BookRequestFormat format) {
     if (format == BookRequestFormat.both) return null;
     final owned = switch (format) {
@@ -114,10 +244,13 @@ class BookRequestStatusDetail {
           ? RequestStatus.requested
           : server;
     }
-    if (owned?.monitored ?? false) return RequestStatus.requested;
     if (server == RequestStatus.pending || server == RequestStatus.denied) {
       return server;
     }
+    if (server == RequestStatus.unavailable) {
+      return RequestStatus.unavailable;
+    }
+    if (owned?.monitored ?? false) return RequestStatus.requested;
     if (!isKnown) return null;
     return RequestStatus.unavailable;
   }
@@ -157,10 +290,12 @@ class BookRequestStatusDetail {
 class RequestSubmissionException implements Exception {
   final String message;
   final bool definitive;
+  final String? code;
 
   const RequestSubmissionException(
     this.message, {
     this.definitive = false,
+    this.code,
   });
 
   @override
@@ -191,7 +326,67 @@ class BookRequestSubmission {
   }
 }
 
-String _requestErrorMessage(DioException error) {
+String? _requestErrorCode(DioException error) {
+  final data = error.response?.data;
+  if (data is! Map) return null;
+  final code = data['code'];
+  return code is String && code.isNotEmpty ? code : null;
+}
+
+/// Plain-language copy for a stable book-request failure code. This is shared
+/// by the immediate POST response and the status reconciliation path so a
+/// terminal durable-job failure never falls back to an ambiguous network
+/// message.
+String? bookRequestFailureMessage(
+  String? code,
+  BookRequestFormat requestedFormat,
+) {
+  switch (code) {
+    case 'book_instance_forbidden':
+      return 'This book library is not available to your account.';
+    case 'book_instance_invalid':
+      return 'This book library is no longer available. Refresh and try again.';
+    case 'book_selection_invalid':
+      return 'The selected book version is no longer valid. Search for the book again and choose a current version.';
+    case 'book_edition_unavailable':
+      return switch (requestedFormat) {
+        BookRequestFormat.ebook =>
+          'No eBook edition is available for this title. Try another version or format.',
+        BookRequestFormat.audiobook =>
+          'No audiobook edition is available for this title. Try another version or format.',
+        BookRequestFormat.both =>
+          'One or more requested formats have no usable edition. Try another version or request one format at a time.',
+      };
+    case 'book_format_unresolved':
+      return 'This version is not identified as an eBook or audiobook. Search again and choose a version with a clear format.';
+    case 'book_match_not_found':
+      return 'This catalog match changed. Search for the book again and retry.';
+    case 'book_multi_work_unsupported':
+      return 'This result contains multiple books. Choose an individual title instead.';
+    case 'book_configuration_invalid':
+      return 'An admin needs to check this book library’s profiles and folders.';
+    case 'book_connection_invalid':
+      return 'An admin needs to check this book library’s connection.';
+    case 'book_catalog_pending':
+      return 'The book library is still preparing this title. Try again in a moment.';
+    case 'book_outcome_pending':
+      return 'The book library is still confirming this request. Cantinarr will keep checking it.';
+    case 'book_request_rejected':
+      return 'The book library rejected this title or edition. Refresh the catalog and try again, or ask an admin to check the book library.';
+    case 'book_request_unverified':
+      return 'Cantinarr could not verify the selected edition, so no download search was started. Try again or ask an admin to check the book library.';
+    case 'book_search_rejected':
+      return 'The book was prepared, but the book library rejected its download search. Ask an admin to check the book library.';
+    case 'book_search_unconfirmed':
+      return 'The book was prepared, but its download search could not be confirmed. Try again or ask an admin to check the book library.';
+  }
+  return null;
+}
+
+String _requestErrorMessage(
+  DioException error,
+  BookRequestFormat requestedFormat,
+) {
   final data = error.response?.data;
   String? raw;
   if (data is Map) {
@@ -199,6 +394,9 @@ String _requestErrorMessage(DioException error) {
     if (message is String && message.isNotEmpty) raw = message;
   }
   if (data is String && data.isNotEmpty) raw = data;
+  final code = _requestErrorCode(error);
+  final codedMessage = bookRequestFailureMessage(code, requestedFormat);
+  if (codedMessage != null) return codedMessage;
   final lower = raw?.toLowerCase() ?? '';
   if (lower.contains('no audiobook edition')) {
     return 'No audiobook edition is available for this book.';
@@ -220,6 +418,23 @@ String _requestErrorMessage(DioException error) {
 }
 
 bool _requestErrorIsDefinitive(DioException error) {
+  final code = _requestErrorCode(error);
+  if (const {
+    'book_instance_forbidden',
+    'book_instance_invalid',
+    'book_selection_invalid',
+    'book_edition_unavailable',
+    'book_format_unresolved',
+    'book_match_not_found',
+    'book_multi_work_unsupported',
+    'book_configuration_invalid',
+    'book_connection_invalid',
+    'book_request_rejected',
+    'book_request_unverified',
+    'book_search_rejected',
+  }.contains(code)) {
+    return true;
+  }
   final data = error.response?.data;
   final raw = data is Map
       ? (data['error'] ?? data['message'])?.toString().toLowerCase() ?? ''
@@ -387,6 +602,10 @@ class RequestOptions {
 /// The backend handles all TMDB-to-TVDB bridging and Radarr/Sonarr
 /// communication transparently.
 class RequestService {
+  // Server budget: bounded setup plus up to 90s per concrete format (roughly
+  // 210s worst case for "both"). Keep transport headroom above that bound.
+  static const _bookRequestTimeout = Duration(seconds: 240);
+
   final Dio _backendDio;
 
   RequestService({required Dio backendDio}) : _backendDio = backendDio;
@@ -495,9 +714,13 @@ class RequestService {
       );
       final data = resp.data as Map<String, dynamic>;
       var isKnown = data['status_known'] as bool? ?? true;
-      final BookStatusUnknownReason? unknownReason = isKnown
+      final unknownReason = isKnown
           ? null
-          : BookStatusUnknownReason.formatNeedsAttention;
+          : switch (data['unknown_reason']) {
+              'outcome_pending' => BookStatusUnknownReason.outcomePending,
+              'request_failed' => BookStatusUnknownReason.requestFailed,
+              _ => BookStatusUnknownReason.formatNeedsAttention,
+            };
       RequestStatus? parseStatus(Object? value) {
         for (final status in RequestStatus.values) {
           if (status.name == value?.toString()) return status;
@@ -549,6 +772,7 @@ class RequestService {
         formats: formats,
         isKnown: isKnown,
         unknownReason: unknownReason,
+        failureCode: data['failure_code'] as String?,
       );
     } catch (_) {
       return const BookRequestStatusDetail(isKnown: false);
@@ -564,16 +788,31 @@ class RequestService {
     required String title,
     BookRequestFormat format = BookRequestFormat.both,
     String? instanceId,
+    BookRequestSelection? selection,
   }) async {
     try {
-      final resp = await _backendDio.post('/api/requests', data: {
-        'media_type': 'book',
-        'foreign_id': foreignId,
-        'title': title,
-        'book_format': format.value,
-        if (instanceId != null && instanceId.isNotEmpty)
-          'instance_id': instanceId,
-      });
+      final resp = await _backendDio.post(
+        '/api/requests',
+        data: {
+          'media_type': 'book',
+          'foreign_id': foreignId,
+          'title': title,
+          'book_format': format.value,
+          if (instanceId != null && instanceId.isNotEmpty)
+            'instance_id': instanceId,
+          if (selection?.hasEvidence ?? false)
+            'book_selection': selection!.toJson(),
+        },
+        // Chaptarr can briefly build its local author/book catalog before it
+        // can accept the exact edition. Keep the normal 15-second timeout for
+        // every other API call, but let this verified mutation finish. This is
+        // not waiting for indexers or a download — only for Chaptarr's durable
+        // add, monitor, and search-command acknowledgement.
+        options: Options(
+          connectTimeout: _bookRequestTimeout,
+          receiveTimeout: _bookRequestTimeout,
+        ),
+      );
       if (resp.statusCode != 200 && resp.statusCode != 201) return null;
       final data = resp.data as Map<String, dynamic>?;
       RequestStatus? parseStatus(Object? value) {
@@ -617,8 +856,9 @@ class RequestService {
       );
     } on DioException catch (e) {
       throw RequestSubmissionException(
-        _requestErrorMessage(e),
+        _requestErrorMessage(e, format),
         definitive: _requestErrorIsDefinitive(e),
+        code: _requestErrorCode(e),
       );
     } catch (_) {
       return null;
