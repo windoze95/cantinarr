@@ -204,9 +204,7 @@ void main() {
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester, _booksState);
 
-    router.go(
-      '/detail/book/29749107?instance_id=books-two&lookup_term=ahsoka&catalog_foreign_book_id=catalog-ahsoka',
-    );
+    router.go('/detail/book/29749107?instance_id=books-two');
     await tester.pumpAndSettle();
 
     final screen = tester.widget<RequesterBookDetailScreen>(
@@ -214,8 +212,6 @@ void main() {
     );
     expect(screen.foreignId, '29749107');
     expect(screen.instanceId, 'books-two');
-    expect(screen.lookupTerm, 'ahsoka');
-    expect(screen.catalogForeignBookId, 'catalog-ahsoka');
   });
 
   testWidgets('a blank book detail id degrades to the Books tab',

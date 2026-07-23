@@ -280,14 +280,12 @@ class ChaptarrBookStatistics {
 class ChaptarrEdition {
   final int id;
   final int bookId;
-  final String? foreignEditionId;
   final String? title;
   final String? format;
   final String? asin;
   final String? isbn13;
   final String? overview;
   final String? publisher;
-  final String? language;
   final int pageCount;
   final bool monitored;
   final bool manualAdd;
@@ -297,14 +295,12 @@ class ChaptarrEdition {
   const ChaptarrEdition({
     required this.id,
     this.bookId = 0,
-    this.foreignEditionId,
     this.title,
     this.format,
     this.asin,
     this.isbn13,
     this.overview,
     this.publisher,
-    this.language,
     this.pageCount = 0,
     this.monitored = true,
     this.manualAdd = false,
@@ -316,14 +312,12 @@ class ChaptarrEdition {
       ChaptarrEdition(
         id: json['id'] as int? ?? 0,
         bookId: json['bookId'] as int? ?? 0,
-        foreignEditionId: json['foreignEditionId'] as String?,
         title: json['title'] as String?,
         format: json['format'] as String?,
         asin: json['asin'] as String?,
         isbn13: json['isbn13'] as String?,
         overview: json['overview'] as String?,
         publisher: json['publisher'] as String?,
-        language: json['language'] as String?,
         pageCount: json['pageCount'] as int? ?? 0,
         monitored: json['monitored'] as bool? ?? true,
         manualAdd: json['manualAdd'] as bool? ?? false,
@@ -334,14 +328,12 @@ class ChaptarrEdition {
   Map<String, dynamic> toJson() => {
         'id': id,
         'bookId': bookId,
-        'foreignEditionId': foreignEditionId,
         'title': title,
         'format': format,
         'asin': asin,
         'isbn13': isbn13,
         'overview': overview,
         'publisher': publisher,
-        'language': language,
         'pageCount': pageCount,
         'monitored': monitored,
         'manualAdd': manualAdd,
@@ -369,7 +361,6 @@ class ChaptarrBook {
   final String title;
   final int authorId;
   final String? foreignBookId;
-  final String? foreignEditionId;
   final String? titleSlug;
   final String? overview;
   final DateTime? releaseDate;
@@ -391,7 +382,6 @@ class ChaptarrBook {
     required this.title,
     this.authorId = 0,
     this.foreignBookId,
-    this.foreignEditionId,
     this.titleSlug,
     this.overview,
     this.releaseDate,
@@ -411,7 +401,6 @@ class ChaptarrBook {
         title: json['title'] as String? ?? 'Untitled',
         authorId: json['authorId'] as int? ?? 0,
         foreignBookId: json['foreignBookId'] as String?,
-        foreignEditionId: json['foreignEditionId'] as String?,
         titleSlug: json['titleSlug'] as String?,
         overview: json['overview'] as String?,
         // Library records carry releaseDate; metadata lookup rows commonly
@@ -440,7 +429,6 @@ class ChaptarrBook {
         'title': title,
         'authorId': authorId,
         'foreignBookId': foreignBookId,
-        'foreignEditionId': foreignEditionId,
         'titleSlug': titleSlug,
         'overview': overview,
         'releaseDate': releaseDate?.toIso8601String(),

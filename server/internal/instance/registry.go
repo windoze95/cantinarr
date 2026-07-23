@@ -20,8 +20,6 @@ import (
 type Registry struct {
 	store               *Store
 	mu                  sync.RWMutex
-	configLockMu        sync.Mutex
-	configLocks         map[string]*sync.RWMutex
 	radarrClients       map[string]*radarr.Client
 	sonarrClients       map[string]*sonarr.Client
 	chaptarrClients     map[string]*chaptarr.Client
@@ -36,7 +34,6 @@ type Registry struct {
 func NewRegistry(store *Store) *Registry {
 	return &Registry{
 		store:               store,
-		configLocks:         make(map[string]*sync.RWMutex),
 		radarrClients:       make(map[string]*radarr.Client),
 		sonarrClients:       make(map[string]*sonarr.Client),
 		chaptarrClients:     make(map[string]*chaptarr.Client),
@@ -46,35 +43,6 @@ func NewRegistry(store *Store) *Registry {
 		transmissionClients: make(map[string]*transmission.Client),
 		tautulliClients:     make(map[string]*tautulli.Client),
 	}
-}
-
-func (r *Registry) instanceConfigLock(instanceID string) *sync.RWMutex {
-	r.configLockMu.Lock()
-	defer r.configLockMu.Unlock()
-	lock := r.configLocks[instanceID]
-	if lock == nil {
-		lock = &sync.RWMutex{}
-		r.configLocks[instanceID] = lock
-	}
-	return lock
-}
-
-// LockInstanceConfigRead pins one instance's URL and credentials while an
-// arr mutation is in flight. Multiple requests may proceed together; an admin
-// update or deletion waits until every reader releases the configuration.
-func (r *Registry) LockInstanceConfigRead(instanceID string) func() {
-	lock := r.instanceConfigLock(instanceID)
-	lock.RLock()
-	return lock.RUnlock
-}
-
-// LockInstanceConfigWrite is the configuration side of
-// LockInstanceConfigRead. Instance persistence and registry invalidation must
-// both finish before it is released.
-func (r *Registry) LockInstanceConfigWrite(instanceID string) func() {
-	lock := r.instanceConfigLock(instanceID)
-	lock.Lock()
-	return lock.Unlock
 }
 
 // Summary is the tool-facing identity of an instance: never the URL, API

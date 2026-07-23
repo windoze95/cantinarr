@@ -29,9 +29,9 @@ such as **AUTO** are informational hints, not machine-enforced claims.
 | [Instances, realtime behavior, and push](catalog/instances-realtime-push.md) | INST, RT, PUSH | 8 |
 | [Plex linking, libraries, and invitations](catalog/plex.md) | PLEX | 18 |
 | [Discovery and requests](catalog/discovery-requests.md) | DISC, REQ | 6 |
-| [Media services and download clients](catalog/media-services.md) | RAD, SON, BOOK, FILE, DOWN, TAUT | 12 |
+| [Media services and download clients](catalog/media-services.md) | RAD, SON, BOOK, FILE, DOWN, TAUT | 11 |
 | [Issues, AI, and MCP](catalog/issues-ai-mcp.md) | ISS, AI, MCP | 10 |
-| **Total** | | **93** |
+| **Total** | | **92** |
 
 Case IDs are stable and never renumbered, so deleted cases leave gaps in the
 sequences; a gap means the behavior moved into the automated suites, not that

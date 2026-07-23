@@ -2,6 +2,7 @@ package request
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -81,7 +82,7 @@ func TestBookRequestRequiresTitleOnlyForNewCanonicalBook(t *testing.T) {
 		chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/api/v1/book":
-				_, _ = w.Write([]byte(`[{"id":1,"title":"  Existing Title  ","foreignBookId":"existing-book","mediaType":"ebook","monitored":true,"statistics":{"bookFileCount":1}}]`))
+				_, _ = w.Write([]byte(`[{"id":1,"title":"  Existing Title  ","foreignBookId":"existing-book","mediaType":"ebook","monitored":true,"statistics":{"bookFileCount":0}}]`))
 			case "/api/v1/book/lookup":
 				lookupCalls++
 				http.Error(w, "lookup should not be reached", http.StatusInternalServerError)
@@ -97,7 +98,7 @@ func TestBookRequestRequiresTitleOnlyForNewCanonicalBook(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateMediaRequest: %v", err)
 		}
-		if resp.Status != StatusAvailable || resp.Title != "Existing Title" {
+		if resp.Status != StatusRequested || resp.Title != "Existing Title" {
 			t.Fatalf("response = %+v, want canonical trimmed title", resp)
 		}
 		if lookupCalls != 0 {
@@ -424,11 +425,9 @@ func TestBookPendingPreflightUsesLiveAndSharedPendingState(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/book":
-			_, _ = w.Write([]byte(`[{"id":7,"title":"Flock","foreignBookId":"flock","monitored":true,"grabbed":true,"mediaType":"audiobook","statistics":{"bookFileCount":0}}]`))
+			_, _ = w.Write([]byte(`[{"id":7,"title":"Flock","foreignBookId":"flock","monitored":true,"mediaType":"audiobook","statistics":{"bookFileCount":0}}]`))
 		case "/api/v1/queue":
 			_, _ = w.Write([]byte(`{"totalRecords":0,"records":[]}`))
-		case "/api/v1/command":
-			_, _ = w.Write([]byte(`[]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -571,6 +570,138 @@ func TestGetUserBookStatusPerFormat(t *testing.T) {
 	}
 }
 
+func TestBookRequestFormatMonitorsRequestedEditions(t *testing.T) {
+	var addBody map[string]any
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"Star Wars: Heir to the Empire",
+					"titleSlug":"star-wars-heir-to-the-empire",
+					"foreignBookId":"book-123",
+					"author":{
+						"authorName":"Timothy Zahn",
+						"foreignAuthorId":"author-456"
+					},
+					"editions":[
+						{"id":1,"foreignEditionId":"edition-ebook","titleSlug":"ebook","title":"Kindle Edition","format":"Kindle Edition","links":[{"url":"https://example.com","name":"Goodreads"}],"images":[{"url":"/cover.jpg","coverType":"cover"}]},
+						{"id":2,"foreignEditionId":"edition-audio","titleSlug":"audio","title":"Audiobook","format":"Audible Audio","links":null}
+					]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":11,"name":"Any"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":22,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":33,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			if err := json.NewDecoder(r.Body).Decode(&addBody); err != nil {
+				t.Errorf("decode add book body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"id":9,"title":"Star Wars: Heir to the Empire","foreignBookId":"book-123","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "book-123",
+		Title:      "Star Wars: Heir to the Empire",
+		BookFormat: BookFormatAudiobook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested", resp.Status)
+	}
+	if addBody == nil {
+		t.Fatal("AddBook was not called")
+	}
+	// Format intent is carried by Chaptarr's book-level flags (this fork tracks
+	// ebook vs audiobook per book, not per edition).
+	if got := addBody["anyEditionOk"]; got != false {
+		t.Fatalf("anyEditionOk = %v, want false for audiobook-only", got)
+	}
+	if got := addBody["mediaType"]; got != "audiobook" {
+		t.Fatalf("mediaType = %v, want audiobook", got)
+	}
+	if got := addBody["audiobookMonitored"]; got != true {
+		t.Fatalf("audiobookMonitored = %v, want true for audiobook request", got)
+	}
+	if got := addBody["ebookMonitored"]; got != false {
+		t.Fatalf("ebookMonitored = %v, want false for audiobook request", got)
+	}
+	if addBody["title"] != "Star Wars: Heir to the Empire" {
+		t.Fatalf("title = %v, want Star Wars: Heir to the Empire", addBody["title"])
+	}
+	if addBody["titleSlug"] != "star-wars-heir-to-the-empire" {
+		t.Fatalf("titleSlug = %v, want star-wars-heir-to-the-empire", addBody["titleSlug"])
+	}
+	author := addBody["author"].(map[string]any)
+	if author["authorName"] != "Timothy Zahn" || author["foreignAuthorId"] != "author-456" {
+		t.Fatalf("author = %#v, want nested lookup author carried into add payload", author)
+	}
+	// Editions are round-tripped verbatim (all monitored) so Chaptarr's NOT NULL
+	// links/images columns are satisfied; format is no longer chosen per edition.
+	editions, ok := addBody["editions"].([]any)
+	if !ok || len(editions) != 2 {
+		t.Fatalf("editions = %#v, want 2 editions", addBody["editions"])
+	}
+	ebook := editions[0].(map[string]any)
+	audio := editions[1].(map[string]any)
+	for i, ed := range []map[string]any{ebook, audio} {
+		if ed["monitored"] != true {
+			t.Fatalf("edition[%d] monitored = %v, want true (monitor all editions)", i, ed["monitored"])
+		}
+		if ed["manualAdd"] != true {
+			t.Fatalf("edition[%d] manualAdd = %v, want true", i, ed["manualAdd"])
+		}
+	}
+	if audio["foreignEditionId"] != "edition-audio" || audio["titleSlug"] != "audio" {
+		t.Fatalf("audiobook edition = %#v, want foreignEditionId/titleSlug preserved", audio)
+	}
+	// Regression guard for the SQLite "NOT NULL constraint failed: Editions.Links/Images"
+	// add failure: links/images must survive the round-trip, and be defaulted to
+	// [] (never null/absent) for editions the lookup omitted them on.
+	ebookLinks, ok := ebook["links"].([]any)
+	if !ok || len(ebookLinks) != 1 {
+		t.Fatalf("ebook links = %#v, want the lookup's 1 link preserved", ebook["links"])
+	}
+	if ebookImages, ok := ebook["images"].([]any); !ok || len(ebookImages) != 1 {
+		t.Fatalf("ebook images = %#v, want the lookup's 1 image preserved", ebook["images"])
+	}
+	if audioLinks, ok := audio["links"].([]any); !ok || len(audioLinks) != 0 {
+		t.Fatalf("audio links = %#v, want [] coerced (lookup sent links:null)", audio["links"])
+	}
+	if audioImages, ok := audio["images"].([]any); !ok || len(audioImages) != 0 {
+		t.Fatalf("audio images = %#v, want [] injected (lookup omitted images)", audio["images"])
+	}
+
+	var stored, storedInstance string
+	if err := svc.db.QueryRow(
+		"SELECT COALESCE(book_format, ''), COALESCE(instance_id, '') FROM request_log WHERE user_id = ? AND foreign_id = ?",
+		uid,
+		"book-123",
+	).Scan(&stored, &storedInstance); err != nil {
+		t.Fatalf("read stored format: %v", err)
+	}
+	if stored != BookFormatAudiobook {
+		t.Fatalf("stored book_format = %q, want %q", stored, BookFormatAudiobook)
+	}
+	if storedInstance == "" {
+		t.Fatal("instance_id was not pinned on fulfilled book request")
+	}
+}
+
 func TestBookRequestErrorStatus(t *testing.T) {
 	if got := bookRequestErrorStatus(ErrChaptarrInstanceForbidden); got != http.StatusForbidden {
 		t.Fatalf("forbidden status = %d, want 403", got)
@@ -625,6 +756,367 @@ func TestSelectBookProfilesRequiresOneOrUniqueDefault(t *testing.T) {
 // isEbook=false / format=null, so the old per-edition format gate rejected every
 // ebook request. An ebook request must now add the book and set ebook-format
 // book-level flags instead of erroring.
+func TestBookRequestEbookFormatAddsRealisticEdition(t *testing.T) {
+	var addBody map[string]any
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			// Mirrors real Chaptarr metadata: a single edition with no format,
+			// isEbook=false, and a present-but-empty links array.
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"Ahsoka (Star Wars)",
+					"titleSlug":"ahsoka-star-wars",
+					"foreignBookId":"29749107",
+					"author":{"authorName":"E.K. Johnston","foreignAuthorId":"gr:7418796"},
+					"editions":[
+						{"foreignEditionId":"29749107","title":"Ahsoka (Star Wars)","format":null,"isEbook":false,"links":[],"images":[{"url":"/c.jpg","coverType":"cover"}]}
+					]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			if err := json.NewDecoder(r.Body).Decode(&addBody); err != nil {
+				t.Errorf("decode add book body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"id":42,"title":"Ahsoka (Star Wars)","foreignBookId":"29749107","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "29749107",
+		Title:      "Ahsoka (Star Wars)",
+		BookFormat: BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest (ebook): %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested (ebook must not be rejected)", resp.Status)
+	}
+	if addBody == nil {
+		t.Fatal("AddBook was not called for ebook request")
+	}
+	if got := addBody["mediaType"]; got != "ebook" {
+		t.Fatalf("mediaType = %v, want ebook", got)
+	}
+	if got := addBody["ebookMonitored"]; got != true {
+		t.Fatalf("ebookMonitored = %v, want true", got)
+	}
+	if got := addBody["audiobookMonitored"]; got != false {
+		t.Fatalf("audiobookMonitored = %v, want false", got)
+	}
+	editions, ok := addBody["editions"].([]any)
+	if !ok || len(editions) != 1 {
+		t.Fatalf("editions = %#v, want 1 edition round-tripped", addBody["editions"])
+	}
+	ed := editions[0].(map[string]any)
+	if ed["monitored"] != true {
+		t.Fatalf("edition monitored = %v, want true", ed["monitored"])
+	}
+	if links, ok := ed["links"].([]any); !ok {
+		t.Fatalf("edition links = %#v, want an array (never null)", ed["links"])
+	} else if len(links) != 0 {
+		t.Fatalf("edition links = %#v, want the lookup's empty array preserved", links)
+	}
+	if images, ok := ed["images"].([]any); !ok || len(images) != 1 {
+		t.Fatalf("edition images = %#v, want the lookup's image preserved", ed["images"])
+	}
+}
+
+// TestBookRequestBothFormatAddsEbookAndAudiobookRecords covers the "both" path.
+// Chaptarr stores a title's ebook and audiobook as separate records (same
+// foreignBookId, different mediaType), so a "both" request must POST the book
+// twice — once as ebook, once as audiobook — each pinned to its own mediaType.
+func TestBookRequestBothFormatAddsEbookAndAudiobookRecords(t *testing.T) {
+	var addBodies []map[string]any
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"Ahsoka (Star Wars)",
+					"titleSlug":"ahsoka-star-wars",
+					"foreignBookId":"29749107",
+					"author":{"authorName":"E.K. Johnston","foreignAuthorId":"gr:7418796"},
+					"editions":[
+						{"foreignEditionId":"29749107","title":"Ahsoka (Star Wars)","format":null,"isEbook":false,"links":[],"images":[]}
+					]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[
+				{"id":1,"path":"/library/ebooks","accessible":true,"freeSpace":10},
+				{"id":2,"path":"/library/audiobooks","accessible":true,"freeSpace":10}
+			]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode add book body: %v", err)
+			}
+			addBodies = append(addBodies, body)
+			_, _ = w.Write([]byte(`{"id":50,"title":"Ahsoka (Star Wars)","foreignBookId":"29749107","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "29749107",
+		Title:      "Ahsoka (Star Wars)",
+		BookFormat: BookFormatBoth,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest (both): %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested", resp.Status)
+	}
+	if len(addBodies) != 2 {
+		t.Fatalf("AddBook called %d times, want 2 (one ebook record + one audiobook record)", len(addBodies))
+	}
+	byFormat := map[string]map[string]any{}
+	for _, b := range addBodies {
+		mt, _ := b["mediaType"].(string)
+		byFormat[mt] = b
+	}
+	ebook, ok := byFormat["ebook"]
+	if !ok {
+		t.Fatalf("no ebook record added; bodies = %#v", addBodies)
+	}
+	audio, ok := byFormat["audiobook"]
+	if !ok {
+		t.Fatalf("no audiobook record added; bodies = %#v", addBodies)
+	}
+	// Each record is pinned to its own format and shares the foreignBookId.
+	if ebook["ebookMonitored"] != true || ebook["audiobookMonitored"] != false {
+		t.Fatalf("ebook record flags = %#v, want ebookMonitored only", ebook)
+	}
+	if audio["audiobookMonitored"] != true || audio["ebookMonitored"] != false {
+		t.Fatalf("audiobook record flags = %#v, want audiobookMonitored only", audio)
+	}
+	if ebook["foreignBookId"] != "29749107" || audio["foreignBookId"] != "29749107" {
+		t.Fatalf("records must share foreignBookId 29749107; got ebook=%v audio=%v", ebook["foreignBookId"], audio["foreignBookId"])
+	}
+	if got := ebook["author"].(map[string]any)["rootFolderPath"]; got != "/library/ebooks" {
+		t.Fatalf("ebook root = %v, want format-specific /library/ebooks", got)
+	}
+	if got := audio["author"].(map[string]any)["rootFolderPath"]; got != "/library/audiobooks" {
+		t.Fatalf("audiobook root = %v, want format-specific /library/audiobooks", got)
+	}
+	for format, body := range byFormat {
+		author := body["author"].(map[string]any)
+		if author["ebookMonitorFuture"] != true || author["audiobookMonitorFuture"] != true {
+			t.Fatalf("%s author future-monitor gates = %#v, want both requested formats enabled", format, author)
+		}
+	}
+}
+
+func TestBookRequestBothReportsAndStoresPartialPerFormat(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[{"title":"Partial","foreignBookId":"partial-1","author":{"authorName":"A","foreignAuthorId":"a"},"editions":[]}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Any"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["mediaType"] == BookFormatAudiobook {
+				http.Error(w, "audio add failed", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":10,"title":"Partial","foreignBookId":"partial-1","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType: "book", ForeignID: "partial-1", Title: "Partial", BookFormat: BookFormatBoth,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusPartial || resp.BookFormats[BookFormatEbook] != StatusRequested || resp.BookFormats[BookFormatAudiobook] != StatusUnavailable {
+		t.Fatalf("response = %#v, want concrete requested/unavailable partial", resp)
+	}
+	rows, err := svc.db.Query("SELECT book_format, status FROM request_log WHERE user_id=? AND foreign_id=?", uid, "partial-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	stored := map[string]string{}
+	for rows.Next() {
+		var format, status string
+		if err := rows.Scan(&format, &status); err != nil {
+			t.Fatal(err)
+		}
+		stored[format] = status
+	}
+	if len(stored) != 1 || stored[BookFormatEbook] != StatusRequested {
+		t.Fatalf("stored outcomes = %#v, want only successful ebook", stored)
+	}
+}
+
+func TestPartialApprovalKeepsFailedWaiterPending(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[{"title":"Partial Approval","foreignBookId":"partial-approval","author":{"authorName":"A","foreignAuthorId":"a"},"editions":[]}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Any"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["mediaType"] == BookFormatAudiobook {
+				http.Error(w, "audio add failed", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":10,"title":"Partial Approval","foreignBookId":"partial-approval","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, ownerID := newChaptarrBookTestService(t, chaptarrServer.URL)
+	_, instanceID, err := svc.resolveChaptarr(ownerID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := svc.db.Exec("INSERT INTO users (username, password_hash, role) VALUES ('audio-waiter', '', 'user')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiterID, _ := res.LastInsertId()
+	res, err = svc.db.Exec("INSERT INTO users (username, password_hash, role) VALUES ('ebook-waiter', '', 'user')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ebookWaiterID, _ := res.LastInsertId()
+	recorder := &recordingNotifier{}
+	svc.notifier = recorder
+	if _, err := svc.createPending(&resolvedRequest{
+		userID: ownerID, mediaType: "book", foreignID: "partial-approval", title: "Partial Approval", bookFormat: BookFormatBoth, instanceID: instanceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.createPending(&resolvedRequest{
+		userID: waiterID, mediaType: "book", foreignID: "partial-approval", title: "Partial Approval", bookFormat: BookFormatAudiobook, instanceID: instanceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.createPending(&resolvedRequest{
+		userID: ebookWaiterID, mediaType: "book", foreignID: "partial-approval", title: "Partial Approval", bookFormat: BookFormatEbook, instanceID: instanceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		userID int64
+		format string
+	}{
+		{waiterID, BookFormatAudiobook},
+		{ebookWaiterID, BookFormatEbook},
+	} {
+		history, historyErr := svc.GetRequests(tc.userID)
+		if historyErr != nil {
+			t.Fatal(historyErr)
+		}
+		if len(history) != 1 || history[0].Status != StatusPending || history[0].BookFormat != tc.format {
+			t.Fatalf("waiter %d pending history = %+v, want one concrete %s row", tc.userID, history, tc.format)
+		}
+	}
+	adminID := createTestAdmin(t, svc)
+	var requestID int64
+	if err := svc.db.QueryRow("SELECT id FROM request_log WHERE foreign_id = 'partial-approval' AND status = 'pending'").Scan(&requestID); err != nil {
+		t.Fatal(err)
+	}
+	response, err := svc.ApproveRequest(adminID, requestID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != StatusPartial {
+		t.Fatalf("approval response = %+v, want partial", response)
+	}
+	var pendingFormat, waiterFormat string
+	if err := svc.db.QueryRow(
+		`SELECT r.book_format, bw.book_format FROM request_log r
+		 JOIN book_request_waiters bw ON bw.request_id = r.id
+		 WHERE r.foreign_id = 'partial-approval' AND r.status = 'pending' AND bw.user_id = ?`, waiterID,
+	).Scan(&pendingFormat, &waiterFormat); err != nil {
+		t.Fatal(err)
+	}
+	if pendingFormat != BookFormatAudiobook || waiterFormat != BookFormatAudiobook {
+		t.Fatalf("retained pending=%q waiter=%q, want audiobook", pendingFormat, waiterFormat)
+	}
+	audioHistory, err := svc.GetRequests(waiterID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audioHistory) != 1 || audioHistory[0].Status != StatusPending || audioHistory[0].BookFormat != BookFormatAudiobook {
+		t.Fatalf("failed-only waiter history = %+v, want audiobook pending only", audioHistory)
+	}
+	ebookHistory, err := svc.GetRequests(ebookWaiterID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ebookHistory) != 1 || ebookHistory[0].Status != StatusRequested || ebookHistory[0].BookFormat != BookFormatEbook {
+		t.Fatalf("successful waiter history = %+v, want personal ebook requested", ebookHistory)
+	}
+	foundEbookApproval := false
+	for _, event := range recorder.userEvents {
+		if event.userID == waiterID && event.data["decision"] == "approved" {
+			t.Fatalf("audio-only waiter received false approval: %+v", event)
+		}
+		if event.userID == ebookWaiterID && event.data["decision"] == "approved" && event.data["book_format"] == BookFormatEbook {
+			foundEbookApproval = true
+		}
+	}
+	if !foundEbookApproval {
+		t.Fatalf("ebook waiter did not receive format-scoped approval: %+v", recorder.userEvents)
+	}
+}
+
 func TestBookStatusUsesLiveProjectionAndCache(t *testing.T) {
 	bookCalls, queueCalls := 0, 0
 	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -633,10 +1125,10 @@ func TestBookStatusUsesLiveProjectionAndCache(t *testing.T) {
 		case "/api/v1/book":
 			bookCalls++
 			_, _ = w.Write([]byte(`[
-				{"id":1,"title":"Flock","foreignBookId":"flock","monitored":true,"grabbed":true,"mediaType":"audiobook","statistics":{"bookFileCount":0}},
+				{"id":1,"title":"Flock","foreignBookId":"flock","monitored":true,"mediaType":"audiobook","statistics":{"bookFileCount":0}},
 				{"id":2,"title":"Queued","foreignBookId":"queued","monitored":true,"mediaType":"ebook","statistics":{"bookFileCount":0}},
 				{"id":3,"title":"Here","foreignBookId":"here","monitored":false,"mediaType":"ebook","statistics":{"bookFileCount":1}}
-				,{"id":4,"title":"Blocked","foreignBookId":"blocked","monitored":true,"grabbed":true,"mediaType":"ebook","statistics":{"bookFileCount":0}}
+				,{"id":4,"title":"Blocked","foreignBookId":"blocked","monitored":true,"mediaType":"ebook","statistics":{"bookFileCount":0}}
 			]`))
 		case "/api/v1/queue":
 			queueCalls++
@@ -644,8 +1136,6 @@ func TestBookStatusUsesLiveProjectionAndCache(t *testing.T) {
 				{"id":8,"bookId":2,"status":"downloading","size":100,"sizeleft":50},
 				{"id":9,"bookId":4,"status":"downloading","trackedDownloadStatus":"warning","trackedDownloadState":"importBlocked"}
 			]}`))
-		case "/api/v1/command":
-			_, _ = w.Write([]byte(`[]`))
 		default:
 			http.Error(w, "unexpected route", http.StatusNotFound)
 		}
@@ -693,7 +1183,7 @@ func TestBookQueueItemDownloadingClassification(t *testing.T) {
 	}
 }
 
-func TestPhysicalRecordDoesNotImpersonateRequestedFormat(t *testing.T) {
+func TestUnknownFormatExactRecordFailsClosed(t *testing.T) {
 	mutations := 0
 	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -702,8 +1192,6 @@ func TestPhysicalRecordDoesNotImpersonateRequestedFormat(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"id":5,"title":"Unknown","foreignBookId":"unknown","monitored":false,"mediaType":"paperback","editions":[]}]`))
 		case "/api/v1/queue":
 			_, _ = w.Write([]byte(`{"totalRecords":0,"records":[]}`))
-		case "/api/v1/command":
-			_, _ = w.Write([]byte(`[]`))
 		default:
 			if r.Method != http.MethodGet {
 				mutations++
@@ -714,14 +1202,14 @@ func TestPhysicalRecordDoesNotImpersonateRequestedFormat(t *testing.T) {
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
 	status, err := svc.GetUserBookStatus(uid, "unknown")
-	if err != nil || status.Status != StatusUnavailable {
-		t.Fatalf("physical-only status = %+v err=%v, want unavailable", status, err)
+	if err != nil || status.Status != StatusUnavailable || status.StatusKnown == nil || *status.StatusKnown {
+		t.Fatalf("unknown exact status = %+v err=%v, want unavailable status_known=false", status, err)
 	}
 	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "unknown", Title: "Unknown", BookFormat: BookFormatEbook}); err == nil {
-		t.Fatal("physical record was accepted as an ebook")
+		t.Fatal("unknown exact format allowed mutation")
 	}
 	if mutations != 0 {
-		t.Fatalf("physical record caused %d mutations", mutations)
+		t.Fatalf("unknown format caused %d mutations", mutations)
 	}
 }
 
@@ -736,11 +1224,9 @@ func TestBookLiveProjectionColdCacheSingleflight(t *testing.T) {
 			bookCalls++
 			mu.Unlock()
 			time.Sleep(25 * time.Millisecond)
-			_, _ = w.Write([]byte(`[{"id":1,"title":"Flock","foreignBookId":"flock","monitored":true,"grabbed":true,"mediaType":"audiobook"}]`))
+			_, _ = w.Write([]byte(`[{"id":1,"title":"Flock","foreignBookId":"flock","monitored":true,"mediaType":"audiobook"}]`))
 		case "/api/v1/queue":
 			_, _ = w.Write([]byte(`{"totalRecords":0,"records":[]}`))
-		case "/api/v1/command":
-			_, _ = w.Write([]byte(`[]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -762,6 +1248,100 @@ func TestBookLiveProjectionColdCacheSingleflight(t *testing.T) {
 	defer mu.Unlock()
 	if bookCalls != 1 {
 		t.Fatalf("cold projection fetched library %d times, want one", bookCalls)
+	}
+}
+
+func TestConcurrentBookRequestsSerializePreflightAndAdd(t *testing.T) {
+	var mu sync.Mutex
+	added := false
+	postCalls := 0
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			mu.Lock()
+			isAdded := added
+			mu.Unlock()
+			if isAdded {
+				_, _ = w.Write([]byte(`[{"id":31,"title":"Race","foreignBookId":"race","monitored":true,"mediaType":"ebook"}]`))
+			} else {
+				_, _ = w.Write([]byte(`[]`))
+			}
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[{"title":"Race","foreignBookId":"race","author":{"authorName":"A","foreignAuthorId":"a"},"editions":[]}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Any"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			mu.Lock()
+			postCalls++
+			added = true
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"id":31,"title":"Race","foreignBookId":"race","monitored":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer chaptarrServer.Close()
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "race", Title: "Race", BookFormat: BookFormatEbook}); err != nil {
+				t.Errorf("CreateMediaRequest: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if postCalls != 1 {
+		t.Fatalf("concurrent requests added book %d times, want one", postCalls)
+	}
+}
+
+func TestBookRequestAddsCanonicalSiblingWhenLookupIDDiffers(t *testing.T) {
+	lookupCalls := 0
+	var addBody map[string]any
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[{"id":4,"authorId":12,"title":"Flock","titleSlug":"flock","foreignBookId":"library-flock","monitored":true,"mediaType":"audiobook"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/author/12":
+			_, _ = w.Write([]byte(`{"id":12,"authorName":"Kate Stewart","foreignAuthorId":"author-kate","qualityProfileId":3,"metadataProfileId":4,"path":"/library/books"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			lookupCalls++
+			_, _ = w.Write([]byte(`[{"title":"Flock","foreignBookId":"lookup-flock"}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			_ = json.NewDecoder(r.Body).Decode(&addBody)
+			_, _ = w.Write([]byte(`{"id":5,"title":"Flock","foreignBookId":"library-flock","monitored":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer chaptarrServer.Close()
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "library-flock", Title: "Flock", BookFormat: BookFormatEbook})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.BookFormats[BookFormatEbook] != StatusRequested || addBody == nil {
+		t.Fatalf("response=%#v add=%#v", resp, addBody)
+	}
+	if addBody["foreignBookId"] != "library-flock" || addBody["mediaType"] != BookFormatEbook {
+		t.Fatalf("canonical sibling body = %#v", addBody)
+	}
+	if author := addBody["author"].(map[string]any); author["rootFolderPath"] != "/library/books" || author["qualityProfileId"] != float64(3) || author["metadataProfileId"] != float64(4) {
+		t.Fatalf("canonical sibling author = %#v", author)
+	}
+	if lookupCalls != 0 {
+		t.Fatalf("metadata lookup called %d times despite canonical existing group", lookupCalls)
 	}
 }
 
@@ -788,6 +1368,103 @@ func TestCanonicalSiblingFailsClosedOnConflictingAuthors(t *testing.T) {
 	}
 	if mutations != 0 {
 		t.Fatalf("conflicting authors caused %d mutations", mutations)
+	}
+}
+
+func TestBookRequestMonitoredRecordIsIdempotent(t *testing.T) {
+	mutations := 0
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[{"id":7,"title":"Flock","foreignBookId":"flock","monitored":true,"mediaType":"audiobook","statistics":{"bookFileCount":0}}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			if r.Method != http.MethodGet {
+				mutations++
+			}
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType: "book", ForeignID: "flock", Title: "Flock", BookFormat: BookFormatAudiobook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusRequested || resp.BookFormats[BookFormatAudiobook] != StatusRequested {
+		t.Fatalf("response = %#v, want already requested audiobook", resp)
+	}
+	if mutations != 0 {
+		t.Fatalf("monitored record caused %d mutations, want idempotent no-op", mutations)
+	}
+}
+
+func TestBookRequestMonitorSuccessSurvivesImmediateSearchFailure(t *testing.T) {
+	monitored := false
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[{"id":9,"title":"Later","foreignBookId":"later","monitored":false,"mediaType":"ebook","statistics":{"bookFileCount":0}}]`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/book/monitor":
+			monitored = true
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/command":
+			http.Error(w, "command unavailable", http.StatusServiceUnavailable)
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType: "book", ForeignID: "later", Title: "Later", BookFormat: BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if !monitored || resp.Status != StatusRequested || resp.BookFormats[BookFormatEbook] != StatusRequested {
+		t.Fatalf("monitored=%v response=%#v, want durable requested despite search failure", monitored, resp)
+	}
+}
+
+func TestBookRequestAddedUnmonitoredRequiresMonitoringSuccess(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[{"title":"New","foreignBookId":"new","author":{"authorName":"A","foreignAuthorId":"a"},"editions":[]}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Any"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`{"id":22,"title":"New","foreignBookId":"new","monitored":false}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/book/monitor":
+			http.Error(w, "monitor failed", http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer chaptarrServer.Close()
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "new", Title: "New", BookFormat: BookFormatEbook}); err == nil {
+		t.Fatal("unmonitored add reported success after required monitoring failed")
+	}
+	var count int
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE foreign_id='new'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("failed monitor wrote %d successful request rows", count)
 	}
 }
 
@@ -821,6 +1498,141 @@ func TestBookRequestFailsClosedWhenPreflightUnavailable(t *testing.T) {
 // refresh hasn't applied monitoring), so the request must monitor it (PUT
 // /book/monitor) and kick off a search (BookSearch command) explicitly, or the
 // request would silently fetch nothing.
+func TestBookRequestMonitorsAndSearchesNewAuthorBook(t *testing.T) {
+	var monitorIDs []any
+	var searchCmd map[string]any
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"Ahsoka (Star Wars)","titleSlug":"ahsoka","foreignBookId":"29749107",
+					"author":{"authorName":"E.K. Johnston","foreignAuthorId":"gr:7418796"},
+					"editions":[{"foreignEditionId":"29749107","title":"Ahsoka (Star Wars)","links":[],"images":[]}]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			// New-author add: Chaptarr returns the book unmonitored.
+			_, _ = w.Write([]byte(`{"id":44,"title":"Ahsoka (Star Wars)","foreignBookId":"29749107","monitored":false}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/book/monitor":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			monitorIDs, _ = body["bookIds"].([]any)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/command":
+			_ = json.NewDecoder(r.Body).Decode(&searchCmd)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType: "book", ForeignID: "29749107", Title: "Ahsoka (Star Wars)", BookFormat: BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested", resp.Status)
+	}
+	if len(monitorIDs) != 1 || int(monitorIDs[0].(float64)) != 44 {
+		t.Fatalf("monitor bookIds = %v, want [44] (unmonitored add must be monitored)", monitorIDs)
+	}
+	if searchCmd["name"] != "BookSearch" {
+		t.Fatalf("command = %v, want a BookSearch", searchCmd["name"])
+	}
+	ids, _ := searchCmd["bookIds"].([]any)
+	if len(ids) != 1 || int(ids[0].(float64)) != 44 {
+		t.Fatalf("BookSearch bookIds = %v, want [44]", searchCmd["bookIds"])
+	}
+}
+
+// TestApproveBookRequestNotifiesWithForeignID: approving a pending book request
+// notifies the requester with the Chaptarr foreignBookId in the event data —
+// books store tmdb_id 0, so foreign_id is the only identity a client can
+// deep-link the decision tap to.
+func TestApproveBookRequestNotifiesWithForeignID(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"Ahsoka (Star Wars)","titleSlug":"ahsoka","foreignBookId":"29749107",
+					"author":{"authorName":"E.K. Johnston","foreignAuthorId":"gr:7418796"},
+					"editions":[{"foreignEditionId":"29749107","title":"Ahsoka (Star Wars)","links":[],"images":[]}]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`{"id":42,"title":"Ahsoka (Star Wars)","foreignBookId":"29749107","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	rec := &recordingNotifier{}
+	svc.notifier = rec
+	requireApproval(t, svc)
+	adminID := createTestAdmin(t, svc)
+
+	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType: "book", ForeignID: "29749107", Title: "Ahsoka (Star Wars)", BookFormat: BookFormatEbook,
+	}); err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	pending, err := svc.ListPending()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("ListPending = %+v err=%v, want exactly 1", pending, err)
+	}
+	if pending[0].InstanceName != "Books" {
+		t.Fatalf("pending instance_name = %q, want safe library name Books", pending[0].InstanceName)
+	}
+	if _, err := svc.ApproveRequest(adminID, pending[0].ID, &DecisionOverride{BookFormat: BookFormatAudiobook}); err == nil {
+		t.Fatal("approval changed the requester's stored book format")
+	}
+
+	if _, err := svc.ApproveRequest(adminID, pending[0].ID, nil); err != nil {
+		t.Fatalf("ApproveRequest: %v", err)
+	}
+	if len(rec.userEvents) != 1 {
+		t.Fatalf("user events = %+v, want exactly one decision", rec.userEvents)
+	}
+	ev := rec.userEvents[0]
+	if ev.userID != uid || ev.eventType != "request_decision" || ev.data["decision"] != "approved" {
+		t.Errorf("event = %+v, want an approved request_decision to the requester", ev)
+	}
+	if ev.data["media_type"] != "book" || ev.data["tmdb_id"] != 0 {
+		t.Errorf("event data = %#v, want media_type book with tmdb_id 0", ev.data)
+	}
+	if ev.data["foreign_id"] != "29749107" {
+		t.Errorf("event foreign_id = %v, want 29749107", ev.data["foreign_id"])
+	}
+}
+
+// TestDenyBookRequestNotifiesWithForeignID: the deny event carries the same
+// book identity (denial touches no arr, so only the DB path is exercised).
 func TestDenyBookRequestNotifiesWithForeignID(t *testing.T) {
 	s, uid := newBookTestService(t)
 	rec := &recordingNotifier{}
@@ -928,8 +1740,5 @@ func newChaptarrBookTestService(t *testing.T, chaptarrURL string) (*Service, int
 		t.Fatalf("grant chaptarr: %v", err)
 	}
 
-	service := NewService(database, instance.NewRegistry(store), nil, nil)
-	service.bookMutationTimeout = 250 * time.Millisecond
-	service.bookSettleInterval = time.Millisecond
-	return service, uid
+	return NewService(database, instance.NewRegistry(store), nil, nil), uid
 }

@@ -179,13 +179,12 @@ func TestGetRequestsBookRowsUsePinnedLiveProjection(t *testing.T) {
 			 "author":{"authorName":"B"},"statistics":{"bookFileCount":0}},
 			{"id":4,"title":"On the Way","foreignBookId":"book-3","monitored":true,"mediaType":"audiobook",
 			 "author":{"authorName":"C"},"statistics":{"bookFileCount":0}},
-			{"id":5,"title":"Being Watched","foreignBookId":"book-4","monitored":true,"grabbed":true,"mediaType":"ebook",
+			{"id":5,"title":"Being Watched","foreignBookId":"book-4","monitored":true,"mediaType":"ebook",
 			 "author":{"authorName":"D"},"statistics":{"bookFileCount":0}},
 			{"id":6,"title":"Unknown Format","foreignBookId":"book-5","monitored":true,"mediaType":"paperback",
 			 "author":{"authorName":"E"},"statistics":{"bookFileCount":0}}
 		]`,
-		"/api/v1/queue":   `{"totalRecords":1,"records":[{"bookId":4,"status":"downloading","trackedDownloadStatus":"ok"}]}`,
-		"/api/v1/command": `[]`,
+		"/api/v1/queue": `{"totalRecords":1,"records":[{"bookId":4,"status":"downloading","trackedDownloadStatus":"ok"}]}`,
 	})
 	s, uid := newHistoryTestService(t, "", "", chaptarrSrv.URL)
 	_, instanceID, err := s.resolveChaptarr(uid, "")
@@ -203,7 +202,7 @@ func TestGetRequestsBookRowsUsePinnedLiveProjection(t *testing.T) {
 		{"Half Here", "book-2", "both", StatusRequested},               // one of two -> partial
 		{"On the Way", "book-3", BookFormatAudiobook, StatusRequested}, // healthy queue -> downloading
 		{"Being Watched", "book-4", BookFormatEbook, StatusAvailable},  // monitored, no file -> requested
-		{"Unknown Format", "book-5", BookFormatEbook, StatusRequested}, // physical does not satisfy ebook
+		{"Unknown Format", "book-5", BookFormatEbook, StatusRequested}, // cannot map format -> unknown
 		{"Not Matched", "book-9", BookFormatEbook, StatusRequested},    // absent -> unavailable
 	}
 	for _, row := range seed {
@@ -236,6 +235,9 @@ func TestGetRequestsBookRowsUsePinnedLiveProjection(t *testing.T) {
 		}
 	}
 	for _, request := range requests {
+		if request.Title == "Unknown Format" && request.StatusKnown {
+			t.Fatalf("unresolved history = %+v, want status_known false", request)
+		}
 		if request.Title == "Read Me" && !request.StatusKnown {
 			t.Fatalf("resolved history = %+v, want status_known true", request)
 		}
@@ -258,8 +260,7 @@ func TestGetUserBookStatusOverlaysOwnership(t *testing.T) {
 			{"id":4,"title":"Pending But Here","foreignBookId":"book-3","monitored":true,"mediaType":"ebook",
 			 "author":{"authorName":"C"},"statistics":{"bookFileCount":1}}
 		]`,
-		"/api/v1/queue":   `{"totalRecords":0,"records":[]}`,
-		"/api/v1/command": `[]`,
+		"/api/v1/queue": `{"totalRecords":0,"records":[]}`,
 	})
 	s, uid := newHistoryTestService(t, "", "", chaptarrSrv.URL)
 

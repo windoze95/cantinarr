@@ -861,9 +861,8 @@ func (s *Service) SetUserAuthMethods(userID int64, passwordEnabled, passkeyEnabl
 	return s.userSummaryByID(userID)
 }
 
-// DeleteUser removes a user and all of their disposable dependent records
-// (devices, tokens, passkeys). Durable book work is transferred to the acting
-// administrator. It refuses to delete the acting admin's own account or the
+// DeleteUser removes a user and all of their dependent records (devices,
+// tokens, passkeys). It refuses to delete the acting admin's own account or the
 // last remaining admin.
 func (s *Service) DeleteUser(actorID, userID int64) error {
 	if actorID == userID {
@@ -904,35 +903,6 @@ func (s *Service) DeleteUser(actorID, userID int64) error {
 	}
 	if _, err := tx.Exec("DELETE FROM devices WHERE user_id = ?", userID); err != nil {
 		return fmt.Errorf("delete devices: %w", err)
-	}
-	// Direct book requests are durable work owners, not disposable user data.
-	// Reassign them before the users FK cascade so an in-flight or uncertain
-	// Chaptarr mutation keeps its duplicate-prevention guard and can reconcile
-	// under the acting administrator after the requester account is gone.
-	if _, err := tx.Exec("UPDATE book_request_jobs SET user_id = ? WHERE user_id = ?", actorID, userID); err != nil {
-		return fmt.Errorf("transfer book request jobs: %w", err)
-	}
-	// Pending requests are durable shared work too. Transfer their ownership to
-	// the acting administrator so a linked approval job can still finalize and
-	// any other book subscribers keep their place. Decided rows are retained as
-	// anonymous history instead of being falsely attributed to that admin.
-	if _, err := tx.Exec(
-		"UPDATE request_log SET user_id = ? WHERE user_id = ? AND status = 'pending'",
-		actorID, userID,
-	); err != nil {
-		return fmt.Errorf("transfer pending requests: %w", err)
-	}
-	if _, err := tx.Exec("UPDATE request_log SET user_id = NULL WHERE user_id = ?", userID); err != nil {
-		return fmt.Errorf("anonymize request history: %w", err)
-	}
-	// Older databases added approved_by without ON DELETE SET NULL. Clear it
-	// explicitly so those installations have the same deletion behavior as a
-	// database created from today's schema.
-	if _, err := tx.Exec("UPDATE request_log SET approved_by = NULL WHERE approved_by = ?", userID); err != nil {
-		return fmt.Errorf("anonymize request decisions: %w", err)
-	}
-	if _, err := tx.Exec("UPDATE book_request_jobs SET approved_by = NULL WHERE approved_by = ?", userID); err != nil {
-		return fmt.Errorf("anonymize book approval jobs: %w", err)
 	}
 	if _, err := tx.Exec("DELETE FROM users WHERE id = ?", userID); err != nil {
 		return fmt.Errorf("delete user: %w", err)
