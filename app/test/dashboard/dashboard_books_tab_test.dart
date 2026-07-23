@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -8,6 +9,7 @@ import 'package:cantinarr/core/providers/library_refresh_provider.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
+import 'package:cantinarr/features/dashboard/logic/book_search_ranking.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
@@ -17,6 +19,124 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  test('book lookup fallback removes one complete Unicode code point', () {
+    expect(bookSearchPrefixFallbackTerm('Café📚'), 'Café');
+    expect(bookSearchPrefixFallbackTerm('x'), isNull);
+  });
+
+  testWidgets(
+      'an empty exact lookup retries one prefix and keeps every strong match',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, :adapter) = await _pumpRouter(
+      tester,
+      lookupHandler: (term) {
+        if (term == 'haunting Adeline') return const <Object>[];
+        if (term == 'haunting Adelin') {
+          return [
+            _lookupBook(
+              'Haunting Adeline (Cat and Mouse, #1)',
+              'H.D. Carlton',
+              'book-a',
+            ),
+            _lookupBook(
+              'Haunting Adeline (Cat and Mouse, #1)',
+              'H.D. Carlton',
+              'book-b',
+            ),
+            _lookupBook(
+              'Adeline: A Haunting Historical Portrait',
+              'Norah Vincent',
+              'unrelated',
+            ),
+          ];
+        }
+        return const <Object>[];
+      },
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final searchField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'Search books or authors…',
+    );
+    await tester.enterText(searchField, 'haunting Adeline');
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+
+    expect(adapter.lookupTerms, ['haunting Adeline', 'haunting Adelin']);
+    expect(
+      find.text('Haunting Adeline (Cat and Mouse, #1)'),
+      findsNWidgets(2),
+    );
+    expect(find.text('Adeline: A Haunting Historical Portrait'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('book-result:book-a:book-a:lookup:0')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('book-result:book-b:book-b:lookup:1')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Choose format').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('eBook'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.requestBodies, hasLength(1));
+    expect(
+      adapter.requestBodies.single['book_selection']['lookup_term'],
+      'haunting Adelin',
+    );
+  });
+
+  testWidgets('typing again immediately invalidates an in-flight partial result',
+      (tester) async {
+    _usePhoneSize(tester);
+    final partialLookup = Completer<Object>();
+    final (:router, container: _, :adapter) = await _pumpRouter(
+      tester,
+      lookupHandler: (term) {
+        if (term == 'meditation') return partialLookup.future;
+        if (term == 'meditations') {
+          return [
+            _lookupBook('Meditations', 'Marcus Aurelius', 'full-result'),
+          ];
+        }
+        return const <Object>[];
+      },
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final searchField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'Search books or authors…',
+    );
+    await tester.enterText(searchField, 'meditation');
+    await tester.pump(const Duration(milliseconds: 450));
+    expect(adapter.lookupTerms, ['meditation']);
+
+    await tester.enterText(searchField, 'meditations');
+    partialLookup.complete([
+      _lookupBook('Stale Partial Result', 'Old Author', 'stale'),
+    ]);
+    await tester.pump();
+
+    expect(find.text('Stale Partial Result'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+    expect(adapter.lookupTerms, ['meditation', 'meditations']);
+    expect(find.text('Meditations'), findsOneWidget);
+    expect(find.text('Stale Partial Result'), findsNothing);
+  });
+
   testWidgets('a fully requested search row still opens rich book detail',
       (tester) async {
     _usePhoneSize(tester);
@@ -115,7 +235,7 @@ void main() {
     ));
     expect(original, findsOneWidget);
     expect(
-      find.descendant(of: original, matching: find.text('Recommended')),
+      find.descendant(of: original, matching: find.text('Closest match')),
       findsOneWidget,
     );
 
@@ -130,7 +250,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Which match looks right?'), findsOneWidget);
-    expect(find.text('Recommended'), findsNWidgets(2));
+    expect(find.text('Closest match'), findsNWidgets(2));
     expect(find.textContaining('George Allen & Unwin'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.textContaining('75th Anniversary Edition'),
@@ -157,6 +277,7 @@ void main() {
     expect(adapter.requestBodies.single['foreign_id'], 'hobbit-anniversary');
     expect(adapter.requestBodies.single['book_format'], 'audiobook');
     expect(adapter.requestBodies.single['book_selection'], {
+      'lookup_term': 'the hobbit',
       'foreign_author_id': 'author-tolkien',
       'author_name': 'J. R. R. Tolkien',
       'audiobook': {
@@ -414,6 +535,7 @@ void main() {
     expect(adapter.requestBodies.single['foreign_id'], 'lookup-flock');
     expect(adapter.requestBodies.single['book_format'], 'ebook');
     expect(adapter.requestBodies.single['book_selection'], {
+      'lookup_term': 'flock',
       'foreign_author_id': 'author-flock',
       'author_name': 'Kate Stewart',
     });
@@ -488,7 +610,7 @@ void main() {
     );
     expect(tester.widget<ListTile>(row).onTap, isNull);
     expect(
-      find.descendant(of: row, matching: find.text('Recommended')),
+      find.descendant(of: row, matching: find.text('Closest match')),
       findsNothing,
     );
     expect(adapter.statusForeignIds, isEmpty);
@@ -573,6 +695,7 @@ Future<({
   bool duplicateLibraryRecords = false,
   bool blankIdentity = false,
   bool editionVariants = false,
+  FutureOr<Object> Function(String term)? lookupHandler,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   final adapter = _BooksSearchAdapter(
@@ -584,6 +707,7 @@ Future<({
     duplicateLibraryRecords: duplicateLibraryRecords,
     blankIdentity: blankIdentity,
     editionVariants: editionVariants,
+    lookupHandler: lookupHandler,
   );
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
@@ -626,6 +750,7 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     this.duplicateLibraryRecords = false,
     this.blankIdentity = false,
     this.editionVariants = false,
+    this.lookupHandler,
   });
 
   final bool mismatchedIdentity;
@@ -636,9 +761,11 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   final bool duplicateLibraryRecords;
   final bool blankIdentity;
   final bool editionVariants;
+  final FutureOr<Object> Function(String term)? lookupHandler;
   int statusRequests = 0;
   int libraryRequests = 0;
   bool ebookSubmitted = false;
+  final lookupTerms = <String>[];
   final statusForeignIds = <String>[];
   final requestBodies = <Map<String, dynamic>>[];
 
@@ -767,7 +894,11 @@ class _BooksSearchAdapter implements HttpClientAdapter {
             }
           : {'status': 'unavailable'};
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
-      body = editionVariants
+      final term = options.queryParameters['term']?.toString() ?? '';
+      lookupTerms.add(term);
+      body = lookupHandler != null
+          ? await lookupHandler!(term)
+          : editionVariants
           ? [
               {
                 'title': 'The Hobbit',
@@ -889,3 +1020,17 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   @override
   void close({bool force = false}) {}
 }
+
+Map<String, Object> _lookupBook(
+  String title,
+  String author,
+  String foreignBookId,
+) =>
+    {
+      'title': title,
+      'foreignBookId': foreignBookId,
+      'author': {
+        'id': 0,
+        'authorName': author,
+      },
+    };

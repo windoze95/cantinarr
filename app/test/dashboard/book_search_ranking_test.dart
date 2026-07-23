@@ -50,7 +50,7 @@ void main() {
         () {
       final ranked = rankBookSearchResults('haunting adeline', [
         _book(
-          'Haunting Adeline: Summary and Analysis',
+          'Summary of Haunting Adeline: Cat and Mouse',
           'Study Guides Press',
         ),
         _book('Haunting Adeline', 'H. D. Carlton'),
@@ -59,24 +59,31 @@ void main() {
       expect(ranked, hasLength(2));
       expect(ranked.first.book.title, 'Haunting Adeline');
       expect(ranked.first.recommendationEligible, isTrue);
-      expect(ranked.last.book.title, contains('Summary and Analysis'));
+      expect(ranked.last.book.title, startsWith('Summary of'));
       expect(ranked.last.recommendationEligible, isFalse);
       expect(ranked.last.evidence, 'Companion or study material');
     });
 
     test('does not penalize a bare guide or summary word', () {
-      final ranked = rankBookSearchResults('guide', [
+      final guide = rankBookSearchResults('guide', [
         _book('The Hitchhiker’s Guide to the Galaxy', 'Douglas Adams'),
+      ]).single;
+      final summary = rankBookSearchResults('summary', [
         _book('A Summary', 'Louise Bourgeois'),
+      ]).single;
+
+      expect(guide.recommendationEligible, isTrue);
+      expect(summary.recommendationEligible, isTrue);
+      expect(guide.evidence, isNot('Companion or study material'));
+      expect(summary.evidence, isNot('Companion or study material'));
+    });
+
+    test('does not label an unrelated first row as a confident match', () {
+      final ranked = rankBookSearchResults('haunting adeline', [
+        _book('Completely Different', 'Another Author'),
       ]);
 
-      expect(ranked, everyElement(
-        isA<RankedBookSearchResult>().having(
-          (result) => result.recommendationEligible,
-          'recommendationEligible',
-          isTrue,
-        ),
-      ));
+      expect(ranked.single.recommendationEligible, isFalse);
     });
 
     test('keeps clear multiple-book sets visible but ineligible', () {

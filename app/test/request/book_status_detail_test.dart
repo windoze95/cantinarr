@@ -368,6 +368,47 @@ class _TerminalFailureRetryAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+class _CatalogMismatchSubmissionAdapter implements HttpClientAdapter {
+  var postCount = 0;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method == 'POST') {
+      postCount++;
+      return ResponseBody.fromString(
+        jsonEncode({
+          'code': 'book_match_not_found',
+          'error': 'This catalog match changed.',
+        }),
+        409,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+    }
+    return ResponseBody.fromString(
+      jsonEncode({
+        'status': 'partial',
+        'book_formats': {
+          'ebook': 'available',
+          'audiobook': 'unavailable',
+        },
+      }),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
 RequestService _service(Map<String, dynamic> resp) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
     ..httpClientAdapter = _GetAdapter(resp);
@@ -650,6 +691,74 @@ void main() {
       tester.widget<TextButton>(find.byType(TextButton)).onPressed,
       isNotNull,
     );
+  });
+
+  testWidgets('changed catalog match refreshes before another request',
+      (tester) async {
+    final adapter = _TerminalFailureRetryAdapter(
+      failureCode: 'book_match_not_found',
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    var refreshes = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookRequestButton(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: RequestService(backendDio: dio),
+            onCatalogMatchChanged: () => refreshes++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Refresh matches'), findsOneWidget);
+    await tester.tap(find.text('Refresh matches'));
+    await tester.pumpAndSettle();
+
+    expect(refreshes, 1);
+    expect(adapter.postCount, 0);
+    expect(find.text('Choose again'), findsOneWidget);
+
+    await tester.tap(find.text('Choose again'));
+    for (var attempt = 0;
+        attempt < 50 && adapter.submittedBody.isEmpty;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+    expect(adapter.postCount, 1);
+  });
+
+  testWidgets('a rejected catalog match refreshes instead of blind retrying',
+      (tester) async {
+    final adapter = _CatalogMismatchSubmissionAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    var refreshes = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookRequestButton(
+            foreignId: 'haunting-adeline',
+            title: 'Haunting Adeline',
+            service: RequestService(backendDio: dio),
+            onCatalogMatchChanged: () async => refreshes++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Request Audiobook'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.postCount, 1);
+    expect(refreshes, 1);
+    expect(find.text('Book matches refreshed. Choose the title again.'),
+        findsOneWidget);
   });
 
   testWidgets('partial both request names each outcome and leaves retry open',

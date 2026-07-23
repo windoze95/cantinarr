@@ -117,12 +117,17 @@ class BookPublicationSelection {
 /// publication distinction for that format, so the server may choose its
 /// deterministic best matching edition after revalidating the work/author.
 class BookRequestSelection {
+  /// The catalog query that produced this result. This is only a lookup
+  /// locator; the server still requires the selected work, author, and
+  /// publication identities to match before changing Chaptarr.
+  final String? lookupTerm;
   final String? foreignAuthorId;
   final String? authorName;
   final BookPublicationSelection? ebook;
   final BookPublicationSelection? audiobook;
 
   const BookRequestSelection({
+    this.lookupTerm,
     this.foreignAuthorId,
     this.authorName,
     this.ebook,
@@ -132,6 +137,7 @@ class BookRequestSelection {
   static BookRequestSelection? tryFromJson(Object? value) {
     if (value is! Map) return null;
     final selection = BookRequestSelection(
+      lookupTerm: _bookSelectionString(value['lookup_term']),
       foreignAuthorId: _bookSelectionString(value['foreign_author_id']),
       authorName: _bookSelectionString(value['author_name']),
       ebook: BookPublicationSelection.tryFromJson(value['ebook']),
@@ -141,12 +147,14 @@ class BookRequestSelection {
   }
 
   bool get hasEvidence =>
+      (lookupTerm?.isNotEmpty ?? false) ||
       (foreignAuthorId?.isNotEmpty ?? false) ||
       (authorName?.isNotEmpty ?? false) ||
       ebook != null ||
       audiobook != null;
 
   Map<String, dynamic> toJson() => {
+        if (lookupTerm?.isNotEmpty ?? false) 'lookup_term': lookupTerm,
         if (foreignAuthorId?.isNotEmpty ?? false)
           'foreign_author_id': foreignAuthorId,
         if (authorName?.isNotEmpty ?? false) 'author_name': authorName,

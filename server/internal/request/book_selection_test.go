@@ -1,8 +1,11 @@
 package request
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -11,6 +14,7 @@ import (
 
 func TestBookSelectionCanonicalNormalizationAndValidation(t *testing.T) {
 	selection, err := normalizeBookSelection(&BookSelection{
+		LookupTerm:      "  haunting Adelin  ",
 		ForeignAuthorID: "  hc:author-42  ",
 		AuthorName:      "  Mara Vale  ",
 		Ebook: &BookPublicationSelection{
@@ -32,6 +36,9 @@ func TestBookSelectionCanonicalNormalizationAndValidation(t *testing.T) {
 	if selection.ForeignAuthorID != "hc:author-42" || selection.AuthorName != "Mara Vale" {
 		t.Fatalf("normalized author = %#v", selection)
 	}
+	if selection.LookupTerm != "haunting Adelin" {
+		t.Fatalf("normalized lookup term = %q", selection.LookupTerm)
+	}
 	if selection.Ebook == nil || selection.Ebook.ISBN13 != "978-1-4028-9462-6" ||
 		selection.Ebook.EditionTitle != "First edition" || selection.Ebook.Publisher != "Lantern Press" ||
 		selection.Ebook.Language != "English" {
@@ -45,7 +52,7 @@ func TestBookSelectionCanonicalNormalizationAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeBookSelection: %v", err)
 	}
-	const want = `{"foreign_author_id":"hc:author-42","author_name":"Mara Vale","audiobook":{"foreign_edition_id":"hc:edition-audio-7","asin":"B0EXACT42"}}`
+	const want = `{"lookup_term":"haunting Adelin","foreign_author_id":"hc:author-42","author_name":"Mara Vale","audiobook":{"foreign_edition_id":"hc:edition-audio-7","asin":"B0EXACT42"}}`
 	if encoded != want {
 		t.Fatalf("canonical audiobook JSON = %s, want %s", encoded, want)
 	}
@@ -71,11 +78,89 @@ func TestBookSelectionCanonicalNormalizationAndValidation(t *testing.T) {
 		{name: "negative year", selection: &BookSelection{Ebook: &BookPublicationSelection{Year: -1}}, format: BookFormatEbook},
 		{name: "impossible page count", selection: &BookSelection{Audiobook: &BookPublicationSelection{PageCount: 10_000_001}}, format: BookFormatAudiobook},
 		{name: "oversized author identity", selection: &BookSelection{ForeignAuthorID: tooLongIdentity}, format: BookFormatEbook},
+		{name: "oversized lookup term", selection: &BookSelection{LookupTerm: tooLongText}, format: BookFormatEbook},
 		{name: "oversized publication text", selection: &BookSelection{Ebook: &BookPublicationSelection{EditionTitle: tooLongText}}, format: BookFormatEbook},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := normalizeBookSelection(tc.selection, tc.format); !errors.Is(err, ErrBookSelectionInvalid) {
 				t.Fatalf("normalizeBookSelection error = %v, want ErrBookSelectionInvalid", err)
+			}
+		})
+	}
+}
+
+func TestBookSelectionAuthorIdentityTreatsAbsentSelectorAsUnconstrained(t *testing.T) {
+	locatorOnly, err := normalizeBookSelection(&BookSelection{
+		LookupTerm: "haunting Adelin",
+	}, BookFormatAudiobook)
+	if err != nil {
+		t.Fatalf("normalize locator-only selection: %v", err)
+	}
+	if !bookSelectionMatchesAuthorIdentity(locatorOnly, "hc:author-42", "H.D. Carlton") {
+		t.Fatal("locator-only selection unexpectedly constrained the existing author")
+	}
+
+	if bookSelectionMatchesAuthorIdentity(
+		&BookSelection{ForeignAuthorID: "hc:other-author"},
+		"hc:author-42",
+		"H.D. Carlton",
+	) {
+		t.Fatal("mismatched supplied author provider id was accepted")
+	}
+	if bookSelectionMatchesAuthorIdentity(
+		&BookSelection{AuthorName: "Another Author"},
+		"hc:author-42",
+		"H.D. Carlton",
+	) {
+		t.Fatal("mismatched supplied author name was accepted")
+	}
+	if !bookSelectionMatchesAuthorIdentity(
+		&BookSelection{AuthorName: "  h.d.   carlton "},
+		"hc:author-42",
+		"H.D. Carlton",
+	) {
+		t.Fatal("normalized supplied author name did not match")
+	}
+}
+
+func TestLookupChaptarrBookResultsPreservesMixedTransportErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		errorTerm string
+	}{
+		{name: "locator empty then title errors", errorTerm: "Haunting Adeline"},
+		{name: "locator errors then title empty", errorTerm: "haunting Adelin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var terms []string
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				term := r.URL.Query().Get("term")
+				terms = append(terms, term)
+				if term == tc.errorTerm {
+					http.Error(w, "synthetic lookup failure", http.StatusBadGateway)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`[]`))
+			}))
+			defer upstream.Close()
+
+			results, err := lookupChaptarrBookResultsForRequest(
+				context.Background(),
+				chaptarr.NewClient(upstream.URL, "key"),
+				"hc:haunting-adeline",
+				"Haunting Adeline",
+				&BookSelection{LookupTerm: "haunting Adelin"},
+			)
+			if err == nil {
+				t.Fatalf("lookup returned results %#v without preserving the transport error", results)
+			}
+			var statusErr *chaptarr.HTTPStatusError
+			if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusBadGateway {
+				t.Fatalf("lookup error = %v, want Chaptarr 502", err)
+			}
+			if got, want := strings.Join(terms, "|"), "haunting Adelin|Haunting Adeline"; got != want {
+				t.Fatalf("lookup terms = %q, want %q", got, want)
 			}
 		})
 	}
@@ -119,6 +204,90 @@ func TestSelectedExternalAuthorDisambiguatesOtherwiseIdenticalLookupRows(t *test
 	if got == nil || got.Author == nil || got.Author.ForeignAuthorID != "hc:author-selected" {
 		t.Fatalf("selected lookup = %#v, want selected external author", got)
 	}
+}
+
+func TestVerifiedBookRequestReplaysTheLookupTermThatFoundTheWork(t *testing.T) {
+	lookupResult := func(upstream *verifiedBookUpstream, foreignBookID string) map[string]any {
+		return map[string]any{
+			"title":         upstream.title,
+			"foreignBookId": foreignBookID,
+			"author": map[string]any{
+				"authorName":      upstream.authorName,
+				"foreignAuthorId": upstream.foreignAuthorID,
+			},
+			// This is the real discovery shape that must remain requestable.
+			// `isEbook` can help presentation, but it is not authoritative
+			// publication identity and is deliberately absent from the selection.
+			"editions": []map[string]any{{
+				"foreignEditionId": "lookup-only",
+				"isEbook":          false,
+				"format":           nil,
+			}},
+		}
+	}
+
+	t.Run("successful discovery term survives full title miss", func(t *testing.T) {
+		upstream := newVerifiedBookUpstream(
+			"Haunting Adeline (Cat and Mouse, #1)",
+			"hc:haunting-adeline",
+		)
+		upstream.lookupResultsByTerm = map[string][]map[string]any{
+			"haunting Adelin": {lookupResult(upstream, upstream.foreignBookID)},
+			upstream.title:    {},
+		}
+		service, userID := newVerifiedMutationService(t, upstream)
+
+		response, err := service.CreateMediaRequest(userID, &CreateRequest{
+			MediaType:  "book",
+			ForeignID:  upstream.foreignBookID,
+			Title:      upstream.title,
+			BookFormat: BookFormatAudiobook,
+			BookSelection: &BookSelection{
+				LookupTerm:      "haunting Adelin",
+				ForeignAuthorID: upstream.foreignAuthorID,
+				AuthorName:      upstream.authorName,
+			},
+		})
+		if err != nil {
+			t.Fatalf("CreateMediaRequest: %v", err)
+		}
+		if response.Status != StatusRequested || upstream.searchCalls != 1 {
+			t.Fatalf("response=%#v searches=%d, want one requested audiobook", response, upstream.searchCalls)
+		}
+		if len(upstream.lookupTerms) == 0 || upstream.lookupTerms[0] != "haunting Adelin" {
+			t.Fatalf("lookup terms = %#v, want discovery term first", upstream.lookupTerms)
+		}
+	})
+
+	t.Run("locator cannot substitute another foreign work", func(t *testing.T) {
+		upstream := newVerifiedBookUpstream(
+			"Haunting Adeline (Cat and Mouse, #1)",
+			"hc:haunting-adeline",
+		)
+		upstream.lookupResultsByTerm = map[string][]map[string]any{
+			"haunting Adelin": {lookupResult(upstream, "hc:different-work")},
+			upstream.title:    {},
+		}
+		service, userID := newVerifiedMutationService(t, upstream)
+
+		_, err := service.CreateMediaRequest(userID, &CreateRequest{
+			MediaType:  "book",
+			ForeignID:  upstream.foreignBookID,
+			Title:      upstream.title,
+			BookFormat: BookFormatAudiobook,
+			BookSelection: &BookSelection{
+				LookupTerm:      "haunting Adelin",
+				ForeignAuthorID: upstream.foreignAuthorID,
+				AuthorName:      upstream.authorName,
+			},
+		})
+		if !errors.Is(err, ErrBookMatchNotFound) {
+			t.Fatalf("CreateMediaRequest error = %v, want ErrBookMatchNotFound", err)
+		}
+		if len(upstream.seedBodies) != 0 || upstream.searchCalls != 0 {
+			t.Fatalf("wrong locator result mutated Chaptarr: seed=%d search=%d", len(upstream.seedBodies), upstream.searchCalls)
+		}
+	})
 }
 
 func TestExactPublicationSelectionUsesParentWorkScopeInsteadOfEditionLabel(t *testing.T) {
@@ -355,6 +524,7 @@ func TestBookSelectionSurvivesPendingApprovalAndDurableJobReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	selection, err := normalizeBookSelection(&BookSelection{
+		LookupTerm:      "durable select",
 		ForeignAuthorID: upstream.foreignAuthorID,
 		AuthorName:      upstream.authorName,
 		Audiobook: &BookPublicationSelection{

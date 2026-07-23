@@ -418,6 +418,121 @@ void main() {
       'audio-edition-one',
     );
   });
+
+  testWidgets(
+      'discovery-only format hints stay requestable without a false exact selection',
+      (tester) async {
+    final book = ChaptarrBook.fromJson({
+      'title': 'Haunting Adeline (Cat and Mouse, #1)',
+      'foreignBookId': 'haunting-adeline',
+      'author': {
+        'authorName': 'H.D. Carlton',
+        'foreignAuthorId': 'author-hd-carlton',
+      },
+      'editions': [
+        {
+          'foreignEditionId': 'lookup-only-audio',
+          'title': 'Haunting Adeline',
+          'isEbook': false,
+          'format': null,
+        },
+      ],
+    });
+    BookRequestTarget? selected;
+    await tester.pumpWidget(MaterialApp(
+      theme: AppTheme.dark,
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              selected = await showBookRequestWizard(
+                context,
+                request: const BookRequestPickerContext(
+                  foreignId: 'haunting-adeline',
+                  title: 'Haunting Adeline (Cat and Mouse, #1)',
+                  instanceId: 'books',
+                  detail: BookRequestStatusDetail(),
+                  requestableFormats: [BookRequestFormat.audiobook],
+                ),
+                selectedBook: book,
+                candidates: [
+                  BookRequestWizardCandidate(
+                    book: book,
+                    foreignId: 'haunting-adeline',
+                    lookupTerm: 'haunting Adelin',
+                    rank: 0,
+                    matchEvidence: 'Title starts with your search',
+                  ),
+                ],
+              );
+            },
+            child: const Text('Open request'),
+          ),
+        ),
+      ),
+    ));
+
+    await tester.tap(find.text('Open request'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Which match looks right?'), findsNothing);
+    expect(selected?.foreignId, 'haunting-adeline');
+    expect(selected?.selection?.lookupTerm, 'haunting Adelin');
+    expect(selected?.selection?.foreignAuthorId, 'author-hd-carlton');
+    // `isEbook: false` is useful discovery metadata, but the server cannot
+    // safely validate it as Chaptarr's authoritative publication format.
+    expect(selected?.selection?.audiobook, isNull);
+  });
+
+  testWidgets('an authorless selected row keeps the query that found it',
+      (tester) async {
+    final book = ChaptarrBook.fromJson({
+      'title': 'The Lost Chronicle',
+      'foreignBookId': 'lost-chronicle',
+      'mediaType': 'Audiobook',
+    });
+    BookRequestTarget? selected;
+    await tester.pumpWidget(MaterialApp(
+      theme: AppTheme.dark,
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              selected = await showBookRequestWizard(
+                context,
+                request: const BookRequestPickerContext(
+                  foreignId: 'lost-chronicle',
+                  title: 'The Lost Chronicle',
+                  instanceId: 'books',
+                  detail: BookRequestStatusDetail(),
+                  requestableFormats: [BookRequestFormat.audiobook],
+                ),
+                selectedBook: book,
+                candidates: [
+                  BookRequestWizardCandidate(
+                    book: book,
+                    foreignId: 'lost-chronicle',
+                    lookupTerm: 'lost chronicl',
+                    rank: 0,
+                    matchEvidence: 'Title starts with your search',
+                  ),
+                ],
+              );
+            },
+            child: const Text('Open request'),
+          ),
+        ),
+      ),
+    ));
+
+    await tester.tap(find.text('Open request'));
+    await tester.pumpAndSettle();
+
+    expect(selected?.foreignId, 'lost-chronicle');
+    expect(selected?.selection?.lookupTerm, 'lost chronicl');
+    expect(selected?.selection?.foreignAuthorId, isNull);
+    expect(selected?.selection?.authorName, isNull);
+  });
 }
 
 ChaptarrBook _book(
