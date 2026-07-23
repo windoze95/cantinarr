@@ -46,10 +46,10 @@ List<RankedBookSearchResult> rankBookSearchResults(
   return ranked;
 }
 
-/// Returns one autocomplete-style fallback by removing the final Unicode code
-/// point from [query]. This is deliberately bounded to one retry: Chaptarr can
-/// cache an empty exact lookup even while the immediately shorter prefix still
-/// returns the intended work.
+/// Returns the next autocomplete-style fallback by removing the final Unicode
+/// code point from [query]. Callers bound how many progressively shorter
+/// prefixes they try: Chaptarr can cache an empty exact lookup while a broader
+/// prefix still returns the intended work.
 String? bookSearchPrefixFallbackTerm(String query) {
   final trimmed = query.trim();
   final codePoints = trimmed.runes.toList(growable: false);
