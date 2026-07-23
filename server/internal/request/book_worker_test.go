@@ -1189,15 +1189,52 @@ func TestBookRequestWorkerGuardsUncertainSearchAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted.wakeBookRequestWorker()
-	waitForBookJobCount(t, restarted, 0)
+	deadline = time.Now().Add(time.Second)
+	var state string
+	for time.Now().Before(deadline) {
+		var attempts int
+		_ = restarted.db.QueryRow(
+			"SELECT state, attempt_count FROM book_request_jobs WHERE id = ?", job.ID,
+		).Scan(&state, &attempts)
+		if state == "outcome_unknown" && attempts >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	upstream.mu.Lock()
-	defer upstream.mu.Unlock()
-	if upstream.searchCalls != 2 {
-		t.Fatalf("expired guard search calls = %d, want one deliberate retry after the original", upstream.searchCalls)
+	guardExpiredCalls := upstream.searchCalls
+	upstream.mu.Unlock()
+	if state != "outcome_unknown" || guardExpiredCalls != 1 {
+		t.Fatalf("elapsed evidence window state=%s searches=%d, want outcome_unknown/1", state, guardExpiredCalls)
+	}
+
+	if _, err := restarted.db.Exec(
+		`UPDATE book_request_jobs SET created_at = datetime('now', '-31 minutes'),
+		 state = 'retry_wait', next_attempt_at = datetime('now', '+1 day') WHERE id = ?`, job.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	restarted.wakeBookRequestWorker()
+	deadline = time.Now().Add(2 * time.Second)
+	var code string
+	for time.Now().Before(deadline) {
+		_ = restarted.db.QueryRow(
+			"SELECT state, last_error_code FROM book_request_jobs WHERE id = ?", job.ID,
+		).Scan(&state, &code)
+		if state == "failed" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	upstream.mu.Lock()
+	finalSearchCalls := upstream.searchCalls
+	upstream.mu.Unlock()
+	if state != "failed" || code != "book_request_unverified" || finalSearchCalls != 1 {
+		t.Fatalf("expired search = %s/%s searches=%d, want failed/book_request_unverified/1", state, code, finalSearchCalls)
 	}
 }
 
-func TestExpiredInvalidDurableSearchGuardResetsExactPreflightAndRecovers(t *testing.T) {
+func TestElapsedInvalidDurableSearchGuardNeverReplays(t *testing.T) {
 	for _, mode := range []string{"missing", "identity_changed"} {
 		t.Run(mode, func(t *testing.T) {
 			upstream := newVerifiedBookUpstream("Invalid Search Guard", "invalid-search-guard")
@@ -1220,6 +1257,11 @@ func TestExpiredInvalidDurableSearchGuardResetsExactPreflightAndRecovers(t *test
 			); err != nil {
 				t.Fatal(err)
 			}
+			if _, err := service.db.Exec(
+				"UPDATE book_request_jobs SET phase_started_at = datetime('now', '-3 minutes') WHERE id = ?", job.ID,
+			); err != nil {
+				t.Fatal(err)
+			}
 			client, _, err := service.resolveChaptarr(userID, instanceID)
 			if err != nil {
 				t.Fatal(err)
@@ -1229,7 +1271,7 @@ func TestExpiredInvalidDurableSearchGuardResetsExactPreflightAndRecovers(t *test
 				t.Fatal(err)
 			}
 			if err := service.restoreDurableSearchGuard(context.Background(), client, job); !errors.Is(err, ErrBookSearchUnconfirmed) {
-				t.Fatalf("pre-expiry guard error = %v, want search unconfirmed", err)
+				t.Fatalf("elapsed evidence-window error = %v, want search unconfirmed", err)
 			}
 			var phase string
 			var guardedBookID int
@@ -1237,11 +1279,10 @@ func TestExpiredInvalidDurableSearchGuardResetsExactPreflightAndRecovers(t *test
 				t.Fatal(err)
 			}
 			if phase != "search_inflight" || guardedBookID != bookID {
-				t.Fatalf("pre-expiry guard became phase=%q book=%d", phase, guardedBookID)
+				t.Fatalf("elapsed guard became phase=%q book=%d", phase, guardedBookID)
 			}
-
 			if _, err := service.db.Exec(
-				"UPDATE book_request_jobs SET phase_started_at = datetime('now', '-3 minutes') WHERE id = ?", job.ID,
+				"UPDATE book_request_jobs SET created_at = datetime('now', '-31 minutes') WHERE id = ?", job.ID,
 			); err != nil {
 				t.Fatal(err)
 			}
@@ -1249,42 +1290,15 @@ func TestExpiredInvalidDurableSearchGuardResetsExactPreflightAndRecovers(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := service.restoreDurableSearchGuard(context.Background(), client, job); err != nil {
-				t.Fatalf("expired guard reset: %v", err)
-			}
-			if err := service.db.QueryRow("SELECT phase, book_id FROM book_request_jobs WHERE id = ?", job.ID).Scan(&phase, &guardedBookID); err != nil {
-				t.Fatal(err)
-			}
-			if phase != "queued" || guardedBookID != 0 {
-				t.Fatalf("expired guard reset to phase=%q book=%d", phase, guardedBookID)
-			}
-			if mode == "identity_changed" {
-				upstream.mu.Lock()
-				upstream.driftIdentityOnRead = false
-				upstream.rows[bookID].book.ForeignBookID = upstream.foreignBookID
-				upstream.mu.Unlock()
-			}
-			service.runClaimedBookRequestJob(context.Background(), job.ID)
-			var remaining int
-			if err := service.db.QueryRow("SELECT COUNT(*) FROM book_request_jobs WHERE id = ?", job.ID).Scan(&remaining); err != nil {
-				t.Fatal(err)
-			}
-			if remaining != 0 {
-				t.Fatalf("recovered guard left %d durable jobs", remaining)
+			if err := service.restoreDurableSearchGuard(context.Background(), client, job); !errors.Is(err, errBookReconciliationExpired) {
+				t.Fatalf("expired guard error = %v, want reconciliation expiry", err)
 			}
 			upstream.mu.Lock()
 			searchCalls := upstream.searchCalls
-			searchedIDs := append([]int(nil), upstream.searchBookIDs...)
 			seedCalls := len(upstream.seedBodies)
 			upstream.mu.Unlock()
-			if searchCalls != 2 || len(searchedIDs) != 1 {
-				t.Fatalf("recovered searches=%d ids=%v, want one guarded plus one deliberate retry", searchCalls, searchedIDs)
-			}
-			if mode == "missing" && seedCalls != 1 {
-				t.Fatalf("missing target recovery seed calls=%d, want 1", seedCalls)
-			}
-			if mode == "identity_changed" && seedCalls != 0 {
-				t.Fatalf("identity recovery seed calls=%d, want 0", seedCalls)
+			if searchCalls != 1 || seedCalls != 0 {
+				t.Fatalf("invalid guard replayed work: searches=%d seeds=%d", searchCalls, seedCalls)
 			}
 		})
 	}
@@ -1569,6 +1583,9 @@ func TestBookRequestWorkerDoesNotReclaimCurrentGenerationClaim(t *testing.T) {
 	if err := service.reclaimStaleBookRequestJobClaims(); err != nil {
 		t.Fatal(err)
 	}
+	if err := service.reclaimExpiredBookRequestJobClaims(); err != nil {
+		t.Fatal(err)
+	}
 
 	var state, generation string
 	if err := service.db.QueryRow(
@@ -1578,6 +1595,68 @@ func TestBookRequestWorkerDoesNotReclaimCurrentGenerationClaim(t *testing.T) {
 	}
 	if state != "running" || generation != service.bookWorkerGeneration {
 		t.Fatalf("live claim changed to state %q generation %q", state, generation)
+	}
+}
+
+func TestBookRequestWorkerReclaimsExpiredCurrentGenerationClaim(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		phase     string
+		wantState string
+	}{
+		{name: "queued", phase: "queued", wantState: "retry_wait"},
+		{name: "uncertain seed", phase: "seed_inflight", wantState: "outcome_unknown"},
+		{name: "uncertain search", phase: "search_inflight", wantState: "outcome_unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := newVerifiedBookUpstream("Expired Live Claim", "expired-live-claim-"+tc.phase)
+			service, userID := newVerifiedMutationService(t, upstream)
+			job, _, _ := prepareWorkerTestJob(t, service, userID, upstream, BookFormatEbook)
+			service.bookWorkerGeneration = "live-generation"
+			if _, err := service.db.Exec(
+				`UPDATE book_request_jobs SET phase = ?, proc_generation = ?,
+				 updated_at = datetime('now', '-6 minutes') WHERE id = ?`,
+				tc.phase, service.bookWorkerGeneration, job.ID,
+			); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := service.reclaimExpiredBookRequestJobClaims(); err != nil {
+				t.Fatal(err)
+			}
+			var state, generation, code string
+			if err := service.db.QueryRow(
+				"SELECT state, proc_generation, last_error_code FROM book_request_jobs WHERE id = ?", job.ID,
+			).Scan(&state, &generation, &code); err != nil {
+				t.Fatal(err)
+			}
+			if state != tc.wantState || generation != "" || code != "book_request_retry" {
+				t.Fatalf("expired live claim = %s generation=%q code=%s", state, generation, code)
+			}
+		})
+	}
+}
+
+func TestBookRequestWorkerPollReclaimsExpiredRunningClaim(t *testing.T) {
+	upstream := newVerifiedBookUpstream("Polled Expired Claim", "polled-expired-claim")
+	service, userID := newVerifiedMutationService(t, upstream)
+	job, _, _ := prepareWorkerTestJob(t, service, userID, upstream, BookFormatEbook)
+	service.bookWorkerGeneration = "live-generation"
+	if _, err := service.db.Exec(
+		`UPDATE book_request_jobs SET proc_generation = ?,
+		 updated_at = datetime('now', '-6 minutes') WHERE id = ?`,
+		service.bookWorkerGeneration, job.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	service.runDueBookRequestJobs(context.Background())
+	waitForBookJobCount(t, service, 0)
+	upstream.mu.Lock()
+	seedCalls, searchCalls := len(upstream.seedBodies), upstream.searchCalls
+	upstream.mu.Unlock()
+	if seedCalls != 1 || searchCalls != 1 {
+		t.Fatalf("polled expired claim seed=%d search=%d, want 1/1", seedCalls, searchCalls)
 	}
 }
 
@@ -1737,6 +1816,21 @@ func TestInflightBookJobSurvivesInstanceFingerprintDrift(t *testing.T) {
 	if state != "outcome_unknown" || code != "book_instance_changed" {
 		t.Fatalf("drifted inflight job = %s/%s, want retained outcome_unknown/book_instance_changed", state, code)
 	}
+	if _, err := service.db.Exec(
+		`UPDATE book_request_jobs SET created_at = datetime('now', '-31 minutes'),
+		 phase_started_at = datetime('now', '-31 minutes'), state = 'retry_wait',
+		 next_attempt_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		job.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	service.runDueBookRequestJobs(context.Background())
+	if err := service.db.QueryRow("SELECT state, last_error_code FROM book_request_jobs WHERE id = ?", job.ID).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || code != "book_request_unverified" {
+		t.Fatalf("expired drifted job = %s/%s, want failed/book_request_unverified", state, code)
+	}
 }
 
 func TestDurableSeedRejectsSameWorkRowWithWrongAuthor(t *testing.T) {
@@ -1766,9 +1860,26 @@ func TestDurableSeedRejectsSameWorkRowWithWrongAuthor(t *testing.T) {
 		t.Fatalf("wrong-author seed advanced to %s/%s", phase, state)
 	}
 	upstream.mu.Lock()
-	defer upstream.mu.Unlock()
-	if len(upstream.monitorIDs) != 0 || upstream.searchCalls != 0 {
-		t.Fatalf("wrong-author seed mutated monitor=%v search=%d", upstream.monitorIDs, upstream.searchCalls)
+	monitorCalls, searchCalls := len(upstream.monitorIDs), upstream.searchCalls
+	upstream.mu.Unlock()
+	if monitorCalls != 0 || searchCalls != 0 {
+		t.Fatalf("wrong-author seed mutated monitor=%d search=%d", monitorCalls, searchCalls)
+	}
+	if _, err := service.db.Exec(
+		`UPDATE book_request_jobs SET created_at = datetime('now', '-31 minutes'),
+		 phase_started_at = datetime('now', '-31 minutes'), state = 'retry_wait',
+		 next_attempt_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		job.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	service.runDueBookRequestJobs(context.Background())
+	var code string
+	if err := service.db.QueryRow("SELECT state, last_error_code FROM book_request_jobs WHERE id = ?", job.ID).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || code != "book_request_unverified" {
+		t.Fatalf("expired wrong-author seed = %s/%s, want failed/book_request_unverified", state, code)
 	}
 }
 
@@ -1784,13 +1895,17 @@ func forceBookJobDue(t *testing.T, service *Service, jobID int64) {
 	service.runDueBookRequestJobs(context.Background())
 }
 
-func TestBookRequestWorkerRetriesAbsentSeedOnlyAfterOutcomeTTL(t *testing.T) {
+func TestBookRequestWorkerStopsReconcilingAbsentSeedAtLifetime(t *testing.T) {
 	upstream := newVerifiedBookUpstream("Expired Seed", "expired-seed")
 	upstream.dropAddWithoutCommit[BookFormatEbook] = true
 	service, userID := newVerifiedMutationService(t, upstream)
 	service.bookMutationTimeout = 20 * time.Millisecond
+	_, instanceID, err := service.resolveChaptarr(userID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if _, err := service.CreateMediaRequest(userID, &CreateRequest{
+	if _, err = service.CreateMediaRequest(userID, &CreateRequest{
 		MediaType: "book", ForeignID: upstream.foreignBookID, Title: upstream.title, BookFormat: BookFormatEbook,
 	}); !errors.Is(err, ErrBookOutcomePending) {
 		t.Fatalf("initial request error = %v, want outcome_pending", err)
@@ -1811,7 +1926,7 @@ func TestBookRequestWorkerRetriesAbsentSeedOnlyAfterOutcomeTTL(t *testing.T) {
 	if preExpirySeeds != 1 {
 		t.Fatalf("seed POSTs before TTL = %d, want original only", preExpirySeeds)
 	}
-	var guardedPhase string
+	var guardedPhase, expiredState string
 	var guardedPhaseAt time.Time
 	if err := service.db.QueryRow(
 		"SELECT phase, phase_started_at FROM book_request_jobs WHERE id = ?", jobID,
@@ -1830,20 +1945,275 @@ func TestBookRequestWorkerRetriesAbsentSeedOnlyAfterOutcomeTTL(t *testing.T) {
 	}
 	forceBookJobDue(t, service, jobID)
 	upstream.mu.Lock()
-	postExpirySeeds := len(upstream.seedBodies)
+	oldPhaseSeeds := len(upstream.seedBodies)
 	upstream.mu.Unlock()
-	if postExpirySeeds != 2 {
-		t.Fatalf("seed POSTs after TTL = %d, want exactly one renewed POST", postExpirySeeds)
+	if oldPhaseSeeds != 1 {
+		t.Fatalf("old seed phase POSTs = %d, want original only", oldPhaseSeeds)
 	}
-	var renewedPhase string
-	var renewedPhaseAt time.Time
 	if err := service.db.QueryRow(
-		"SELECT phase, phase_started_at FROM book_request_jobs WHERE id = ?", jobID,
-	).Scan(&renewedPhase, &renewedPhaseAt); err != nil {
+		"SELECT phase, state FROM book_request_jobs WHERE id = ?", jobID,
+	).Scan(&guardedPhase, &expiredState); err != nil {
 		t.Fatal(err)
 	}
-	if renewedPhase != "seed_inflight" || time.Since(renewedPhaseAt) > time.Minute {
-		t.Fatalf("renewed seed intent = %s at %s, want fresh seed_inflight timestamp", renewedPhase, renewedPhaseAt)
+	if guardedPhase != "seed_inflight" || expiredState != "outcome_unknown" {
+		t.Fatalf("old seed phase = %s/%s, want guarded seed_inflight/outcome_unknown", guardedPhase, expiredState)
+	}
+
+	if _, err := service.db.Exec(
+		`UPDATE book_request_jobs SET phase_started_at = CURRENT_TIMESTAMP,
+		 created_at = datetime('now', '-31 minutes'), attempt_count = 130,
+		 state = 'retry_wait', next_attempt_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		jobID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	service.runDueBookRequestJobs(context.Background())
+	upstream.mu.Lock()
+	latePhaseSeeds := len(upstream.seedBodies)
+	upstream.mu.Unlock()
+	if latePhaseSeeds != 1 {
+		t.Fatalf("fresh seed guard POSTs = %d, want original only", latePhaseSeeds)
+	}
+	var guardedAttempts int
+	if err := service.db.QueryRow(
+		"SELECT state, attempt_count FROM book_request_jobs WHERE id = ?", jobID,
+	).Scan(&expiredState, &guardedAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if expiredState != "outcome_unknown" || guardedAttempts != 131 {
+		t.Fatalf("fresh seed guard = %s attempts=%d, want outcome_unknown at 131", expiredState, guardedAttempts)
+	}
+
+	if _, err := service.db.Exec(
+		`UPDATE book_request_jobs SET phase_started_at = datetime('now', '-31 minutes'),
+		 next_attempt_at = datetime('now', '+1 day') WHERE id = ?`, jobID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	service.runDueBookRequestJobs(context.Background())
+	upstream.mu.Lock()
+	postExpirySeeds := len(upstream.seedBodies)
+	upstream.mu.Unlock()
+	if postExpirySeeds != 1 {
+		t.Fatalf("seed POSTs after lifetime = %d, want original only", postExpirySeeds)
+	}
+	var failureCode string
+	var expiredAttempts int
+	if err := service.db.QueryRow(
+		"SELECT state, last_error_code, attempt_count FROM book_request_jobs WHERE id = ?", jobID,
+	).Scan(&expiredState, &failureCode, &expiredAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if expiredState != "failed" || failureCode != "book_request_unverified" || expiredAttempts != 132 {
+		t.Fatalf("expired seed = %s/%s attempts=%d, want failed/book_request_unverified at 132", expiredState, failureCode, expiredAttempts)
+	}
+	active, err := service.hasActiveBookRequestJob(instanceID, upstream.foreignBookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Fatal("expired seed still owns the title")
+	}
+	service.runDueBookRequestJobs(context.Background())
+	var unchangedAttempts int
+	if err := service.db.QueryRow("SELECT attempt_count FROM book_request_jobs WHERE id = ?", jobID).Scan(&unchangedAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if unchangedAttempts != expiredAttempts {
+		t.Fatalf("terminal seed attempts advanced from %d to %d", expiredAttempts, unchangedAttempts)
+	}
+
+	upstream.mu.Lock()
+	upstream.dropAddWithoutCommit[BookFormatEbook] = false
+	upstream.mu.Unlock()
+	response, err := service.CreateMediaRequest(userID, &CreateRequest{
+		MediaType: "book", ForeignID: upstream.foreignBookID, Title: upstream.title, BookFormat: BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatalf("explicit retry: %v", err)
+	}
+	if response.Status != StatusRequested {
+		t.Fatalf("explicit retry status = %s, want requested", response.Status)
+	}
+	upstream.mu.Lock()
+	retrySeeds := len(upstream.seedBodies)
+	upstream.mu.Unlock()
+	if retrySeeds != 2 {
+		t.Fatalf("explicit retry seed POSTs = %d, want original plus one deliberate retry", retrySeeds)
+	}
+}
+
+func TestExpiredBookSeedReadsVisibleOutcomeWithoutContinuingWrites(t *testing.T) {
+	upstream := newVerifiedBookUpstream("Visible Expired Seed", "visible-expired-seed")
+	upstream.addExisting(BookFormatEbook, false)
+	upstream.mu.Lock()
+	upstream.seedBodies = append(upstream.seedBodies, map[string]any{"mediaType": BookFormatEbook})
+	upstream.mu.Unlock()
+	service, userID := newVerifiedMutationService(t, upstream)
+	job, _, _ := prepareWorkerTestJob(t, service, userID, upstream, BookFormatEbook)
+	if err := service.setBookJobPhase(
+		job.ID, "seed_inflight", BookFormatEbook, 0,
+		upstream.foreignAuthorID, upstream.authorName, 0, false,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.db.Exec(
+		`UPDATE book_request_jobs SET created_at = datetime('now', '-31 minutes'),
+		 phase_started_at = datetime('now', '-31 minutes'), state = 'retry_wait',
+		 next_attempt_at = datetime('now', '+1 day') WHERE id = ?`, job.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	service.bookWorkerGeneration = newBookWorkerGeneration()
+	service.runDueBookRequestJobs(context.Background())
+	var state, code string
+	if err := service.db.QueryRow(
+		"SELECT state, last_error_code FROM book_request_jobs WHERE id = ?", job.ID,
+	).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || code != "book_request_unverified" {
+		t.Fatalf("expired visible seed = %s/%s, want failed/book_request_unverified", state, code)
+	}
+
+	upstream.mu.Lock()
+	seedCalls := len(upstream.seedBodies)
+	monitorCalls := len(upstream.monitorIDs)
+	searchCalls := upstream.searchCalls
+	upstream.mu.Unlock()
+	if seedCalls != 1 || monitorCalls != 0 || searchCalls != 0 {
+		t.Fatalf("expired visible seed mutated Chaptarr: seed=%d monitor=%d search=%d", seedCalls, monitorCalls, searchCalls)
+	}
+}
+
+func TestExpiredAcknowledgedSearchPreservesProofAcrossRetry(t *testing.T) {
+	upstream := newVerifiedBookUpstream("Acknowledged Expiry", "acknowledged-expiry")
+	bookID := upstream.addExisting(BookFormatAudiobook, true)
+	upstream.mu.Lock()
+	upstream.author.AudiobookMonitorFuture = true
+	upstream.searchCalls = 1
+	upstream.searchBookIDs = []int{bookID}
+	upstream.mu.Unlock()
+	service, userID := newVerifiedMutationService(t, upstream)
+	job, resolved, _ := prepareWorkerTestJob(t, service, userID, upstream, BookFormatAudiobook)
+	if err := service.setBookJobPhase(
+		job.ID, "search_inflight", BookFormatAudiobook, upstream.author.ID,
+		upstream.foreignAuthorID, upstream.authorName, bookID, true,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.db.Exec(
+		`UPDATE book_request_jobs SET created_at = datetime('now', '-31 minutes'),
+		 phase_started_at = datetime('now', '-3 minutes') WHERE id = ?`, job.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if retained := service.deferDirectBookJob(job.ID, errors.New("temporary upstream failure")); retained {
+		t.Fatal("expired acknowledged search remained active")
+	}
+
+	var state, code, audiobookStatus string
+	if err := service.db.QueryRow(
+		"SELECT state, last_error_code, audiobook_status FROM book_request_jobs WHERE id = ?", job.ID,
+	).Scan(&state, &code, &audiobookStatus); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || code != "book_request_unverified" || audiobookStatus != StatusRequested {
+		t.Fatalf("expired acknowledged search = %s/%s checkpoint=%s", state, code, audiobookStatus)
+	}
+
+	response, err := service.CreateMediaRequest(userID, &CreateRequest{
+		MediaType: "book", ForeignID: resolved.foreignID, Title: resolved.title, BookFormat: BookFormatAudiobook,
+	})
+	if err != nil {
+		t.Fatalf("retry acknowledged search: %v", err)
+	}
+	if response.Status != StatusRequested {
+		t.Fatalf("retry acknowledged status = %s, want requested", response.Status)
+	}
+	upstream.mu.Lock()
+	searchCalls := upstream.searchCalls
+	upstream.mu.Unlock()
+	if searchCalls != 1 {
+		t.Fatalf("acknowledged search replayed %d times, want original only", searchCalls)
+	}
+}
+
+func TestExpiredSearchProofDiscoveredDuringFinalReconciliationIsDurable(t *testing.T) {
+	upstream := newVerifiedBookUpstream("Discovered Search Proof", "discovered-search-proof")
+	bookID := upstream.addExisting(BookFormatAudiobook, true)
+	upstream.mu.Lock()
+	upstream.author.AudiobookMonitorFuture = true
+	upstream.searchCalls = 1
+	upstream.searchBookIDs = []int{bookID}
+	upstream.activeSearch = true
+	upstream.activeSearchBookID = bookID
+	upstream.bookListStatus = http.StatusBadGateway
+	upstream.mu.Unlock()
+	service, userID := newVerifiedMutationService(t, upstream)
+	job, _, _ := prepareWorkerTestJob(t, service, userID, upstream, BookFormatAudiobook)
+	if err := service.setBookJobPhase(
+		job.ID, "search_inflight", BookFormatAudiobook, upstream.author.ID,
+		upstream.foreignAuthorID, upstream.authorName, bookID, false,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.db.Exec(
+		`UPDATE book_request_jobs SET created_at = datetime('now', '-31 minutes'),
+		 phase_started_at = datetime('now', '-3 minutes'), state = 'retry_wait',
+		 next_attempt_at = datetime('now', '+1 day') WHERE id = ?`, job.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	service.bookWorkerGeneration = newBookWorkerGeneration()
+	service.runDueBookRequestJobs(context.Background())
+
+	var jobCount, requested int
+	if err := service.db.QueryRow(
+		"SELECT COUNT(*) FROM book_request_jobs WHERE id = ?", job.ID,
+	).Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.db.QueryRow(
+		`SELECT COUNT(*) FROM request_log
+		 WHERE user_id = ? AND foreign_id = ? AND book_format = ? AND status = ?`,
+		userID, upstream.foreignBookID, BookFormatAudiobook, StatusRequested,
+	).Scan(&requested); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 0 || requested != 1 {
+		t.Fatalf("discovered search proof left jobs=%d requested=%d, want 0/1", jobCount, requested)
+	}
+	upstream.mu.Lock()
+	searchCalls := upstream.searchCalls
+	upstream.mu.Unlock()
+	if searchCalls != 1 {
+		t.Fatalf("discovered acknowledged search replayed %d times, want original only", searchCalls)
+	}
+}
+
+func TestExpiredMalformedBookJobIgnoresFutureRetryTime(t *testing.T) {
+	upstream := newVerifiedBookUpstream("Malformed Expiry", "malformed-expiry")
+	service, userID := newVerifiedMutationService(t, upstream)
+	job, _, _ := prepareWorkerTestJob(t, service, userID, upstream, BookFormatEbook)
+	if _, err := service.db.Exec(
+		`UPDATE book_request_jobs SET book_selection_json = '{',
+		 created_at = datetime('now', '-31 minutes'), state = 'retry_wait',
+		 next_attempt_at = datetime('now', '+1 day') WHERE id = ?`, job.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	service.bookWorkerGeneration = newBookWorkerGeneration()
+	service.runDueBookRequestJobs(context.Background())
+
+	var state, code string
+	if err := service.db.QueryRow(
+		"SELECT state, last_error_code FROM book_request_jobs WHERE id = ?", job.ID,
+	).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || code != "book_request_unverified" {
+		t.Fatalf("expired malformed job = %s/%s, want failed/book_request_unverified", state, code)
 	}
 }
 
@@ -1866,7 +2236,8 @@ func TestBookRequestWorkerNeverReplaysOldProvisionalSeedFootprint(t *testing.T) 
 		t.Fatal(err)
 	}
 	if _, err := service.db.Exec(
-		"UPDATE book_request_jobs SET phase_started_at = datetime('now', '-31 minutes') WHERE id = ?", job.ID,
+		`UPDATE book_request_jobs SET phase_started_at = datetime('now', '-31 minutes'),
+		 created_at = datetime('now', '-31 minutes'), attempt_count = 130 WHERE id = ?`, job.ID,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1878,12 +2249,12 @@ func TestBookRequestWorkerNeverReplaysOldProvisionalSeedFootprint(t *testing.T) 
 	if seedCalls != 1 {
 		t.Fatalf("old provisional footprint caused %d seed POSTs, want original only", seedCalls)
 	}
-	var phase, state string
-	if err := service.db.QueryRow("SELECT phase, state FROM book_request_jobs WHERE id = ?", job.ID).Scan(&phase, &state); err != nil {
+	var state, code string
+	if err := service.db.QueryRow("SELECT state, last_error_code FROM book_request_jobs WHERE id = ?", job.ID).Scan(&state, &code); err != nil {
 		t.Fatal(err)
 	}
-	if phase != "seed_inflight" || state != "outcome_unknown" {
-		t.Fatalf("provisional footprint advanced job to %s/%s, want guarded seed_inflight/outcome_unknown", phase, state)
+	if state != "failed" || code != "book_request_unverified" {
+		t.Fatalf("expired provisional footprint = %s/%s, want failed/book_request_unverified", state, code)
 	}
 }
 
@@ -1904,7 +2275,7 @@ func TestBookRequestWorkerRebindsQueuedJobImmediately(t *testing.T) {
 	}
 }
 
-func TestBookRequestWorkerWaitsThenRebindsExpiredSeed(t *testing.T) {
+func TestBookRequestWorkerExpiredSeedRebindRequiresExplicitRetry(t *testing.T) {
 	upstream := newVerifiedBookUpstream("Seed Rebind", "seed-rebind")
 	upstream.dropAddWithoutCommit[BookFormatEbook] = true
 	service, userID := newVerifiedMutationService(t, upstream)
@@ -1931,26 +2302,47 @@ func TestBookRequestWorkerWaitsThenRebindsExpiredSeed(t *testing.T) {
 	}
 
 	if _, err := service.db.Exec(
-		"UPDATE book_request_jobs SET phase_started_at = datetime('now', '-31 minutes') WHERE id = ?", jobID,
+		`UPDATE book_request_jobs SET created_at = datetime('now', '-31 minutes'),
+		 phase_started_at = datetime('now', '-31 minutes'),
+		 next_attempt_at = datetime('now', '+1 day') WHERE id = ?`, jobID,
 	); err != nil {
 		t.Fatal(err)
 	}
-	forceBookJobDue(t, service, jobID)
+	service.runDueBookRequestJobs(context.Background())
 	upstream.mu.Lock()
 	postExpirySeeds := len(upstream.seedBodies)
 	upstream.mu.Unlock()
-	if postExpirySeeds != 2 {
-		t.Fatalf("expired drifted seed POSTs=%d, want exactly one renewed POST", postExpirySeeds)
+	if postExpirySeeds != 1 {
+		t.Fatalf("expired drifted seed POSTs=%d, want original only", postExpirySeeds)
 	}
-	var phase string
-	var stillOldFingerprint int
+	var state, code string
 	if err := service.db.QueryRow(
-		"SELECT phase, settings_fingerprint = zeroblob(32) FROM book_request_jobs WHERE id = ?", jobID,
-	).Scan(&phase, &stillOldFingerprint); err != nil {
+		"SELECT state, last_error_code FROM book_request_jobs WHERE id = ?", jobID,
+	).Scan(&state, &code); err != nil {
 		t.Fatal(err)
 	}
-	if phase != "seed_inflight" || stillOldFingerprint != 0 {
-		t.Fatalf("rebound seed phase=%s old_fingerprint=%d, want renewed seed on fresh fingerprint", phase, stillOldFingerprint)
+	if state != "failed" || code != "book_request_unverified" {
+		t.Fatalf("expired drifted seed = %s/%s, want failed/book_request_unverified", state, code)
+	}
+
+	upstream.mu.Lock()
+	upstream.dropAddWithoutCommit[BookFormatEbook] = false
+	upstream.mu.Unlock()
+	response, err := service.CreateMediaRequest(userID, &CreateRequest{
+		MediaType: "book", ForeignID: upstream.foreignBookID,
+		Title: upstream.title, BookFormat: BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatalf("explicit rebind retry: %v", err)
+	}
+	if response.Status != StatusRequested {
+		t.Fatalf("explicit rebind retry status=%s, want requested", response.Status)
+	}
+	upstream.mu.Lock()
+	retrySeeds := len(upstream.seedBodies)
+	upstream.mu.Unlock()
+	if retrySeeds != 2 {
+		t.Fatalf("explicit rebind retry seed POSTs=%d, want original plus one retry", retrySeeds)
 	}
 }
 
