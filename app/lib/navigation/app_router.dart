@@ -713,9 +713,6 @@ Widget _mediaDetailChild(GoRouterState state) {
     return RequesterBookDetailScreen(
       foreignId: foreignId,
       titleHint: state.uri.queryParameters['title'],
-      lookupTerm: state.uri.queryParameters['lookup_term'],
-      catalogForeignBookId:
-          state.uri.queryParameters['catalog_foreign_book_id'],
       instanceId: state.uri.queryParameters['instance_id'],
       initialBook: state.extra is ChaptarrBook
           ? state.extra! as ChaptarrBook

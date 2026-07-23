@@ -218,11 +218,6 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 // Update modifies an existing service instance.
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "instanceID")
-	unlockConfig := func() {}
-	if h.registry != nil {
-		unlockConfig = h.registry.LockInstanceConfigWrite(instanceID)
-	}
-	defer unlockConfig()
 
 	existing, err := h.store.Get(instanceID)
 	if err != nil {
@@ -344,11 +339,6 @@ func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
 // Delete removes a service instance.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "instanceID")
-	unlockConfig := func() {}
-	if h.registry != nil {
-		unlockConfig = h.registry.LockInstanceConfigWrite(instanceID)
-	}
-	defer unlockConfig()
 
 	if err := h.store.Delete(instanceID); err != nil {
 		status := http.StatusInternalServerError

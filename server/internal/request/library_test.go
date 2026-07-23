@@ -94,7 +94,7 @@ func TestRecordsByForeignID(t *testing.T) {
 }
 
 // TestReduceLibraryRoutesByLoneEditionFormat asserts a record with no mediaType
-// is routed by the authoritative format enum of its single edition.
+// is routed by the format of its single edition (EPUB -> ebook).
 func TestReduceLibraryRoutesByLoneEditionFormat(t *testing.T) {
 	books := []chaptarr.Book{
 		{
@@ -105,14 +105,14 @@ func TestReduceLibraryRoutesByLoneEditionFormat(t *testing.T) {
 			Monitored:     true,
 			Author:        &chaptarr.AuthorContext{AuthorName: "An Author"},
 			Statistics:    chaptarr.BookStatistics{BookFileCount: 1},
-			Editions:      []chaptarr.Edition{{Format: "Ebook"}},
+			Editions:      []chaptarr.Edition{{Format: "EPUB"}},
 		},
 	}
 
 	digest := reduceLibrary(books)
 	lt := findTitle(t, digest, "Some Ebook")
 	if !lt.Ebook.Monitored || !lt.Ebook.Downloaded {
-		t.Errorf("ebook = %+v, want monitored && downloaded (routed from lone Ebook edition)", lt.Ebook)
+		t.Errorf("ebook = %+v, want monitored && downloaded (routed from lone EPUB edition)", lt.Ebook)
 	}
 	if lt.Audiobook != (FormatOwnership{}) {
 		t.Errorf("audiobook = %+v, want zero (no audiobook record)", lt.Audiobook)
@@ -205,27 +205,6 @@ func TestSelectBookRootFailsClosedOnAmbiguity(t *testing.T) {
 		{Path: "/audio-two", Accessible: true},
 	}, BookFormatAudiobook); ok {
 		t.Fatal("multiple audiobook roots were guessed instead of rejected")
-	}
-}
-
-func TestRecordFormatUsesOnlyAuthoritativeEditionEnum(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		in   string
-		want string
-	}{
-		{name: "ebook case variant", in: "eBoOk", want: chaptarr.FormatEbook},
-		{name: "audiobook case variant", in: "AUDIOBOOK", want: chaptarr.FormatAudiobook},
-		{name: "audio cd is not inferred", in: "Audio CD", want: chaptarr.FormatUnknown},
-		{name: "mp3 is not inferred", in: "MP3", want: chaptarr.FormatUnknown},
-		{name: "physical stays unknown", in: "Physical", want: chaptarr.FormatUnknown},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			book := chaptarr.Book{Editions: []chaptarr.Edition{{Format: tc.in}}}
-			if got := recordFormat(book); got != tc.want {
-				t.Fatalf("recordFormat(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
 	}
 }
 

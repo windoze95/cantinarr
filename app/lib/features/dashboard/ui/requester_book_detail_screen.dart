@@ -23,7 +23,6 @@ import '../../request/data/request_service.dart';
 import '../../request/ui/book_request_button.dart';
 import '../data/book_library_service.dart';
 import '../logic/book_ownership_matcher.dart';
-import 'book_request_wizard.dart';
 
 /// Requester-facing detail for one book, addressed by its Chaptarr/Readarr
 /// foreignBookId. Search navigation supplies [initialBook] for an immediate,
@@ -33,8 +32,6 @@ import 'book_request_wizard.dart';
 class RequesterBookDetailScreen extends ConsumerStatefulWidget {
   final String foreignId;
   final String? titleHint;
-  final String? lookupTerm;
-  final String? catalogForeignBookId;
   final ChaptarrBook? initialBook;
   final String? instanceId;
 
@@ -42,8 +39,6 @@ class RequesterBookDetailScreen extends ConsumerStatefulWidget {
     super.key,
     required this.foreignId,
     this.titleHint,
-    this.lookupTerm,
-    this.catalogForeignBookId,
     this.initialBook,
     this.instanceId,
   });
@@ -92,8 +87,6 @@ class _RequesterBookDetailScreenState
     if (oldWidget.foreignId != widget.foreignId ||
         oldWidget.initialBook != widget.initialBook ||
         oldWidget.titleHint != widget.titleHint ||
-        oldWidget.lookupTerm != widget.lookupTerm ||
-        oldWidget.catalogForeignBookId != widget.catalogForeignBookId ||
         oldWidget.instanceId != widget.instanceId) {
       _startLoads();
     }
@@ -109,8 +102,7 @@ class _RequesterBookDetailScreenState
     _filesByBook = const {};
     _requestDetail = null;
     _metadataLoading = widget.initialBook == null &&
-        ((widget.lookupTerm?.trim().isNotEmpty ?? false) ||
-            (widget.titleHint?.trim().isNotEmpty ?? false));
+        (widget.titleHint?.trim().isNotEmpty ?? false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _resolveMetadata(generation);
       _resolveChaptarrRecords(generation);
@@ -133,25 +125,24 @@ class _RequesterBookDetailScreenState
   /// matches both that row's title and author.
   Future<void> _resolveMetadata(int generation) async {
     if (_metadata != null) return;
-    final terms = <String>[];
-    void addTerm(String? value) {
-      final term = value?.trim() ?? '';
-      if (term.isNotEmpty && !terms.contains(term)) terms.add(term);
-    }
-    addTerm(widget.lookupTerm);
-    addTerm(widget.titleHint);
+    final term = widget.titleHint?.trim() ?? '';
     final service = _chaptarrService();
-    if (terms.isEmpty || service == null) {
+    if (term.isEmpty || service == null) {
       if (mounted && generation == _loadGeneration) {
         setState(() => _metadataLoading = false);
       }
       return;
     }
     ChaptarrBook? match;
-    final catalogId = widget.catalogForeignBookId?.trim() ?? '';
-    OwnedTitle? canonical;
-    if (catalogId.isEmpty) {
-      try {
+    try {
+      final results = await service.lookupBook(term);
+      for (final book in results) {
+        if (book.foreignBookId == widget.foreignId) {
+          match = book;
+          break;
+        }
+      }
+      if (match == null) {
         final digest = await ref.read(
           ownedBooksForInstanceProvider(_instanceId).future,
         );
@@ -159,42 +150,23 @@ class _RequesterBookDetailScreenState
             .where((owned) =>
                 owned.foreignBookId.trim() == widget.foreignId.trim())
             .toList(growable: false);
-        if (canonicalRows.length == 1) canonical = canonicalRows.single;
-      } catch (_) {
-        // Exact provider-id matching below can still recover metadata.
-      }
-    }
-    for (final term in terms) {
-      List<ChaptarrBook> results;
-      try {
-        results = await service.lookupBook(term);
-      } catch (_) {
-        continue;
-      }
-      final exactId = catalogId.isNotEmpty
-          ? catalogId
-          : widget.foreignId.trim();
-      for (final book in results) {
-        if (book.foreignBookId?.trim() == exactId) {
-          match = book;
-          break;
+        if (canonicalRows.length == 1) {
+          final canonical = canonicalRows.single;
+          final strongIdentityMatches = results
+              .where((book) =>
+                  strongNormalizedTitleMatch(book.title, canonical.title) &&
+                  strongAuthorMatch(
+                    book.author?.authorName,
+                    canonical.author,
+                  ))
+              .toList(growable: false);
+          if (strongIdentityMatches.length == 1) {
+            match = strongIdentityMatches.single;
+          }
         }
       }
-      if (match != null) break;
-      final canonicalMatch = canonical;
-      if (catalogId.isNotEmpty || canonicalMatch == null) continue;
-      final strongIdentityMatches = results
-          .where((book) =>
-              strongNormalizedTitleMatch(book.title, canonicalMatch.title) &&
-              strongAuthorMatch(
-                book.author?.authorName,
-                canonicalMatch.author,
-              ))
-          .toList(growable: false);
-      if (strongIdentityMatches.length == 1) {
-        match = strongIdentityMatches.single;
-        break;
-      }
+    } catch (_) {
+      // The title hint still gives the requester a useful fallback.
     }
     if (!mounted || generation != _loadGeneration) return;
     setState(() {
@@ -372,7 +344,6 @@ class _RequesterBookDetailScreenState
     final ebookFiles = _downloadChoicesFor(BookFormat.ebook);
     final audiobookFiles = _downloadChoicesFor(BookFormat.audiobook);
     final isAdmin = auth?.user?.isAdmin ?? false;
-    final requestBook = _metadata ?? live;
 
     final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
     ChaptarrImageSource? cover;
@@ -476,28 +447,6 @@ class _RequesterBookDetailScreenState
                 showCoveredStatus: false,
                 onDetailChanged: _onRequestDetailChanged,
                 onRequestCompleted: _onRequestCompleted,
-                requestTargetPicker: requestBook == null
-                    ? null
-                    : (context, request) => showBookRequestWizard(
-                          context,
-                          request: request,
-                          selectedBook: requestBook,
-                          candidates: [
-                            BookRequestWizardCandidate(
-                              book: requestBook,
-                              foreignId: widget.foreignId,
-                              lookupTerm: widget.lookupTerm,
-                              catalogForeignBookId:
-                                  widget.catalogForeignBookId,
-                              ownership: ownership,
-                              ownershipStatusKnown:
-                                  owned?.statusKnown ?? true,
-                              statusDetail: request.detail,
-                              rank: 0,
-                              matchEvidence: 'Selected book',
-                            ),
-                          ],
-                        ),
               ),
               if (isAdmin && _chaptarrRecords.isNotEmpty)
                 OutlinedButton.icon(
@@ -757,14 +706,11 @@ String _bookFileLabel(ChaptarrBookFile file, int index) {
     return (label: 'Available', color: AppTheme.available);
   }
 
-  // A bare Chaptarr monitor flag is not proof that an add/search succeeded.
-  // Wait for the server's verified per-format request truth before labeling a
-  // missing format Requested.
-  if (!statusLoaded) {
-    return (label: 'Checking…', color: AppTheme.textSecondary);
+  if (owned?.monitored ?? false) {
+    return (label: 'Requested', color: AppTheme.requested);
   }
 
-  final status = detail.formats[format];
+  final status = detail.statusFor(format);
   if (status != null && status != RequestStatus.unavailable) {
     return switch (status) {
       RequestStatus.available =>
@@ -783,21 +729,20 @@ String _bookFileLabel(ChaptarrBookFile file, int index) {
     };
   }
 
-  if (!detail.isKnown) {
-    return switch (detail.effectiveUnknownReason) {
-      BookStatusUnknownReason.outcomePending =>
-        (label: 'Still checking', color: AppTheme.requested),
-      BookStatusUnknownReason.requestFailed =>
-        status == RequestStatus.unavailable
-            ? (label: 'Couldn’t add', color: AppTheme.error)
-            : (label: 'Not requested', color: AppTheme.textSecondary),
-      BookStatusUnknownReason.formatNeedsAttention =>
-        (label: 'Format needs attention', color: AppTheme.requested),
-      BookStatusUnknownReason.transient || null =>
-        (label: 'Couldn’t check', color: AppTheme.error),
-    };
+  // Until request history resolves, an empty ownership row does not prove the
+  // format was never requested. Keep the neutral loading state instead of
+  // briefly claiming "Not requested" for a pending or denied request.
+  if (!statusLoaded) {
+    return (label: 'Checking…', color: AppTheme.textSecondary);
   }
-  if (status == null || status == RequestStatus.unavailable) {
+
+  if (!detail.isKnown) {
+    return detail.effectiveUnknownReason ==
+            BookStatusUnknownReason.formatNeedsAttention
+        ? (label: 'Format needs attention', color: AppTheme.requested)
+        : (label: 'Couldn’t check', color: AppTheme.error);
+  }
+  if (status == RequestStatus.unavailable) {
     return (label: 'Not requested', color: AppTheme.textSecondary);
   }
   return (label: 'Couldn’t check', color: AppTheme.error);

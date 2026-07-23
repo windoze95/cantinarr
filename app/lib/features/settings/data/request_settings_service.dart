@@ -5,10 +5,6 @@ import '../../request/data/request_service.dart';
 int _positiveRequesterCount(Object? value) =>
     value is int && value > 0 ? value : 1;
 
-// Book approvals use the same verified Chaptarr path as direct requests. The
-// 240s client window stays above its roughly 210s worst-case server budget.
-const _verifiedApprovalTimeout = Duration(seconds: 240);
-
 /// An arr quality profile (id + name) offered for selection.
 class QualityProfile {
   final int id;
@@ -157,7 +153,6 @@ class PendingRequestItem {
   final String seasonScope;
   final int qualityProfileId;
   final DateTime? requestedAt;
-  final BookRequestSelection? bookSelection;
 
   const PendingRequestItem({
     required this.id,
@@ -173,7 +168,6 @@ class PendingRequestItem {
     required this.seasonScope,
     required this.qualityProfileId,
     required this.requestedAt,
-    required this.bookSelection,
   });
 
   bool get isTv => mediaType == 'tv';
@@ -208,8 +202,6 @@ class PendingRequestItem {
         qualityProfileId: json['quality_profile_id'] as int? ?? 0,
         requestedAt:
             DateTime.tryParse(json['requested_at'] as String? ?? '')?.toLocal(),
-        bookSelection:
-            BookRequestSelection.tryFromJson(json['book_selection']),
       );
 }
 
@@ -324,19 +316,8 @@ class RequestSettingsService {
     if (qualityProfileId != null && qualityProfileId != 0) {
       body['quality_profile_id'] = qualityProfileId;
     }
-    final response = await _dio.post(
-      '/api/admin/requests/$id/approve',
-      data: body,
-      // Book approvals execute the same bounded, verified Chaptarr workflow as
-      // direct requests. The server may spend up to 90 seconds settling each
-      // concrete format; leave enough client headroom for a two-format request
-      // and use the same safe ceiling for every media type because this
-      // endpoint does not encode the type.
-      options: Options(
-        connectTimeout: _verifiedApprovalTimeout,
-        receiveTimeout: _verifiedApprovalTimeout,
-      ),
-    );
+    final response =
+        await _dio.post('/api/admin/requests/$id/approve', data: body);
     return BookApprovalResult.fromJson(response.data);
   }
 

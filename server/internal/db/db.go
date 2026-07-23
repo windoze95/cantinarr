@@ -40,9 +40,7 @@ CREATE TABLE IF NOT EXISTS request_log (
     quality_profile_id INTEGER,
     book_format TEXT,
     instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL,
-    book_settings_fingerprint BLOB,
-    book_selection_json TEXT,
-    approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    approved_by INTEGER REFERENCES users(id),
     decided_at DATETIME,
     deny_reason TEXT,
     requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -107,50 +105,6 @@ CREATE TABLE IF NOT EXISTS user_default_instances (
     instance_id TEXT NOT NULL,
     PRIMARY KEY (user_id, service_type)
 );
-
--- Durable continuation for Chaptarr book requests. request_id is NULL for a
--- direct request and points at the still-pending approval row for an approved
--- request. The phase is committed before each non-idempotent upstream POST;
--- ordinary status reads only observe these rows and never advance them.
-CREATE TABLE IF NOT EXISTS book_request_jobs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    request_id INTEGER REFERENCES request_log(id) ON DELETE RESTRICT,
-    approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
-    foreign_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    book_format TEXT NOT NULL,                    -- ebook|audiobook|both
-    book_selection_json TEXT NOT NULL DEFAULT '',
-    state TEXT NOT NULL DEFAULT 'running',        -- running|retry_wait|outcome_unknown|failed
-    phase TEXT NOT NULL DEFAULT 'queued',         -- queued|seed_inflight|converging|search_inflight
-    phase_format TEXT NOT NULL DEFAULT '',
-    author_id INTEGER NOT NULL DEFAULT 0,
-    foreign_author_id TEXT NOT NULL DEFAULT '',
-    author_name TEXT NOT NULL DEFAULT '',
-    book_id INTEGER NOT NULL DEFAULT 0,
-    search_acknowledged INTEGER NOT NULL DEFAULT 0,
-    ebook_status TEXT NOT NULL DEFAULT '',
-    audiobook_status TEXT NOT NULL DEFAULT '',
-    settings_fingerprint BLOB NOT NULL,
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    next_attempt_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    proc_generation TEXT NOT NULL DEFAULT '',
-    last_error_code TEXT NOT NULL DEFAULT '',
-    last_error_text TEXT NOT NULL DEFAULT '',
-    phase_started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_book_request_jobs_due
-    ON book_request_jobs(state, next_attempt_at, id);
-CREATE INDEX IF NOT EXISTS idx_book_request_jobs_work
-    ON book_request_jobs(instance_id, foreign_id, book_format);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_book_request_jobs_active_owner
-    ON book_request_jobs(instance_id, foreign_id)
-    WHERE state IN ('running','retry_wait','outcome_unknown');
-CREATE UNIQUE INDEX IF NOT EXISTS idx_book_request_jobs_approval
-    ON book_request_jobs(request_id) WHERE request_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
@@ -627,15 +581,6 @@ func Open(dbPath string) (*sql.DB, error) {
 		// Legacy rows remain NULL: assigning them to today's user default would
 		// invent provenance and could misroute an old approval/history row.
 		{alter: "ALTER TABLE request_log ADD COLUMN instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL"},
-		// Only verified Chaptarr outcomes carry this opaque endpoint binding.
-		// Legacy/unverified rows remain NULL and cannot suppress a search after an
-		// instance is repointed or its credentials rotate.
-		{alter: "ALTER TABLE request_log ADD COLUMN book_settings_fingerprint BLOB"},
-		// Optional stable external author/publication evidence selected by the
-		// requester. JSON keeps per-format edition selectors together and leaves
-		// legacy rows NULL for deterministic server-side selection.
-		{alter: "ALTER TABLE request_log ADD COLUMN book_selection_json TEXT"},
-		{alter: "ALTER TABLE book_request_jobs ADD COLUMN book_selection_json TEXT NOT NULL DEFAULT ''"},
 		// Stable per-device hardware id (e.g. iOS identifierForVendor) so a
 		// reconnect from the same physical device updates its existing row
 		// instead of creating a duplicate. Empty for rows created before this

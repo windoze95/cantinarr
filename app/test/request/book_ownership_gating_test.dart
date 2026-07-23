@@ -22,17 +22,6 @@ void main() {
       expect(d.coverageLabel(BookRequestFormat.ebook), 'Requested');
     });
 
-    test('verified unavailable beats a leftover monitor flag', () {
-      const d = BookRequestStatusDetail(
-        formats: {BookRequestFormat.ebook: RequestStatus.unavailable},
-        ownership: BookOwnership(ebook: FormatOwnership(monitored: true)),
-      );
-
-      expect(d.isCovered(BookRequestFormat.ebook), isFalse);
-      expect(d.isRequestable(BookRequestFormat.ebook), isTrue);
-      expect(d.coverageLabel(BookRequestFormat.ebook), isNull);
-    });
-
     test('available ebook + monitored audiobook covers both formats', () {
       const d = BookRequestStatusDetail(
         ownership: BookOwnership(

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -9,7 +8,6 @@ import 'package:cantinarr/core/providers/library_refresh_provider.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
-import 'package:cantinarr/features/dashboard/logic/book_search_ranking.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
@@ -19,146 +17,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
-  test('book lookup fallback removes one complete Unicode code point', () {
-    expect(bookSearchPrefixFallbackTerm('Café📚'), 'Café');
-    expect(bookSearchPrefixFallbackTerm('x'), isNull);
-  });
-
-  testWidgets(
-      'an empty exact lookup retries bounded prefixes and keeps strong matches',
-      (tester) async {
-    _usePhoneSize(tester);
-    final (:router, container: _, :adapter) = await _pumpRouter(
-      tester,
-      lookupHandler: (term) {
-        if (term == 'haunting Adeline') return const <Object>[];
-        if (term == 'haunting Adelin') {
-          return [
-            _lookupBook(
-              'Adeline: A Haunting Historical Portrait',
-              'Norah Vincent',
-              'unrelated-warmup',
-            ),
-          ];
-        }
-        if (term == 'haunting Ad') {
-          return [
-            _lookupBook(
-              'Haunting Adeline (Cat and Mouse, #1)',
-              'H.D. Carlton',
-              'book-a',
-            ),
-            _lookupBook(
-              'Haunting Adeline (Cat and Mouse, #1)',
-              'H.D. Carlton',
-              'book-b',
-            ),
-            _lookupBook(
-              'Adeline: A Haunting Historical Portrait',
-              'Norah Vincent',
-              'unrelated',
-            ),
-          ];
-        }
-        return const <Object>[];
-      },
-    );
-    router.go('/dashboard/books');
-    await tester.pumpAndSettle();
-
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
-    );
-    await tester.enterText(searchField, 'haunting Adeline');
-    await tester.pump(const Duration(milliseconds: 450));
-    await tester.pumpAndSettle();
-
-    expect(adapter.lookupTerms, [
-      'haunting Adeline',
-      'haunting Adelin',
-      'haunting Adeli',
-      'haunting Adel',
-      'haunting Ade',
-      'haunting Ad',
-    ]);
-    expect(
-      find.text('Haunting Adeline (Cat and Mouse, #1)'),
-      findsNWidgets(2),
-    );
-    expect(find.text('Adeline: A Haunting Historical Portrait'), findsNothing);
-    expect(
-      find.byKey(const ValueKey('book-result:book-a:book-a:lookup:0')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('book-result:book-b:book-b:lookup:1')),
-      findsOneWidget,
-    );
-
-    await tester.tap(find.text('Choose format').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('eBook'));
-    await tester.pumpAndSettle();
-    expect(find.text('Which match looks right?'), findsNothing);
-
-    expect(adapter.requestBodies, hasLength(1));
-    expect(
-      adapter.requestBodies.single['book_selection']['lookup_term'],
-      'haunting Ad',
-    );
-    expect(
-      adapter.requestBodies.single['book_selection']
-          ['catalog_foreign_book_id'],
-      'book-a',
-    );
-  });
-
-  testWidgets('typing again immediately invalidates an in-flight partial result',
-      (tester) async {
-    _usePhoneSize(tester);
-    final partialLookup = Completer<Object>();
-    final (:router, container: _, :adapter) = await _pumpRouter(
-      tester,
-      lookupHandler: (term) {
-        if (term == 'meditation') return partialLookup.future;
-        if (term == 'meditations') {
-          return [
-            _lookupBook('Meditations', 'Marcus Aurelius', 'full-result'),
-          ];
-        }
-        return const <Object>[];
-      },
-    );
-    router.go('/dashboard/books');
-    await tester.pumpAndSettle();
-
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
-    );
-    await tester.enterText(searchField, 'meditation');
-    await tester.pump(const Duration(milliseconds: 450));
-    expect(adapter.lookupTerms, ['meditation']);
-
-    await tester.enterText(searchField, 'meditations');
-    partialLookup.complete([
-      _lookupBook('Stale Partial Result', 'Old Author', 'stale'),
-    ]);
-    await tester.pump();
-
-    expect(find.text('Stale Partial Result'), findsNothing);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-
-    await tester.pump(const Duration(milliseconds: 450));
-    await tester.pumpAndSettle();
-    expect(adapter.lookupTerms, ['meditation', 'meditations']);
-    expect(find.text('Meditations'), findsOneWidget);
-    expect(find.text('Stale Partial Result'), findsNothing);
-  });
-
   testWidgets('a fully requested search row still opens rich book detail',
       (tester) async {
     _usePhoneSize(tester);
@@ -182,10 +40,10 @@ void main() {
     expect(find.text('Requested'), findsNothing);
     expect(find.byIcon(Icons.chevron_right), findsWidgets);
 
-    final statusRequestsBeforeRefresh = adapter.statusRequests;
+    expect(adapter.statusRequests, 0);
     container.read(libraryRefreshTickProvider.notifier).state++;
     await tester.pumpAndSettle();
-    expect(adapter.statusRequests, greaterThan(statusRequestsBeforeRefresh));
+    expect(adapter.statusRequests, 0);
 
     await tester.tap(
       find.byKey(const ValueKey('book-result:book-1:book-1:lookup:0')),
@@ -193,29 +51,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
-    expect(
-      tester
-          .widget<RequesterBookDetailScreen>(
-            find.byType(RequesterBookDetailScreen),
-          )
-          .lookupTerm,
-      'meditations',
-    );
-    expect(
-      tester
-          .widget<RequesterBookDetailScreen>(
-            find.byType(RequesterBookDetailScreen),
-          )
-          .catalogForeignBookId,
-      'book-1',
-    );
+    expect(adapter.statusRequests, greaterThan(0));
     expect(find.text('Marcus Aurelius'), findsOneWidget);
     expect(find.text('2002 · 304 pages'), findsOneWidget);
     expect(find.text('A practical guide to Stoic philosophy.'), findsOneWidget);
     expect(find.text('Requested'), findsNWidgets(2));
   });
 
-  testWidgets('the trailing Request control does not open book detail',
+  testWidgets('request controls live on book detail, not search results',
       (tester) async {
     _usePhoneSize(tester);
     final (:router, container: _, :adapter) = await _pumpRouter(tester);
@@ -231,104 +74,27 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
+    expect(find.text('Choose format'), findsNothing);
+
     final secondResult =
         find.byKey(const ValueKey('book-result:book-2:book-2:lookup:1'));
-    await tester.tap(
-      find.descendant(of: secondResult, matching: find.text('Choose format')),
-    );
+    await tester.tap(secondResult);
     await tester.pumpAndSettle();
 
-    expect(find.byType(RequesterBookDetailScreen), findsNothing);
-    expect(find.text('Letters from a Stoic'), findsWidgets);
-    expect(find.text('eBook'), findsOneWidget);
-    expect(find.text('Audiobook'), findsOneWidget);
+    expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
+    expect(find.text('Letters from a Stoic'), findsOneWidget);
+    expect(find.text('Choose format'), findsOneWidget);
+
+    await tester.tap(find.text('Choose format'));
+    await tester.pumpAndSettle();
+    expect(find.text('eBook'), findsNWidgets(2));
+    expect(find.text('Audiobook'), findsNWidgets(2));
     expect(find.text('eBook + Audiobook'), findsOneWidget);
 
     final libraryRequestsBefore = adapter.libraryRequests;
-    await tester.tap(find.text('eBook'));
+    await tester.tap(find.text('eBook').last);
     await tester.pumpAndSettle();
     expect(adapter.libraryRequests, greaterThan(libraryRequestsBefore));
-  });
-
-  testWidgets(
-      'request wizard chooses format first then a meaningful catalog match',
-      (tester) async {
-    _usePhoneSize(tester);
-    final (:router, container: _, :adapter) =
-        await _pumpRouter(tester, editionVariants: true);
-    router.go('/dashboard/books');
-    await tester.pumpAndSettle();
-
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
-    );
-    await tester.enterText(searchField, 'the hobbit');
-    await tester.pump(const Duration(milliseconds: 450));
-    await tester.pumpAndSettle();
-
-    final original = find.byKey(const ValueKey(
-      'book-result:hobbit-original:hobbit-original:lookup:0',
-    ));
-    expect(original, findsOneWidget);
-    expect(
-      find.descendant(of: original, matching: find.text('Closest match')),
-      findsOneWidget,
-    );
-
-    await tester.tap(
-      find.descendant(of: original, matching: find.text('Choose format')),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Choose how you want to enjoy this book.'), findsOneWidget);
-    expect(find.text('Which match looks right?'), findsNothing);
-    await tester.tap(find.text('Audiobook'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Which match looks right?'), findsOneWidget);
-    expect(find.text('Closest match'), findsNWidgets(2));
-    expect(find.textContaining('George Allen & Unwin'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.textContaining('75th Anniversary Edition'),
-      180,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.drag(
-      find.byType(Scrollable).last,
-      const Offset(0, -180),
-    );
-    await tester.pumpAndSettle();
-    expect(find.textContaining('75th Anniversary Edition'), findsOneWidget);
-    expect(find.textContaining('Record #'), findsNothing);
-
-    await tester.tap(
-      find.ancestor(
-        of: find.textContaining('75th Anniversary Edition'),
-        matching: find.byType(InkWell),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(adapter.requestBodies, hasLength(1));
-    expect(adapter.requestBodies.single['foreign_id'], 'hobbit-anniversary');
-    expect(adapter.requestBodies.single['book_format'], 'audiobook');
-    expect(adapter.requestBodies.single['book_selection'], {
-      'lookup_term': 'the hobbit',
-      'catalog_foreign_book_id': 'hobbit-anniversary',
-      'foreign_author_id': 'author-tolkien',
-      'author_name': 'J. R. R. Tolkien',
-      'audiobook': {
-        'foreign_edition_id': 'edition-anniversary-audio',
-        'isbn13': '9780007487295',
-        'asin': 'B0ANNIVERSARY',
-        'edition_title': '75th Anniversary Edition',
-        'publisher': 'HarperCollins',
-        'year': 2012,
-        'page_count': 320,
-      },
-    });
   });
 
   testWidgets(
@@ -349,8 +115,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
-    expect(adapter.statusForeignIds, isNotEmpty);
-    expect(adapter.statusForeignIds, everyElement('library-flock'));
+    expect(adapter.statusForeignIds, isEmpty);
     expect(
       find.byKey(
         const ValueKey(
@@ -358,35 +123,31 @@ void main() {
       ),
       findsOneWidget,
     );
+    // The normal-row test above proves the tile gesture. Continue this case
+    // through the exact route/extra the mismatched row owns so the remainder
+    // can assert detail identity and mutation payload end to end.
     router.go(
-      '/detail/book/library-flock?title=Flock&lookup_term=flock&catalog_foreign_book_id=lookup-flock&instance_id=books',
+      '/detail/book/library-flock?title=Flock&instance_id=books',
       extra: ChaptarrBook.fromJson({
         'title': 'Flock',
         'foreignBookId': 'lookup-flock',
-        'author': {
-          'authorName': 'Kate Stewart',
-          'foreignAuthorId': 'author-flock',
-        },
+        'author': {'authorName': 'Kate Stewart'},
       }),
     );
     await tester.pumpAndSettle();
 
+    expect(adapter.statusForeignIds, isNotEmpty);
+    expect(adapter.statusForeignIds, everyElement('library-flock'));
     expect(router.routeInformationProvider.value.uri.path,
         '/detail/book/library-flock');
     expect(
       router.routeInformationProvider.value.uri.queryParameters['instance_id'],
       'books',
     );
-    expect(
-      router.routeInformationProvider.value.uri.queryParameters['lookup_term'],
-      'flock',
-    );
     final screen = tester.widget<RequesterBookDetailScreen>(
       find.byType(RequesterBookDetailScreen),
     );
     expect(screen.foreignId, 'library-flock');
-    expect(screen.lookupTerm, 'flock');
-    expect(screen.catalogForeignBookId, 'lookup-flock');
     expect(screen.initialBook?.foreignBookId, 'lookup-flock');
 
     await tester.scrollUntilVisible(
@@ -404,45 +165,6 @@ void main() {
     expect(adapter.requestBodies.single['foreign_id'], 'library-flock');
     expect(adapter.requestBodies.single['instance_id'], 'books');
     expect(adapter.requestBodies.single['book_format'], 'ebook');
-    expect(adapter.requestBodies.single['book_selection'], {
-      'lookup_term': 'flock',
-      'catalog_foreign_book_id': 'lookup-flock',
-      'foreign_author_id': 'author-flock',
-      'author_name': 'Kate Stewart',
-    });
-  });
-
-  testWidgets('a single known match and format submits without extra steps',
-      (tester) async {
-    _usePhoneSize(tester);
-    final (:router, container: _, :adapter) =
-        await _pumpRouter(tester, mismatchedIdentity: true);
-    router.go('/dashboard/books');
-    await tester.pumpAndSettle();
-
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
-    );
-    await tester.enterText(searchField, 'flock');
-    await tester.pump(const Duration(milliseconds: 450));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Request eBook'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Choose how you want to enjoy this book.'), findsNothing);
-    expect(find.text('Which match looks right?'), findsNothing);
-    expect(adapter.requestBodies, hasLength(1));
-    expect(adapter.requestBodies.single['foreign_id'], 'library-flock');
-    expect(adapter.requestBodies.single['book_format'], 'ebook');
-    expect(adapter.requestBodies.single['book_selection'], {
-      'lookup_term': 'flock',
-      'catalog_foreign_book_id': 'lookup-flock',
-      'foreign_author_id': 'author-flock',
-      'author_name': 'Kate Stewart',
-    });
   });
 
   testWidgets(
@@ -467,14 +189,13 @@ void main() {
       const ValueKey('book-result:lookup-flock:library-flock:lookup:0'),
     );
     expect(row, findsOneWidget);
-    expect(adapter.statusForeignIds, isNotEmpty);
-    expect(adapter.statusForeignIds, everyElement('library-flock'));
+    expect(adapter.statusForeignIds, isEmpty);
     expect(
       find.descendant(
         of: row,
         matching: find.text('Ask an admin to check this book’s format'),
       ),
-      findsOneWidget,
+      findsNothing,
     );
     expect(find.text('Request eBook'), findsNothing);
 
@@ -488,6 +209,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(adapter.statusForeignIds, isNotEmpty);
+    expect(adapter.statusForeignIds, everyElement('library-flock'));
     expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
     expect(find.text('Format needs attention'), findsNWidgets(2));
     expect(
@@ -521,29 +244,8 @@ void main() {
     expect(chip.style?.color, AppTheme.requested);
   });
 
-  testWidgets('a bare monitor flag does not claim a search result was requested',
-      (tester) async {
-    _usePhoneSize(tester);
-    final (:router, container: _, adapter: _) =
-        await _pumpRouter(tester, bareMonitor: true);
-    router.go('/dashboard/books');
-    await tester.pumpAndSettle();
-
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
-    );
-    await tester.enterText(searchField, 'meditations');
-    await tester.pump(const Duration(milliseconds: 450));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Audiobook requested'), findsNothing);
-    expect(find.text('Choose format'), findsWidgets);
-  });
-
   testWidgets(
-      'equivalent hidden matches keep the clicked lookup identity',
+      'two lookup rows cannot silently bind to one canonical library record',
       (tester) async {
     _usePhoneSize(tester);
     final (:router, container: _, :adapter) =
@@ -560,8 +262,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
-    expect(find.text('Choose a matching library record'), findsNothing);
-    expect(find.textContaining('Record #'), findsNothing);
+    expect(
+      find.text('Choose a matching library record'),
+      findsNWidgets(2),
+    );
     expect(
       find.byKey(const ValueKey(
           'book-result:lookup-flock:lookup-flock:lookup:0')),
@@ -577,72 +281,7 @@ void main() {
           'book-result:library-flock:library-flock:library:0')),
       findsOneWidget,
     );
-    expect(adapter.statusForeignIds, isNotEmpty);
-    expect(
-      adapter.statusForeignIds,
-      containsAll(['lookup-flock', 'library-flock']),
-    );
-
-    await tester.tap(find.text('Choose format').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('eBook'));
-    await tester.pumpAndSettle();
-    expect(find.text('Which match looks right?'), findsNothing);
-
-    expect(adapter.requestBodies, hasLength(1));
-    expect(adapter.requestBodies.single['foreign_id'], 'lookup-flock');
-    expect(adapter.requestBodies.single['book_format'], 'ebook');
-    final selection = adapter.requestBodies.single['book_selection']
-        as Map<String, dynamic>;
-    expect(selection['lookup_term'], 'flock');
-    expect(
-      selection['catalog_foreign_book_id'],
-      adapter.requestBodies.single['foreign_id'],
-    );
-    expect(find.text('Confirm the matching title'), findsNothing);
-    expect(
-      find.textContaining('equivalent catalog matches grouped'),
-      findsNothing,
-    );
-    expect(find.text('Which match looks right?'), findsNothing);
-  });
-
-  testWidgets(
-      'an injected library request omits lookup-only catalog identity',
-      (tester) async {
-    _usePhoneSize(tester);
-    final (:router, container: _, :adapter) =
-        await _pumpRouter(tester, ambiguousLookup: true);
-    router.go('/dashboard/books');
-    await tester.pumpAndSettle();
-
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
-    );
-    await tester.enterText(searchField, 'flock');
-    await tester.pump(const Duration(milliseconds: 450));
-    await tester.pumpAndSettle();
-
-    final libraryRow = find.byKey(
-      const ValueKey(
-          'book-result:library-flock:library-flock:library:0'),
-    );
-    await tester.tap(
-      find.descendant(of: libraryRow, matching: find.text('Request eBook')),
-    );
-    await tester.pumpAndSettle();
-
-    expect(adapter.requestBodies, hasLength(1));
-    expect(adapter.requestBodies.single['foreign_id'], 'library-flock');
-    expect(adapter.requestBodies.single['book_format'], 'ebook');
-    final selection = adapter.requestBodies.single['book_selection']
-        as Map<String, dynamic>;
-    expect(selection['lookup_term'], 'flock');
-    expect(selection['foreign_author_id'], 'author-flock');
-    expect(selection['author_name'], 'Kate Stewart');
-    expect(selection.containsKey('catalog_foreign_book_id'), isFalse);
+    expect(adapter.statusForeignIds, isEmpty);
   });
 
   testWidgets('same-title library records are surfaced separately',
@@ -662,7 +301,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
-    expect(find.text('Choose a matching library record'), findsNothing);
+    expect(
+      find.text('Choose a matching library record'),
+      findsOneWidget,
+    );
     expect(
       find.byKey(
           const ValueKey('book-result:library-a:library-a:library:0')),
@@ -673,10 +315,7 @@ void main() {
           const ValueKey('book-result:library-b:library-b:library:1')),
       findsOneWidget,
     );
-    expect(
-      adapter.statusForeignIds,
-      containsAll(['lookup-flock', 'library-a', 'library-b']),
-    );
+    expect(adapter.statusForeignIds, isEmpty);
   });
 
   testWidgets('a lookup row without a canonical id explains why it is blocked',
@@ -707,10 +346,6 @@ void main() {
       findsOneWidget,
     );
     expect(tester.widget<ListTile>(row).onTap, isNull);
-    expect(
-      find.descendant(of: row, matching: find.text('Closest match')),
-      findsNothing,
-    );
     expect(adapter.statusForeignIds, isEmpty);
     expect(adapter.requestBodies, isEmpty);
   });
@@ -740,10 +375,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    expect(
-      find.text('Ask an admin to check this book’s format'),
-      findsOneWidget,
-    );
+    expect(find.text('Ask an admin to check this book’s format'), findsNothing);
 
     router.go('/detail/book/library-flock?title=Flock&instance_id=books');
     await tester.pumpAndSettle();
@@ -788,24 +420,18 @@ Future<({
   bool mismatchedIdentity = false,
   bool unresolvedIdentity = false,
   bool mixedOwnership = false,
-  bool bareMonitor = false,
   bool ambiguousLookup = false,
   bool duplicateLibraryRecords = false,
   bool blankIdentity = false,
-  bool editionVariants = false,
-  FutureOr<Object> Function(String term)? lookupHandler,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   final adapter = _BooksSearchAdapter(
     mismatchedIdentity: mismatchedIdentity,
     unresolvedIdentity: unresolvedIdentity,
     mixedOwnership: mixedOwnership,
-    bareMonitor: bareMonitor,
     ambiguousLookup: ambiguousLookup,
     duplicateLibraryRecords: duplicateLibraryRecords,
     blankIdentity: blankIdentity,
-    editionVariants: editionVariants,
-    lookupHandler: lookupHandler,
   );
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
@@ -843,27 +469,20 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     this.mismatchedIdentity = false,
     this.unresolvedIdentity = false,
     this.mixedOwnership = false,
-    this.bareMonitor = false,
     this.ambiguousLookup = false,
     this.duplicateLibraryRecords = false,
     this.blankIdentity = false,
-    this.editionVariants = false,
-    this.lookupHandler,
   });
 
   final bool mismatchedIdentity;
   final bool unresolvedIdentity;
   final bool mixedOwnership;
-  final bool bareMonitor;
   final bool ambiguousLookup;
   final bool duplicateLibraryRecords;
   final bool blankIdentity;
-  final bool editionVariants;
-  final FutureOr<Object> Function(String term)? lookupHandler;
   int statusRequests = 0;
   int libraryRequests = 0;
   bool ebookSubmitted = false;
-  final lookupTerms = <String>[];
   final statusForeignIds = <String>[];
   final requestBodies = <Map<String, dynamic>>[];
 
@@ -937,17 +556,14 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                 },
               ],
             }
-          : (mixedOwnership || bareMonitor)
+          : mixedOwnership
           ? {
               'titles': [
                 {
                   'title': 'Meditations',
                   'author': 'Marcus Aurelius',
                   'foreign_book_id': 'book-1',
-                  'ebook': {
-                    'monitored': mixedOwnership,
-                    'downloaded': mixedOwnership,
-                  },
+                  'ebook': {'monitored': true, 'downloaded': true},
                   'audiobook': {'monitored': true, 'downloaded': false},
                 },
               ],
@@ -974,14 +590,6 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                 'audiobook': 'requested',
               },
             }
-          : foreignId == 'book-1' && bareMonitor
-          ? {
-              'status': 'unavailable',
-              'book_formats': {
-                'ebook': 'unavailable',
-                'audiobook': 'unavailable',
-              },
-            }
           : foreignId == 'book-1'
           ? {
               'status': 'requested',
@@ -992,55 +600,7 @@ class _BooksSearchAdapter implements HttpClientAdapter {
             }
           : {'status': 'unavailable'};
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
-      final term = options.queryParameters['term']?.toString() ?? '';
-      lookupTerms.add(term);
-      body = lookupHandler != null
-          ? await lookupHandler!(term)
-          : editionVariants
-          ? [
-              {
-                'title': 'The Hobbit',
-                'foreignBookId': 'hobbit-original',
-                'year': 1937,
-                'pageCount': 310,
-                'author': {
-                  'authorName': 'J. R. R. Tolkien',
-                  'foreignAuthorId': 'author-tolkien',
-                },
-                'editions': [
-                  {
-                    'id': 1,
-                    'foreignEditionId': 'edition-original-audio',
-                    'format': 'audiobook',
-                    'asin': 'B0ORIGINAL',
-                    'publisher': 'George Allen & Unwin',
-                    'isbn13': '9780007525492',
-                  },
-                ],
-              },
-              {
-                'title': 'The Hobbit',
-                'foreignBookId': 'hobbit-anniversary',
-                'year': 2012,
-                'pageCount': 320,
-                'author': {
-                  'authorName': 'J. R. R. Tolkien',
-                  'foreignAuthorId': 'author-tolkien',
-                },
-                'editions': [
-                  {
-                    'id': 2,
-                    'foreignEditionId': 'edition-anniversary-audio',
-                    'format': 'audiobook',
-                    'asin': 'B0ANNIVERSARY',
-                    'title': '75th Anniversary Edition',
-                    'publisher': 'HarperCollins',
-                    'isbn13': '9780007487295',
-                  },
-                ],
-              },
-            ]
-          : (mismatchedIdentity ||
+      body = (mismatchedIdentity ||
               unresolvedIdentity ||
               ambiguousLookup ||
               duplicateLibraryRecords ||
@@ -1118,17 +678,3 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   @override
   void close({bool force = false}) {}
 }
-
-Map<String, Object> _lookupBook(
-  String title,
-  String author,
-  String foreignBookId,
-) =>
-    {
-      'title': title,
-      'foreignBookId': foreignBookId,
-      'author': {
-        'id': 0,
-        'authorName': author,
-      },
-    };
