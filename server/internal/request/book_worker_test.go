@@ -52,6 +52,21 @@ func waitForBookJobCount(t *testing.T, service *Service, want int) {
 	t.Fatalf("book request job count = %d, want %d", count, want)
 }
 
+func waitForRecordedUserEvents(t *testing.T, recorder *recordingNotifier, want int) []notifierEvent {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		events := recorder.userEventsSnapshot()
+		if len(events) >= want {
+			return events
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	events := recorder.userEventsSnapshot()
+	t.Fatalf("recorded user event count = %d, want at least %d: %+v", len(events), want, events)
+	return nil
+}
+
 func restartedBookWorker(service *Service) (*Service, context.CancelFunc) {
 	restarted := NewService(service.db, service.registry, service.bridge, service.notifier)
 	restarted.bookMutationTimeout = 250 * time.Millisecond
@@ -133,14 +148,15 @@ func TestBookApprovalWorkerResumesVisibleSeedAndFinalizesPendingRow(t *testing.T
 	if seedCalls != 0 || monitorCalls != 1 || searchCalls != 1 {
 		t.Fatalf("resumed approval seed=%d monitor=%d search=%d, want 0/1/1", seedCalls, monitorCalls, searchCalls)
 	}
+	userEvents := waitForRecordedUserEvents(t, recorder, 1)
 	approvedEvents := 0
-	for _, event := range recorder.userEvents {
+	for _, event := range userEvents {
 		if event.userID == userID && event.eventType == "request_decision" && event.data["decision"] == "approved" {
 			approvedEvents++
 		}
 	}
 	if approvedEvents != 1 {
-		t.Fatalf("approval events=%d, want exactly one: %+v", approvedEvents, recorder.userEvents)
+		t.Fatalf("approval events=%d, want exactly one: %+v", approvedEvents, userEvents)
 	}
 }
 
@@ -2026,6 +2042,7 @@ func TestBookRequestWorkerStopsReconcilingAbsentSeedAtLifetime(t *testing.T) {
 	upstream.mu.Lock()
 	upstream.dropAddWithoutCommit[BookFormatEbook] = false
 	upstream.mu.Unlock()
+	service.bookMutationTimeout = 250 * time.Millisecond
 	response, err := service.CreateMediaRequest(userID, &CreateRequest{
 		MediaType: "book", ForeignID: upstream.foreignBookID, Title: upstream.title, BookFormat: BookFormatEbook,
 	})
@@ -2328,6 +2345,7 @@ func TestBookRequestWorkerExpiredSeedRebindRequiresExplicitRetry(t *testing.T) {
 	upstream.mu.Lock()
 	upstream.dropAddWithoutCommit[BookFormatEbook] = false
 	upstream.mu.Unlock()
+	service.bookMutationTimeout = 250 * time.Millisecond
 	response, err := service.CreateMediaRequest(userID, &CreateRequest{
 		MediaType: "book", ForeignID: upstream.foreignBookID,
 		Title: upstream.title, BookFormat: BookFormatEbook,

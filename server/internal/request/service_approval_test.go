@@ -1,12 +1,14 @@
 package request
 
 import (
+	"sync"
 	"testing"
 )
 
 // recordingNotifier records notifier events, mirroring the fake in
 // internal/push/composite_test.go but keeping the payloads for assertions.
 type recordingNotifier struct {
+	mu          sync.Mutex
 	userEvents  []notifierEvent
 	adminEvents []notifierEvent
 }
@@ -18,11 +20,21 @@ type notifierEvent struct {
 }
 
 func (r *recordingNotifier) NotifyUser(userID int64, eventType string, data map[string]interface{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.userEvents = append(r.userEvents, notifierEvent{userID: userID, eventType: eventType, data: data})
 }
 
 func (r *recordingNotifier) NotifyAdmins(eventType string, data map[string]interface{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.adminEvents = append(r.adminEvents, notifierEvent{eventType: eventType, data: data})
+}
+
+func (r *recordingNotifier) userEventsSnapshot() []notifierEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]notifierEvent(nil), r.userEvents...)
 }
 
 // createTestAdmin inserts an admin user (decisions record approved_by, which
