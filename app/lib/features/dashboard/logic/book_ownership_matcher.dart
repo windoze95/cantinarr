@@ -194,9 +194,11 @@ bool _strongIdentityMatch(ChaptarrBook result, OwnedTitle owned) {
 /// choosing a first record and potentially requesting the wrong library item.
 OwnedTitle? ownedMatchFor(ChaptarrBook result, List<OwnedTitle> digest) {
   final matches = ownedIdentityCandidatesFor(result, digest);
-  return matches.length == 1 &&
-          (_sameForeignId(result, matches.single) ||
-              _strongIdentityMatch(result, matches.single))
+  // Provider IDs narrow the candidates but are not identity on their own:
+  // Chaptarr can normalize lookup and local rows through different metadata
+  // sources. Require the visible title and author to agree before borrowing a
+  // library row's ownership or canonical ID.
+  return matches.length == 1 && _strongIdentityMatch(result, matches.single)
       ? matches.single
       : null;
 }
@@ -222,9 +224,7 @@ Map<ChaptarrBook, OwnedTitle> unambiguousOwnedMatches(
   for (final entry in candidates.entries) {
     if (entry.value.length != 1) continue;
     final match = entry.value.single;
-    if (lookupCounts[match] == 1 &&
-        (_sameForeignId(entry.key, match) ||
-            _strongIdentityMatch(entry.key, match))) {
+    if (lookupCounts[match] == 1 && _strongIdentityMatch(entry.key, match)) {
       resolved[entry.key] = match;
     }
   }

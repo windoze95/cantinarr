@@ -193,6 +193,7 @@ func main() {
 	plexHandler := plex.NewHandler(plexService, logger)
 	authHandler.SetAccessRequestHook(plexService.OnAccessRequest)
 	requestService := request.NewService(database, registry, bridge, notifier)
+	requestService.StartBookRequestWorkers(ctx)
 	requestHandler := request.NewHandler(requestService)
 
 	// Remediation (issue reporting) service + handler. Records/threads issues, runs

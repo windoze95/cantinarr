@@ -55,10 +55,10 @@ type BookLibraryDigest struct {
 // Chaptarr stores a title's ebook and audiobook as separate records sharing a
 // foreignBookId, so records are grouped by groupKey (foreignBookId, else the
 // record id) — mirroring the Dart ChaptarrBook.groupKey — and each record is
-// routed to the ebook or audiobook slot by its format. A record's format is its
-// book-level mediaType when set, else the format of its lone edition (else
-// unknown), matching the Dart ChaptarrBook.format fallback. Downloaded is keyed
-// off Statistics.BookFileCount (the hasFiles field is unreliable here).
+// routed to the ebook or audiobook slot by its authoritative format enum. A
+// record's format is its book-level mediaType when set, else the exact enum of
+// its lone edition; labels/extensions remain unknown. Downloaded is keyed off
+// Statistics.BookFileCount (the hasFiles field is unreliable here).
 func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 	type group struct {
 		title    *LibraryTitle
@@ -150,19 +150,30 @@ func coverOf(book chaptarr.Book) string {
 	return ""
 }
 
-// recordFormat resolves the single format a Chaptarr book record represents: its
-// book-level mediaType when "ebook"/"audiobook", else the format of its lone
-// edition via chaptarr.FormatOf (a book with anything other than exactly one
-// edition is "unknown"). Mirrors the Dart ChaptarrBook.format fallback.
-func recordFormat(book chaptarr.Book) string {
-	switch book.MediaType {
+// strictChaptarrFormat accepts only Chaptarr's authoritative media enum. File
+// extensions and publication labels such as MP3, Kindle, or Audio CD are not
+// safe substitutes: treating one as a requestable media type can mutate a
+// physical or otherwise unrelated edition.
+func strictChaptarrFormat(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
 	case chaptarr.FormatEbook:
 		return chaptarr.FormatEbook
 	case chaptarr.FormatAudiobook:
 		return chaptarr.FormatAudiobook
+	default:
+		return chaptarr.FormatUnknown
+	}
+}
+
+// recordFormat resolves the single format a Chaptarr book record represents:
+// its authoritative book-level mediaType when present, else the authoritative
+// format enum of its lone edition. Anything else remains unknown.
+func recordFormat(book chaptarr.Book) string {
+	if format := strictChaptarrFormat(book.MediaType); format != chaptarr.FormatUnknown {
+		return format
 	}
 	if len(book.Editions) == 1 {
-		return chaptarr.FormatOf(book.Editions[0].Format)
+		return strictChaptarrFormat(book.Editions[0].Format)
 	}
 	return chaptarr.FormatUnknown
 }
@@ -306,6 +317,25 @@ func (s *Service) GetBookLibraryDigestForInstance(userID int64, requestedInstanc
 	}
 
 	cacheKey := "book-library:" + instanceID
+	if s.libraryCache != nil {
+		if data, ok := s.libraryCache.Get(cacheKey); ok {
+			var digest BookLibraryDigest
+			if err := json.Unmarshal(data, &digest); err == nil {
+				if digest.Titles == nil {
+					digest.Titles = []LibraryTitle{}
+				}
+				return &digest, nil
+			}
+		}
+	}
+
+	// Share the per-instance projection lock with live-status refreshes and
+	// mutation invalidation. Without this second cache check, an owned-library
+	// fetch that began before a successful mutation could Set its stale result
+	// after the mutation's Delete and keep the old truth alive for the full TTL.
+	projectionLock := s.projectionLock(instanceID)
+	projectionLock.Lock()
+	defer projectionLock.Unlock()
 	if s.libraryCache != nil {
 		if data, ok := s.libraryCache.Get(cacheKey); ok {
 			var digest BookLibraryDigest

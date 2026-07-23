@@ -1,10 +1,13 @@
 package request
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -34,6 +37,28 @@ var (
 	ErrChaptarrInstanceForbidden = errors.New("chaptarr instance is not available to you")
 	ErrChaptarrInstanceInvalid   = errors.New("invalid chaptarr instance")
 	ErrBookFormatUnresolved      = errors.New("book format is unsupported or ambiguous")
+	ErrBookOutcomePending        = errors.New("book request outcome is still being reconciled")
+	ErrBookConfigurationInvalid  = errors.New("Chaptarr book configuration is incomplete")
+	ErrBookSelectionInvalid      = errors.New("selected book publication is invalid")
+	ErrBookMatchNotFound         = errors.New("selected catalog book could not be resolved")
+	ErrBookCatalogPending        = errors.New("Chaptarr is still preparing this title")
+	ErrBookEditionUnavailable    = errors.New("Chaptarr has no usable edition for the requested format")
+	ErrBookMutationUnverified    = errors.New("Chaptarr did not retain the requested book settings")
+	ErrBookMutationRejected      = errors.New("Chaptarr rejected the requested book change")
+	ErrBookSearchUnconfirmed     = errors.New("Chaptarr did not confirm the book search")
+	ErrBookSearchRejected        = errors.New("Chaptarr rejected the book search")
+	ErrBookMultiWorkUnsupported  = errors.New("select one book instead of a bundle or multi-book set")
+	errBookTitleRequired         = errors.New("title is required to add a new book")
+)
+
+var numberedMultiBookTitle = regexp.MustCompile(`(?i)\bbooks?\s+\d+\s*(?:-|–|—|&|\+|,|to|through)\s*\d+\b`)
+
+const (
+	defaultBookSetupTimeout    = 15 * time.Second
+	defaultBookMutationTimeout = 90 * time.Second
+	defaultBookSettleInterval  = 500 * time.Millisecond
+	defaultBookSearchAckTTL    = 2 * time.Minute
+	defaultBookSeedOutcomeTTL  = 30 * time.Minute
 )
 
 // Season scope choices a user (or admin) can attach to a TV request.
@@ -69,24 +94,103 @@ type Service struct {
 	notifier Notifier
 	// libraryCache holds reduced Chaptarr library digests keyed by instance id,
 	// so the owned-books digest doesn't refetch the whole library on every call.
-	libraryCache    *cache.Cache
-	decisionLocks   [64]sync.Mutex
-	bookLocks       [64]sync.Mutex
-	projectionLocks [32]sync.Mutex
+	libraryCache            *cache.Cache
+	decisionLocks           [64]sync.Mutex
+	bookLocks               [64]sync.Mutex
+	bookAuthorLocks         [64]sync.Mutex
+	bookAuthorMutationLocks [64]sync.Mutex
+	projectionLocks         [32]sync.Mutex
+	bookSearchAckMu         sync.Mutex
+	bookSearchAcks          map[string]time.Time
+	bookSearchOutcomeMu     sync.Mutex
+	bookUncertainSearches   map[string]time.Time
+	bookSeedOutcomeMu       sync.Mutex
+	bookUncertainSeeds      map[string]time.Time
+	bookUncertainSeedTitles map[string]string
+	bookJobWake             chan struct{}
+	bookWorkerGeneration    string
+
+	// These durations are fields rather than package variables so focused tests
+	// can exercise settling and expiry without racing unrelated parallel tests.
+	bookMutationTimeout time.Duration
+	bookSettleInterval  time.Duration
+	bookSearchAckTTL    time.Duration
 }
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
 	return &Service{
-		db:           db,
-		registry:     registry,
-		bridge:       bridge,
-		notifier:     notifier,
-		libraryCache: cache.New(),
+		db:                      db,
+		registry:                registry,
+		bridge:                  bridge,
+		notifier:                notifier,
+		libraryCache:            cache.New(),
+		bookSearchAcks:          make(map[string]time.Time),
+		bookUncertainSearches:   make(map[string]time.Time),
+		bookUncertainSeeds:      make(map[string]time.Time),
+		bookUncertainSeedTitles: make(map[string]string),
+		bookJobWake:             make(chan struct{}, 1),
+		bookMutationTimeout:     defaultBookMutationTimeout,
+		bookSettleInterval:      defaultBookSettleInterval,
+		bookSearchAckTTL:        defaultBookSearchAckTTL,
 	}
 }
 
 func (s *Service) bookLock(key string) *sync.Mutex {
 	return &s.bookLocks[stripeHash(key)%uint32(len(s.bookLocks))]
+}
+
+func (s *Service) newBookMutationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := s.bookMutationTimeout
+	if timeout <= 0 {
+		timeout = defaultBookMutationTimeout
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func newBookSetupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, defaultBookSetupTimeout)
+}
+
+func (s *Service) bookAuthorLock(key string) *sync.Mutex {
+	return &s.bookAuthorLocks[stripeHash(key)%uint32(len(s.bookAuthorLocks))]
+}
+
+func (s *Service) lockBookAuthorSeed(instanceID, foreignAuthorID, authorName string) func() {
+	indices := make(map[int]bool, 2)
+	if foreignAuthorID = strings.TrimSpace(foreignAuthorID); foreignAuthorID != "" {
+		index := int(stripeHash(instanceID+"\x00provider\x00"+foreignAuthorID) % uint32(len(s.bookAuthorLocks)))
+		indices[index] = true
+	}
+	if authorName = normalizeBookIdentity(authorName); authorName != "" {
+		index := int(stripeHash(instanceID+"\x00name\x00"+authorName) % uint32(len(s.bookAuthorLocks)))
+		indices[index] = true
+	}
+	if len(indices) == 0 {
+		indices[int(stripeHash(instanceID+"\x00unknown-author")%uint32(len(s.bookAuthorLocks)))] = true
+	}
+	ordered := make([]int, 0, len(indices))
+	for index := range indices {
+		ordered = append(ordered, index)
+	}
+	sort.Ints(ordered)
+	for _, index := range ordered {
+		s.bookAuthorLocks[index].Lock()
+	}
+	return func() {
+		for index := len(ordered) - 1; index >= 0; index-- {
+			s.bookAuthorLocks[ordered[index]].Unlock()
+		}
+	}
+}
+
+func (s *Service) bookAuthorMutationLock(key string) *sync.Mutex {
+	return &s.bookAuthorMutationLocks[stripeHash(key)%uint32(len(s.bookAuthorMutationLocks))]
 }
 
 func (s *Service) decisionLock(requestID int64) *sync.Mutex {
@@ -188,6 +292,10 @@ type CreateRequest struct {
 	// have no TMDB id. Required when media_type == "book"; ignored otherwise.
 	ForeignID  string `json:"foreign_id"`
 	BookFormat string `json:"book_format"`
+	// BookSelection carries only stable external author/publication evidence
+	// from the requester-facing match chooser. Chaptarr-local numeric IDs are
+	// intentionally excluded because they can change while the catalog settles.
+	BookSelection *BookSelection `json:"book_selection,omitempty"`
 	// InstanceID pins book operations to the Chaptarr instance the requester is
 	// viewing. It is optional for backward compatibility; omitted uses the
 	// user's effective grant (or the admin default).
@@ -201,6 +309,34 @@ type CreateRequest struct {
 	Seasons []int `json:"seasons,omitempty"`
 }
 
+type BookPublicationSelection struct {
+	ForeignEditionID string `json:"foreign_edition_id,omitempty"`
+	ISBN13           string `json:"isbn13,omitempty"`
+	ASIN             string `json:"asin,omitempty"`
+	EditionTitle     string `json:"edition_title,omitempty"`
+	Publisher        string `json:"publisher,omitempty"`
+	Language         string `json:"language,omitempty"`
+	Year             int    `json:"year,omitempty"`
+	PageCount        int    `json:"page_count,omitempty"`
+}
+
+type BookSelection struct {
+	ForeignAuthorID string                    `json:"foreign_author_id,omitempty"`
+	AuthorName      string                    `json:"author_name,omitempty"`
+	Ebook           *BookPublicationSelection `json:"ebook,omitempty"`
+	Audiobook       *BookPublicationSelection `json:"audiobook,omitempty"`
+}
+
+func (s *BookSelection) publication(format string) *BookPublicationSelection {
+	if s == nil {
+		return nil
+	}
+	if format == BookFormatAudiobook {
+		return s.Audiobook
+	}
+	return s.Ebook
+}
+
 type CreateResponse struct {
 	Success     bool              `json:"success"`
 	Status      string            `json:"status"`
@@ -209,9 +345,11 @@ type CreateResponse struct {
 }
 
 type StatusResponse struct {
-	Status      string  `json:"status"`
-	Progress    float64 `json:"progress"`
-	StatusKnown *bool   `json:"status_known,omitempty"`
+	Status        string  `json:"status"`
+	Progress      float64 `json:"progress"`
+	StatusKnown   *bool   `json:"status_known,omitempty"`
+	UnknownReason string  `json:"unknown_reason,omitempty"`
+	FailureCode   string  `json:"failure_code,omitempty"`
 	// Seasons carries per-season availability for TV titles (omitted for
 	// movies and for series not yet in the library). Season 0 / Specials are
 	// excluded, matching the rest of the app's season handling.
@@ -248,20 +386,21 @@ type RequestLog struct {
 
 // PendingRequest is one row of the admin approval queue.
 type PendingRequest struct {
-	ID               int64     `json:"id"`
-	UserID           int64     `json:"user_id"`
-	Username         string    `json:"username"`
-	TmdbID           int       `json:"tmdb_id"`
-	TvdbID           int       `json:"tvdb_id"`
-	MediaType        string    `json:"media_type"`
-	Title            string    `json:"title"`
-	BookFormat       string    `json:"book_format"`
-	InstanceID       string    `json:"instance_id,omitempty"`
-	InstanceName     string    `json:"instance_name,omitempty"`
-	RequesterCount   int       `json:"requester_count"`
-	SeasonScope      string    `json:"season_scope"`
-	QualityProfileID int       `json:"quality_profile_id"`
-	RequestedAt      time.Time `json:"requested_at"`
+	ID               int64          `json:"id"`
+	UserID           int64          `json:"user_id"`
+	Username         string         `json:"username"`
+	TmdbID           int            `json:"tmdb_id"`
+	TvdbID           int            `json:"tvdb_id"`
+	MediaType        string         `json:"media_type"`
+	Title            string         `json:"title"`
+	BookFormat       string         `json:"book_format"`
+	BookSelection    *BookSelection `json:"book_selection,omitempty"`
+	InstanceID       string         `json:"instance_id,omitempty"`
+	InstanceName     string         `json:"instance_name,omitempty"`
+	RequesterCount   int            `json:"requester_count"`
+	SeasonScope      string         `json:"season_scope"`
+	QualityProfileID int            `json:"quality_profile_id"`
+	RequestedAt      time.Time      `json:"requested_at"`
 }
 
 // QualityProfile is an arr quality profile offered for selection.
@@ -344,12 +483,14 @@ type resolvedRequest struct {
 	tvdbID           int
 	foreignID        string // Chaptarr foreignBookId (book requests)
 	bookFormat       string
+	bookSelection    *BookSelection
 	instanceID       string
 	bookFormats      map[string]string
 	mediaType        string
 	title            string
 	seasonScope      string
 	qualityProfileID int
+	bookJobID        int64
 	// seasonNumbers, when non-empty, is an explicit set of seasons to monitor
 	// (overrides seasonScope). It round-trips through the approval flow by
 	// being JSON-encoded into the season_scope column.
@@ -521,6 +662,9 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		if req.BookFormat != "" && !validBookFormat(req.BookFormat) {
 			return nil, fmt.Errorf("book_format must be ebook, audiobook, or both")
 		}
+		if chaptarrTitleIsMultiWork(req.Title) {
+			return nil, ErrBookMultiWorkUnsupported
+		}
 	}
 
 	isAdmin := s.userIsAdmin(userID)
@@ -539,6 +683,13 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		mediaType:  req.MediaType,
 		title:      req.Title,
 	}
+	if resolved.mediaType == "book" {
+		selection, selectionErr := normalizeBookSelection(req.BookSelection, resolved.bookFormat)
+		if selectionErr != nil {
+			return nil, selectionErr
+		}
+		resolved.bookSelection = selection
+	}
 	var resolvedBookClient *chaptarr.Client
 	if resolved.mediaType == "book" {
 		client, instanceID, err := s.resolveChaptarr(userID, resolved.instanceID)
@@ -548,13 +699,44 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		if client == nil {
 			return nil, fmt.Errorf("chaptarr is not configured for you")
 		}
-		resolvedBookClient = client
 		resolved.instanceID = instanceID
+		// Pin the instance URL/credentials for the full request. Re-resolve after
+		// taking the shared configuration lock so an admin update that won the
+		// race cannot leave this request writing through a stale client and then
+		// recording the result against the repointed instance ID.
+		unlockConfig := s.registry.LockInstanceConfigRead(resolved.instanceID)
+		defer unlockConfig()
+		client, lockedInstanceID, err := s.resolveChaptarr(userID, resolved.instanceID)
+		if err != nil {
+			return nil, err
+		}
+		if client == nil || lockedInstanceID != resolved.instanceID {
+			return nil, ErrChaptarrInstanceInvalid
+		}
+		resolvedBookClient = client
 		// Keep the live preflight, external mutation, and request-log write in one
 		// same-process per-title critical section.
 		bookLock := s.bookLock(resolved.instanceID + "\x00" + resolved.foreignID)
 		bookLock.Lock()
 		defer bookLock.Unlock()
+		if eff.RequiresApproval {
+			ctx, cancel := newBookSetupContext(context.Background())
+			books, readErr := client.GetAllBooksContext(ctx)
+			if readErr != nil {
+				cancel()
+				return nil, fmt.Errorf("check existing book identity: %w", readErr)
+			}
+			canonicalTitle, _, identityErr := s.selectChaptarrLibraryWorkForRequest(
+				ctx, client, books, resolved.foreignID, resolved.title, resolved.bookSelection,
+			)
+			cancel()
+			if identityErr != nil {
+				return nil, identityErr
+			}
+			if resolved.title == "" {
+				resolved.title = canonicalTitle
+			}
+		}
 	}
 
 	// Season scope (TV only). Honor the client's choice only when allowed;
@@ -636,6 +818,31 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		return s.createPending(resolved)
 	}
 
+	if resolved.mediaType == "book" {
+		job, client, alreadyActive, err := s.prepareDirectBookJob(resolved)
+		if err != nil {
+			return nil, err
+		}
+		if alreadyActive {
+			return nil, ErrBookOutcomePending
+		}
+		resolved.bookJobID = job.ID
+		applyBookJobCheckpoints(resolved, job)
+		status, title, err := s.addToChaptarrWithClient(resolved, client, resolved.instanceID)
+		if err != nil {
+			if retained := s.deferDirectBookJob(job.ID, err); !retained {
+				return nil, err
+			}
+			return nil, ErrBookOutcomePending
+		}
+		resolved.title = title
+		if err := s.completeDirectBookJob(job.ID, resolved, title); err != nil {
+			s.deferDirectBookJob(job.ID, err)
+			return nil, ErrBookOutcomePending
+		}
+		return &CreateResponse{Success: true, Status: status, Title: title, BookFormats: resolved.bookFormats}, nil
+	}
+
 	status, title, err := s.addToArr(resolved)
 	if err != nil {
 		return nil, err
@@ -673,7 +880,7 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 
 		coveredBy := map[string]int64{}
 		rows, queryErr := tx.Query(
-			`SELECT id, COALESCE(book_format, 'both') FROM request_log
+			`SELECT id, COALESCE(book_format, 'both'), COALESCE(book_selection_json, '') FROM request_log
 			 WHERE foreign_id = ? AND COALESCE(instance_id, '') = COALESCE(?, '')
 			   AND media_type = 'book' AND status = ?`,
 			r.foreignID, sqlNullStr(r.instanceID), StatusPending,
@@ -684,12 +891,21 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 		covered := map[string]bool{}
 		for rows.Next() {
 			var requestID int64
-			var storedFormat string
-			if scanErr := rows.Scan(&requestID, &storedFormat); scanErr != nil {
+			var storedFormat, storedSelectionJSON string
+			if scanErr := rows.Scan(&requestID, &storedFormat, &storedSelectionJSON); scanErr != nil {
 				_ = rows.Close()
 				return nil, fmt.Errorf("scan pending book format: %w", scanErr)
 			}
+			storedFormat = normalizeBookFormat(storedFormat)
+			storedSelection, selectionErr := requireDecodedBookSelection(storedSelectionJSON, storedFormat)
+			if selectionErr != nil {
+				_ = rows.Close()
+				return nil, selectionErr
+			}
 			for _, format := range expandBookFormat(storedFormat) {
+				if !bookSelectionsEquivalent(storedSelection, r.bookSelection, format) {
+					continue
+				}
 				covered[format] = true
 				coveredBy[format] = requestID
 			}
@@ -717,10 +933,14 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 			res = zeroRowsResult{}
 		} else {
 			insertedBookFormat = pendingFormat
+			selectionJSON, encodeErr := encodeBookSelection(r.bookSelection, pendingFormat)
+			if encodeErr != nil {
+				return nil, encodeErr
+			}
 			res, err = tx.Exec(
-				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
-				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?)`,
-				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending,
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, book_selection_json, media_type, title, status)
+				 VALUES (?, 0, ?, ?, ?, ?, 'book', ?, ?)`,
+				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), sqlNullStr(selectionJSON), r.title, StatusPending,
 			)
 			if err == nil {
 				requestID, _ := res.LastInsertId()
@@ -853,62 +1073,110 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	if client == nil {
 		return "", "", fmt.Errorf("chaptarr is not configured for you")
 	}
+	return s.addToChaptarrWithClient(r, client, instanceID)
+}
+
+func (s *Service) addToChaptarrWithClient(r *resolvedRequest, client *chaptarr.Client, instanceID string) (string, string, error) {
+	return s.addToChaptarrWithClientContext(context.Background(), r, client, instanceID)
+}
+
+func (s *Service) addToChaptarrWithClientContext(parent context.Context, r *resolvedRequest, client *chaptarr.Client, instanceID string) (string, string, error) {
+	r.instanceID = instanceID
+	ctx, cancel := newBookSetupContext(parent)
+	defer cancel()
 
 	// Preflight the live library before lookup/add. The request boundary is the
 	// idempotency boundary: a file is already available, a monitored record is
-	// already requested, and an unmonitored record is monitored/searched in
-	// place rather than duplicated.
-	books, libraryErr := client.GetAllBooks()
+	// repaired in place rather than duplicated. A bare monitor flag is not an
+	// accepted request: the edition choice, author gate, monitor read-back, and
+	// BookSearch acknowledgement must all converge first.
+	books, libraryErr := client.GetAllBooksContext(ctx)
 	if libraryErr != nil {
 		return "", "", fmt.Errorf("check existing book state: %w", libraryErr)
 	}
-	title, existing, unresolved := recordsForForeignID(books, r.foreignID)
-	title = strings.TrimSpace(title)
-	if unresolved {
+	title, canonicalBooks, err := s.selectChaptarrLibraryWorkForRequest(
+		ctx, client, books, r.foreignID, r.title, r.bookSelection,
+	)
+	if err != nil {
+		return "", "", err
+	}
+	_, existing, unresolved := recordsForForeignID(canonicalBooks, r.foreignID)
+	physicalRecords, unsafeUnresolved := chaptarrPhysicalAndUnsafeRecords(canonicalBooks, r.foreignID)
+	if unresolved && unsafeUnresolved {
 		return "", "", ErrBookFormatUnresolved
 	}
-	if title == "" {
-		title = r.title
+	// Preserve the title the requester explicitly selected. Library ordering is
+	// not stable, and a physical sibling or duplicate pocket can carry a title
+	// variant that must not redirect the exact work selected in the app.
+	if chaptarrTitleIsMultiWork(title) {
+		return "", "", ErrBookMultiWorkUnsupported
 	}
-	r.bookFormats = make(map[string]string)
+	if r.bookFormats == nil {
+		r.bookFormats = make(map[string]string)
+	}
 	missing := make([]string, 0, 2)
 	var lastErr error
+	abortFurtherFormats := false
 	for _, mediaType := range chaptarrRequestFormats(r.bookFormat) {
+		if completed, ok := r.bookFormats[mediaType]; ok && completed != StatusUnavailable {
+			continue
+		}
+		if abortFurtherFormats {
+			r.bookFormats[mediaType] = StatusUnavailable
+			continue
+		}
 		records := existing[mediaType]
 		if len(records) == 0 {
 			missing = append(missing, mediaType)
 			continue
 		}
-		available := false
-		monitored := false
-		ids := make([]int, 0, len(records))
-		for _, rec := range records {
-			ids = append(ids, rec.ID)
-			available = available || rec.Statistics.BookFileCount > 0
-			monitored = monitored || rec.Monitored
-		}
-		switch {
-		case available:
-			r.bookFormats[mediaType] = StatusAvailable
-		case monitored:
-			r.bookFormats[mediaType] = StatusRequested
-		default:
-			if err := client.SetBookMonitored(ids, true); err != nil {
-				lastErr = fmt.Errorf("monitor %s: %w", mediaType, err)
-				r.bookFormats[mediaType] = StatusUnavailable
+		if r.bookSelection.publication(mediaType) == nil {
+			available := false
+			for _, rec := range records {
+				available = available || chaptarrBookAvailable(rec)
+			}
+			if available {
+				if err := s.completeBookJobFormat(r, mediaType, StatusAvailable); err != nil {
+					return "", "", err
+				}
 				continue
 			}
-			// Monitoring is the durable request contract; the immediate search is a
-			// best-effort accelerator. A failed command must not make the now-
-			// monitored record requestable again.
-			_ = client.TriggerBookSearch(ids)
-			r.bookFormats[mediaType] = StatusRequested
 		}
+		authorID, err := chaptarrRecordAuthorID(records)
+		if err != nil {
+			lastErr = preferBookMutationError(lastErr, err)
+			r.bookFormats[mediaType] = StatusUnavailable
+			abortFurtherFormats = bookMutationOutcomeUnknown(err)
+			continue
+		}
+		target := chaptarrBookTargetForResolvedRequest(r, authorID, title, mediaType)
+		formatCtx, formatCancel := s.newBookMutationContext(parent)
+		status, err := s.ensureChaptarrBookRequest(formatCtx, client, r.instanceID, target)
+		formatCancel()
+		if err != nil {
+			lastErr = preferBookMutationError(lastErr, err)
+			r.bookFormats[mediaType] = StatusUnavailable
+			abortFurtherFormats = bookMutationOutcomeUnknown(err)
+			continue
+		}
+		if err := s.completeBookJobFormat(r, mediaType, status); err != nil {
+			return "", "", err
+		}
+	}
+	if abortFurtherFormats {
+		markRemainingBookFormatsUnavailable(r.bookFormats, missing)
+		return s.finishBookMutation(r, title, lastErr)
 	}
 	if len(missing) == 0 {
 		return s.finishBookMutation(r, title, lastErr)
 	}
-	if len(existing) > 0 {
+	// Existing-format convergence can consume its full independent budget. Use
+	// a fresh setup window for the missing-format author/lookup/config reads so a
+	// slow first format cannot strand the second before its own mutation budget.
+	cancel()
+	ctx, cancel = newBookSetupContext(parent)
+	defer cancel()
+	if len(existing) > 0 || len(physicalRecords) > 0 {
 		// A requester can arrive with the canonical library foreignBookId while
 		// metadata lookup uses a different provider ID. Add missing sibling
 		// formats under the already-tracked author instead of requiring those IDs
@@ -929,25 +1197,64 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 				}
 			}
 		}
+		for _, record := range physicalRecords {
+			authorID := record.AuthorID
+			if authorID == 0 && record.Author != nil {
+				authorID = record.Author.ID
+			}
+			if authorID != 0 {
+				authorIDs[authorID] = true
+			}
+			if seed.ID == 0 {
+				seed = record
+			}
+		}
 		if len(authorIDs) > 1 {
-			return "", "", fmt.Errorf("existing canonical book records disagree on author")
+			return s.finishBookSetupFailure(
+				r,
+				title,
+				missing,
+				fmt.Errorf("existing canonical book records disagree on author"),
+			)
 		}
 		authorID := 0
 		for collectedID := range authorIDs {
 			authorID = collectedID
 		}
 		if authorID == 0 {
-			return "", "", fmt.Errorf("existing book author is unresolved")
+			return s.finishBookSetupFailure(
+				r,
+				title,
+				missing,
+				fmt.Errorf("existing book author is unresolved"),
+			)
 		}
-		author, err := client.GetAuthor(authorID)
+		author, err := client.GetAuthorContext(ctx, authorID)
 		if err != nil {
-			return "", "", fmt.Errorf("load existing book author: %w", err)
+			return s.finishBookSetupFailure(
+				r,
+				title,
+				missing,
+				fmt.Errorf("load existing book author: %w", err),
+			)
+		}
+		if !bookSelectionMatchesAuthorIdentity(r.bookSelection, author.ForeignAuthorID, author.AuthorName) {
+			return s.finishBookSetupFailure(
+				r,
+				title,
+				missing,
+				fmt.Errorf("%w: selected author changed", ErrBookMatchNotFound),
+			)
 		}
 		config, ok := bookConfigFromAuthor(author)
 		if !ok {
-			return "", "", fmt.Errorf("existing book configuration is incomplete for one or more formats")
+			return s.finishBookSetupFailure(
+				r,
+				title,
+				missing,
+				fmt.Errorf("%w: existing book configuration is incomplete for one or more formats", ErrBookConfigurationInvalid),
+			)
 		}
-		config.includeRequestedFormats(r.bookFormat)
 		match := &chaptarr.LookupResult{
 			ForeignBookID:   r.foreignID,
 			Title:           title,
@@ -958,39 +1265,77 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		if match.TitleSlug == "" {
 			match.TitleSlug = fallbackTitleSlug(title)
 		}
-		for _, mediaType := range missing {
-			if err := s.addChaptarrBookRecord(client, match, config, title, match.TitleSlug, mediaType); err != nil {
-				lastErr = err
+		lookupResults, lookupErr := client.LookupBookContext(ctx, title)
+		if lookupErr != nil {
+			return s.finishBookSetupFailure(
+				r,
+				title,
+				missing,
+				fmt.Errorf("load missing-format seed editions: %w", lookupErr),
+			)
+		}
+		match.Editions, lookupErr = selectChaptarrSeedEditions(lookupResults, r.foreignID, title, author, r.bookSelection)
+		if lookupErr != nil {
+			return s.finishBookSetupFailure(r, title, missing, lookupErr)
+		}
+		for index, mediaType := range missing {
+			formatCtx, formatCancel := s.newBookMutationContext(parent)
+			status, materialized, err := s.ensureMaterializedChaptarrBook(formatCtx, client, r.instanceID, match, config.authorID, title, mediaType, r.bookJobID, r.bookSelection)
+			if err != nil {
+				formatCancel()
+				lastErr = preferBookMutationError(lastErr, err)
 				r.bookFormats[mediaType] = StatusUnavailable
+				if bookMutationOutcomeUnknown(err) {
+					markRemainingBookFormatsUnavailable(r.bookFormats, missing[index+1:])
+					break
+				}
 				continue
 			}
-			r.bookFormats[mediaType] = StatusRequested
+			if materialized {
+				formatCancel()
+				if err := s.completeBookJobFormat(r, mediaType, status); err != nil {
+					return "", "", err
+				}
+				config.markMonitorFuture(mediaType)
+				continue
+			}
+			status, err = s.addChaptarrBookRecord(formatCtx, client, r.instanceID, match, &config, title, match.TitleSlug, mediaType, r.bookJobID, r.bookSelection)
+			formatCancel()
+			if err != nil {
+				lastErr = preferBookMutationError(lastErr, err)
+				r.bookFormats[mediaType] = StatusUnavailable
+				if bookMutationOutcomeUnknown(err) {
+					markRemainingBookFormatsUnavailable(r.bookFormats, missing[index+1:])
+					break
+				}
+				continue
+			}
+			if err := s.completeBookJobFormat(r, mediaType, status); err != nil {
+				return "", "", err
+			}
 		}
 		return s.finishBookMutation(r, title, lastErr)
 	}
 	if r.title == "" {
-		return "", "", fmt.Errorf("title is required to add a new book")
+		return "", "", errBookTitleRequired
 	}
 
-	results, err := client.LookupBook(r.title)
+	results, err := client.LookupBookContext(ctx, r.title)
 	if err != nil {
 		if len(missing) > 0 {
 			return "", "", fmt.Errorf("book lookup failed: %w", err)
 		}
 		results = nil
 	}
-	var match *chaptarr.LookupResult
-	for i := range results {
-		if results[i].ForeignBookID == r.foreignID {
-			match = &results[i]
-			break
-		}
+	match, err := selectChaptarrLookupResultWithSelection(results, r.foreignID, r.title, r.bookSelection)
+	if err != nil {
+		return "", "", err
 	}
 	if match == nil && len(missing) > 0 {
 		// The foreignBookId belongs to a book already in the library (owned
 		// records carry a library foreignBookId the metadata lookup can't match);
 		// complete the missing format from the existing records instead of adding.
-		lastErr = fmt.Errorf("book not found for foreign id %s", r.foreignID)
+		lastErr = preferBookMutationError(lastErr, fmt.Errorf("%w: book not found for foreign id %s", ErrBookMatchNotFound, r.foreignID))
 		for _, mediaType := range missing {
 			r.bookFormats[mediaType] = StatusUnavailable
 		}
@@ -999,27 +1344,80 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		return s.finishBookMutation(r, title, lastErr)
 	}
 
-	qps, err := client.GetQualityProfiles()
-	if err != nil || len(qps) == 0 {
-		return "", "", fmt.Errorf("no quality profiles available")
+	authorName, foreignAuthorID := chaptarrLookupAuthorIdentity(match)
+	if authorName == "" && foreignAuthorID == "" {
+		return "", "", fmt.Errorf("%w: selected author identity is missing", ErrBookMutationUnverified)
 	}
-	mps, err := client.GetMetadataProfiles()
-	if err != nil || len(mps) == 0 {
-		return "", "", fmt.Errorf("no metadata profiles available")
-	}
-	folders, err := client.GetRootFolders()
-	if err != nil || len(folders) == 0 {
-		return "", "", fmt.Errorf("no root folders available")
-	}
-	config, err := selectBookConfig(qps, mps, folders)
+	// This first resolution chooses configuration without mutating anything.
+	// addChaptarrBookRecord repeats it under deterministic provider/name locks
+	// immediately before POST, which closes alias races without serializing
+	// unrelated authors during the longer catalog/search convergence.
+	localAuthor, err := findExistingChaptarrAuthor(ctx, client, foreignAuthorID, authorName)
 	if err != nil {
 		return "", "", err
 	}
-	config.includeRequestedFormats(r.bookFormat)
-
+	var config bookAddConfig
+	if localAuthor != nil {
+		localAuthorID := localAuthor.ID
+		localAuthor, err = client.GetAuthorContext(ctx, localAuthor.ID)
+		if err != nil {
+			return "", "", fmt.Errorf("load existing selected author: %w", err)
+		}
+		providerMatched := foreignAuthorID != "" && localAuthor.ForeignAuthorID == foreignAuthorID
+		nameMatched := authorName != "" && normalizeBookIdentity(localAuthor.AuthorName) == normalizeBookIdentity(authorName)
+		if localAuthor.ID != localAuthorID || (!providerMatched && !nameMatched) {
+			return "", "", fmt.Errorf("%w: selected author identity changed", ErrBookMutationUnverified)
+		}
+		// The unique name fallback deliberately tolerates provider-id drift. Once
+		// it resolves, pin every later write/read-back to the authoritative local
+		// identity instead of carrying the stale lookup provider id forward.
+		authorName = strings.TrimSpace(localAuthor.AuthorName)
+		foreignAuthorID = strings.TrimSpace(localAuthor.ForeignAuthorID)
+		match.AuthorName = authorName
+		match.ForeignAuthorID = foreignAuthorID
+		if match.Author != nil {
+			match.Author.ID = localAuthor.ID
+			match.Author.AuthorName = authorName
+			match.Author.ForeignAuthorID = foreignAuthorID
+		}
+		var ok bool
+		config, ok = bookConfigFromAuthor(localAuthor)
+		if !ok {
+			return "", "", fmt.Errorf("%w: existing author configuration is incomplete for one or more formats", ErrBookConfigurationInvalid)
+		}
+	} else {
+		qps, err := client.GetQualityProfilesContext(ctx)
+		if err != nil {
+			return "", "", fmt.Errorf("load book quality profiles: %w", err)
+		}
+		if len(qps) == 0 {
+			return "", "", fmt.Errorf("%w: no quality profiles available", ErrBookConfigurationInvalid)
+		}
+		mps, err := client.GetMetadataProfilesContext(ctx)
+		if err != nil {
+			return "", "", fmt.Errorf("load book metadata profiles: %w", err)
+		}
+		if len(mps) == 0 {
+			return "", "", fmt.Errorf("%w: no metadata profiles available", ErrBookConfigurationInvalid)
+		}
+		folders, err := client.GetRootFoldersContext(ctx)
+		if err != nil {
+			return "", "", fmt.Errorf("load book root folders: %w", err)
+		}
+		if len(folders) == 0 {
+			return "", "", fmt.Errorf("%w: no root folders available", ErrBookConfigurationInvalid)
+		}
+		config, err = selectBookConfig(qps, mps, folders)
+		if err != nil {
+			return "", "", err
+		}
+	}
 	title = strings.TrimSpace(match.Title)
 	if title == "" {
 		title = r.title
+	}
+	if chaptarrTitleIsMultiWork(title) {
+		return "", "", ErrBookMultiWorkUnsupported
 	}
 	titleSlug := match.TitleSlug
 	if titleSlug == "" {
@@ -1030,13 +1428,41 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	// (same foreignBookId, different mediaType), so a "both" request adds the
 	// book once per format. Adding at least one record counts as requested; the
 	// last error is surfaced only if every requested format failed.
-	for _, mediaType := range missing {
-		if err := s.addChaptarrBookRecord(client, match, config, title, titleSlug, mediaType); err != nil {
-			lastErr = err
+	for index, mediaType := range missing {
+		formatCtx, formatCancel := s.newBookMutationContext(parent)
+		status, materialized, err := s.ensureMaterializedChaptarrBook(formatCtx, client, r.instanceID, match, config.authorID, title, mediaType, r.bookJobID, r.bookSelection)
+		if err != nil {
+			formatCancel()
+			lastErr = preferBookMutationError(lastErr, err)
 			r.bookFormats[mediaType] = StatusUnavailable
+			if bookMutationOutcomeUnknown(err) {
+				markRemainingBookFormatsUnavailable(r.bookFormats, missing[index+1:])
+				break
+			}
 			continue
 		}
-		r.bookFormats[mediaType] = StatusRequested
+		if materialized {
+			formatCancel()
+			if err := s.completeBookJobFormat(r, mediaType, status); err != nil {
+				return "", "", err
+			}
+			config.markMonitorFuture(mediaType)
+			continue
+		}
+		status, err = s.addChaptarrBookRecord(formatCtx, client, r.instanceID, match, &config, title, titleSlug, mediaType, r.bookJobID, r.bookSelection)
+		formatCancel()
+		if err != nil {
+			lastErr = preferBookMutationError(lastErr, err)
+			r.bookFormats[mediaType] = StatusUnavailable
+			if bookMutationOutcomeUnknown(err) {
+				markRemainingBookFormatsUnavailable(r.bookFormats, missing[index+1:])
+				break
+			}
+			continue
+		}
+		if err := s.completeBookJobFormat(r, mediaType, status); err != nil {
+			return "", "", err
+		}
 	}
 	return s.finishBookMutation(r, title, lastErr)
 }
@@ -1073,13 +1499,11 @@ func (c bookAddConfig) complete() bool {
 		strings.TrimSpace(c.audiobookRootFolderPath) != ""
 }
 
-func (c *bookAddConfig) includeRequestedFormats(bookFormat string) {
-	for _, format := range expandBookFormat(bookFormat) {
-		if format == BookFormatEbook {
-			c.ebookMonitorFuture = true
-		} else if format == BookFormatAudiobook {
-			c.audiobookMonitorFuture = true
-		}
+func (c *bookAddConfig) markMonitorFuture(mediaType string) {
+	if mediaType == BookFormatAudiobook {
+		c.audiobookMonitorFuture = true
+	} else if mediaType == BookFormatEbook {
+		c.ebookMonitorFuture = true
 	}
 }
 
@@ -1119,15 +1543,15 @@ func selectBookConfig(qualityProfiles []chaptarr.QualityProfile, metadataProfile
 	for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
 		qualityProfileID, ok := selectBookQualityProfile(qualityProfiles, format)
 		if !ok {
-			return bookAddConfig{}, fmt.Errorf("Chaptarr %s quality profile selection is ambiguous", format)
+			return bookAddConfig{}, fmt.Errorf("%w: Chaptarr %s quality profile selection is ambiguous", ErrBookConfigurationInvalid, format)
 		}
 		metadataProfileID, ok := selectBookMetadataProfile(metadataProfiles, format)
 		if !ok {
-			return bookAddConfig{}, fmt.Errorf("Chaptarr %s metadata profile selection is ambiguous", format)
+			return bookAddConfig{}, fmt.Errorf("%w: Chaptarr %s metadata profile selection is ambiguous", ErrBookConfigurationInvalid, format)
 		}
 		root, ok := selectBookRoot(folders, format)
 		if !ok {
-			return bookAddConfig{}, fmt.Errorf("no accessible root folder available for %s", format)
+			return bookAddConfig{}, fmt.Errorf("%w: no accessible root folder available for %s", ErrBookConfigurationInvalid, format)
 		}
 		if format == BookFormatEbook {
 			config.ebookQualityProfileID = qualityProfileID
@@ -1194,17 +1618,7 @@ type bookProfileCandidate struct {
 }
 
 func selectSingleBookProfileCandidate(profiles []bookProfileCandidate) (int, bool) {
-	selected := 0
-	for _, profile := range profiles {
-		if profile.ID <= 0 {
-			continue
-		}
-		if selected != 0 {
-			return 0, false
-		}
-		selected = profile.ID
-	}
-	return selected, selected != 0
+	return selectBookProfileCandidate(profiles)
 }
 
 func selectLegacyBookProfile(profiles []bookProfileCandidate, format string) (int, bool) {
@@ -1266,11 +1680,22 @@ func bookProfileNameIsDefault(name string) bool {
 // finishBookMutation reduces per-format outcomes without allowing a partial
 // "both" request to masquerade as complete success.
 func (s *Service) finishBookMutation(r *resolvedRequest, title string, lastErr error) (string, string, error) {
+	requestedFormats := expandBookFormat(r.bookFormat)
 	succeeded := 0
-	for _, status := range r.bookFormats {
+	for _, format := range requestedFormats {
+		status := r.bookFormats[format]
 		if status != StatusUnavailable {
+			if strings.TrimSpace(status) == "" {
+				continue
+			}
 			succeeded++
 		}
+	}
+	// Never reduce an outcome-unknown sibling to a clean partial response. That
+	// would label it unavailable and immediately invite a duplicate retry even
+	// though its seed/search may have committed upstream.
+	if bookMutationOutcomeUnknown(lastErr) {
+		return "", "", lastErr
 	}
 	if succeeded == 0 {
 		if lastErr == nil {
@@ -1278,78 +1703,542 @@ func (s *Service) finishBookMutation(r *resolvedRequest, title string, lastErr e
 		}
 		return "", "", lastErr
 	}
-	if s.libraryCache != nil && r.instanceID != "" {
-		s.libraryCache.Delete("book-library:" + r.instanceID)
-		s.libraryCache.Delete("book-live:" + r.instanceID)
-	}
-	if succeeded != len(r.bookFormats) {
+	s.invalidateBookCaches(r.instanceID)
+	if succeeded != len(requestedFormats) {
 		return StatusPartial, title, nil
 	}
-	if allBookFormatsAre(r.bookFormats, StatusAvailable) {
+	requestedStatuses := make(map[string]string, len(requestedFormats))
+	for _, format := range requestedFormats {
+		requestedStatuses[format] = r.bookFormats[format]
+	}
+	if allBookFormatsAre(requestedStatuses, StatusAvailable) {
 		return StatusAvailable, title, nil
 	}
-	if anyBookFormatIs(r.bookFormats, StatusAvailable) {
+	if anyBookFormatIs(requestedStatuses, StatusAvailable) {
 		return StatusPartial, title, nil
 	}
 	return StatusRequested, title, nil
 }
 
-// completeOwnedBook fulfils a request whose foreignBookId is an owned library
-// record (not a current metadata id, so the lookup above couldn't match it): it
-// monitors and searches the existing record(s) for the requested format(s) to
-// fetch the missing file, rather than adding a fresh book.
-func (s *Service) completeOwnedBook(client *chaptarr.Client, r *resolvedRequest) (string, string, error) {
-	books, err := client.GetAllBooks()
-	if err != nil {
-		return "", "", fmt.Errorf("book not found for foreign id %s", r.foreignID)
-	}
-	title, byFormat := recordsByForeignID(books, r.foreignID)
-	if title == "" {
-		return "", "", fmt.Errorf("book not found for foreign id %s", r.foreignID)
-	}
-
-	var lastErr error
-	done := 0
-	for _, mediaType := range chaptarrRequestFormats(r.bookFormat) {
-		rec := byFormat[mediaType]
-		if rec == nil {
-			lastErr = fmt.Errorf("no %s edition of %q exists to complete", mediaType, title)
-			continue
+// finishBookSetupFailure preserves a concrete format that completed before a
+// later sibling failed during read-only setup. No write for the missing
+// formats has started yet, so committing the completed coverage as a partial
+// result is both accurate and safer than deleting its durable checkpoint or
+// retrying the whole "both" action indefinitely.
+func (s *Service) finishBookSetupFailure(r *resolvedRequest, title string, missing []string, setupErr error) (string, string, error) {
+	hasCompleted := false
+	for _, format := range expandBookFormat(r.bookFormat) {
+		status := r.bookFormats[format]
+		if status != StatusUnavailable {
+			if strings.TrimSpace(status) == "" {
+				continue
+			}
+			hasCompleted = true
+			break
 		}
-		if err := client.SetBookMonitored([]int{rec.ID}, true); err != nil {
-			lastErr = fmt.Errorf("monitor %s: %w", mediaType, err)
-			continue
-		}
-		_ = client.TriggerBookSearch([]int{rec.ID})
-		done++
 	}
-	if done == 0 {
-		return "", "", fmt.Errorf("could not complete %q: %w", title, lastErr)
+	if !hasCompleted {
+		return "", "", setupErr
 	}
-	return StatusRequested, title, nil
+	markRemainingBookFormatsUnavailable(r.bookFormats, missing)
+	return s.finishBookMutation(r, title, nil)
 }
 
-// addChaptarrBookRecord adds one format record (ebook or audiobook) of a book and
-// ensures it ends up monitored and searched. Chaptarr tracks format at the book
-// level via mediaType, so each requested format is its own record.
-func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr.LookupResult, config bookAddConfig, title, titleSlug, mediaType string) error {
-	qualityProfileID, metadataProfileID, rootFolderPath := config.forFormat(mediaType)
-	addReq := chaptarr.AddBookRequest{
-		ForeignBookID:              match.ForeignBookID,
-		AuthorID:                   config.authorID,
-		Title:                      title,
-		TitleSlug:                  titleSlug,
-		Monitored:                  true,
-		RootFolderPath:             rootFolderPath,
-		EbookQualityProfileID:      config.ebookQualityProfileID,
-		AudiobookQualityProfileID:  config.audiobookQualityProfileID,
-		EbookMetadataProfileID:     config.ebookMetadataProfileID,
-		AudiobookMetadataProfileID: config.audiobookMetadataProfileID,
-		EbookRootFolderPath:        config.ebookRootFolderPath,
-		AudiobookRootFolderPath:    config.audiobookRootFolderPath,
+func markRemainingBookFormatsUnavailable(statuses map[string]string, formats []string) {
+	for _, format := range formats {
+		statuses[format] = StatusUnavailable
 	}
-	setChaptarrMediaType(&addReq, mediaType)
+}
 
+func bookMutationOutcomeUnknown(err error) bool {
+	return errors.Is(err, ErrBookSearchUnconfirmed) || errors.Is(err, ErrBookMutationUnverified) ||
+		errors.Is(err, ErrBookCatalogPending) || errors.Is(err, ErrBookOutcomePending)
+}
+
+func preferBookMutationError(current, candidate error) error {
+	if current == nil {
+		return candidate
+	}
+	if candidate == nil {
+		return current
+	}
+	rank := func(err error) int {
+		switch {
+		case errors.Is(err, ErrBookSearchUnconfirmed):
+			return 4
+		case errors.Is(err, ErrBookMutationUnverified):
+			return 3
+		case errors.Is(err, ErrBookCatalogPending):
+			return 2
+		default:
+			return 1
+		}
+	}
+	if rank(candidate) > rank(current) {
+		return candidate
+	}
+	return current
+}
+
+// chaptarrBookTarget is the immutable identity selected before a mutation.
+// Local provider IDs can drift between metadata sources, so an existing author
+// is pinned by local ID; a new one is re-resolved by exact provider identity or
+// one unique normalized name. Work and format are rechecked before every write
+// and after the final read-back.
+type chaptarrBookTarget struct {
+	jobID             int64
+	authorID          int
+	foreignAuthorID   string
+	authorName        string
+	foreignBookID     string
+	title             string
+	mediaType         string
+	publication       *BookPublicationSelection
+	explicitSelection bool
+	selection         *BookSelection
+}
+
+type chaptarrBookCandidate struct {
+	book                chaptarr.Book
+	editions            []chaptarr.Edition
+	usable              []chaptarr.Edition
+	identityTier        int
+	editionIdentityTier int
+	editionMultiWork    bool
+}
+
+// selectChaptarrLibraryWork narrows a provider id to the exact work selected
+// by the requester before any availability shortcut or sibling add is allowed.
+// Provider ids are external metadata and can collide or be reassigned; a
+// conflicting title or local author therefore fails closed instead of letting
+// an unrelated row report Available or donate its author configuration.
+func selectChaptarrLibraryWork(books []chaptarr.Book, foreignBookID, selectedTitle string) (string, []chaptarr.Book, error) {
+	return selectChaptarrLibraryWorkWithSelection(books, foreignBookID, selectedTitle, nil)
+}
+
+func selectChaptarrLibraryWorkWithSelection(books []chaptarr.Book, foreignBookID, selectedTitle string, selection *BookSelection) (string, []chaptarr.Book, error) {
+	selectedTitle = strings.TrimSpace(selectedTitle)
+	sameID := make([]chaptarr.Book, 0)
+	for _, book := range books {
+		if foreignBookID != "" && book.ForeignBookID == foreignBookID {
+			sameID = append(sameID, book)
+		}
+	}
+	if len(sameID) == 0 {
+		return selectedTitle, nil, nil
+	}
+	if selectedTitle == "" {
+		for _, book := range sameID {
+			if candidate := strings.TrimSpace(book.Title); candidate != "" {
+				selectedTitle = candidate
+				break
+			}
+		}
+	}
+	if selectedTitle == "" {
+		return "", nil, fmt.Errorf("%w: existing book title is unresolved", ErrBookMutationUnverified)
+	}
+
+	bestTitleTier := 0
+	selectedBooks := make([]chaptarr.Book, 0, len(sameID))
+	for _, book := range sameID {
+		tier := bookTitleIdentityTier(book.Title, selectedTitle)
+		if tier == 0 {
+			return "", nil, fmt.Errorf("%w: provider id identifies conflicting works", ErrBookMutationUnverified)
+		}
+		if tier > bestTitleTier {
+			bestTitleTier = tier
+			selectedBooks = selectedBooks[:0]
+		}
+		if tier == bestTitleTier {
+			selectedBooks = append(selectedBooks, book)
+		}
+	}
+	if selection != nil && (selection.ForeignAuthorID != "" || selection.AuthorName != "") {
+		providerMatches := make([]chaptarr.Book, 0, len(selectedBooks))
+		nameMatches := make([]chaptarr.Book, 0, len(selectedBooks))
+		for _, book := range selectedBooks {
+			if book.Author == nil {
+				continue
+			}
+			if selection.ForeignAuthorID != "" && strings.TrimSpace(book.Author.ForeignAuthorID) == selection.ForeignAuthorID {
+				providerMatches = append(providerMatches, book)
+			}
+			if selection.AuthorName != "" && normalizeBookIdentity(book.Author.AuthorName) == normalizeBookIdentity(selection.AuthorName) {
+				nameMatches = append(nameMatches, book)
+			}
+		}
+		switch {
+		case len(providerMatches) > 0:
+			selectedBooks = providerMatches
+		case len(nameMatches) > 0:
+			selectedBooks = nameMatches
+		default:
+			return "", nil, fmt.Errorf("%w: selected author is no longer present", ErrBookMatchNotFound)
+		}
+	}
+
+	authorIDs := make(map[int]bool)
+	authorNames := make(map[string]bool)
+	foreignAuthorIDs := make(map[string]bool)
+	for _, book := range selectedBooks {
+		if chaptarrTitleIsMultiWork(book.Title) {
+			return "", nil, ErrBookMultiWorkUnsupported
+		}
+		authorID := book.AuthorID
+		if book.Author != nil {
+			if authorID == 0 {
+				authorID = book.Author.ID
+			}
+			if name := normalizeBookIdentity(book.Author.AuthorName); name != "" {
+				authorNames[name] = true
+			}
+			if providerID := strings.TrimSpace(book.Author.ForeignAuthorID); providerID != "" {
+				foreignAuthorIDs[providerID] = true
+			}
+		}
+		if authorID > 0 {
+			authorIDs[authorID] = true
+		}
+	}
+	if len(authorIDs) > 1 || (len(authorIDs) == 0 && len(authorNames) > 1 && len(foreignAuthorIDs) != 1) {
+		return "", nil, fmt.Errorf("%w: provider id identifies conflicting authors", ErrBookMutationUnverified)
+	}
+	return selectedTitle, selectedBooks, nil
+}
+
+func selectChaptarrLookupResult(results []chaptarr.LookupResult, foreignBookID, selectedTitle string) (*chaptarr.LookupResult, error) {
+	return selectChaptarrLookupResultWithSelection(results, foreignBookID, selectedTitle, nil)
+}
+
+func selectChaptarrLookupResultWithSelection(results []chaptarr.LookupResult, foreignBookID, selectedTitle string, selection *BookSelection) (*chaptarr.LookupResult, error) {
+	type rankedLookup struct {
+		result     chaptarr.LookupResult
+		authorName string
+		authorID   string
+	}
+	candidates := make([]rankedLookup, 0, len(results))
+	bestTier := 0
+	for _, result := range results {
+		if result.ForeignBookID != foreignBookID {
+			continue
+		}
+		tier := bookTitleIdentityTier(result.Title, selectedTitle)
+		if tier == 0 {
+			continue
+		}
+		if tier < bestTier {
+			continue
+		}
+		if tier > bestTier {
+			bestTier = tier
+			candidates = candidates[:0]
+		}
+		authorName, authorID := chaptarrLookupAuthorIdentity(&result)
+		candidates = append(candidates, rankedLookup{
+			result: result, authorName: normalizeBookIdentity(authorName), authorID: strings.TrimSpace(authorID),
+		})
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	for _, candidate := range candidates {
+		if chaptarrTitleIsMultiWork(candidate.result.Title) {
+			return nil, ErrBookMultiWorkUnsupported
+		}
+	}
+	if selection != nil && (selection.ForeignAuthorID != "" || selection.AuthorName != "") {
+		providerMatches := make([]rankedLookup, 0, len(candidates))
+		nameMatches := make([]rankedLookup, 0, len(candidates))
+		for _, candidate := range candidates {
+			if selection.ForeignAuthorID != "" && candidate.authorID == selection.ForeignAuthorID {
+				providerMatches = append(providerMatches, candidate)
+			}
+			if selection.AuthorName != "" && candidate.authorName == normalizeBookIdentity(selection.AuthorName) {
+				nameMatches = append(nameMatches, candidate)
+			}
+		}
+		switch {
+		case len(providerMatches) > 0:
+			candidates = providerMatches
+		case len(nameMatches) > 0:
+			candidates = nameMatches
+		default:
+			return nil, nil
+		}
+	}
+	if selection != nil && (selection.Ebook != nil || selection.Audiobook != nil) {
+		publicationMatches := make([]rankedLookup, 0, len(candidates))
+		for _, candidate := range candidates {
+			ebookMatches, matchErr := lookupResultMatchesPublication(candidate.result, BookFormatEbook, selection.Ebook)
+			if matchErr != nil {
+				return nil, matchErr
+			}
+			audiobookMatches, matchErr := lookupResultMatchesPublication(candidate.result, BookFormatAudiobook, selection.Audiobook)
+			if matchErr != nil {
+				return nil, matchErr
+			}
+			if ebookMatches && audiobookMatches {
+				publicationMatches = append(publicationMatches, candidate)
+			}
+		}
+		candidates = publicationMatches
+		if len(candidates) == 0 {
+			return nil, nil
+		}
+	}
+	for i := 1; i < len(candidates); i++ {
+		left, right := candidates[0], candidates[i]
+		sameProvider := left.authorID != "" && left.authorID == right.authorID
+		sameName := left.authorName != "" && left.authorName == right.authorName
+		if !sameProvider && !sameName {
+			return nil, fmt.Errorf("%w: lookup returned ambiguous authors", ErrBookMutationUnverified)
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left, right := candidates[i], candidates[j]
+		if (left.authorName != "") != (right.authorName != "") {
+			return left.authorName != ""
+		}
+		if (left.authorID != "") != (right.authorID != "") {
+			return left.authorID != ""
+		}
+		if left.authorName != right.authorName {
+			return left.authorName < right.authorName
+		}
+		if left.authorID != right.authorID {
+			return left.authorID < right.authorID
+		}
+		return normalizeBookIdentity(left.result.Title) < normalizeBookIdentity(right.result.Title)
+	})
+	selected := candidates[0].result
+	return &selected, nil
+}
+
+func selectChaptarrSeedEditions(results []chaptarr.LookupResult, foreignBookID, selectedTitle string, author *chaptarr.Author, selections ...*BookSelection) ([]json.RawMessage, error) {
+	var selection *BookSelection
+	if len(selections) > 0 {
+		selection = selections[0]
+	}
+	if exact, err := selectChaptarrLookupResultWithSelection(results, foreignBookID, selectedTitle, selection); err != nil {
+		return nil, err
+	} else if exact != nil && len(exact.Editions) > 0 {
+		if !chaptarrLookupMatchesAuthor(*exact, author) {
+			return nil, fmt.Errorf("%w: missing-format seed author identity changed", ErrBookMutationUnverified)
+		}
+		return append([]json.RawMessage(nil), exact.Editions...), nil
+	}
+
+	bestTitleTier := 0
+	candidates := make([]chaptarr.LookupResult, 0, 1)
+	for _, result := range results {
+		if len(result.Editions) == 0 || chaptarrTitleIsMultiWork(result.Title) {
+			continue
+		}
+		titleTier := bookTitleIdentityTier(result.Title, selectedTitle)
+		if titleTier == 0 || titleTier < bestTitleTier {
+			continue
+		}
+		if !chaptarrLookupMatchesAuthor(result, author) {
+			continue
+		}
+		if selection != nil {
+			ebookMatches, matchErr := lookupResultMatchesPublication(result, BookFormatEbook, selection.Ebook)
+			if matchErr != nil {
+				return nil, matchErr
+			}
+			audiobookMatches, matchErr := lookupResultMatchesPublication(result, BookFormatAudiobook, selection.Audiobook)
+			if matchErr != nil {
+				return nil, matchErr
+			}
+			if !ebookMatches || !audiobookMatches {
+				continue
+			}
+		}
+		if titleTier > bestTitleTier {
+			bestTitleTier = titleTier
+			candidates = candidates[:0]
+		}
+		candidates = append(candidates, result)
+	}
+	if len(candidates) != 1 {
+		return nil, fmt.Errorf("%w: missing-format seed editions are unresolved or ambiguous", ErrBookMutationUnverified)
+	}
+	return append([]json.RawMessage(nil), candidates[0].Editions...), nil
+}
+
+func chaptarrLookupMatchesAuthor(result chaptarr.LookupResult, author *chaptarr.Author) bool {
+	if author == nil {
+		return false
+	}
+	authorName, authorProviderID := chaptarrLookupAuthorIdentity(&result)
+	providerMatched := strings.TrimSpace(author.ForeignAuthorID) != "" &&
+		strings.TrimSpace(authorProviderID) == strings.TrimSpace(author.ForeignAuthorID)
+	nameMatched := normalizeBookIdentity(author.AuthorName) != "" &&
+		normalizeBookIdentity(authorName) == normalizeBookIdentity(author.AuthorName)
+	return providerMatched || nameMatched
+}
+
+func chaptarrLookupAuthorIdentity(match *chaptarr.LookupResult) (authorName, foreignAuthorID string) {
+	if match == nil {
+		return "", ""
+	}
+	authorName = strings.TrimSpace(match.AuthorName)
+	foreignAuthorID = strings.TrimSpace(match.ForeignAuthorID)
+	if match.Author != nil {
+		if authorName == "" {
+			authorName = strings.TrimSpace(match.Author.AuthorName)
+		}
+		if foreignAuthorID == "" {
+			foreignAuthorID = strings.TrimSpace(match.Author.ForeignAuthorID)
+		}
+	}
+	return authorName, foreignAuthorID
+}
+
+func findExistingChaptarrAuthor(ctx context.Context, client *chaptarr.Client, foreignAuthorID, authorName string) (*chaptarr.Author, error) {
+	authors, err := client.GetAllAuthorsContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolve selected book author: %w", err)
+	}
+	matches := make([]chaptarr.Author, 0, 1)
+	if foreignAuthorID != "" {
+		for _, author := range authors {
+			if author.ForeignAuthorID == foreignAuthorID {
+				matches = append(matches, author)
+			}
+		}
+	}
+	if len(matches) == 0 && authorName != "" {
+		for _, author := range authors {
+			if normalizeBookIdentity(author.AuthorName) == normalizeBookIdentity(authorName) {
+				matches = append(matches, author)
+			}
+		}
+	}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("%w: selected author identity is ambiguous", ErrBookMutationUnverified)
+	}
+	if len(matches) == 0 {
+		return nil, nil
+	}
+	if matches[0].ID <= 0 {
+		return nil, fmt.Errorf("%w: selected author has no local identity", ErrBookMutationUnverified)
+	}
+	return &matches[0], nil
+}
+
+// ensureMaterializedChaptarrBook closes a subtle both-format race. Seeding a
+// new author can populate more than the one requested mediaType while the
+// catalog settles. Before a later format POST, re-read that author's exact work
+// and converge any row Chaptarr already created instead of duplicating it.
+func (s *Service) ensureMaterializedChaptarrBook(ctx context.Context, client *chaptarr.Client, instanceID string, match *chaptarr.LookupResult, authorID int, title, mediaType string, jobID int64, selections ...*BookSelection) (status string, materialized bool, err error) {
+	if authorID <= 0 {
+		return "", false, nil
+	}
+	target := chaptarrBookTargetFromLookup(match, authorID, title, mediaType, selections...)
+	target.jobID = jobID
+	materialized, err = s.waitForMaterializedChaptarrBook(ctx, client, target)
+	if err != nil || !materialized {
+		return "", materialized, err
+	}
+	status, err = s.ensureChaptarrBookRequest(ctx, client, instanceID, target)
+	return status, true, err
+}
+
+func chaptarrBookTargetFromLookup(match *chaptarr.LookupResult, authorID int, title, mediaType string, selections ...*BookSelection) chaptarrBookTarget {
+	target := chaptarrBookTarget{
+		authorID:        authorID,
+		foreignBookID:   match.ForeignBookID,
+		title:           title,
+		mediaType:       mediaType,
+		foreignAuthorID: match.ForeignAuthorID,
+		authorName:      match.AuthorName,
+	}
+	if match.Author != nil {
+		if target.foreignAuthorID == "" {
+			target.foreignAuthorID = match.Author.ForeignAuthorID
+		}
+		if target.authorName == "" {
+			target.authorName = match.Author.AuthorName
+		}
+	}
+	if len(selections) > 0 && selections[0] != nil {
+		target.publication = selections[0].publication(mediaType)
+		target.explicitSelection = true
+		target.selection = bookSelectionForFormat(selections[0], mediaType)
+	}
+	return target
+}
+
+// waitForMaterializedChaptarrBook proves a row is either present or absent
+// after the relevant author refresh has quiesced. It performs no mutation, so
+// callers can use it inside the short author-seed critical section and release
+// that lock before edition/search convergence.
+func (s *Service) waitForMaterializedChaptarrBook(ctx context.Context, client *chaptarr.Client, target chaptarrBookTarget) (bool, error) {
+	interval := s.bookSettleInterval
+	if interval <= 0 {
+		interval = defaultBookSettleInterval
+	}
+	stableAbsent := 0
+	for {
+		books, err := client.GetBooksContext(ctx, target.authorID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return false, fmt.Errorf("%w: %s catalog did not settle", ErrBookCatalogPending, target.mediaType)
+			}
+			return false, fmt.Errorf("recheck materialized %s book: %w", target.mediaType, err)
+		}
+		bestIdentityTier := 0
+		materializedBooks := make([]chaptarr.Book, 0, 1)
+		for _, book := range books {
+			if book.ForeignBookID == target.foreignBookID && !bookTitlesMatch(book.Title, target.title) {
+				return false, fmt.Errorf("%w: provider id identifies conflicting works", ErrBookMutationUnverified)
+			}
+			tier := chaptarrBookIdentityTier(book, target)
+			if tier == 0 || tier < bestIdentityTier {
+				continue
+			}
+			if tier > bestIdentityTier {
+				bestIdentityTier = tier
+				materializedBooks = materializedBooks[:0]
+			}
+			materializedBooks = append(materializedBooks, book)
+		}
+		if len(materializedBooks) > 0 {
+			for _, book := range materializedBooks {
+				if chaptarrTitleIsMultiWork(book.Title) {
+					return false, ErrBookMultiWorkUnsupported
+				}
+			}
+			return true, nil
+		}
+		commands, err := client.GetCommandsContext(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return false, fmt.Errorf("%w: %s catalog did not settle", ErrBookCatalogPending, target.mediaType)
+			}
+			return false, fmt.Errorf("recheck Chaptarr catalog commands: %w", err)
+		}
+		if chaptarrCatalogCommandActive(commands, target.authorID) {
+			stableAbsent = 0
+		} else {
+			stableAbsent++
+			if stableAbsent >= 2 {
+				return false, nil
+			}
+		}
+		if err := waitForBookPoll(ctx, interval); err != nil {
+			return false, fmt.Errorf("%w: %s catalog did not settle", ErrBookCatalogPending, target.mediaType)
+		}
+	}
+}
+
+// addChaptarrBookRecord seeds one unmonitored format record, then treats the
+// response only as an acknowledgement. Chaptarr populates authors, books, and
+// editions asynchronously; ensureChaptarrBookRequest resolves the authoritative
+// local row after that work settles and verifies every silent-write-prone step.
+func (s *Service) addChaptarrBookRecord(ctx context.Context, client *chaptarr.Client, instanceID string, match *chaptarr.LookupResult, config *bookAddConfig, title, titleSlug, mediaType string, jobID int64, selections ...*BookSelection) (string, error) {
 	authorName := match.AuthorName
 	foreignAuthorID := match.ForeignAuthorID
 	if match.Author != nil {
@@ -1358,6 +2247,141 @@ func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr
 		}
 		if foreignAuthorID == "" {
 			foreignAuthorID = match.Author.ForeignAuthorID
+		}
+	}
+	unlockAuthorSeed := func() {}
+	authorSeedLocked := false
+	if config.authorID == 0 {
+		unlockAuthorSeed = s.lockBookAuthorSeed(instanceID, foreignAuthorID, authorName)
+		authorSeedLocked = true
+	}
+	releaseAuthorSeed := func() {
+		if authorSeedLocked {
+			unlockAuthorSeed()
+			authorSeedLocked = false
+		}
+	}
+	defer releaseAuthorSeed()
+
+	// Repeat author discovery inside the alias-aware seed lock. A concurrent
+	// request may have created this author after the caller selected profiles.
+	var localAuthor *chaptarr.Author
+	var err error
+	if config.authorID > 0 {
+		localAuthor, err = client.GetAuthorContext(ctx, config.authorID)
+		if err != nil {
+			return "", fmt.Errorf("recheck selected book author: %w", err)
+		}
+	} else {
+		localAuthor, err = findExistingChaptarrAuthor(ctx, client, foreignAuthorID, authorName)
+		if err != nil {
+			return "", err
+		}
+		if localAuthor != nil {
+			localAuthor, err = client.GetAuthorContext(ctx, localAuthor.ID)
+			if err != nil {
+				return "", fmt.Errorf("load concurrently added book author: %w", err)
+			}
+		}
+	}
+	if localAuthor != nil {
+		if err := pinChaptarrLookupToLocalAuthor(match, localAuthor, foreignAuthorID, authorName); err != nil {
+			return "", err
+		}
+		freshConfig, ok := bookConfigFromAuthor(localAuthor)
+		if !ok {
+			return "", fmt.Errorf("%w: existing author configuration is incomplete for one or more formats", ErrBookConfigurationInvalid)
+		}
+		*config = freshConfig
+		authorName = match.AuthorName
+		foreignAuthorID = match.ForeignAuthorID
+		// Once a local author is pinned, different works no longer share a seed
+		// race. Release before any per-work catalog settling.
+		releaseAuthorSeed()
+	}
+	if config.authorID == 0 {
+		owned, ownerErr := s.hasDurableAuthorSeedOwner(instanceID, foreignAuthorID, authorName, jobID)
+		if ownerErr != nil {
+			return "", fmt.Errorf("check active author seed: %w", ownerErr)
+		}
+		if owned {
+			return "", ErrBookOutcomePending
+		}
+	}
+
+	target := chaptarrBookTargetFromLookup(match, config.authorID, title, mediaType, selections...)
+	target.jobID = jobID
+	if config.authorID > 0 {
+		materialized, err := s.waitForMaterializedChaptarrBook(ctx, client, target)
+		if err != nil {
+			return "", err
+		}
+		if materialized {
+			releaseAuthorSeed()
+			status, err := s.ensureChaptarrBookRequest(ctx, client, instanceID, target)
+			if err == nil {
+				config.markMonitorFuture(mediaType)
+			}
+			return status, err
+		}
+	}
+
+	seedKey := s.bookSeedOutcomeKey(instanceID, match.ForeignBookID, mediaType)
+	if s.hasUncertainBookSeed(seedKey) {
+		if config.authorID == 0 {
+			resolvedID, resolveErr := s.resolveChaptarrAuthorID(ctx, client, nil, chaptarrBookTarget{
+				foreignAuthorID: foreignAuthorID,
+				authorName:      authorName,
+			})
+			if resolveErr != nil {
+				return "", fmt.Errorf("%w: prior %s seed outcome remains unknown: %w", ErrBookMutationUnverified, mediaType, resolveErr)
+			}
+			config.authorID = resolvedID
+		}
+		resolvedAuthor, resolveErr := s.waitForChaptarrAuthor(ctx, client, config.authorID)
+		if resolveErr != nil {
+			return "", fmt.Errorf("%w: verify prior %s seed author: %w", ErrBookMutationUnverified, mediaType, resolveErr)
+		}
+		if err := pinChaptarrLookupToLocalAuthor(match, resolvedAuthor, foreignAuthorID, authorName); err != nil {
+			return "", err
+		}
+		target.authorID = config.authorID
+		target.foreignAuthorID = match.ForeignAuthorID
+		target.authorName = match.AuthorName
+		releaseAuthorSeed()
+		status, reconcileErr := s.ensureChaptarrBookRequest(ctx, client, instanceID, target)
+		if reconcileErr != nil {
+			return "", fmt.Errorf("%w: prior %s seed outcome remains unknown: %w", ErrBookMutationUnverified, mediaType, reconcileErr)
+		}
+		s.clearUncertainBookSeed(seedKey)
+		config.markMonitorFuture(mediaType)
+		return status, nil
+	}
+
+	qualityProfileID, metadataProfileID, rootFolderPath := config.forFormat(mediaType)
+	monitorFalse := false
+	addReq := chaptarr.AddBookRequest{
+		ForeignBookID:              match.ForeignBookID,
+		AuthorID:                   config.authorID,
+		Title:                      title,
+		TitleSlug:                  titleSlug,
+		Monitored:                  false,
+		AnyEditionOk:               false,
+		MediaType:                  mediaType,
+		EbookMonitored:             &monitorFalse,
+		AudiobookMonitored:         &monitorFalse,
+		RootFolderPath:             rootFolderPath,
+		EbookQualityProfileID:      config.ebookQualityProfileID,
+		AudiobookQualityProfileID:  config.audiobookQualityProfileID,
+		EbookMetadataProfileID:     config.ebookMetadataProfileID,
+		AudiobookMetadataProfileID: config.audiobookMetadataProfileID,
+		EbookRootFolderPath:        config.ebookRootFolderPath,
+		AudiobookRootFolderPath:    config.audiobookRootFolderPath,
+		Editions:                   append([]json.RawMessage(nil), match.Editions...),
+	}
+	if len(selections) > 0 && selections[0] != nil {
+		if publication := selections[0].publication(mediaType); publication != nil {
+			addReq.ForeignEditionID = publication.ForeignEditionID
 		}
 	}
 	addReq.Author.ID = config.authorID
@@ -1375,45 +2399,1332 @@ func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr
 	addReq.Author.EbookMonitorFuture = config.ebookMonitorFuture || mediaType == BookFormatEbook
 	addReq.Author.AudiobookMonitorFuture = config.audiobookMonitorFuture || mediaType == BookFormatAudiobook
 	addReq.Author.Monitored = true
-	addReq.Author.AddOptions.Monitor = "all"
-	addReq.AddOptions.SearchForNewBook = true
+	addReq.Author.MonitorNewItems = "none"
+	addReq.Author.AddOptions.Monitor = "none"
+	addReq.AddOptions.SearchForNewBook = false
 
-	// Round-trip the lookup's editions verbatim, marking them monitored so
-	// Chaptarr tracks the book (an add with no editions stays unmonitored).
-	// patchEditionForAdd also guards Chaptarr's NOT NULL links/images columns so
-	// the add can't fail a SQLite constraint.
-	if len(match.Editions) > 0 {
-		addReq.Editions = make([]json.RawMessage, 0, len(match.Editions))
-		for _, raw := range match.Editions {
-			patched, ok, err := patchEditionForAdd(raw)
-			if err != nil {
-				return fmt.Errorf("prepare edition: %w", err)
-			}
-			if !ok {
-				continue // skip a non-object edition element rather than emit junk
-			}
-			addReq.Editions = append(addReq.Editions, patched)
-		}
+	s.invalidateBookCaches(instanceID)
+	defer s.invalidateBookCaches(instanceID)
+	if err := s.setBookJobPhase(jobID, "seed_inflight", mediaType, config.authorID, foreignAuthorID, authorName, 0, false); err != nil {
+		return "", fmt.Errorf("persist %s seed intent: %w", mediaType, err)
 	}
-
-	book, err := client.AddBook(addReq)
+	s.recordUncertainBookSeed(seedKey, title)
+	book, err := client.AddBookContext(ctx, addReq)
 	if err != nil {
-		return err
-	}
-	// A book added under an author created by this same request comes back
-	// unmonitored (Chaptarr's async author refresh hasn't applied monitoring),
-	// so the format flags and searchForNewBook never take effect. Monitor +
-	// search it explicitly; SetBookMonitored re-derives the format from the
-	// mediaType set above. Books under an already-tracked author come back
-	// monitored and need nothing further. Monitoring is required; only the
-	// immediate search command is best-effort after monitoring succeeds.
-	if book != nil && book.ID != 0 && !book.Monitored {
-		if err := client.SetBookMonitored([]int{book.ID}, true); err != nil {
-			return fmt.Errorf("monitor added %s: %w", mediaType, err)
+		if chaptarrMutationErrorIsDefinitive(err) {
+			s.clearUncertainBookSeed(seedKey)
+			return "", fmt.Errorf("%w: seed %s book: %w", ErrBookMutationRejected, mediaType, err)
 		}
-		_ = client.TriggerBookSearch([]int{book.ID})
+	}
+	if config.authorID == 0 {
+		resolvedID, err := s.resolveChaptarrAuthorID(ctx, client, book, chaptarrBookTarget{
+			foreignAuthorID: foreignAuthorID,
+			authorName:      authorName,
+		})
+		if err != nil {
+			return "", fmt.Errorf("%w: %s seed outcome remains unknown: %w", ErrBookMutationUnverified, mediaType, err)
+		}
+		config.authorID = resolvedID
+	}
+	resolvedAuthor, authorErr := s.waitForChaptarrAuthor(ctx, client, config.authorID)
+	if authorErr != nil {
+		return "", fmt.Errorf("%w: verify seeded %s author: %w", ErrBookMutationUnverified, mediaType, authorErr)
+	}
+	if err := pinChaptarrLookupToLocalAuthor(match, resolvedAuthor, foreignAuthorID, authorName); err != nil {
+		return "", err
+	}
+	authorName = match.AuthorName
+	foreignAuthorID = match.ForeignAuthorID
+	target = chaptarrBookTargetFromLookup(match, config.authorID, title, mediaType, selections...)
+	target.jobID = jobID
+	releaseAuthorSeed()
+
+	status, err := s.ensureChaptarrBookRequest(ctx, client, instanceID, target)
+	if err == nil {
+		s.clearUncertainBookSeed(seedKey)
+		config.markMonitorFuture(mediaType)
+	}
+	return status, err
+}
+
+func pinChaptarrLookupToLocalAuthor(match *chaptarr.LookupResult, localAuthor *chaptarr.Author, expectedProviderID, expectedName string) error {
+	if match == nil || localAuthor == nil || localAuthor.ID <= 0 {
+		return fmt.Errorf("%w: selected author has no local identity", ErrBookMutationUnverified)
+	}
+	providerMatched := expectedProviderID != "" && localAuthor.ForeignAuthorID == expectedProviderID
+	nameMatched := expectedName != "" && normalizeBookIdentity(localAuthor.AuthorName) == normalizeBookIdentity(expectedName)
+	if !providerMatched && !nameMatched {
+		return fmt.Errorf("%w: selected author identity changed", ErrBookMutationUnverified)
+	}
+	match.AuthorName = strings.TrimSpace(localAuthor.AuthorName)
+	match.ForeignAuthorID = strings.TrimSpace(localAuthor.ForeignAuthorID)
+	if match.Author != nil {
+		match.Author.ID = localAuthor.ID
+		match.Author.AuthorName = match.AuthorName
+		match.Author.ForeignAuthorID = match.ForeignAuthorID
 	}
 	return nil
+}
+
+func (s *Service) bookSeedOutcomeKey(instanceID, foreignBookID, mediaType string) string {
+	return instanceID + "\x00" + foreignBookID + "\x00" + mediaType
+}
+
+func (s *Service) hasUncertainBookSeed(key string) bool {
+	now := time.Now()
+	s.bookSeedOutcomeMu.Lock()
+	defer s.bookSeedOutcomeMu.Unlock()
+	seededAt, ok := s.bookUncertainSeeds[key]
+	if !ok {
+		return false
+	}
+	if now.Sub(seededAt) > defaultBookSeedOutcomeTTL {
+		delete(s.bookUncertainSeeds, key)
+		delete(s.bookUncertainSeedTitles, key)
+		return false
+	}
+	return true
+}
+
+func (s *Service) hasUncertainBookSeedFor(instanceID, foreignBookID string) bool {
+	prefix := instanceID + "\x00" + foreignBookID + "\x00"
+	now := time.Now()
+	s.bookSeedOutcomeMu.Lock()
+	defer s.bookSeedOutcomeMu.Unlock()
+	uncertain := false
+	for key, seededAt := range s.bookUncertainSeeds {
+		if now.Sub(seededAt) > defaultBookSeedOutcomeTTL {
+			delete(s.bookUncertainSeeds, key)
+			delete(s.bookUncertainSeedTitles, key)
+			continue
+		}
+		if strings.HasPrefix(key, prefix) {
+			uncertain = true
+		}
+	}
+	return uncertain
+}
+
+func (s *Service) recordUncertainBookSeed(key, title string) {
+	now := time.Now()
+	s.bookSeedOutcomeMu.Lock()
+	if s.bookUncertainSeeds == nil {
+		s.bookUncertainSeeds = make(map[string]time.Time)
+	}
+	if s.bookUncertainSeedTitles == nil {
+		s.bookUncertainSeedTitles = make(map[string]string)
+	}
+	for candidate, seededAt := range s.bookUncertainSeeds {
+		if now.Sub(seededAt) > defaultBookSeedOutcomeTTL {
+			delete(s.bookUncertainSeeds, candidate)
+			delete(s.bookUncertainSeedTitles, candidate)
+		}
+	}
+	s.bookUncertainSeeds[key] = now
+	s.bookUncertainSeedTitles[key] = strings.TrimSpace(title)
+	s.bookSeedOutcomeMu.Unlock()
+	instanceID, _, _ := strings.Cut(key, "\x00")
+	s.invalidateBookCaches(instanceID)
+}
+
+func (s *Service) clearUncertainBookSeed(key string) {
+	s.bookSeedOutcomeMu.Lock()
+	_, existed := s.bookUncertainSeeds[key]
+	delete(s.bookUncertainSeeds, key)
+	delete(s.bookUncertainSeedTitles, key)
+	s.bookSeedOutcomeMu.Unlock()
+	if existed {
+		instanceID, _, _ := strings.Cut(key, "\x00")
+		s.invalidateBookCaches(instanceID)
+	}
+}
+
+func chaptarrMutationErrorIsDefinitive(err error) bool {
+	var statusErr *chaptarr.HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	switch statusErr.StatusCode {
+	case 400, 401, 403, 404, 405, 406, 411, 412, 413, 414, 415, 422:
+		return true
+	default:
+		// Conflicts, throttling/timeouts, and every 5xx can follow a committed
+		// POST, so they remain guarded until live state reconciles.
+		return false
+	}
+}
+
+func chaptarrVerifiedMutationError(step string, err error) error {
+	if chaptarrMutationErrorIsDefinitive(err) {
+		return fmt.Errorf("%w: %s: %w", ErrBookMutationRejected, step, err)
+	}
+	return fmt.Errorf("%w: %s: %w", ErrBookMutationUnverified, step, err)
+}
+
+func (s *Service) resolveChaptarrAuthorID(ctx context.Context, client *chaptarr.Client, added *chaptarr.Book, target chaptarrBookTarget) (int, error) {
+	if added != nil {
+		if added.AuthorID > 0 {
+			return added.AuthorID, nil
+		}
+		if added.Author != nil && added.Author.ID > 0 {
+			return added.Author.ID, nil
+		}
+	}
+
+	interval := s.bookSettleInterval
+	if interval <= 0 {
+		interval = defaultBookSettleInterval
+	}
+	for {
+		authors, err := client.GetAllAuthorsContext(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return 0, fmt.Errorf("%w: author did not become available", ErrBookCatalogPending)
+			}
+			return 0, fmt.Errorf("resolve added book author: %w", err)
+		}
+		matches := make([]chaptarr.Author, 0, 1)
+		for _, author := range authors {
+			if target.foreignAuthorID != "" && author.ForeignAuthorID == target.foreignAuthorID {
+				matches = append(matches, author)
+			}
+		}
+		if len(matches) == 0 && target.authorName != "" {
+			for _, author := range authors {
+				if normalizeBookIdentity(author.AuthorName) == normalizeBookIdentity(target.authorName) {
+					matches = append(matches, author)
+				}
+			}
+		}
+		if len(matches) == 1 && matches[0].ID > 0 {
+			return matches[0].ID, nil
+		}
+		if len(matches) > 1 {
+			return 0, fmt.Errorf("%w: added author identity is ambiguous", ErrBookMutationUnverified)
+		}
+		if err := waitForBookPoll(ctx, interval); err != nil {
+			return 0, fmt.Errorf("%w: author did not become available", ErrBookCatalogPending)
+		}
+	}
+}
+
+func (s *Service) waitForChaptarrAuthor(ctx context.Context, client *chaptarr.Client, authorID int) (*chaptarr.Author, error) {
+	if authorID <= 0 {
+		return nil, fmt.Errorf("%w: author is unresolved", ErrBookMutationUnverified)
+	}
+	interval := s.bookSettleInterval
+	if interval <= 0 {
+		interval = defaultBookSettleInterval
+	}
+	for {
+		author, err := client.GetAuthorContext(ctx, authorID)
+		if err == nil && author != nil && author.ID == authorID {
+			return author, nil
+		}
+		if err != nil && bookUpstreamAuthFailure(err) {
+			return nil, fmt.Errorf("read added book author: %w", err)
+		}
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: author did not become readable", ErrBookCatalogPending)
+		}
+		if err := waitForBookPoll(ctx, interval); err != nil {
+			return nil, fmt.Errorf("%w: author did not become readable", ErrBookCatalogPending)
+		}
+	}
+}
+
+// ensureChaptarrBookRequest is deliberately convergent: retries inspect every
+// matching pocket, preserve a valid existing edition choice, repair partial
+// state, and avoid a duplicate search while an exact command or recent local
+// acknowledgement proves that this row was already submitted.
+func (s *Service) ensureChaptarrBookRequest(ctx context.Context, client *chaptarr.Client, instanceID string, target chaptarrBookTarget) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		status, err := s.ensureChaptarrBookRequestOnce(ctx, client, instanceID, target)
+		if err == nil {
+			s.clearUncertainBookSeed(s.bookSeedOutcomeKey(instanceID, target.foreignBookID, target.mediaType))
+			return status, nil
+		}
+		lastErr = err
+		if !errors.Is(err, ErrBookMutationUnverified) || ctx.Err() != nil {
+			return "", err
+		}
+		interval := s.bookSettleInterval
+		if interval <= 0 {
+			interval = defaultBookSettleInterval
+		}
+		if err := waitForBookPoll(ctx, interval); err != nil {
+			break
+		}
+	}
+	return "", lastErr
+}
+
+func (s *Service) ensureChaptarrBookRequestOnce(ctx context.Context, client *chaptarr.Client, instanceID string, target chaptarrBookTarget) (string, error) {
+	// Clear both before and after the convergence attempt. A status request can
+	// repopulate the short-lived projection while this bounded workflow is still
+	// in flight; the deferred clear prevents that stale snapshot from masking a
+	// successful, failed, or outcome-unknown mutation.
+	s.invalidateBookCaches(instanceID)
+	defer s.invalidateBookCaches(instanceID)
+	candidates, commands, err := s.waitForChaptarrBookCandidates(ctx, client, instanceID, target)
+	if err != nil {
+		return "", err
+	}
+	// Request evidence is aggregated across every duplicate pocket before one
+	// row is ranked for repair. Chaptarr can place the useful edition in one
+	// pocket while a sibling pocket already owns the file, grab, or exact search;
+	// never launch a duplicate merely because the evidence is not on the row we
+	// would otherwise prefer to mutate.
+	for i := range candidates {
+		candidate := &candidates[i]
+		if chaptarrBookAvailable(candidate.book) {
+			s.clearUncertainBookSearch(instanceID, candidate.book.ID)
+			return StatusAvailable, nil
+		}
+		if candidate.book.Grabbed || s.hasRecentBookSearchAck(instanceID, candidate.book.ID) {
+			s.clearUncertainBookSearch(instanceID, candidate.book.ID)
+			return StatusRequested, nil
+		}
+	}
+	selected := selectChaptarrBookCandidate(candidates, target.mediaType)
+	if selected == nil {
+		if chaptarrAnyCandidateBookSearchActive(commands, candidates) {
+			for _, candidate := range candidates {
+				if chaptarrExactBookSearchActive(commands, candidate.book.ID) {
+					s.recordUncertainBookSearch(instanceID, candidate.book.ID)
+				}
+			}
+			return "", fmt.Errorf("%w: exact book search is active while the requested edition settles", ErrBookOutcomePending)
+		}
+		return "", fmt.Errorf("%w: %s", ErrBookEditionUnavailable, target.mediaType)
+	}
+	if chaptarrBookAvailable(selected.book) {
+		return StatusAvailable, nil
+	}
+	selected, err = readChaptarrBookCandidate(ctx, client, selected.book.ID, target, selected.identityTier, selected.editionIdentityTier)
+	if err != nil {
+		return "", err
+	}
+	if chaptarrBookAvailable(selected.book) {
+		return StatusAvailable, nil
+	}
+	if chosen, chooseErr := chooseChaptarrEditionForTarget(selected.usable, target); chooseErr != nil {
+		return "", chooseErr
+	} else if chosen == nil {
+		return "", fmt.Errorf("%w: %s", ErrBookEditionUnavailable, target.mediaType)
+	}
+	authorMutationLock := s.bookAuthorMutationLock(instanceID + "\x00" + fmt.Sprintf("%d", target.authorID))
+	authorMutationLock.Lock()
+	authorMutationLocked := true
+	releaseAuthorMutation := func() {
+		if authorMutationLocked {
+			authorMutationLock.Unlock()
+			authorMutationLocked = false
+		}
+	}
+	defer releaseAuthorMutation()
+
+	author, err := client.GetAuthorContext(ctx, target.authorID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("%w: author did not become available", ErrBookCatalogPending)
+		}
+		return "", fmt.Errorf("read selected book author: %w", err)
+	}
+	if !chaptarrAuthorMatches(*author, target) {
+		return "", fmt.Errorf("%w: author identity changed", ErrBookMutationUnverified)
+	}
+	// Existing library targets may initially carry only a local author ID. Bind
+	// the durable phase to the authoritative provider/name identity before the
+	// first author or book write so restart and instance-drift recovery never
+	// has to trust an endpoint-local integer by itself.
+	if target.foreignAuthorID == "" {
+		target.foreignAuthorID = strings.TrimSpace(author.ForeignAuthorID)
+	}
+	if target.authorName == "" {
+		target.authorName = strings.TrimSpace(author.AuthorName)
+	}
+	if err := s.setBookJobPhase(target.jobID, "converging", target.mediaType, target.authorID, target.foreignAuthorID, target.authorName, selected.book.ID, false); err != nil {
+		return "", fmt.Errorf("persist %s convergence: %w", target.mediaType, err)
+	}
+	if !chaptarrAuthorGate(*author, target.mediaType) || !author.Monitored {
+		author.Monitored = true
+		if target.mediaType == BookFormatAudiobook {
+			author.AudiobookMonitorFuture = true
+		} else {
+			author.EbookMonitorFuture = true
+		}
+		s.invalidateBookCaches(instanceID)
+		if _, err := client.UpdateAuthorContext(ctx, *author); err != nil {
+			return "", chaptarrVerifiedMutationError("enable "+target.mediaType+" author monitoring", err)
+		}
+		author, err = client.GetAuthorContext(ctx, target.authorID)
+		if err != nil {
+			return "", fmt.Errorf("%w: verify selected book author: %w", ErrBookMutationUnverified, err)
+		}
+		if !chaptarrAuthorMatches(*author, target) || !author.Monitored || !chaptarrAuthorGate(*author, target.mediaType) {
+			return "", fmt.Errorf("%w: %s author monitoring", ErrBookMutationUnverified, target.mediaType)
+		}
+	}
+	releaseAuthorMutation()
+
+	// Author writes can themselves overlap provider activity. Re-read the exact
+	// full resource and authoritative editions once more immediately before the
+	// book PUT so the selected work cannot switch after the gate check.
+	fresh, err := readChaptarrBookCandidate(ctx, client, selected.book.ID, target, selected.identityTier, selected.editionIdentityTier)
+	if err != nil {
+		return "", err
+	}
+	selected = fresh
+	if chaptarrBookAvailable(selected.book) {
+		return StatusAvailable, nil
+	}
+	chosen, chooseErr := chooseChaptarrEditionForTarget(selected.usable, target)
+	if chooseErr != nil {
+		return "", chooseErr
+	}
+	if chosen == nil {
+		return "", fmt.Errorf("%w: %s", ErrBookEditionUnavailable, target.mediaType)
+	}
+	alreadyVerified := chaptarrBookSelectionVerified(selected.book, selected.editions, chosen.ID, target, selected.identityTier, selected.editionIdentityTier)
+	activeSearch := chaptarrAnyCandidateBookSearchActive(commands, candidates)
+	if alreadyVerified && (selected.book.Grabbed || activeSearch || s.hasRecentBookSearchAck(instanceID, selected.book.ID)) {
+		return StatusRequested, nil
+	}
+	if alreadyVerified {
+		durable, historyErr := s.hasDurableVerifiedBookRequest(instanceID, target.foreignBookID, target.mediaType, bookSelectionFromTarget(target))
+		if historyErr != nil {
+			return "", historyErr
+		}
+		if durable {
+			return StatusRequested, nil
+		}
+	}
+
+	bookForUpdate := selected.book
+	bookForUpdate.AnyEditionOk = false
+	bookForUpdate.EbookMonitored = target.mediaType == BookFormatEbook
+	bookForUpdate.AudiobookMonitored = target.mediaType == BookFormatAudiobook
+	bookForUpdate.Editions = append([]chaptarr.Edition(nil), selected.editions...)
+	for i := range bookForUpdate.Editions {
+		bookForUpdate.Editions[i].Monitored = bookForUpdate.Editions[i].ID == chosen.ID
+		bookForUpdate.Editions[i].ManualAdd = bookForUpdate.Editions[i].ID == chosen.ID
+	}
+	s.invalidateBookCaches(instanceID)
+	if _, err := client.UpdateBookContext(ctx, bookForUpdate); err != nil {
+		return "", chaptarrVerifiedMutationError("select "+target.mediaType+" edition", err)
+	}
+	if err := client.SetBookMonitoredContext(ctx, []int{selected.book.ID}, true); err != nil {
+		return "", chaptarrVerifiedMutationError("monitor selected "+target.mediaType+" book", err)
+	}
+
+	verifiedBook, err := client.GetBookContext(ctx, selected.book.ID)
+	if err != nil {
+		return "", fmt.Errorf("%w: verify selected %s book: %w", ErrBookMutationUnverified, target.mediaType, err)
+	}
+	verifiedEditions, err := client.GetEditionsContext(ctx, selected.book.ID)
+	if err != nil {
+		return "", fmt.Errorf("%w: verify selected %s edition: %w", ErrBookMutationUnverified, target.mediaType, err)
+	}
+	verifiedAuthor, err := client.GetAuthorContext(ctx, target.authorID)
+	if err != nil {
+		return "", fmt.Errorf("%w: verify selected book author gate: %w", ErrBookMutationUnverified, err)
+	}
+	if !chaptarrAuthorMatches(*verifiedAuthor, target) || !verifiedAuthor.Monitored || !chaptarrAuthorGate(*verifiedAuthor, target.mediaType) ||
+		!chaptarrBookSelectionVerified(*verifiedBook, verifiedEditions, chosen.ID, target, selected.identityTier, selected.editionIdentityTier) {
+		return "", fmt.Errorf("%w: %s book or edition read-back", ErrBookMutationUnverified, target.mediaType)
+	}
+	if chaptarrBookAvailable(*verifiedBook) {
+		s.clearUncertainBookSearch(instanceID, selected.book.ID)
+		return StatusAvailable, nil
+	}
+	if verifiedBook.Grabbed {
+		s.clearUncertainBookSearch(instanceID, selected.book.ID)
+		return StatusRequested, nil
+	}
+	if s.hasRecentBookSearchAck(instanceID, selected.book.ID) {
+		return StatusRequested, nil
+	}
+	durable, err := s.hasDurableVerifiedBookRequest(instanceID, target.foreignBookID, target.mediaType, bookSelectionFromTarget(target))
+	if err != nil {
+		return "", err
+	}
+	if durable {
+		return StatusRequested, nil
+	}
+	latestCommands, err := client.GetCommandsContext(ctx)
+	if err != nil {
+		return "", fmt.Errorf("%w: verify existing book search: %w", ErrBookSearchUnconfirmed, err)
+	}
+	if chaptarrAnyCandidateBookSearchActive(latestCommands, candidates) {
+		s.clearUncertainBookSearch(instanceID, selected.book.ID)
+		return StatusRequested, nil
+	}
+	if s.hasUncertainBookSearch(instanceID, selected.book.ID) {
+		return "", fmt.Errorf("%w: prior search outcome remains unknown", ErrBookSearchUnconfirmed)
+	}
+	if err := s.setBookJobPhase(target.jobID, "search_inflight", target.mediaType, target.authorID, target.foreignAuthorID, target.authorName, selected.book.ID, false); err != nil {
+		return "", fmt.Errorf("persist %s search intent: %w", target.mediaType, err)
+	}
+	s.recordUncertainBookSearch(instanceID, selected.book.ID)
+	command, err := client.QueueBookSearchContext(ctx, []int{selected.book.ID})
+	if err != nil {
+		if chaptarrMutationErrorIsDefinitive(err) {
+			s.clearUncertainBookSearch(instanceID, selected.book.ID)
+			return "", fmt.Errorf("%w: %w", ErrBookSearchRejected, err)
+		}
+		return "", fmt.Errorf("%w: %w", ErrBookSearchUnconfirmed, err)
+	}
+	if command == nil || !command.Acknowledges() || !strings.EqualFold(command.EffectiveName(), "BookSearch") {
+		return "", fmt.Errorf("%w: invalid command acknowledgement", ErrBookSearchUnconfirmed)
+	}
+	s.clearUncertainBookSearch(instanceID, selected.book.ID)
+	s.recordBookSearchAck(instanceID, selected.book.ID)
+	if err := s.setBookJobPhase(target.jobID, "search_inflight", target.mediaType, target.authorID, target.foreignAuthorID, target.authorName, selected.book.ID, true); err != nil {
+		return "", fmt.Errorf("persist %s search acknowledgement: %w", target.mediaType, err)
+	}
+	return StatusRequested, nil
+}
+
+func (s *Service) hasDurableVerifiedBookRequest(instanceID, foreignBookID, format string, selections ...*BookSelection) (bool, error) {
+	if s.db == nil || s.registry == nil || instanceID == "" || foreignBookID == "" || !validBookFormat(format) || format == BookFormatBoth {
+		return false, nil
+	}
+	_, fingerprint, err := s.registry.GetFreshChaptarrClient(instanceID)
+	if err != nil {
+		return false, fmt.Errorf("bind durable verified book request: %w", err)
+	}
+	var selection *BookSelection
+	if len(selections) > 0 {
+		selection = selections[0]
+	}
+	rows, err := s.db.Query(
+		`SELECT COALESCE(book_format, 'both'), COALESCE(book_selection_json, '') FROM request_log
+		 WHERE media_type = 'book' AND foreign_id = ?
+		   AND COALESCE(instance_id, '') = ?
+		   AND (COALESCE(book_format, 'both') = ? OR COALESCE(book_format, 'both') = 'both')
+		   AND status = ? AND book_settings_fingerprint = ?
+		 ORDER BY id DESC`,
+		foreignBookID, instanceID, format, StatusRequested, fingerprint[:],
+	)
+	if err != nil {
+		return false, fmt.Errorf("read durable verified book request: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var storedFormat, selectionJSON string
+		if err := rows.Scan(&storedFormat, &selectionJSON); err != nil {
+			return false, fmt.Errorf("scan durable verified book request: %w", err)
+		}
+		if selection == nil {
+			return true, nil
+		}
+		storedSelection, decodeErr := requireDecodedBookSelection(selectionJSON, normalizeBookFormat(storedFormat))
+		if decodeErr != nil {
+			return false, decodeErr
+		}
+		if bookSelectionsEquivalent(storedSelection, selection, format) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func readChaptarrBookCandidate(ctx context.Context, client *chaptarr.Client, bookID int, target chaptarrBookTarget, requiredBookTier, requiredEditionTier int) (*chaptarrBookCandidate, error) {
+	book, err := client.GetBookContext(ctx, bookID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: %s catalog did not settle", ErrBookCatalogPending, target.mediaType)
+		}
+		return nil, fmt.Errorf("re-resolve selected %s book: %w", target.mediaType, err)
+	}
+	bookTier := chaptarrBookIdentityTier(*book, target)
+	if bookTier != requiredBookTier || chaptarrTitleIsMultiWork(book.Title) || !chaptarrBookResolved(*book) {
+		return nil, fmt.Errorf("%w: selected book identity changed", ErrBookMutationUnverified)
+	}
+	editions, err := client.GetEditionsContext(ctx, bookID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: %s catalog did not settle", ErrBookCatalogPending, target.mediaType)
+		}
+		return nil, fmt.Errorf("re-resolve selected %s editions: %w", target.mediaType, err)
+	}
+	usable, editionTier, editionMultiWork, selectionErr := selectChaptarrEditionsForTarget(editions, *book, target)
+	if selectionErr != nil {
+		return nil, selectionErr
+	}
+	if editionMultiWork {
+		return nil, ErrBookMultiWorkUnsupported
+	}
+	if editionTier != requiredEditionTier || len(usable) == 0 {
+		return nil, fmt.Errorf("%w: selected %s edition changed", ErrBookMutationUnverified, target.mediaType)
+	}
+	candidate := &chaptarrBookCandidate{
+		book: *book, editions: editions, usable: usable, identityTier: bookTier, editionIdentityTier: editionTier,
+	}
+	return candidate, nil
+}
+
+func (s *Service) waitForChaptarrBookCandidates(ctx context.Context, client *chaptarr.Client, instanceID string, target chaptarrBookTarget) ([]chaptarrBookCandidate, []chaptarr.Command, error) {
+	if target.authorID <= 0 {
+		return nil, nil, fmt.Errorf("%w: author is unresolved", ErrBookMutationUnverified)
+	}
+	interval := s.bookSettleInterval
+	if interval <= 0 {
+		interval = defaultBookSettleInterval
+	}
+	lastFingerprint := ""
+	stableSamples := 0
+	for {
+		books, err := client.GetBooksContext(ctx, target.authorID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, fmt.Errorf("%w: %s catalog did not settle", ErrBookCatalogPending, target.mediaType)
+			}
+			return nil, nil, fmt.Errorf("read Chaptarr catalog: %w", err)
+		}
+		// Keep every compatible pocket in the stable catalog snapshot. Identity
+		// tier is a mutation-ranking signal, not an evidence filter: Chaptarr can
+		// put the exact title on one row while a compatible subtitle row carries
+		// the requested-format edition, file, grab, or active search.
+		candidates := make([]chaptarrBookCandidate, 0, len(books))
+		for _, book := range books {
+			if book.ForeignBookID == target.foreignBookID && !bookTitlesMatch(book.Title, target.title) {
+				return nil, nil, fmt.Errorf("%w: provider id identifies conflicting works", ErrBookMutationUnverified)
+			}
+			identityTier := chaptarrBookIdentityTier(book, target)
+			if identityTier == 0 {
+				continue
+			}
+			editions, err := client.GetEditionsContext(ctx, book.ID)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, nil, fmt.Errorf("%w: %s catalog did not settle", ErrBookCatalogPending, target.mediaType)
+				}
+				return nil, nil, fmt.Errorf("read Chaptarr editions: %w", err)
+			}
+			usable, editionTier, editionMultiWork, selectionErr := selectChaptarrEditionsForTarget(editions, book, target)
+			if selectionErr != nil {
+				return nil, nil, selectionErr
+			}
+			candidate := chaptarrBookCandidate{
+				book: book, editions: editions, usable: usable, identityTier: identityTier,
+				editionIdentityTier: editionTier, editionMultiWork: editionMultiWork,
+			}
+			candidates = append(candidates, candidate)
+		}
+		for _, candidate := range candidates {
+			if chaptarrTitleIsMultiWork(candidate.book.Title) {
+				return nil, nil, ErrBookMultiWorkUnsupported
+			}
+		}
+		hasSafeEdition := false
+		hasMultiWorkEdition := false
+		for _, candidate := range candidates {
+			if len(candidate.usable) == 0 {
+				continue
+			}
+			if candidate.editionMultiWork {
+				hasMultiWorkEdition = true
+			} else {
+				hasSafeEdition = true
+			}
+		}
+		// Any requestable single-work edition beats a bundle, even when its
+		// optional title is blank and therefore has a lower identity tier. Ranking
+		// must never let a better-named bundle poison a safe duplicate pocket.
+		if !hasSafeEdition && hasMultiWorkEdition {
+			return nil, nil, ErrBookMultiWorkUnsupported
+		}
+		if hasSafeEdition && hasMultiWorkEdition {
+			safe := candidates[:0]
+			for _, candidate := range candidates {
+				if !candidate.editionMultiWork {
+					safe = append(safe, candidate)
+				}
+			}
+			candidates = safe
+		}
+		commands, err := client.GetCommandsContext(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, fmt.Errorf("%w: %s catalog did not settle", ErrBookCatalogPending, target.mediaType)
+			}
+			return nil, nil, fmt.Errorf("read Chaptarr catalog commands: %w", err)
+		}
+
+		fingerprint := chaptarrCandidatesFingerprint(candidates)
+		if fingerprint == "" || chaptarrCatalogCommandActive(commands, target.authorID) {
+			stableSamples = 0
+			lastFingerprint = ""
+		} else if fingerprint == lastFingerprint {
+			stableSamples++
+		} else {
+			lastFingerprint = fingerprint
+			stableSamples = 1
+		}
+		if stableSamples >= 2 {
+			requestCandidates := candidates
+			if target.publication != nil {
+				requestCandidates = make([]chaptarrBookCandidate, 0, len(candidates))
+				for _, candidate := range candidates {
+					if len(candidate.usable) == 1 {
+						requestCandidates = append(requestCandidates, candidate)
+					}
+				}
+			}
+			if chaptarrProviderlessCompatibleCandidatesAmbiguous(requestCandidates) {
+				return nil, nil, fmt.Errorf("%w: provider-less compatible book identity is ambiguous", ErrBookMutationUnverified)
+			}
+			if selectChaptarrBookCandidate(requestCandidates, target.mediaType) != nil {
+				return requestCandidates, commands, nil
+			}
+			for _, candidate := range requestCandidates {
+				if chaptarrBookAvailable(candidate.book) || candidate.book.Grabbed ||
+					chaptarrExactBookSearchActive(commands, candidate.book.ID) ||
+					s.hasRecentBookSearchAck(instanceID, candidate.book.ID) {
+					return requestCandidates, commands, nil
+				}
+			}
+			// A complete, stable row with authoritative editions of only other
+			// formats is a real format miss. In particular, Physical is never an
+			// audiobook fallback. Empty editions and placeholders may still be
+			// catalog work in progress and continue polling to the deadline.
+			allPocketsComplete := len(candidates) > 0
+			for _, candidate := range candidates {
+				if !chaptarrBookResolved(candidate.book) || len(candidate.editions) == 0 {
+					allPocketsComplete = false
+					break
+				}
+			}
+			if allPocketsComplete {
+				if target.publication != nil {
+					return nil, nil, fmt.Errorf("%w: selected %s publication is no longer present", ErrBookMatchNotFound, target.mediaType)
+				}
+				return nil, nil, fmt.Errorf("%w: %s", ErrBookEditionUnavailable, target.mediaType)
+			}
+		}
+
+		if err := waitForBookPoll(ctx, interval); err != nil {
+			return nil, nil, fmt.Errorf("%w: %s catalog did not settle", ErrBookCatalogPending, target.mediaType)
+		}
+	}
+}
+
+func chaptarrProviderlessCompatibleCandidatesAmbiguous(candidates []chaptarrBookCandidate) bool {
+	compatibleTitles := make(map[string]bool)
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate.book.ForeignBookID) != "" || candidate.identityTier != 11 {
+			continue
+		}
+		compatibleTitles[normalizeBookIdentity(candidate.book.Title)] = true
+	}
+	return len(compatibleTitles) > 1
+}
+
+func waitForBookPoll(ctx context.Context, interval time.Duration) error {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func chaptarrRecordAuthorID(records []chaptarr.Book) (int, error) {
+	authorID := 0
+	for _, record := range records {
+		candidate := record.AuthorID
+		if candidate == 0 && record.Author != nil {
+			candidate = record.Author.ID
+		}
+		if candidate <= 0 {
+			return 0, fmt.Errorf("%w: existing book author is unresolved", ErrBookMutationUnverified)
+		}
+		if authorID != 0 && authorID != candidate {
+			return 0, fmt.Errorf("existing canonical book records disagree on author")
+		}
+		authorID = candidate
+	}
+	if authorID == 0 {
+		return 0, fmt.Errorf("%w: existing book author is unresolved", ErrBookMutationUnverified)
+	}
+	return authorID, nil
+}
+
+func chaptarrPhysicalAndUnsafeRecords(books []chaptarr.Book, foreignBookID string) (physical []chaptarr.Book, unsafe bool) {
+	for _, book := range books {
+		if book.ForeignBookID != foreignBookID || recordFormat(book) != chaptarr.FormatUnknown {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(book.MediaType)) {
+		case "physical", "paperback", "hardcover", "print":
+			physical = append(physical, book)
+		default:
+			unsafe = true
+		}
+	}
+	return physical, unsafe
+}
+
+func chaptarrBookMatchesTarget(book chaptarr.Book, target chaptarrBookTarget) bool {
+	return chaptarrBookIdentityTier(book, target) > 0
+}
+
+// chaptarrBookIdentityTier is deliberately lexicographic: an explicit exact
+// provider id outranks a temporarily missing id, then an exact normalized title
+// outranks a compatible subtitle/base-title variant. Candidate polling retains
+// every compatible pocket for file/search evidence and catalog stability; this
+// tier only decides which single safe row wins mutation ranking.
+func chaptarrBookIdentityTier(book chaptarr.Book, target chaptarrBookTarget) int {
+	if book.ID <= 0 || strings.ToLower(strings.TrimSpace(book.MediaType)) != target.mediaType {
+		return 0
+	}
+	authorID := book.AuthorID
+	if authorID == 0 && book.Author != nil {
+		authorID = book.Author.ID
+	}
+	if target.authorID > 0 && authorID != target.authorID {
+		return 0
+	}
+	providerTier := 1
+	if target.foreignBookID != "" {
+		switch {
+		case book.ForeignBookID == target.foreignBookID:
+			providerTier = 2
+		case strings.TrimSpace(book.ForeignBookID) == "":
+			providerTier = 1
+		default:
+			return 0
+		}
+	}
+	titleTier := 0
+	if normalizeBookIdentity(book.Title) == normalizeBookIdentity(target.title) {
+		titleTier = 2
+	} else if bookTitlesMatch(book.Title, target.title) {
+		titleTier = 1
+	}
+	if titleTier == 0 {
+		return 0
+	}
+	return providerTier*10 + titleTier
+}
+
+func chaptarrBookResolved(book chaptarr.Book) bool {
+	foreignEditionID := strings.ToLower(strings.TrimSpace(book.ForeignEditionID))
+	return book.ReleaseDate != nil && len(book.Images) > 0 && foreignEditionID != "" && !strings.HasPrefix(foreignEditionID, "default-")
+}
+
+func chaptarrBookAvailable(book chaptarr.Book) bool {
+	if book.HasFiles || book.Statistics.BookFileCount > 0 {
+		return true
+	}
+	if strings.EqualFold(book.MediaType, BookFormatAudiobook) {
+		return book.AudiobookStatistics.BookFileCount > 0
+	}
+	return book.EbookStatistics.BookFileCount > 0
+}
+
+func chaptarrEditionFormat(edition chaptarr.Edition) string {
+	if format := strictChaptarrFormat(edition.Format); format != chaptarr.FormatUnknown {
+		return format
+	}
+	return ""
+}
+
+func selectChaptarrBookCandidate(candidates []chaptarrBookCandidate, mediaType string) *chaptarrBookCandidate {
+	best := -1
+	for i := range candidates {
+		candidate := &candidates[i]
+		if !chaptarrBookResolved(candidate.book) || len(candidate.usable) == 0 {
+			continue
+		}
+		if best == -1 || chaptarrCandidateBetter(*candidate, candidates[best], mediaType) {
+			best = i
+		}
+	}
+	if best == -1 {
+		return nil
+	}
+	return &candidates[best]
+}
+
+func chaptarrCandidateBetter(left, right chaptarrBookCandidate, mediaType string) bool {
+	if left.identityTier != right.identityTier {
+		return left.identityTier > right.identityTier
+	}
+	if left.editionIdentityTier != right.editionIdentityTier {
+		return left.editionIdentityTier > right.editionIdentityTier
+	}
+	// A full-book PUT can persist the exact edition before /book/monitor fails.
+	// Prefer that partial selection on retry even while the book-level monitor
+	// flag is still false, then repair the same pocket instead of selecting a
+	// second duplicate row.
+	leftSelected := countMonitoredChaptarrEditions(left.editions, mediaType) == 1
+	rightSelected := countMonitoredChaptarrEditions(right.editions, mediaType) == 1
+	if leftSelected != rightSelected {
+		return leftSelected
+	}
+	if len(left.usable) != len(right.usable) {
+		return len(left.usable) > len(right.usable)
+	}
+	if chaptarrBookAvailable(left.book) != chaptarrBookAvailable(right.book) {
+		return chaptarrBookAvailable(left.book)
+	}
+	if left.book.Grabbed != right.book.Grabbed {
+		return left.book.Grabbed
+	}
+	if left.book.Ratings.Popularity != right.book.Ratings.Popularity {
+		return left.book.Ratings.Popularity > right.book.Ratings.Popularity
+	}
+	if left.book.Ratings.Votes != right.book.Ratings.Votes {
+		return left.book.Ratings.Votes > right.book.Ratings.Votes
+	}
+	return left.book.ID < right.book.ID
+}
+
+func selectChaptarrEditions(editions []chaptarr.Edition, targetTitle, mediaType string) ([]chaptarr.Edition, int, bool) {
+	bestSafeTier := 0
+	bestUnsafeTier := 0
+	safe := make([]chaptarr.Edition, 0, len(editions))
+	unsafe := make([]chaptarr.Edition, 0, len(editions))
+	for _, edition := range editions {
+		if edition.ID <= 0 || chaptarrEditionFormat(edition) != mediaType {
+			continue
+		}
+		tier := 0
+		if strings.TrimSpace(edition.Title) == "" {
+			tier = 1 // Chaptarr permits title-less local editions.
+		} else if titleTier := bookTitleIdentityTier(edition.Title, targetTitle); titleTier > 0 {
+			tier = titleTier + 1 // titled compatible/exact editions outrank unknown.
+		}
+		if tier == 0 {
+			continue
+		}
+		if chaptarrTitleIsMultiWork(edition.Title) {
+			if tier < bestUnsafeTier {
+				continue
+			}
+			if tier > bestUnsafeTier {
+				bestUnsafeTier = tier
+				unsafe = unsafe[:0]
+			}
+			unsafe = append(unsafe, edition)
+			continue
+		}
+		if tier < bestSafeTier {
+			continue
+		}
+		if tier > bestSafeTier {
+			bestSafeTier = tier
+			safe = safe[:0]
+		}
+		safe = append(safe, edition)
+	}
+	if len(safe) > 0 {
+		return safe, bestSafeTier, false
+	}
+	return unsafe, bestUnsafeTier, len(unsafe) > 0
+}
+
+func chooseChaptarrEdition(editions []chaptarr.Edition, targetTitle, mediaType string) (*chaptarr.Edition, error) {
+	matching, _, multiWork := selectChaptarrEditions(editions, targetTitle, mediaType)
+	if multiWork {
+		return nil, ErrBookMultiWorkUnsupported
+	}
+	best := -1
+	bestScore := -1
+	for i := range matching {
+		edition := matching[i]
+		score := 0
+		if edition.Monitored {
+			score += 100
+		}
+		if strings.TrimSpace(edition.ForeignEditionID) != "" {
+			score += 8
+		}
+		if strings.TrimSpace(edition.Language) != "" {
+			score += 4
+		}
+		if strings.TrimSpace(edition.ISBN13) != "" || strings.TrimSpace(edition.ASIN) != "" {
+			score += 2
+		}
+		if strings.TrimSpace(edition.Title) != "" {
+			score++
+		}
+		// Equal scores retain the authoritative response order. Local IDs are
+		// allocation artifacts and must not become an invented preference.
+		if best == -1 || score > bestScore {
+			best = i
+			bestScore = score
+		}
+	}
+	if best == -1 {
+		return nil, nil
+	}
+	return &matching[best], nil
+}
+
+func chooseChaptarrEditionForTarget(editions []chaptarr.Edition, target chaptarrBookTarget) (*chaptarr.Edition, error) {
+	if target.publication != nil {
+		if len(editions) > 1 {
+			return nil, fmt.Errorf("%w: selected publication is ambiguous", ErrBookMatchNotFound)
+		}
+		if len(editions) == 0 {
+			return nil, nil
+		}
+		chosen := editions[0]
+		return &chosen, nil
+	}
+	return chooseChaptarrEdition(editions, target.title, target.mediaType)
+}
+
+func countMonitoredChaptarrEditions(editions []chaptarr.Edition, mediaType string) int {
+	count := 0
+	for _, edition := range editions {
+		if edition.Monitored && chaptarrEditionFormat(edition) == mediaType {
+			count++
+		}
+	}
+	return count
+}
+
+func chaptarrBookSelectionVerified(book chaptarr.Book, editions []chaptarr.Edition, editionID int, target chaptarrBookTarget, requiredBookTier, requiredEditionTier int) bool {
+	if chaptarrBookIdentityTier(book, target) != requiredBookTier || chaptarrTitleIsMultiWork(book.Title) ||
+		!chaptarrBookResolved(book) || !book.Monitored || book.AnyEditionOk {
+		return false
+	}
+	usable, editionTier, multiWork, selectionErr := selectChaptarrEditionsForTarget(editions, book, target)
+	if selectionErr != nil || multiWork || editionTier != requiredEditionTier {
+		return false
+	}
+	chosenIdentity := false
+	for _, edition := range usable {
+		if edition.ID == editionID {
+			chosenIdentity = true
+			break
+		}
+	}
+	if !chosenIdentity {
+		return false
+	}
+	if target.mediaType == BookFormatAudiobook {
+		if !book.AudiobookMonitored {
+			return false
+		}
+	} else if !book.EbookMonitored {
+		return false
+	}
+	monitored := 0
+	chosen := false
+	for _, edition := range editions {
+		if !edition.Monitored {
+			continue
+		}
+		monitored++
+		if edition.ID == editionID && chaptarrEditionFormat(edition) == target.mediaType {
+			chosen = true
+		}
+	}
+	return monitored == 1 && chosen
+}
+
+func chaptarrAuthorMatches(author chaptarr.Author, target chaptarrBookTarget) bool {
+	if author.ID != target.authorID {
+		return false
+	}
+	if target.foreignAuthorID != "" && author.ForeignAuthorID != "" {
+		if author.ForeignAuthorID == target.foreignAuthorID {
+			return true
+		}
+	}
+	if target.authorName != "" {
+		return normalizeBookIdentity(author.AuthorName) == normalizeBookIdentity(target.authorName)
+	}
+	return true
+}
+
+func chaptarrAuthorGate(author chaptarr.Author, mediaType string) bool {
+	if mediaType == BookFormatAudiobook {
+		return author.AudiobookMonitorFuture
+	}
+	return author.EbookMonitorFuture
+}
+
+func chaptarrCandidatesFingerprint(candidates []chaptarrBookCandidate) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	sorted := append([]chaptarrBookCandidate(nil), candidates...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].book.ID < sorted[j].book.ID })
+	var out strings.Builder
+	for _, candidate := range sorted {
+		fmt.Fprintf(&out, "b:%d:%d:%s:%s:%s:%s:%d:%d:%t:%t:%t:%t:%t:%t:%t:%t:%d:%d:%f:%d|",
+			candidate.book.ID,
+			candidate.book.AuthorID,
+			candidate.book.ForeignBookID,
+			candidate.book.ForeignEditionID,
+			candidate.book.MediaType,
+			normalizeBookIdentity(candidate.book.Title),
+			candidate.identityTier,
+			candidate.editionIdentityTier,
+			candidate.editionMultiWork,
+			candidate.book.ReleaseDate != nil,
+			len(candidate.book.Images) > 0,
+			candidate.book.Monitored,
+			candidate.book.EbookMonitored,
+			candidate.book.AudiobookMonitored,
+			candidate.book.HasFiles,
+			candidate.book.Grabbed,
+			candidate.book.Statistics.BookFileCount,
+			candidate.book.EbookStatistics.BookFileCount+candidate.book.AudiobookStatistics.BookFileCount,
+			candidate.book.Ratings.Popularity,
+			candidate.book.Ratings.Votes,
+		)
+		editions := append([]chaptarr.Edition(nil), candidate.editions...)
+		sort.Slice(editions, func(i, j int) bool { return editions[i].ID < editions[j].ID })
+		for _, edition := range editions {
+			fmt.Fprintf(&out, "e:%d:%s:%s:%s:%s:%s:%s:%t:%t|",
+				edition.ID,
+				edition.ForeignEditionID,
+				edition.Format,
+				normalizeBookIdentity(edition.Title),
+				strings.TrimSpace(edition.Language),
+				strings.TrimSpace(edition.ISBN13),
+				strings.TrimSpace(edition.ASIN),
+				edition.Monitored,
+				edition.ManualAdd,
+			)
+		}
+	}
+	return out.String()
+}
+
+func chaptarrCommandActive(command chaptarr.Command) bool {
+	switch strings.ToLower(strings.TrimSpace(command.Status)) {
+	case "queued", "started", "running":
+		return true
+	default:
+		return false
+	}
+}
+
+func chaptarrCatalogCommandActive(commands []chaptarr.Command, authorID int) bool {
+	for _, command := range commands {
+		if !chaptarrCommandActive(command) {
+			continue
+		}
+		name := strings.ToLower(command.EffectiveName())
+		catalogMutation := strings.Contains(name, "refresh") && (strings.Contains(name, "author") || strings.Contains(name, "book"))
+		catalogMutation = catalogMutation || strings.Contains(name, "rescan") && (strings.Contains(name, "author") || strings.Contains(name, "book"))
+		if !catalogMutation {
+			continue
+		}
+		if command.Body.AuthorID > 0 {
+			if command.Body.AuthorID == authorID {
+				return true
+			}
+			continue
+		}
+		if len(command.Body.AuthorIDs) > 0 {
+			for _, id := range command.Body.AuthorIDs {
+				if id == authorID {
+					return true
+				}
+			}
+			continue
+		}
+		// A global refresh has no author identity; fail closed for every author.
+		return true
+	}
+	return false
+}
+
+func chaptarrExactBookSearchActive(commands []chaptarr.Command, bookID int) bool {
+	for _, command := range commands {
+		if !chaptarrCommandActive(command) || !strings.EqualFold(command.EffectiveName(), "BookSearch") {
+			continue
+		}
+		for _, candidateID := range command.Body.BookIDs {
+			if candidateID == bookID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func chaptarrAnyCandidateBookSearchActive(commands []chaptarr.Command, candidates []chaptarrBookCandidate) bool {
+	for _, candidate := range candidates {
+		if chaptarrExactBookSearchActive(commands, candidate.book.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) bookSearchAckKey(instanceID string, bookID int) string {
+	return instanceID + "\x00" + fmt.Sprintf("%d", bookID)
+}
+
+func (s *Service) hasRecentBookSearchAck(instanceID string, bookID int) bool {
+	ttl := s.bookSearchAckTTL
+	if ttl <= 0 {
+		ttl = defaultBookSearchAckTTL
+	}
+	key := s.bookSearchAckKey(instanceID, bookID)
+	now := time.Now()
+	s.bookSearchAckMu.Lock()
+	defer s.bookSearchAckMu.Unlock()
+	acknowledgedAt, ok := s.bookSearchAcks[key]
+	if !ok {
+		return false
+	}
+	if now.Sub(acknowledgedAt) > ttl {
+		delete(s.bookSearchAcks, key)
+		return false
+	}
+	return true
+}
+
+func (s *Service) recordBookSearchAck(instanceID string, bookID int) {
+	ttl := s.bookSearchAckTTL
+	if ttl <= 0 {
+		ttl = defaultBookSearchAckTTL
+	}
+	now := time.Now()
+	s.bookSearchAckMu.Lock()
+	for key, acknowledgedAt := range s.bookSearchAcks {
+		if now.Sub(acknowledgedAt) > ttl {
+			delete(s.bookSearchAcks, key)
+		}
+	}
+	s.bookSearchAcks[s.bookSearchAckKey(instanceID, bookID)] = now
+	s.bookSearchAckMu.Unlock()
+}
+
+func (s *Service) hasUncertainBookSearch(instanceID string, bookID int) bool {
+	key := s.bookSearchAckKey(instanceID, bookID)
+	now := time.Now()
+	s.bookSearchOutcomeMu.Lock()
+	defer s.bookSearchOutcomeMu.Unlock()
+	startedAt, ok := s.bookUncertainSearches[key]
+	if !ok {
+		return false
+	}
+	if now.Sub(startedAt) > defaultBookSearchAckTTL {
+		delete(s.bookUncertainSearches, key)
+		return false
+	}
+	return true
+}
+
+func (s *Service) recordUncertainBookSearch(instanceID string, bookID int) {
+	key := s.bookSearchAckKey(instanceID, bookID)
+	now := time.Now()
+	s.bookSearchOutcomeMu.Lock()
+	if s.bookUncertainSearches == nil {
+		s.bookUncertainSearches = make(map[string]time.Time)
+	}
+	for candidate, startedAt := range s.bookUncertainSearches {
+		if now.Sub(startedAt) > defaultBookSearchAckTTL {
+			delete(s.bookUncertainSearches, candidate)
+		}
+	}
+	s.bookUncertainSearches[key] = now
+	s.bookSearchOutcomeMu.Unlock()
+	s.invalidateBookCaches(instanceID)
+}
+
+func (s *Service) clearUncertainBookSearch(instanceID string, bookID int) {
+	s.bookSearchOutcomeMu.Lock()
+	key := s.bookSearchAckKey(instanceID, bookID)
+	_, existed := s.bookUncertainSearches[key]
+	delete(s.bookUncertainSearches, key)
+	s.bookSearchOutcomeMu.Unlock()
+	if existed {
+		s.invalidateBookCaches(instanceID)
+	}
+}
+
+func (s *Service) invalidateBookCaches(instanceID string) {
+	if s.libraryCache == nil || instanceID == "" {
+		return
+	}
+	// Serialize Delete against both cache builders. This prevents an in-flight
+	// pre-mutation GET from publishing stale data after invalidation.
+	projectionLock := s.projectionLock(instanceID)
+	projectionLock.Lock()
+	defer projectionLock.Unlock()
+	s.libraryCache.Delete("book-library:" + instanceID)
+	s.libraryCache.Delete("book-live:" + instanceID)
+}
+
+func normalizeBookIdentity(value string) string {
+	var out strings.Builder
+	space := false
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			if space && out.Len() > 0 {
+				out.WriteByte(' ')
+			}
+			out.WriteRune(r)
+			space = false
+		} else if out.Len() > 0 {
+			space = true
+		}
+	}
+	return out.String()
+}
+
+func bookTitlesMatch(left, right string) bool {
+	return bookTitleIdentityTier(left, right) > 0
+}
+
+func bookTitleIdentityTier(left, right string) int {
+	leftNormalized := normalizeBookIdentity(left)
+	rightNormalized := normalizeBookIdentity(right)
+	if leftNormalized == "" || rightNormalized == "" {
+		return 0
+	}
+	if leftNormalized == rightNormalized {
+		return 2
+	}
+	if normalizeBookIdentity(bookTitleBase(left)) == rightNormalized ||
+		normalizeBookIdentity(bookTitleBase(right)) == leftNormalized {
+		return 1
+	}
+	return 0
+}
+
+func bookTitleBase(title string) string {
+	cut := len(title)
+	for _, separator := range []string{" (", ":", " - ", " — "} {
+		if index := strings.Index(title, separator); index >= 0 && index < cut {
+			cut = index
+		}
+	}
+	return strings.TrimSpace(title[:cut])
+}
+
+func chaptarrTitleIsMultiWork(title string) bool {
+	normalized := normalizeBookIdentity(title)
+	if normalized == "" {
+		return false
+	}
+	padded := " " + normalized + " "
+	if strings.Contains(padded, " omnibus ") ||
+		strings.Contains(padded, " box set ") || strings.Contains(padded, " boxed set ") ||
+		strings.HasSuffix(normalized, " bundle") || strings.HasSuffix(normalized, " trilogy") {
+		return true
+	}
+	if strings.Contains(normalized, "complete ") && strings.Contains(normalized, " series") {
+		return true
+	}
+	return numberedMultiBookTitle.MatchString(title)
 }
 
 func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
@@ -1868,7 +4179,26 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 	if err != nil {
 		return nil, err
 	}
-	query := "SELECT COALESCE(book_format, 'both'), status FROM request_log WHERE (user_id = ? OR status = 'pending') AND foreign_id = ? AND media_type = 'book'"
+	var currentFingerprint []byte
+	if client != nil && s.registry != nil {
+		freshClient, fingerprint, freshErr := s.registry.GetFreshChaptarrClient(instanceID)
+		if freshErr != nil || freshClient == nil {
+			return nil, ErrChaptarrInstanceInvalid
+		}
+		client = freshClient
+		currentFingerprint = append([]byte(nil), fingerprint[:]...)
+	}
+	failedFormat, failureCode, failedCheckpoints, failureUpdatedAt, err := s.bookRequestFailure(instanceID, foreignID, currentFingerprint, userID)
+	if err != nil {
+		return nil, fmt.Errorf("read failed book request: %w", err)
+	}
+	if failedFormat == "" {
+		failureCode = ""
+	}
+	query := `SELECT COALESCE(book_format, 'both'), status, book_settings_fingerprint,
+	                 CAST(strftime('%s', COALESCE(decided_at, requested_at)) AS INTEGER)
+	          FROM request_log
+	          WHERE (user_id = ? OR status = 'pending') AND foreign_id = ? AND media_type = 'book'`
 	args := []interface{}{userID, foreignID}
 	if instanceID != "" {
 		if requestedInstanceID != "" {
@@ -1892,10 +4222,14 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 	defer rows.Close()
 
 	formats := map[string]string{}
+	historyTimes := map[string]int64{}
+	verifiedRequested := map[string]bool{}
 	collapsed := ""
 	for rows.Next() {
 		var format, status string
-		if err := rows.Scan(&format, &status); err != nil {
+		var historyFingerprint []byte
+		var historyAt int64
+		if err := rows.Scan(&format, &status, &historyFingerprint, &historyAt); err != nil {
 			return nil, fmt.Errorf("scan book request status: %w", err)
 		}
 		if collapsed == "" {
@@ -1906,15 +4240,43 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 		for _, f := range expandBookFormat(format) {
 			if _, ok := formats[f]; !ok {
 				formats[f] = status
+				historyTimes[f] = historyAt
+				verifiedRequested[f] = status == StatusRequested &&
+					len(currentFingerprint) > 0 && bytes.Equal(historyFingerprint, currentFingerprint)
 			}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read book request status: %w", err)
 	}
+	for format, status := range failedCheckpoints {
+		if strings.TrimSpace(status) != "" {
+			formats[format] = status
+		}
+	}
+	if bookFailureSupersededByNewerDenial(formats, historyTimes, failedFormat, failureUpdatedAt) {
+		failedFormat, failureCode = "", ""
+		failedCheckpoints = map[string]string{}
+	}
 	if client != nil {
-		live, lerr := s.liveBookFormats(client, instanceID, foreignID)
+		live, monitored, lerr := s.liveBookState(client, instanceID, foreignID)
 		if lerr != nil {
+			// A terminal worker failure is durable requester-facing truth. If
+			// Chaptarr cannot currently be read, retain that exact failed format
+			// and code instead of replacing it with a transient status-read error.
+			// A later successful projection can still prove live coverage below
+			// and heal the failure presentation.
+			if failureCode != "" {
+				return failedBookStatus(formats, failedCheckpoints, failedFormat, failureCode), nil
+			}
+			if errors.Is(lerr, ErrBookOutcomePending) {
+				known := false
+				return &StatusResponse{
+					Status:        StatusUnavailable,
+					StatusKnown:   &known,
+					UnknownReason: "outcome_pending",
+				}, nil
+			}
 			if errors.Is(lerr, ErrBookFormatUnresolved) {
 				known := false
 				return &StatusResponse{Status: StatusUnavailable, StatusKnown: &known}, nil
@@ -1928,6 +4290,20 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 				formats[format] = liveStatus
 				continue
 			}
+			if checkpoint, ok := failedCheckpoints[format]; ok && strings.TrimSpace(checkpoint) != "" {
+				// A completed first half of a durable "both" job has already
+				// crossed its search acknowledgement boundary. An absent live row
+				// must not make that exact format requestable again.
+				formats[format] = checkpoint
+				continue
+			}
+			if logged && loggedStatus == StatusRequested && verifiedRequested[format] && monitored[format] {
+				// Requested history is durable proof of an acknowledged search.
+				// Preserve it only while the exact live format remains monitored;
+				// history alone must not mask a removed/unmonitored library row.
+				formats[format] = StatusRequested
+				continue
+			}
 			if !logged {
 				continue
 			}
@@ -1938,6 +4314,9 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 			}
 		}
 	}
+	if failureCode != "" && !bookFailureHasCoverage(formats, failedFormat) {
+		return failedBookStatus(formats, failedCheckpoints, failedFormat, failureCode), nil
+	}
 
 	if len(formats) == 0 {
 		return &StatusResponse{Status: StatusUnavailable}, nil
@@ -1947,40 +4326,123 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 	return resp, nil
 }
 
+func bookUncheckpointedFormat(failedFormat string, checkpoints map[string]string) string {
+	remaining := make(map[string]string, 2)
+	for _, format := range expandBookFormat(failedFormat) {
+		if strings.TrimSpace(checkpoints[format]) == "" {
+			remaining[format] = StatusUnavailable
+		}
+	}
+	return concreteBookFormat(remaining)
+}
+
+func bookFailureSupersededByNewerDenial(formats map[string]string, historyTimes map[string]int64, failedFormat string, failureUpdatedAt int64) bool {
+	failed := expandBookFormat(failedFormat)
+	if len(failed) == 0 || failureUpdatedAt == 0 {
+		return false
+	}
+	for _, format := range failed {
+		if formats[format] != StatusDenied || historyTimes[format] < failureUpdatedAt {
+			return false
+		}
+	}
+	return true
+}
+
+func failedBookStatus(formats, checkpoints map[string]string, failedFormat, failureCode string) *StatusResponse {
+	for format, status := range checkpoints {
+		if strings.TrimSpace(status) != "" {
+			formats[format] = status
+		}
+	}
+	for _, format := range expandBookFormat(failedFormat) {
+		if strings.TrimSpace(checkpoints[format]) != "" {
+			continue
+		}
+		// Without readable live truth, request history cannot prove that a
+		// terminally failed format has since been covered.
+		formats[format] = StatusUnavailable
+	}
+	known := false
+	return &StatusResponse{
+		Status:        StatusUnavailable,
+		StatusKnown:   &known,
+		UnknownReason: "request_failed",
+		FailureCode:   failureCode,
+		BookFormats:   formats,
+	}
+}
+
+func bookFailureHasCoverage(formats map[string]string, failedFormat string) bool {
+	failed := expandBookFormat(failedFormat)
+	if len(failed) == 0 {
+		return false
+	}
+	for _, format := range failed {
+		switch formats[format] {
+		case StatusAvailable, StatusDownloading, StatusRequested, StatusPending, StatusPartial:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 const bookLiveProjectionTTL = 15 * time.Second
 
 type bookLiveProjection struct {
-	Formats    map[string]map[string]string `json:"formats"`
-	Unresolved map[string]bool              `json:"unresolved,omitempty"`
+	Formats        map[string]map[string]string `json:"formats"`
+	Monitored      map[string]map[string]bool   `json:"monitored,omitempty"`
+	Unresolved     map[string]bool              `json:"unresolved,omitempty"`
+	OutcomePending map[string]bool              `json:"outcome_pending,omitempty"`
 }
 
 // liveBookFormats returns one title's slice of a short-lived instance-wide
 // projection. Search grids call book-status once per row, so fetching the full
 // library/queue per title would be an accidental N+1 load on Chaptarr.
 func (s *Service) liveBookFormats(client *chaptarr.Client, instanceID, foreignID string) (map[string]string, error) {
+	formats, _, err := s.liveBookState(client, instanceID, foreignID)
+	return formats, err
+}
+
+func (s *Service) liveBookState(client *chaptarr.Client, instanceID, foreignID string) (map[string]string, map[string]bool, error) {
+	active, err := s.hasActiveBookRequestJob(instanceID, foreignID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("check active book request: %w", err)
+	}
+	if active {
+		return nil, nil, ErrBookOutcomePending
+	}
 	cacheKey := "book-live:" + instanceID
 	if projection, ok := s.cachedBookProjection(cacheKey); ok {
-		return projection.formatsFor(foreignID)
+		return projection.stateFor(foreignID)
 	}
 	projectionLock := s.projectionLock(instanceID)
 	projectionLock.Lock()
 	defer projectionLock.Unlock()
 	if projection, ok := s.cachedBookProjection(cacheKey); ok {
-		return projection.formatsFor(foreignID)
+		return projection.stateFor(foreignID)
 	}
-	projection, err := buildBookLiveProjection(client)
+	projection, err := s.buildBookLiveProjection(client, instanceID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	s.cacheBookProjection(cacheKey, projection)
-	return projection.formatsFor(foreignID)
+	return projection.stateFor(foreignID)
 }
 
 func (s *Service) freshLiveBookFormats(client *chaptarr.Client, instanceID, foreignID string) (map[string]string, error) {
+	active, err := s.hasActiveBookRequestJob(instanceID, foreignID)
+	if err != nil {
+		return nil, fmt.Errorf("check active book request: %w", err)
+	}
+	if active {
+		return nil, ErrBookOutcomePending
+	}
 	projectionLock := s.projectionLock(instanceID)
 	projectionLock.Lock()
 	defer projectionLock.Unlock()
-	projection, err := buildBookLiveProjection(client)
+	projection, err := s.buildBookLiveProjection(client, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1988,20 +4450,31 @@ func (s *Service) freshLiveBookFormats(client *chaptarr.Client, instanceID, fore
 	return projection.formatsFor(foreignID)
 }
 
-func buildBookLiveProjection(client *chaptarr.Client) (*bookLiveProjection, error) {
+func (s *Service) buildBookLiveProjection(client *chaptarr.Client, instanceID string) (*bookLiveProjection, error) {
 	books, err := client.GetAllBooks()
 	if err != nil {
 		return nil, fmt.Errorf("check live book state: %w", err)
 	}
 	queued := make(map[int]bool)
-	if queue, err := client.GetQueueDetailed(1, 100); err == nil {
-		for _, item := range queue {
-			if item.BookID != 0 && bookQueueItemDownloading(item) {
-				queued[item.BookID] = true
-			}
+	queue, err := client.GetQueueDetailed(1, 100)
+	if err != nil {
+		return nil, fmt.Errorf("check live book queue: %w", err)
+	}
+	for _, item := range queue {
+		if item.BookID != 0 && bookQueueItemDownloading(item) {
+			queued[item.BookID] = true
 		}
 	}
-	projection := &bookLiveProjection{Formats: make(map[string]map[string]string), Unresolved: make(map[string]bool)}
+	commands, err := client.GetCommands()
+	if err != nil {
+		return nil, fmt.Errorf("check live book searches: %w", err)
+	}
+	projection := &bookLiveProjection{
+		Formats:        make(map[string]map[string]string),
+		Monitored:      make(map[string]map[string]bool),
+		Unresolved:     make(map[string]bool),
+		OutcomePending: make(map[string]bool),
+	}
 	foreignIDs := make(map[string]bool)
 	for _, book := range books {
 		if book.ForeignBookID != "" {
@@ -2010,11 +4483,13 @@ func buildBookLiveProjection(client *chaptarr.Client) (*bookLiveProjection, erro
 	}
 	for id := range foreignIDs {
 		_, records, unresolved := recordsForForeignID(books, id)
-		if unresolved {
+		_, unsafeUnresolved := chaptarrPhysicalAndUnsafeRecords(books, id)
+		if unresolved && unsafeUnresolved {
 			projection.Unresolved[id] = true
 			continue
 		}
 		live := make(map[string]string)
+		monitored := make(map[string]bool)
 		for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
 			recs := records[format]
 			if len(recs) == 0 {
@@ -2022,18 +4497,27 @@ func buildBookLiveProjection(client *chaptarr.Client) (*bookLiveProjection, erro
 			}
 			status := StatusUnavailable
 			for _, rec := range recs {
+				monitored[format] = monitored[format] || chaptarrBookMonitoredForFormat(rec, format)
 				switch {
-				case rec.Statistics.BookFileCount > 0:
+				case chaptarrBookAvailable(rec):
 					status = StatusAvailable
 				case status != StatusAvailable && queued[rec.ID]:
 					status = StatusDownloading
-				case status != StatusAvailable && status != StatusDownloading && rec.Monitored:
+				case status != StatusAvailable && status != StatusDownloading &&
+					(rec.Grabbed || s.hasRecentBookSearchAck(instanceID, rec.ID)):
+					status = StatusRequested
+				case status != StatusAvailable && status != StatusDownloading &&
+					rec.Monitored && chaptarrExactBookSearchActive(commands, rec.ID):
 					status = StatusRequested
 				}
 			}
 			live[format] = status
 		}
+		if projection.Unresolved[id] {
+			continue
+		}
 		projection.Formats[id] = live
+		projection.Monitored[id] = monitored
 	}
 	return projection, nil
 }
@@ -2063,10 +4547,28 @@ func (s *Service) cacheBookProjection(cacheKey string, projection *bookLiveProje
 }
 
 func (p *bookLiveProjection) formatsFor(foreignID string) (map[string]string, error) {
-	if p.Unresolved[foreignID] {
-		return nil, ErrBookFormatUnresolved
+	formats, _, err := p.stateFor(foreignID)
+	return formats, err
+}
+
+func (p *bookLiveProjection) stateFor(foreignID string) (map[string]string, map[string]bool, error) {
+	if p.OutcomePending[foreignID] {
+		return nil, nil, ErrBookOutcomePending
 	}
-	return p.Formats[foreignID], nil
+	if p.Unresolved[foreignID] {
+		return nil, nil, ErrBookFormatUnresolved
+	}
+	return p.Formats[foreignID], p.Monitored[foreignID], nil
+}
+
+func chaptarrBookMonitoredForFormat(book chaptarr.Book, format string) bool {
+	if !book.Monitored {
+		return false
+	}
+	if format == BookFormatAudiobook {
+		return book.AudiobookMonitored
+	}
+	return book.EbookMonitored
 }
 
 func bookQueueItemDownloading(item chaptarr.QueueItem) bool {
@@ -2501,7 +5003,7 @@ func (s *Service) overlayLiveStatuses(userID int64, history []historyRow) {
 			}
 			formats, err := s.liveBookFormats(bookClients[instanceID], instanceID, row.foreignID)
 			if err != nil {
-				if errors.Is(err, ErrBookFormatUnresolved) {
+				if errors.Is(err, ErrBookFormatUnresolved) || errors.Is(err, ErrBookOutcomePending) {
 					row.log.Status = StatusUnavailable
 					row.log.StatusKnown = false
 				}
@@ -2665,7 +5167,7 @@ func concreteBookFormat(formats map[string]string) string {
 
 func (s *Service) ListPending() ([]PendingRequest, error) {
 	rows, err := s.db.Query(
-		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.instance_id, ''),
+		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.book_selection_json, ''), COALESCE(r.instance_id, ''),
 		        CASE WHEN r.media_type = 'book' THEN COALESCE(si.name, '') ELSE '' END,
 		        CASE WHEN r.media_type = 'book' THEN 1 + (SELECT COUNT(*) FROM book_request_waiters bw WHERE bw.request_id = r.id AND bw.user_id <> r.user_id) ELSE 1 END,
 		        COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at
@@ -2683,10 +5185,17 @@ func (s *Service) ListPending() ([]PendingRequest, error) {
 	var out []PendingRequest
 	for rows.Next() {
 		var p PendingRequest
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
+		var selectionJSON string
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.MediaType, &p.Title, &p.BookFormat, &selectionJSON, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
 			return nil, fmt.Errorf("scan pending request: %w", err)
 		}
 		p.BookFormat = normalizeBookFormat(p.BookFormat)
+		if p.MediaType == "book" {
+			p.BookSelection, err = requireDecodedBookSelection(selectionJSON, p.BookFormat)
+			if err != nil {
+				return nil, err
+			}
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -2695,11 +5204,11 @@ func (s *Service) ListPending() ([]PendingRequest, error) {
 // loadRequest reads a request_log row into a resolvedRequest plus its status.
 func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error) {
 	var r resolvedRequest
-	var status string
+	var status, selectionJSON string
 	err := s.db.QueryRow(
-		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), COALESCE(instance_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
+		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), COALESCE(book_selection_json, ''), COALESCE(instance_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
 		requestID,
-	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
+	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &selectionJSON, &r.instanceID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
 	if err == sql.ErrNoRows {
 		return nil, "", fmt.Errorf("request not found")
 	}
@@ -2710,10 +5219,59 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	if r.mediaType == "book" && !validBookFormat(r.bookFormat) {
 		return nil, "", fmt.Errorf("request has unsupported book_format %q", r.bookFormat)
 	}
+	if r.mediaType == "book" {
+		r.bookSelection, err = requireDecodedBookSelection(selectionJSON, r.bookFormat)
+		if err != nil {
+			return nil, "", err
+		}
+	}
 	// An explicit season list was stored as JSON in season_scope; decode it so
 	// approval replays the explicit season selection the requester chose.
 	r.seasonNumbers = decodeSeasonNumbers(r.seasonScope)
 	return &r, status, nil
+}
+
+func (s *Service) approveBookRequestDurably(adminID, requestID int64, r *resolvedRequest) (*CreateResponse, error) {
+	if strings.TrimSpace(r.instanceID) == "" {
+		return nil, fmt.Errorf("pending book request has no pinned Chaptarr instance")
+	}
+	// Validate the current shared audience before touching Chaptarr. Completion
+	// reads it again transactionally so subscribers who join while work is being
+	// reconciled are still included.
+	if _, err := s.bookRequestAudience(requestID, r.userID, r.bookFormat); err != nil {
+		return nil, err
+	}
+	if s.registry == nil {
+		return nil, ErrChaptarrInstanceInvalid
+	}
+	unlockConfig := s.registry.LockInstanceConfigRead(r.instanceID)
+	defer unlockConfig()
+	bookLock := s.bookLock(r.instanceID + "\x00" + r.foreignID)
+	bookLock.Lock()
+	defer bookLock.Unlock()
+	job, client, alreadyActive, err := s.prepareApprovalBookJob(adminID, requestID, r)
+	if err != nil {
+		return nil, err
+	}
+	if alreadyActive {
+		return nil, ErrBookOutcomePending
+	}
+	r.actorID = adminID
+	r.bookJobID = job.ID
+	applyBookJobCheckpoints(r, job)
+	status, title, err := s.addToChaptarrWithClient(r, client, r.instanceID)
+	if err != nil {
+		if s.deferDirectBookJob(job.ID, err) {
+			return nil, ErrBookOutcomePending
+		}
+		return nil, err
+	}
+	response, err := s.completeApprovedBookJob(job, r, title, status)
+	if err != nil {
+		s.deferDirectBookJob(job.ID, err)
+		return nil, ErrBookOutcomePending
+	}
+	return response, nil
 }
 
 // ApproveRequest fulfills a pending request (optionally with admin overrides)
@@ -2730,23 +5288,6 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 	if status != StatusPending {
 		return nil, fmt.Errorf("request is not pending")
 	}
-	audience := []bookRequestSubscriber{{UserID: r.userID}}
-	if r.mediaType == "book" {
-		if strings.TrimSpace(r.instanceID) == "" {
-			return nil, fmt.Errorf("pending book request has no pinned Chaptarr instance")
-		}
-		audience, err = s.bookRequestAudience(requestID, r.userID, r.bookFormat)
-		if err != nil {
-			return nil, err
-		}
-		bookLock := s.bookLock(r.instanceID + "\x00" + r.foreignID)
-		bookLock.Lock()
-		defer bookLock.Unlock()
-		// The request's instance was authorized and pinned at submission. Execute
-		// approval under the approving admin so a later requester-grant change
-		// cannot reroute or strand it; history remains owned by r.userID.
-		r.actorID = adminID
-	}
 	if override != nil {
 		// An admin choosing a coarse scope replaces any explicit season list the
 		// requester had picked, so the coarse addOptions.Monitor path is used.
@@ -2761,6 +5302,11 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 			return nil, fmt.Errorf("book format cannot be changed during approval")
 		}
 	}
+	if r.mediaType == "book" {
+		return s.approveBookRequestDurably(adminID, requestID, r)
+	}
+	audience := []bookRequestSubscriber{{UserID: r.userID}}
+	var bookDecisionFingerprint []byte
 
 	newStatus, title, err := s.addToArr(r)
 	if err != nil {
@@ -2784,8 +5330,8 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(
-		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, book_format = ?, instance_id = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
-		primaryStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(primaryFormat), sqlNullStr(r.instanceID), sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), adminID, requestID, StatusPending,
+		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, book_format = ?, instance_id = ?, book_settings_fingerprint = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
+		primaryStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(primaryFormat), sqlNullStr(r.instanceID), bookDecisionFingerprint, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), adminID, requestID, StatusPending,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update request: %w", err)
@@ -2801,9 +5347,9 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 				continue
 			}
 			_, err = tx.Exec(
-				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, approved_by, decided_at)
-				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?, CURRENT_TIMESTAMP)`,
-				r.userID, r.foreignID, format, sqlNullStr(r.instanceID), title, formatStatus, adminID,
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, book_settings_fingerprint, media_type, title, status, approved_by, decided_at)
+				 VALUES (?, 0, ?, ?, ?, ?, 'book', ?, ?, ?, CURRENT_TIMESTAMP)`,
+				r.userID, r.foreignID, format, sqlNullStr(r.instanceID), bookDecisionFingerprint, title, formatStatus, adminID,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("store approved book format: %w", err)
@@ -2825,9 +5371,9 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 					continue
 				}
 				if _, insertErr := tx.Exec(
-					`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, approved_by, decided_at)
-					 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?, CURRENT_TIMESTAMP)`,
-					subscriber.UserID, r.foreignID, format, sqlNullStr(r.instanceID), title, formatStatus, adminID,
+					`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, book_settings_fingerprint, media_type, title, status, approved_by, decided_at)
+					 VALUES (?, 0, ?, ?, ?, ?, 'book', ?, ?, ?, CURRENT_TIMESTAMP)`,
+					subscriber.UserID, r.foreignID, format, sqlNullStr(r.instanceID), bookDecisionFingerprint, title, formatStatus, adminID,
 				); insertErr != nil {
 					return nil, fmt.Errorf("store subscriber book format: %w", insertErr)
 				}
@@ -2931,17 +5477,39 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 		return fmt.Errorf("request is not pending")
 	}
 	audience := []bookRequestSubscriber{{UserID: r.userID}}
+	unlockBook := func() {}
 	if r.mediaType == "book" {
-		audience, err = s.bookRequestAudience(requestID, r.userID, r.bookFormat)
-		if err != nil {
-			return err
+		if r.instanceID != "" {
+			bookLock := s.bookLock(r.instanceID + "\x00" + r.foreignID)
+			bookLock.Lock()
+			unlockBook = bookLock.Unlock
 		}
 	}
+	defer unlockBook()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin request denial: %w", err)
 	}
 	defer tx.Rollback()
+	if r.mediaType == "book" {
+		audience, err = bookRequestAudienceTx(tx, requestID, r.userID, r.bookFormat)
+		if err != nil {
+			return err
+		}
+		var active int
+		err := tx.QueryRow(
+			`SELECT 1 FROM book_request_jobs
+			 WHERE request_id = ? AND state IN ('running','retry_wait','outcome_unknown')
+			 LIMIT 1`,
+			requestID,
+		).Scan(&active)
+		if err == nil {
+			return ErrBookOutcomePending
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("check active book approval: %w", err)
+		}
+	}
 	res, err := tx.Exec(
 		"UPDATE request_log SET status = ?, deny_reason = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
 		StatusDenied, sqlNullStr(reason), adminID, requestID, StatusPending,
@@ -2957,10 +5525,14 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 			if subscriber.UserID == r.userID {
 				continue
 			}
+			selectionJSON, encodeErr := encodeBookSelection(r.bookSelection, subscriber.BookFormat)
+			if encodeErr != nil {
+				return encodeErr
+			}
 			if _, err := tx.Exec(
-				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, deny_reason, approved_by, decided_at)
-				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-				subscriber.UserID, r.foreignID, subscriber.BookFormat, sqlNullStr(r.instanceID), r.title, StatusDenied, sqlNullStr(reason), adminID,
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, book_selection_json, media_type, title, status, deny_reason, approved_by, decided_at)
+				 VALUES (?, 0, ?, ?, ?, ?, 'book', ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+				subscriber.UserID, r.foreignID, subscriber.BookFormat, sqlNullStr(r.instanceID), sqlNullStr(selectionJSON), r.title, StatusDenied, sqlNullStr(reason), adminID,
 			); err != nil {
 				return fmt.Errorf("store waiter denial: %w", err)
 			}
@@ -3193,50 +5765,6 @@ func chaptarrRequestFormats(format string) []string {
 	default:
 		return nil
 	}
-}
-
-// setChaptarrMediaType pins one add-book payload to a single Chaptarr media type
-// (ebook or audiobook) and its matching monitor flag. This fork tracks format at
-// the book level via mediaType — its lookup editions carry no format — so format
-// intent is expressed here, not by selecting an edition. A book record holds one
-// format; the flag that doesn't match mediaType is ignored by Chaptarr.
-func setChaptarrMediaType(req *chaptarr.AddBookRequest, mediaType string) {
-	req.MediaType = mediaType
-	ebook := mediaType == "ebook"
-	audiobook := mediaType == "audiobook"
-	req.EbookMonitored = &ebook
-	req.AudiobookMonitored = &audiobook
-}
-
-// patchEditionForAdd prepares one lookup edition for the add payload: it marks
-// the edition monitored/manualAdd and guarantees the NOT NULL links and images
-// arrays survive. The edition is otherwise passed through verbatim — Chaptarr's
-// Editions table rejects a null links or images, and the lookup result already
-// carries both. ok is false when the element is a JSON null (which decodes to a
-// nil map) — Chaptarr never sends that, but guarding it avoids a nil-map-write
-// panic; the caller skips such elements.
-func patchEditionForAdd(raw json.RawMessage) (out json.RawMessage, ok bool, err error) {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return nil, false, err
-	}
-	if obj == nil {
-		return nil, false, nil
-	}
-	t := json.RawMessage("true")
-	obj["monitored"] = t
-	obj["manualAdd"] = t
-	if v, ok := obj["links"]; !ok || string(v) == "null" {
-		obj["links"] = json.RawMessage("[]")
-	}
-	if v, ok := obj["images"]; !ok || string(v) == "null" {
-		obj["images"] = json.RawMessage("[]")
-	}
-	out, err = json.Marshal(obj)
-	if err != nil {
-		return nil, false, err
-	}
-	return out, true, nil
 }
 
 func fallbackTitleSlug(title string) string {

@@ -27,6 +27,19 @@ import (
 // than diagnose one.
 var ErrCustomFormatsNotFound = errors.New("chaptarr: the custom format endpoint returned 404")
 
+// HTTPStatusError is a host-free non-2xx response. Callers that coordinate a
+// mutation can distinguish a definite client-side rejection from a 5xx whose
+// outcome may be unknown without parsing an error string.
+type HTTPStatusError struct {
+	Method     string
+	Path       string
+	StatusCode int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("chaptarr %s %s returned status %d", e.Method, e.Path, e.StatusCode)
+}
+
 type Client struct {
 	baseURL    string
 	apiKey     string
@@ -116,9 +129,11 @@ type Author struct {
 	AudiobookRootFolderPath    string           `json:"audiobookRootFolderPath"`
 	EbookMonitorFuture         bool             `json:"ebookMonitorFuture"`
 	AudiobookMonitorFuture     bool             `json:"audiobookMonitorFuture"`
+	MonitorNewItems            string           `json:"monitorNewItems,omitempty"`
 	Statistics                 AuthorStatistics `json:"statistics"`
 	Images                     []Image          `json:"images"`
 	Genres                     genreList        `json:"genres"`
+	rawFields                  map[string]json.RawMessage
 }
 
 // BookStatistics is the per-book file rollup Chaptarr returns on a book.
@@ -142,33 +157,163 @@ type Edition struct {
 	ISBN13           string  `json:"isbn13"`
 	Overview         string  `json:"overview"`
 	Publisher        string  `json:"publisher"`
+	Language         string  `json:"language"`
 	PageCount        int     `json:"pageCount"`
 	Monitored        bool    `json:"monitored"`
 	ManualAdd        bool    `json:"manualAdd"`
 	IsEbook          *bool   `json:"isEbook,omitempty"`
 	Images           []Image `json:"images"`
+	rawFields        map[string]json.RawMessage
+}
+
+// UnmarshalJSON retains fields Cantinarr does not model. Chaptarr requires a
+// complete edition object when the parent book is PUT, and pre-1.0 releases
+// may add fields (notably links) that must survive the read-modify-write.
+func (e *Edition) UnmarshalJSON(data []byte) error {
+	type wire Edition
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*e = Edition(decoded)
+	e.rawFields = raw
+	return nil
+}
+
+// MarshalJSON overlays typed fields on the original object so deliberate
+// monitor/manualAdd mutations are applied without dropping additive fields.
+func (e Edition) MarshalJSON() ([]byte, error) {
+	type wire Edition
+	return marshalWithPreservedFields(e.rawFields, wire(e), "id", "monitored", "manualAdd")
+}
+
+// BookRatings contains optional ranking signals. They are tie-breakers only;
+// title, author, requested format, and usable-edition identity take priority.
+type BookRatings struct {
+	Popularity float64 `json:"popularity"`
+	Votes      int64   `json:"votes"`
 }
 
 type Book struct {
-	ID            int        `json:"id"`
-	Title         string     `json:"title"`
-	AuthorID      int        `json:"authorId"`
-	ForeignBookID string     `json:"foreignBookId"`
-	TitleSlug     string     `json:"titleSlug"`
-	Overview      string     `json:"overview"`
-	ReleaseDate   *time.Time `json:"releaseDate,omitempty"`
-	Monitored     bool       `json:"monitored"`
+	ID                 int        `json:"id"`
+	Title              string     `json:"title"`
+	AuthorID           int        `json:"authorId"`
+	ForeignBookID      string     `json:"foreignBookId"`
+	ForeignEditionID   string     `json:"foreignEditionId"`
+	TitleSlug          string     `json:"titleSlug"`
+	Overview           string     `json:"overview"`
+	ReleaseDate        *time.Time `json:"releaseDate,omitempty"`
+	Monitored          bool       `json:"monitored"`
+	EbookMonitored     bool       `json:"ebookMonitored"`
+	AudiobookMonitored bool       `json:"audiobookMonitored"`
+	HasFiles           bool       `json:"hasFiles"`
+	Grabbed            bool       `json:"grabbed"`
 	// MediaType is the book-level format Chaptarr returns on library books
 	// ("ebook"/"audiobook"); this fork tracks a title's ebook and audiobook as
 	// separate records sharing a foreignBookId, distinguished by this field.
-	MediaType    string         `json:"mediaType"`
-	AnyEditionOk bool           `json:"anyEditionOk"`
-	PageCount    int            `json:"pageCount"`
-	Author       *AuthorContext `json:"author,omitempty"`
-	Statistics   BookStatistics `json:"statistics"`
-	Editions     []Edition      `json:"editions"`
-	Images       []Image        `json:"images"`
-	Genres       genreList      `json:"genres"`
+	MediaType           string         `json:"mediaType"`
+	AnyEditionOk        bool           `json:"anyEditionOk"`
+	PageCount           int            `json:"pageCount"`
+	Author              *AuthorContext `json:"author,omitempty"`
+	Statistics          BookStatistics `json:"statistics"`
+	EbookStatistics     BookStatistics `json:"ebookStatistics"`
+	AudiobookStatistics BookStatistics `json:"audiobookStatistics"`
+	Ratings             BookRatings    `json:"ratings"`
+	Editions            []Edition      `json:"editions"`
+	Images              []Image        `json:"images"`
+	Genres              genreList      `json:"genres"`
+	rawFields           map[string]json.RawMessage
+}
+
+// UnmarshalJSON retains the complete top-level book resource for the full-body
+// PUT Chaptarr requires when selecting an edition.
+func (b *Book) UnmarshalJSON(data []byte) error {
+	type wire Book
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*b = Book(decoded)
+	b.rawFields = raw
+	return nil
+}
+
+// MarshalJSON preserves additive Chaptarr fields while applying the typed
+// book and edition values held by the caller.
+func (b Book) MarshalJSON() ([]byte, error) {
+	type wire Book
+	return marshalWithPreservedFields(
+		b.rawFields,
+		wire(b),
+		"id",
+		"anyEditionOk",
+		"ebookMonitored",
+		"audiobookMonitored",
+		"editions",
+	)
+}
+
+// UnmarshalJSON retains the full author resource for the same reason as Book:
+// Chaptarr's format-monitor gate is changed with a complete-resource PUT.
+func (a *Author) UnmarshalJSON(data []byte) error {
+	type wire Author
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*a = Author(decoded)
+	a.rawFields = raw
+	return nil
+}
+
+// MarshalJSON keeps unmodeled fields intact while applying typed monitor-gate
+// changes made by a caller.
+func (a Author) MarshalJSON() ([]byte, error) {
+	type wire Author
+	return marshalWithPreservedFields(
+		a.rawFields,
+		wire(a),
+		"id",
+		"monitored",
+		"ebookMonitorFuture",
+		"audiobookMonitorFuture",
+	)
+}
+
+func marshalWithPreservedFields(original map[string]json.RawMessage, typed any, mutableKeys ...string) ([]byte, error) {
+	data, err := json.Marshal(typed)
+	if err != nil {
+		return nil, err
+	}
+	if len(original) == 0 {
+		return data, nil
+	}
+	fields := make(map[string]json.RawMessage, len(original))
+	for key, value := range original {
+		fields[key] = value
+	}
+	var overlay map[string]json.RawMessage
+	if err := json.Unmarshal(data, &overlay); err != nil {
+		return nil, err
+	}
+	for _, key := range mutableKeys {
+		if value, ok := overlay[key]; ok {
+			fields[key] = value
+		}
+	}
+	return json.Marshal(fields)
 }
 
 type BookFile struct {
@@ -300,22 +445,25 @@ func (r RootFolder) IsAccessible() bool {
 // fields needed to render a lookup row and seed an add: identifiers, a cover,
 // and (for book lookups) the nested author the book belongs to.
 //
-// Editions is kept as raw JSON, not a typed []Edition, so it can be round-tripped
-// verbatim into the book-add payload. Chaptarr's Editions table has NOT NULL
-// constraints on columns the typed struct would drop (notably links and images),
-// so a lossy re-encode fails the add with a SQLite constraint error.
+// Editions is kept as raw JSON because lookup editions are discovery metadata,
+// not authoritative local-edition truth. Keeping the lookup shape intact lets
+// search callers display its additive fields without accidentally feeding a
+// lossy typed projection into the verified local-edition mutation path.
 type LookupResult struct {
-	Title           string            `json:"title"`
-	TitleSlug       string            `json:"titleSlug,omitempty"`
-	AuthorName      string            `json:"authorName"`
-	ForeignAuthorID string            `json:"foreignAuthorId"`
-	ForeignBookID   string            `json:"foreignBookId"`
-	Overview        string            `json:"overview"`
-	Year            int               `json:"year"`
-	Images          []Image           `json:"images"`
-	Author          *Author           `json:"author,omitempty"`
-	RemoteCover     string            `json:"remoteCover,omitempty"`
-	Editions        []json.RawMessage `json:"editions,omitempty"`
+	Title            string            `json:"title"`
+	TitleSlug        string            `json:"titleSlug,omitempty"`
+	AuthorName       string            `json:"authorName"`
+	ForeignAuthorID  string            `json:"foreignAuthorId"`
+	ForeignBookID    string            `json:"foreignBookId"`
+	ForeignEditionID string            `json:"foreignEditionId,omitempty"`
+	MediaType        string            `json:"mediaType,omitempty"`
+	Overview         string            `json:"overview"`
+	Year             int               `json:"year"`
+	PageCount        int               `json:"pageCount,omitempty"`
+	Images           []Image           `json:"images"`
+	Author           *Author           `json:"author,omitempty"`
+	RemoteCover      string            `json:"remoteCover,omitempty"`
+	Editions         []json.RawMessage `json:"editions,omitempty"`
 }
 
 // AddAuthorRequest mirrors Sonarr's AddSeriesRequest shape for adding an author
@@ -335,6 +483,7 @@ type AddAuthorRequest struct {
 	AudiobookRootFolderPath    string `json:"audiobookRootFolderPath,omitempty"`
 	EbookMonitorFuture         bool   `json:"ebookMonitorFuture"`
 	AudiobookMonitorFuture     bool   `json:"audiobookMonitorFuture"`
+	MonitorNewItems            string `json:"monitorNewItems,omitempty"`
 	Monitored                  bool   `json:"monitored"`
 	AddOptions                 struct {
 		// Monitor is Chaptarr's monitor scope applied at add time: one of
@@ -347,13 +496,12 @@ type AddAuthorRequest struct {
 // AddBookRequest adds a single book. Readarr nests the author inside the
 // book-add payload, so an author ref is required for authors not yet tracked.
 //
-// This Chaptarr fork tracks ebook vs audiobook at the book level via
-// MediaType + EbookMonitored/AudiobookMonitored (not per edition — lookup
-// editions carry no format), so requested-format intent is set through those
-// fields. Editions is raw JSON round-tripped from the lookup result so the
-// add satisfies Chaptarr's NOT NULL edition columns (links, images).
+// This Chaptarr fork tracks ebook vs audiobook at the book-row level via
+// MediaType. Add requests start all book monitor flags false; authoritative
+// local edition format and selection are resolved after the catalog settles.
 type AddBookRequest struct {
 	ForeignBookID              string           `json:"foreignBookId"`
+	ForeignEditionID           string           `json:"foreignEditionId,omitempty"`
 	AuthorID                   int              `json:"authorId,omitempty"`
 	Title                      string           `json:"title"`
 	TitleSlug                  string           `json:"titleSlug,omitempty"`
@@ -481,6 +629,50 @@ type DiskSpace struct {
 	TotalSpace int64  `json:"totalSpace"`
 }
 
+// CommandBody contains the narrow identity fields Chaptarr exposes for
+// catalog and book-search commands. Other command-specific fields are ignored.
+type CommandBody struct {
+	AuthorID  int   `json:"authorId"`
+	AuthorIDs []int `json:"authorIds"`
+	BookIDs   []int `json:"bookIds"`
+}
+
+// Command is both the queued-command acknowledgement returned by POST
+// /command and an entry returned by GET /command. Older Servarr-shaped
+// responses may call the command commandName instead of name.
+type Command struct {
+	ID          int         `json:"id"`
+	Name        string      `json:"name"`
+	CommandName string      `json:"commandName"`
+	Status      string      `json:"status"`
+	Body        CommandBody `json:"body"`
+}
+
+func (c Command) EffectiveName() string {
+	if c.Name != "" {
+		return c.Name
+	}
+	return c.CommandName
+}
+
+// Acknowledges reports whether a POST /command response is a valid Servarr
+// acknowledgement. When an expected name is supplied it must match. Failed,
+// unknown, and zero-id responses do not establish that work was queued.
+func (c Command) Acknowledges(expectedName ...string) bool {
+	if c.ID <= 0 {
+		return false
+	}
+	if len(expectedName) > 0 && !strings.EqualFold(c.EffectiveName(), expectedName[0]) {
+		return false
+	}
+	switch strings.ToLower(c.Status) {
+	case "queued", "started", "completed":
+		return true
+	default:
+		return false
+	}
+}
+
 // HealthCheck is one entry from Chaptarr's system health report: a config-level
 // problem (download client unreachable, remote path mapping, indexers down, no
 // root folder, low disk, etc.). Type is one of ok/notice/warning/error.
@@ -563,10 +755,18 @@ type ManualImportFile struct {
 // and decodes JSON into out when out is non-nil. Upstream error bodies are
 // deliberately excluded because they can contain credentials or signed URLs.
 func (c *Client) do(method, path string, body, out any) error {
-	return c.doWith(c.httpClient, method, path, body, out)
+	return c.doContext(context.Background(), method, path, body, out)
 }
 
 func (c *Client) doWith(client *http.Client, method, path string, body, out any) error {
+	return c.doWithContext(context.Background(), client, method, path, body, out)
+}
+
+func (c *Client) doContext(ctx context.Context, method, path string, body, out any) error {
+	return c.doWithContext(ctx, c.httpClient, method, path, body, out)
+}
+
+func (c *Client) doWithContext(ctx context.Context, client *http.Client, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -575,7 +775,7 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(method, c.baseURL+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
 		return err
 	}
@@ -594,7 +794,11 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		requestPath, _, _ := strings.Cut(path, "?")
-		return fmt.Errorf("chaptarr %s %s returned status %d", method, requestPath, resp.StatusCode)
+		return &HTTPStatusError{
+			Method:     method,
+			Path:       requestPath,
+			StatusCode: resp.StatusCode,
+		}
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -625,38 +829,43 @@ func (c *Client) doRequestContext(ctx context.Context, method, path string) (*ht
 
 // LookupAuthor searches Chaptarr's metadata for authors matching term.
 func (c *Client) LookupAuthor(term string) ([]LookupResult, error) {
-	resp, err := c.doRequest("GET", "/api/v1/author/lookup?term="+url.QueryEscape(term))
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr author lookup: %w", err)
-	}
-	defer resp.Body.Close()
+	return c.LookupAuthorContext(context.Background(), term)
+}
 
+// LookupAuthorContext is the cancellation-aware author lookup.
+func (c *Client) LookupAuthorContext(ctx context.Context, term string) ([]LookupResult, error) {
 	var results []LookupResult
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("decode chaptarr author lookup: %w", err)
+	path := "/api/v1/author/lookup?term=" + url.QueryEscape(term)
+	if err := c.doContext(ctx, http.MethodGet, path, nil, &results); err != nil {
+		return nil, fmt.Errorf("chaptarr author lookup: %w", err)
 	}
 	return results, nil
 }
 
 // LookupBook searches Chaptarr's metadata for books matching term.
 func (c *Client) LookupBook(term string) ([]LookupResult, error) {
-	resp, err := c.doRequest("GET", "/api/v1/book/lookup?term="+url.QueryEscape(term))
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr book lookup: %w", err)
-	}
-	defer resp.Body.Close()
+	return c.LookupBookContext(context.Background(), term)
+}
 
+// LookupBookContext is the cancellation-aware book lookup.
+func (c *Client) LookupBookContext(ctx context.Context, term string) ([]LookupResult, error) {
 	var results []LookupResult
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, fmt.Errorf("decode chaptarr book lookup: %w", err)
+	path := "/api/v1/book/lookup?term=" + url.QueryEscape(term)
+	if err := c.doContext(ctx, http.MethodGet, path, nil, &results); err != nil {
+		return nil, fmt.Errorf("chaptarr book lookup: %w", err)
 	}
 	return results, nil
 }
 
 // GetAllAuthors lists every author in the Chaptarr library.
 func (c *Client) GetAllAuthors() ([]Author, error) {
+	return c.GetAllAuthorsContext(context.Background())
+}
+
+// GetAllAuthorsContext is the cancellation-aware author list.
+func (c *Client) GetAllAuthorsContext(ctx context.Context) ([]Author, error) {
 	var authors []Author
-	if err := c.do("GET", "/api/v1/author", nil, &authors); err != nil {
+	if err := c.doContext(ctx, http.MethodGet, "/api/v1/author", nil, &authors); err != nil {
 		return nil, fmt.Errorf("chaptarr author list: %w", err)
 	}
 	return authors, nil
@@ -664,24 +873,28 @@ func (c *Client) GetAllAuthors() ([]Author, error) {
 
 // GetAuthor returns a single author by id.
 func (c *Client) GetAuthor(id int) (*Author, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/author/%d", id))
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr get author: %w", err)
-	}
-	defer resp.Body.Close()
+	return c.GetAuthorContext(context.Background(), id)
+}
 
+// GetAuthorContext is the cancellation-aware single-author read.
+func (c *Client) GetAuthorContext(ctx context.Context, id int) (*Author, error) {
 	var author Author
-	if err := json.NewDecoder(resp.Body).Decode(&author); err != nil {
-		return nil, fmt.Errorf("decode chaptarr author: %w", err)
+	if err := c.doContext(ctx, http.MethodGet, fmt.Sprintf("/api/v1/author/%d", id), nil, &author); err != nil {
+		return nil, fmt.Errorf("chaptarr get author: %w", err)
 	}
 	return &author, nil
 }
 
 // GetBooks lists the books of one author.
 func (c *Client) GetBooks(authorID int) ([]Book, error) {
+	return c.GetBooksContext(context.Background(), authorID)
+}
+
+// GetBooksContext is the cancellation-aware per-author book list.
+func (c *Client) GetBooksContext(ctx context.Context, authorID int) ([]Book, error) {
 	var books []Book
 	path := fmt.Sprintf("/api/v1/book?authorId=%d", authorID)
-	if err := c.do("GET", path, nil, &books); err != nil {
+	if err := c.doContext(ctx, http.MethodGet, path, nil, &books); err != nil {
 		return nil, fmt.Errorf("chaptarr books: %w", err)
 	}
 	return books, nil
@@ -690,8 +903,13 @@ func (c *Client) GetBooks(authorID int) ([]Book, error) {
 // GetAllBooks lists every book in the Chaptarr library (all authors). Chaptarr
 // returns the same book shape as GetBooks; omitting authorId widens the scope.
 func (c *Client) GetAllBooks() ([]Book, error) {
+	return c.GetAllBooksContext(context.Background())
+}
+
+// GetAllBooksContext is the cancellation-aware all-author book list.
+func (c *Client) GetAllBooksContext(ctx context.Context) ([]Book, error) {
 	var books []Book
-	if err := c.do("GET", "/api/v1/book", nil, &books); err != nil {
+	if err := c.doContext(ctx, http.MethodGet, "/api/v1/book", nil, &books); err != nil {
 		return nil, fmt.Errorf("chaptarr books: %w", err)
 	}
 	return books, nil
@@ -699,17 +917,32 @@ func (c *Client) GetAllBooks() ([]Book, error) {
 
 // GetBook returns a single book by id.
 func (c *Client) GetBook(id int) (*Book, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/book/%d", id))
-	if err != nil {
+	return c.GetBookContext(context.Background(), id)
+}
+
+// GetBookContext is the cancellation-aware single-book read. Its Editions
+// field is not authoritative on Chaptarr 0.9.720; use GetEditionsContext.
+func (c *Client) GetBookContext(ctx context.Context, id int) (*Book, error) {
+	var book Book
+	if err := c.doContext(ctx, http.MethodGet, fmt.Sprintf("/api/v1/book/%d", id), nil, &book); err != nil {
 		return nil, fmt.Errorf("chaptarr get book: %w", err)
 	}
-	defer resp.Body.Close()
-
-	var book Book
-	if err := json.NewDecoder(resp.Body).Decode(&book); err != nil {
-		return nil, fmt.Errorf("decode chaptarr book: %w", err)
-	}
 	return &book, nil
+}
+
+// GetEditions returns Chaptarr's authoritative local editions for one book.
+func (c *Client) GetEditions(bookID int) ([]Edition, error) {
+	return c.GetEditionsContext(context.Background(), bookID)
+}
+
+// GetEditionsContext is the cancellation-aware authoritative edition read.
+func (c *Client) GetEditionsContext(ctx context.Context, bookID int) ([]Edition, error) {
+	var editions []Edition
+	path := fmt.Sprintf("/api/v1/edition?bookId=%d", bookID)
+	if err := c.doContext(ctx, http.MethodGet, path, nil, &editions); err != nil {
+		return nil, fmt.Errorf("chaptarr editions: %w", err)
+	}
+	return editions, nil
 }
 
 // GetBookFiles lists the book files on disk for one author.
@@ -733,15 +966,13 @@ func (c *Client) GetBookFile(id int) (*BookFile, error) {
 }
 
 func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
-	resp, err := c.doRequest("GET", "/api/v1/qualityprofile")
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr quality profiles: %w", err)
-	}
-	defer resp.Body.Close()
+	return c.GetQualityProfilesContext(context.Background())
+}
 
+func (c *Client) GetQualityProfilesContext(ctx context.Context) ([]QualityProfile, error) {
 	var profiles []QualityProfile
-	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
-		return nil, fmt.Errorf("decode quality profiles: %w", err)
+	if err := c.doContext(ctx, http.MethodGet, "/api/v1/qualityprofile", nil, &profiles); err != nil {
+		return nil, fmt.Errorf("chaptarr quality profiles: %w", err)
 	}
 	return profiles, nil
 }
@@ -832,49 +1063,94 @@ func (c *Client) UpdateCustomFormatRawContext(ctx context.Context, id int, body 
 }
 
 func (c *Client) GetMetadataProfiles() ([]MetadataProfile, error) {
-	resp, err := c.doRequest("GET", "/api/v1/metadataprofile")
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr metadata profiles: %w", err)
-	}
-	defer resp.Body.Close()
+	return c.GetMetadataProfilesContext(context.Background())
+}
 
+func (c *Client) GetMetadataProfilesContext(ctx context.Context) ([]MetadataProfile, error) {
 	var profiles []MetadataProfile
-	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
-		return nil, fmt.Errorf("decode metadata profiles: %w", err)
+	if err := c.doContext(ctx, http.MethodGet, "/api/v1/metadataprofile", nil, &profiles); err != nil {
+		return nil, fmt.Errorf("chaptarr metadata profiles: %w", err)
 	}
 	return profiles, nil
 }
 
 func (c *Client) GetRootFolders() ([]RootFolder, error) {
-	resp, err := c.doRequest("GET", "/api/v1/rootfolder")
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr root folders: %w", err)
-	}
-	defer resp.Body.Close()
+	return c.GetRootFoldersContext(context.Background())
+}
 
+func (c *Client) GetRootFoldersContext(ctx context.Context) ([]RootFolder, error) {
 	var folders []RootFolder
-	if err := json.NewDecoder(resp.Body).Decode(&folders); err != nil {
-		return nil, fmt.Errorf("decode root folders: %w", err)
+	if err := c.doContext(ctx, http.MethodGet, "/api/v1/rootfolder", nil, &folders); err != nil {
+		return nil, fmt.Errorf("chaptarr root folders: %w", err)
 	}
 	return folders, nil
 }
 
 // AddAuthor adds an author to the Chaptarr library.
 func (c *Client) AddAuthor(req AddAuthorRequest) (*Author, error) {
+	return c.AddAuthorContext(context.Background(), req)
+}
+
+// AddAuthorContext is the cancellation-aware author add.
+func (c *Client) AddAuthorContext(ctx context.Context, req AddAuthorRequest) (*Author, error) {
 	var author Author
-	if err := c.do("POST", "/api/v1/author", req, &author); err != nil {
+	if err := c.doContext(ctx, http.MethodPost, "/api/v1/author", req, &author); err != nil {
 		return nil, fmt.Errorf("chaptarr add author: %w", err)
 	}
 	return &author, nil
 }
 
+// UpdateAuthor PUTs the complete author resource. Chaptarr may acknowledge the
+// write with an empty 2xx response, so the return value is deliberately nil;
+// callers must re-read it to verify the requested-format monitor gate.
+func (c *Client) UpdateAuthor(author Author) (*Author, error) {
+	return c.UpdateAuthorContext(context.Background(), author)
+}
+
+// UpdateAuthorContext is the cancellation-aware full-author update.
+func (c *Client) UpdateAuthorContext(ctx context.Context, author Author) (*Author, error) {
+	if author.ID <= 0 {
+		return nil, errors.New("chaptarr update author: author id must be positive")
+	}
+	path := fmt.Sprintf("/api/v1/author/%d", author.ID)
+	if err := c.doContext(ctx, http.MethodPut, path, author, nil); err != nil {
+		return nil, fmt.Errorf("chaptarr update author: %w", err)
+	}
+	return nil, nil
+}
+
 // AddBook adds a single book (and, if needed, its author) to the library.
 func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
+	return c.AddBookContext(context.Background(), req)
+}
+
+// AddBookContext is the cancellation-aware book add.
+func (c *Client) AddBookContext(ctx context.Context, req AddBookRequest) (*Book, error) {
 	var book Book
-	if err := c.do("POST", "/api/v1/book", req, &book); err != nil {
+	if err := c.doContext(ctx, http.MethodPost, "/api/v1/book", req, &book); err != nil {
 		return nil, fmt.Errorf("chaptarr add book: %w", err)
 	}
 	return &book, nil
+}
+
+// UpdateBook PUTs a complete library book. On Chaptarr 0.9.720 this is the
+// only write that persists edition selection, but it does not persist the
+// book-level monitor flag. Its 2xx body is optional and untrusted; use
+// SetBookMonitored and then re-read both resources.
+func (c *Client) UpdateBook(book Book) (*Book, error) {
+	return c.UpdateBookContext(context.Background(), book)
+}
+
+// UpdateBookContext is the cancellation-aware full-book update.
+func (c *Client) UpdateBookContext(ctx context.Context, book Book) (*Book, error) {
+	if book.ID <= 0 {
+		return nil, errors.New("chaptarr update book: book id must be positive")
+	}
+	path := fmt.Sprintf("/api/v1/book/%d", book.ID)
+	if err := c.doContext(ctx, http.MethodPut, path, book, nil); err != nil {
+		return nil, fmt.Errorf("chaptarr update book: %w", err)
+	}
+	return nil, nil
 }
 
 // SetBookMonitored toggles monitoring for the given books. Chaptarr's
@@ -882,8 +1158,15 @@ func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
 // book's ebook/audiobook monitor flags from its mediaType, so monitoring a book
 // whose mediaType was set on add applies the requested format.
 func (c *Client) SetBookMonitored(bookIDs []int, monitored bool) error {
+	return c.SetBookMonitoredContext(context.Background(), bookIDs, monitored)
+}
+
+// SetBookMonitoredContext is the cancellation-aware persistent book-monitor
+// write. Chaptarr may return success while dropping it, so callers must verify
+// the book with GetBookContext.
+func (c *Client) SetBookMonitoredContext(ctx context.Context, bookIDs []int, monitored bool) error {
 	body := map[string]any{"bookIds": bookIDs, "monitored": monitored}
-	if err := c.do("PUT", "/api/v1/book/monitor", body, nil); err != nil {
+	if err := c.doContext(ctx, http.MethodPut, "/api/v1/book/monitor", body, nil); err != nil {
 		return fmt.Errorf("chaptarr set book monitored: %w", err)
 	}
 	return nil
@@ -913,6 +1196,12 @@ const queueMaxRecords = 1000
 // paginating from page until all records are fetched (capped at
 // queueMaxRecords).
 func (c *Client) GetQueueDetailed(page, pageSize int) ([]DetailedQueueItem, error) {
+	return c.GetQueueDetailedContext(context.Background(), page, pageSize)
+}
+
+// GetQueueDetailedContext is the cancellation-aware fully paginated queue
+// read used while reconciling an in-flight durable request.
+func (c *Client) GetQueueDetailedContext(ctx context.Context, page, pageSize int) ([]DetailedQueueItem, error) {
 	var all []DetailedQueueItem
 	for ; ; page++ {
 		var resp struct {
@@ -920,7 +1209,7 @@ func (c *Client) GetQueueDetailed(page, pageSize int) ([]DetailedQueueItem, erro
 			Records      []DetailedQueueItem `json:"records"`
 		}
 		path := fmt.Sprintf("/api/v1/queue?page=%d&pageSize=%d&includeAuthor=true&includeBook=true", page, pageSize)
-		if err := c.do("GET", path, nil, &resp); err != nil {
+		if err := c.doContext(ctx, http.MethodGet, path, nil, &resp); err != nil {
 			return nil, fmt.Errorf("chaptarr queue: %w", err)
 		}
 		all = append(all, resp.Records...)
@@ -1043,6 +1332,74 @@ func (c *Client) triggerCommand(payload map[string]any) error {
 		return fmt.Errorf("chaptarr command: %w", err)
 	}
 	return nil
+}
+
+// GetCommands lists Chaptarr's current and recent commands.
+func (c *Client) GetCommands() ([]Command, error) {
+	return c.GetCommandsContext(context.Background())
+}
+
+// GetCommandsContext is the cancellation-aware command list used to determine
+// whether an author's catalog import is still running.
+func (c *Client) GetCommandsContext(ctx context.Context) ([]Command, error) {
+	var raw json.RawMessage
+	if err := c.doContext(ctx, http.MethodGet, "/api/v1/command", nil, &raw); err != nil {
+		return nil, fmt.Errorf("chaptarr commands: %w", err)
+	}
+	commands, err := decodeCommands(raw)
+	if err != nil {
+		return nil, fmt.Errorf("decode chaptarr commands: %w", err)
+	}
+	return commands, nil
+}
+
+func decodeCommands(raw json.RawMessage) ([]Command, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, errors.New("empty command response")
+	}
+	if trimmed[0] == '[' {
+		var commands []Command
+		if err := json.Unmarshal(trimmed, &commands); err != nil {
+			return nil, err
+		}
+		return commands, nil
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &envelope); err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"records", "commands"} {
+		value, ok := envelope[key]
+		if !ok {
+			continue
+		}
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return nil, nil
+		}
+		var commands []Command
+		if err := json.Unmarshal(value, &commands); err != nil {
+			return nil, err
+		}
+		return commands, nil
+	}
+	return nil, errors.New("command response is not a list")
+}
+
+// QueueBookSearch submits one strict BookSearch and returns the acknowledgement
+// for the caller to validate before reporting a durable request.
+func (c *Client) QueueBookSearch(bookIDs []int) (*Command, error) {
+	return c.QueueBookSearchContext(context.Background(), bookIDs)
+}
+
+// QueueBookSearchContext is the cancellation-aware BookSearch submission.
+func (c *Client) QueueBookSearchContext(ctx context.Context, bookIDs []int) (*Command, error) {
+	payload := map[string]any{"name": "BookSearch", "bookIds": bookIDs}
+	var command Command
+	if err := c.doContext(ctx, http.MethodPost, "/api/v1/command", payload, &command); err != nil {
+		return nil, fmt.Errorf("chaptarr book search command: %w", err)
+	}
+	return &command, nil
 }
 
 // TriggerAuthorSearch starts an automatic search for all monitored books of an

@@ -93,6 +93,85 @@ void main() {
   });
 
   testWidgets(
+      'request wizard chooses format first then a meaningful catalog match',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, :adapter) =
+        await _pumpRouter(tester, editionVariants: true);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final searchField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'Search books or authors…',
+    );
+    await tester.enterText(searchField, 'the hobbit');
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+
+    final original = find.byKey(const ValueKey(
+      'book-result:hobbit-original:hobbit-original:lookup:0',
+    ));
+    expect(original, findsOneWidget);
+    expect(
+      find.descendant(of: original, matching: find.text('Recommended')),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.descendant(of: original, matching: find.text('Choose format')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Choose how you want to enjoy this book.'), findsOneWidget);
+    expect(find.text('Which match looks right?'), findsNothing);
+    await tester.tap(find.text('Audiobook'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Which match looks right?'), findsOneWidget);
+    expect(find.text('Recommended'), findsNWidgets(2));
+    expect(find.textContaining('George Allen & Unwin'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.textContaining('75th Anniversary Edition'),
+      180,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.drag(
+      find.byType(Scrollable).last,
+      const Offset(0, -180),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('75th Anniversary Edition'), findsOneWidget);
+    expect(find.textContaining('Record #'), findsNothing);
+
+    await tester.tap(
+      find.ancestor(
+        of: find.textContaining('75th Anniversary Edition'),
+        matching: find.byType(InkWell),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(adapter.requestBodies, hasLength(1));
+    expect(adapter.requestBodies.single['foreign_id'], 'hobbit-anniversary');
+    expect(adapter.requestBodies.single['book_format'], 'audiobook');
+    expect(adapter.requestBodies.single['book_selection'], {
+      'foreign_author_id': 'author-tolkien',
+      'author_name': 'J. R. R. Tolkien',
+      'audiobook': {
+        'foreign_edition_id': 'edition-anniversary-audio',
+        'isbn13': '9780007487295',
+        'asin': 'B0ANNIVERSARY',
+        'edition_title': '75th Anniversary Edition',
+        'publisher': 'HarperCollins',
+        'year': 2012,
+        'page_count': 320,
+      },
+    });
+  });
+
+  testWidgets(
       'fuzzy ownership keeps lookup metadata but uses the canonical library id',
       (tester) async {
     _usePhoneSize(tester);
@@ -158,6 +237,33 @@ void main() {
     expect(adapter.requestBodies, hasLength(1));
     expect(adapter.requestBodies.single['foreign_id'], 'library-flock');
     expect(adapter.requestBodies.single['instance_id'], 'books');
+    expect(adapter.requestBodies.single['book_format'], 'ebook');
+  });
+
+  testWidgets('a single known match and format submits without extra steps',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, :adapter) =
+        await _pumpRouter(tester, mismatchedIdentity: true);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final searchField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'Search books or authors…',
+    );
+    await tester.enterText(searchField, 'flock');
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Request eBook'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Choose how you want to enjoy this book.'), findsNothing);
+    expect(find.text('Which match looks right?'), findsNothing);
+    expect(adapter.requestBodies, hasLength(1));
+    expect(adapter.requestBodies.single['foreign_id'], 'library-flock');
     expect(adapter.requestBodies.single['book_format'], 'ebook');
   });
 
@@ -237,8 +343,29 @@ void main() {
     expect(chip.style?.color, AppTheme.requested);
   });
 
+  testWidgets('a bare monitor flag does not claim a search result was requested',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, bareMonitor: true);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final searchField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'Search books or authors…',
+    );
+    await tester.enterText(searchField, 'meditations');
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Audiobook requested'), findsNothing);
+    expect(find.text('Choose format'), findsWidgets);
+  });
+
   testWidgets(
-      'two lookup rows cannot silently bind to one canonical library record',
+      'equivalent lookup rows resolve automatically without exposing record ids',
       (tester) async {
     _usePhoneSize(tester);
     final (:router, container: _, :adapter) =
@@ -255,10 +382,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
-    expect(
-      find.text('Choose a matching library record'),
-      findsNWidgets(2),
-    );
+    expect(find.text('Choose a matching library record'), findsNothing);
+    expect(find.textContaining('Record #'), findsNothing);
     expect(
       find.byKey(const ValueKey(
           'book-result:lookup-flock:lookup-flock:lookup:0')),
@@ -275,7 +400,29 @@ void main() {
       findsOneWidget,
     );
     expect(adapter.statusForeignIds, isNotEmpty);
-    expect(adapter.statusForeignIds, everyElement('library-flock'));
+    expect(
+      adapter.statusForeignIds,
+      containsAll(['lookup-flock', 'library-flock']),
+    );
+
+    await tester.tap(find.text('Choose format').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('eBook'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.requestBodies, hasLength(1));
+    expect(adapter.requestBodies.single['foreign_id'], 'lookup-flock');
+    expect(adapter.requestBodies.single['book_format'], 'ebook');
+    expect(adapter.requestBodies.single['book_selection'], {
+      'foreign_author_id': 'author-flock',
+      'author_name': 'Kate Stewart',
+    });
+    expect(find.text('Confirm the matching title'), findsNothing);
+    expect(
+      find.textContaining('equivalent catalog matches grouped'),
+      findsNothing,
+    );
+    expect(find.text('Which match looks right?'), findsNothing);
   });
 
   testWidgets('same-title library records are surfaced separately',
@@ -295,10 +442,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
-    expect(
-      find.text('Choose a matching library record'),
-      findsOneWidget,
-    );
+    expect(find.text('Choose a matching library record'), findsNothing);
     expect(
       find.byKey(
           const ValueKey('book-result:library-a:library-a:library:0')),
@@ -309,8 +453,10 @@ void main() {
           const ValueKey('book-result:library-b:library-b:library:1')),
       findsOneWidget,
     );
-    expect(adapter.statusForeignIds, containsAll(['library-a', 'library-b']));
-    expect(adapter.statusForeignIds, isNot(contains('lookup-flock')));
+    expect(
+      adapter.statusForeignIds,
+      containsAll(['lookup-flock', 'library-a', 'library-b']),
+    );
   });
 
   testWidgets('a lookup row without a canonical id explains why it is blocked',
@@ -341,6 +487,10 @@ void main() {
       findsOneWidget,
     );
     expect(tester.widget<ListTile>(row).onTap, isNull);
+    expect(
+      find.descendant(of: row, matching: find.text('Recommended')),
+      findsNothing,
+    );
     expect(adapter.statusForeignIds, isEmpty);
     expect(adapter.requestBodies, isEmpty);
   });
@@ -418,18 +568,22 @@ Future<({
   bool mismatchedIdentity = false,
   bool unresolvedIdentity = false,
   bool mixedOwnership = false,
+  bool bareMonitor = false,
   bool ambiguousLookup = false,
   bool duplicateLibraryRecords = false,
   bool blankIdentity = false,
+  bool editionVariants = false,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   final adapter = _BooksSearchAdapter(
     mismatchedIdentity: mismatchedIdentity,
     unresolvedIdentity: unresolvedIdentity,
     mixedOwnership: mixedOwnership,
+    bareMonitor: bareMonitor,
     ambiguousLookup: ambiguousLookup,
     duplicateLibraryRecords: duplicateLibraryRecords,
     blankIdentity: blankIdentity,
+    editionVariants: editionVariants,
   );
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
@@ -467,17 +621,21 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     this.mismatchedIdentity = false,
     this.unresolvedIdentity = false,
     this.mixedOwnership = false,
+    this.bareMonitor = false,
     this.ambiguousLookup = false,
     this.duplicateLibraryRecords = false,
     this.blankIdentity = false,
+    this.editionVariants = false,
   });
 
   final bool mismatchedIdentity;
   final bool unresolvedIdentity;
   final bool mixedOwnership;
+  final bool bareMonitor;
   final bool ambiguousLookup;
   final bool duplicateLibraryRecords;
   final bool blankIdentity;
+  final bool editionVariants;
   int statusRequests = 0;
   int libraryRequests = 0;
   bool ebookSubmitted = false;
@@ -554,14 +712,17 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                 },
               ],
             }
-          : mixedOwnership
+          : (mixedOwnership || bareMonitor)
           ? {
               'titles': [
                 {
                   'title': 'Meditations',
                   'author': 'Marcus Aurelius',
                   'foreign_book_id': 'book-1',
-                  'ebook': {'monitored': true, 'downloaded': true},
+                  'ebook': {
+                    'monitored': mixedOwnership,
+                    'downloaded': mixedOwnership,
+                  },
                   'audiobook': {'monitored': true, 'downloaded': false},
                 },
               ],
@@ -588,6 +749,14 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                 'audiobook': 'requested',
               },
             }
+          : foreignId == 'book-1' && bareMonitor
+          ? {
+              'status': 'unavailable',
+              'book_formats': {
+                'ebook': 'unavailable',
+                'audiobook': 'unavailable',
+              },
+            }
           : foreignId == 'book-1'
           ? {
               'status': 'requested',
@@ -598,7 +767,51 @@ class _BooksSearchAdapter implements HttpClientAdapter {
             }
           : {'status': 'unavailable'};
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
-      body = (mismatchedIdentity ||
+      body = editionVariants
+          ? [
+              {
+                'title': 'The Hobbit',
+                'foreignBookId': 'hobbit-original',
+                'year': 1937,
+                'pageCount': 310,
+                'author': {
+                  'authorName': 'J. R. R. Tolkien',
+                  'foreignAuthorId': 'author-tolkien',
+                },
+                'editions': [
+                  {
+                    'id': 1,
+                    'foreignEditionId': 'edition-original-audio',
+                    'format': 'audiobook',
+                    'asin': 'B0ORIGINAL',
+                    'publisher': 'George Allen & Unwin',
+                    'isbn13': '9780007525492',
+                  },
+                ],
+              },
+              {
+                'title': 'The Hobbit',
+                'foreignBookId': 'hobbit-anniversary',
+                'year': 2012,
+                'pageCount': 320,
+                'author': {
+                  'authorName': 'J. R. R. Tolkien',
+                  'foreignAuthorId': 'author-tolkien',
+                },
+                'editions': [
+                  {
+                    'id': 2,
+                    'foreignEditionId': 'edition-anniversary-audio',
+                    'format': 'audiobook',
+                    'asin': 'B0ANNIVERSARY',
+                    'title': '75th Anniversary Edition',
+                    'publisher': 'HarperCollins',
+                    'isbn13': '9780007487295',
+                  },
+                ],
+              },
+            ]
+          : (mismatchedIdentity ||
               unresolvedIdentity ||
               ambiguousLookup ||
               duplicateLibraryRecords ||

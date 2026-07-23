@@ -528,6 +528,18 @@ func (s *Store) Delete(id string) error {
 	if pending > 0 {
 		return fmt.Errorf("%w: cannot delete instance while %d book request(s) await approval", ErrPendingBookRequests, pending)
 	}
+	var active int
+	err = tx.QueryRow(
+		`SELECT COUNT(*) FROM book_request_jobs
+		 WHERE instance_id = ? AND state IN ('running','retry_wait','outcome_unknown')`,
+		id,
+	).Scan(&active)
+	if err != nil {
+		return fmt.Errorf("check active book requests: %w", err)
+	}
+	if active > 0 {
+		return fmt.Errorf("%w: cannot delete instance while %d book request(s) are still being confirmed", ErrPendingBookRequests, active)
+	}
 	result, err := tx.Exec("DELETE FROM service_instances WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete instance: %w", err)

@@ -116,6 +116,7 @@ class _PartialRequestAdapter implements HttpClientAdapter {
 
 class _FailedPostAfterMutationAdapter implements HttpClientAdapter {
   var mutated = false;
+  var postCount = 0;
   var statusChecks = 0;
 
   @override
@@ -125,6 +126,7 @@ class _FailedPostAfterMutationAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     if (options.method == 'POST') {
+      postCount++;
       mutated = true;
       return ResponseBody.fromString(
         jsonEncode({'error': 'upstream response was lost'}),
@@ -139,6 +141,108 @@ class _FailedPostAfterMutationAdapter implements HttpClientAdapter {
         ? {
             'status': 'requested',
             'book_formats': {'ebook': 'requested'},
+          }
+        : {'status': 'unavailable'};
+    return ResponseBody.fromString(
+      jsonEncode(body),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _FailedPostWithoutMutationAdapter implements HttpClientAdapter {
+  var postCount = 0;
+  var statusChecks = 0;
+  var submitted = false;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method == 'POST') {
+      postCount++;
+      submitted = true;
+      return ResponseBody.fromString(
+        jsonEncode({
+          'code': 'book_search_unconfirmed',
+          'error': 'upstream response was lost',
+        }),
+        502,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+    }
+    statusChecks++;
+    return ResponseBody.fromString(
+      jsonEncode(submitted
+          ? {
+              'status': 'unavailable',
+              'status_known': false,
+              'unknown_reason': 'outcome_pending',
+            }
+          : {'status': 'unavailable'}),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _CodedPostFailureAdapter implements HttpClientAdapter {
+  final String postCode;
+  final int postStatus;
+  final String? reconciledFailureCode;
+  var submitted = false;
+  var postCount = 0;
+  var statusChecks = 0;
+
+  _CodedPostFailureAdapter({
+    required this.postCode,
+    required this.postStatus,
+    this.reconciledFailureCode,
+  });
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method == 'POST') {
+      submitted = true;
+      postCount++;
+      return ResponseBody.fromString(
+        jsonEncode({
+          'code': postCode,
+          'error': 'server wording intentionally ignored',
+        }),
+        postStatus,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+    }
+    statusChecks++;
+    final body = submitted && reconciledFailureCode != null
+        ? {
+            'status': 'unavailable',
+            'status_known': false,
+            'unknown_reason': 'request_failed',
+            'failure_code': reconciledFailureCode,
+            'book_formats': {'ebook': 'unavailable'},
           }
         : {'status': 'unavailable'};
     return ResponseBody.fromString(
@@ -183,6 +287,71 @@ class _DeferredPostRefreshAdapter implements HttpClientAdapter {
     refreshResponse.complete(_jsonResponse({
       'status': 'requested',
       'book_formats': {'ebook': 'requested'},
+    }));
+  }
+
+  ResponseBody _jsonResponse(Map<String, dynamic> body) =>
+      ResponseBody.fromString(
+        jsonEncode(body),
+        200,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _TerminalFailureRetryAdapter implements HttpClientAdapter {
+  final String failureCode;
+  final retryResponse = Completer<ResponseBody>();
+  Map<String, dynamic> submittedBody = {};
+  var postCount = 0;
+  var statusChecks = 0;
+  var retryCompleted = false;
+
+  _TerminalFailureRetryAdapter({
+    this.failureCode = 'book_edition_unavailable',
+  });
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method == 'POST') {
+      postCount++;
+      final bytes = <int>[];
+      if (requestStream != null) {
+        await for (final chunk in requestStream) {
+          bytes.addAll(chunk);
+        }
+      }
+      submittedBody = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+      return retryResponse.future;
+    }
+    statusChecks++;
+    return _jsonResponse(retryCompleted
+        ? {
+            'status': 'requested',
+            'book_formats': {'audiobook': 'requested'},
+          }
+        : {
+            'status': 'unavailable',
+            'status_known': false,
+            'unknown_reason': 'request_failed',
+            'failure_code': failureCode,
+            'book_formats': {'audiobook': 'unavailable'},
+          });
+  }
+
+  void completeRetry() {
+    retryCompleted = true;
+    retryResponse.complete(_jsonResponse({
+      'status': 'requested',
+      'book_formats': {'audiobook': 'requested'},
     }));
   }
 
@@ -310,6 +479,27 @@ void main() {
       );
     });
 
+    test('terminal request failure preserves its retry-safe format and code',
+        () async {
+      final d = await _service({
+        'status': 'unavailable',
+        'status_known': false,
+        'unknown_reason': 'request_failed',
+        'failure_code': 'book_edition_unavailable',
+        'book_formats': {'audiobook': 'unavailable'},
+      }).checkBookStatusDetail('fb');
+
+      expect(d.isKnown, isFalse);
+      expect(
+        d.effectiveUnknownReason,
+        BookStatusUnknownReason.requestFailed,
+      );
+      expect(d.failureCode, 'book_edition_unavailable');
+      expect(d.isRequestable(BookRequestFormat.audiobook), isTrue);
+      expect(d.isRequestable(BookRequestFormat.ebook), isFalse);
+      expect(d.withOwnership(null).failureCode, 'book_edition_unavailable');
+    });
+
     test('an unknown format key blocks uncovered format actions', () async {
       final d = await _service({
         'status': 'requested',
@@ -383,6 +573,85 @@ void main() {
     expect(find.byType(TextButton), findsNothing);
   });
 
+  testWidgets('terminal book failure exposes one enabled format-safe retry',
+      (tester) async {
+    final adapter = _TerminalFailureRetryAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookRequestButton(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: RequestService(backendDio: dio),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Couldn’t add · Try again'), findsOneWidget);
+    expect(adapter.statusChecks, 1);
+    expect(
+      tester.widget<TextButton>(find.byType(TextButton)).onPressed,
+      isNotNull,
+    );
+
+    await tester.tap(find.text('Couldn’t add · Try again'));
+    for (var attempt = 0;
+        attempt < 50 && adapter.submittedBody.isEmpty;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+
+    expect(adapter.postCount, 1);
+    expect(adapter.submittedBody['book_format'], 'audiobook');
+    expect(
+      tester.widget<TextButton>(find.byType(TextButton)).onPressed,
+      isNull,
+    );
+
+    await tester.tap(find.byType(TextButton), warnIfMissed: false);
+    await tester.pump();
+    expect(adapter.postCount, 1);
+
+    adapter.completeRetry();
+    await tester.pumpAndSettle();
+
+    expect(adapter.postCount, 1);
+    expect(adapter.statusChecks, 2);
+    expect(find.text('Couldn’t add · Try again'), findsNothing);
+    expect(find.text('Request eBook'), findsOneWidget);
+  });
+
+  testWidgets('terminal library configuration failure explains admin action',
+      (tester) async {
+    final adapter = _TerminalFailureRetryAdapter(
+      failureCode: 'book_connection_invalid',
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookRequestButton(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: RequestService(backendDio: dio),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ask an admin, then retry'), findsOneWidget);
+    expect(
+      tester.widget<TextButton>(find.byType(TextButton)).onPressed,
+      isNotNull,
+    );
+  });
+
   testWidgets('partial both request names each outcome and leaves retry open',
       (tester) async {
     final adapter = _PartialRequestAdapter();
@@ -444,7 +713,7 @@ void main() {
     );
   });
 
-  testWidgets('a failed POST refreshes truth before exposing another action',
+  testWidgets('an interrupted POST recovers success from exact status truth',
       (tester) async {
     final adapter = _FailedPostAfterMutationAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
@@ -466,15 +735,126 @@ void main() {
     await tester.tap(find.text('eBook'));
     await tester.pumpAndSettle();
 
+    expect(adapter.postCount, 1);
     expect(adapter.statusChecks, 2);
     expect(find.text('Request eBook'), findsNothing);
     expect(find.text('Request Audiobook'), findsOneWidget);
+    expect(find.text('eBook requested.'), findsOneWidget);
+  });
+
+  testWidgets('an unknown failed POST polls without sending a duplicate',
+      (tester) async {
+    final adapter = _FailedPostWithoutMutationAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookRequestButton(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: RequestService(backendDio: dio),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Choose format'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('eBook'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(adapter.postCount, 1);
+    expect(adapter.statusChecks, 4);
+    expect(find.text('Choose format'), findsNothing);
+    expect(find.text('Still checking · Refresh'), findsOneWidget);
     expect(
       find.text(
-        'The request outcome couldn’t be confirmed. The book status was refreshed.',
+        'The book library is still confirming this request. Cantinarr will keep checking it.',
       ),
       findsOneWidget,
     );
+
+    await tester.pump(const Duration(seconds: 30));
+    await tester.pump();
+    expect(adapter.postCount, 1);
+    expect(adapter.statusChecks, 5);
+  });
+
+  testWidgets('a stable invalid selection shows reselect guidance immediately',
+      (tester) async {
+    final adapter = _CodedPostFailureAdapter(
+      postCode: 'book_selection_invalid',
+      postStatus: 400,
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookRequestButton(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: RequestService(backendDio: dio),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Choose format'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('eBook'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.postCount, 1);
+    expect(adapter.statusChecks, 2);
+    expect(
+      find.text(
+        'The selected book version is no longer valid. Search for the book again and choose a current version.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('couldn’t confirm'), findsNothing);
+  });
+
+  testWidgets('a reconciled terminal failure shows its actionable cause',
+      (tester) async {
+    final adapter = _CodedPostFailureAdapter(
+      postCode: 'book_search_unconfirmed',
+      postStatus: 502,
+      reconciledFailureCode: 'book_edition_unavailable',
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookRequestButton(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: RequestService(backendDio: dio),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Choose format'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('eBook'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.postCount, 1);
+    expect(adapter.statusChecks, 2,
+        reason: 'terminal reconciliation should stop polling');
+    expect(
+      find.text(
+        'No eBook edition is available for this title. Try another version or format.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('couldn’t confirm'), findsNothing);
   });
 
   testWidgets('a successful POST stays disabled until refreshed truth arrives',

@@ -188,7 +188,7 @@ void main() {
       expect(match.ownership.ebook.downloaded, isTrue);
     });
 
-    test('an exact foreign id outranks mismatched metadata', () {
+    test('an exact foreign id cannot override mismatched metadata', () {
       final digest = [
         _owned(
           'Library title',
@@ -203,7 +203,7 @@ void main() {
         foreignBookId: 'same-id',
       );
 
-      expect(ownedMatchFor(result, digest), same(digest.single));
+      expect(ownedMatchFor(result, digest), isNull);
     });
   });
 

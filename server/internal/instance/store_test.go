@@ -178,6 +178,33 @@ func TestDeleteRejectsPinnedPendingBookRequests(t *testing.T) {
 	}
 }
 
+func TestDeleteRejectsDurableBookRequestJobs(t *testing.T) {
+	s := newTestStore(t)
+	uid := createUser(t, s, "durable-books")
+	instanceID := mkInstance(t, s, "chaptarr", "Books")
+	if _, err := s.db.Exec(
+		`INSERT INTO book_request_jobs
+		 (user_id, instance_id, foreign_id, title, book_format, settings_fingerprint)
+		 VALUES (?, ?, 'book-1', 'Still Confirming', 'audiobook', zeroblob(32))`,
+		uid,
+		instanceID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(instanceID); err == nil {
+		t.Fatal("deleted instance with a durable book request job")
+	}
+	if inst, err := s.Get(instanceID); err != nil || inst == nil {
+		t.Fatalf("failed atomic delete removed instance: inst=%+v err=%v", inst, err)
+	}
+	if _, err := s.db.Exec("DELETE FROM book_request_jobs WHERE instance_id = ?", instanceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(instanceID); err != nil {
+		t.Fatalf("delete after durable request resolved: %v", err)
+	}
+}
+
 // AUTH-023: Proxy authorization classifies instances without decrypting secrets.
 func TestLookupServiceTypeUsesServiceMetadata(t *testing.T) {
 	s := newTestStore(t)

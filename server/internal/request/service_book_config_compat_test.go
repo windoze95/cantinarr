@@ -98,17 +98,23 @@ func TestChaptarr0720ConfigSelectorsUseFormatDiscriminators(t *testing.T) {
 }
 
 func TestChaptarrTypedProfilesAndPerFormatAuthorsFailClosedOnAmbiguity(t *testing.T) {
-	if _, ok := selectBookQualityProfile([]chaptarr.QualityProfile{
+	if id, ok := selectBookQualityProfile([]chaptarr.QualityProfile{
 		{ID: 11, Name: "Ebook Standard", ProfileType: BookFormatEbook},
 		{ID: 13, Name: "Ebook Default", ProfileType: BookFormatEbook},
-	}, BookFormatEbook); ok {
-		t.Fatal("multiple typed ebook quality profiles were guessed")
+	}, BookFormatEbook); !ok || id != 13 {
+		t.Fatalf("typed ebook quality default = %d ok=%v, want 13", id, ok)
 	}
-	if _, ok := selectBookMetadataProfile([]chaptarr.MetadataProfile{
+	if id, ok := selectBookMetadataProfile([]chaptarr.MetadataProfile{
 		{ID: 21, Name: "Ebook Standard", ProfileType: "2"},
 		{ID: 23, Name: "Ebook Default", ProfileType: "2"},
+	}, BookFormatEbook); !ok || id != 23 {
+		t.Fatalf("typed ebook metadata default = %d ok=%v, want 23", id, ok)
+	}
+	if _, ok := selectBookQualityProfile([]chaptarr.QualityProfile{
+		{ID: 11, Name: "Ebook Standard", ProfileType: BookFormatEbook},
+		{ID: 13, Name: "Ebook High", ProfileType: BookFormatEbook},
 	}, BookFormatEbook); ok {
-		t.Fatal("multiple typed ebook metadata profiles were guessed")
+		t.Fatal("multiple typed ebook quality profiles without a default were guessed")
 	}
 	if id, ok := selectBookQualityProfile([]chaptarr.QualityProfile{
 		{ID: 11, Name: "Ebook Standard", ProfileType: BookFormatEbook},
@@ -209,47 +215,8 @@ func TestChaptarr0720RootSelectionUsesNamesAndEffectiveDefaults(t *testing.T) {
 }
 
 func TestApproveNewAudiobookUsesChaptarr0720PerFormatConfiguration(t *testing.T) {
-	var addBody map[string]any
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
-			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/queue":
-			_, _ = w.Write([]byte(`{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
-			_, _ = w.Write([]byte(`[
-				{
-					"title":"The Clockwork Orchard",
-					"titleSlug":"the-clockwork-orchard",
-					"foreignBookId":"hc:work-1001",
-					"author":{"authorName":"Mara Vale","foreignAuthorId":"hc:author-2001"},
-					"editions":[
-						{"foreignEditionId":"hc:edition-1001","title":"The Clockwork Orchard","links":[],"images":[]}
-					]
-				}
-			]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
-			_, _ = w.Write([]byte(chaptarrQualityProfiles0720))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
-			_, _ = w.Write([]byte(chaptarrMetadataProfiles0720))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
-			_, _ = w.Write([]byte(chaptarrRootFolders0720))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
-			if err := json.NewDecoder(r.Body).Decode(&addBody); err != nil {
-				t.Errorf("decode add body: %v", err)
-			}
-			_, _ = w.Write([]byte(`{
-				"id":42,
-				"title":"The Clockwork Orchard",
-				"foreignBookId":"hc:work-1001",
-				"mediaType":"audiobook",
-				"monitored":true
-			}`))
-		default:
-			http.Error(w, "unexpected route", http.StatusNotFound)
-		}
-	}))
+	fake := newVerifiedBookUpstream("The Clockwork Orchard", "hc:work-1001")
+	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)
 
 	svc, requesterID := newChaptarrBookTestService(t, upstream.URL)
@@ -280,9 +247,12 @@ func TestApproveNewAudiobookUsesChaptarr0720PerFormatConfiguration(t *testing.T)
 	if approved.Status != StatusRequested {
 		t.Fatalf("approved status = %q, want %q", approved.Status, StatusRequested)
 	}
-	if addBody == nil {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.seedBodies) != 1 {
 		t.Fatal("Chaptarr add body was not captured")
 	}
+	addBody := fake.seedBodies[0]
 
 	assertJSONFields(t, "book", addBody, map[string]any{
 		"mediaType":                  BookFormatAudiobook,
@@ -313,58 +283,10 @@ func TestApproveNewAudiobookUsesChaptarr0720PerFormatConfiguration(t *testing.T)
 }
 
 func TestApproveAudiobookBesideExistingEbookUsesPerFormatAuthorConfiguration(t *testing.T) {
-	var addBody map[string]any
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
-			_, _ = w.Write([]byte(`[
-				{
-					"id":4101,
-					"authorId":2101,
-					"title":"The Clockwork Orchard",
-					"titleSlug":"the-clockwork-orchard",
-					"foreignBookId":"hc:work-1001",
-					"mediaType":"ebook",
-					"monitored":true,
-					"statistics":{"bookFileCount":0}
-				}
-			]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/queue":
-			_, _ = w.Write([]byte(`{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/author/2101":
-			// Current Chaptarr authors can omit legacy path/qualityProfileId/
-			// metadataProfileId entirely. The per-format fields are authoritative.
-			_, _ = w.Write([]byte(`{
-				"id":2101,
-				"authorName":"Mara Vale",
-				"foreignAuthorId":"hc:author-2001",
-				"ebookQualityProfileId":11,
-				"audiobookQualityProfileId":12,
-				"ebookMetadataProfileId":21,
-				"audiobookMetadataProfileId":22,
-				"ebookRootFolderPath":"/library/ebooks",
-				"audiobookRootFolderPath":"/library/audiobooks",
-				"ebookMonitorFuture":true,
-				"audiobookMonitorFuture":false,
-				"monitored":true
-			}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
-			if err := json.NewDecoder(r.Body).Decode(&addBody); err != nil {
-				t.Errorf("decode add body: %v", err)
-			}
-			_, _ = w.Write([]byte(`{
-				"id":5101,
-				"authorId":2101,
-				"title":"The Clockwork Orchard",
-				"foreignBookId":"hc:work-1001",
-				"mediaType":"audiobook",
-				"monitored":true
-			}`))
-		default:
-			http.Error(w, "unexpected route", http.StatusNotFound)
-		}
-	}))
+	fake := newVerifiedBookUpstream("The Clockwork Orchard", "hc:work-1001")
+	fake.author.EbookMonitorFuture = true
+	fake.addExisting(BookFormatEbook, true)
+	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)
 
 	svc, requesterID := newChaptarrBookTestService(t, upstream.URL)
@@ -390,9 +312,12 @@ func TestApproveAudiobookBesideExistingEbookUsesPerFormatAuthorConfiguration(t *
 	if approved.Status != StatusRequested {
 		t.Fatalf("approved status = %q, want %q", approved.Status, StatusRequested)
 	}
-	if addBody == nil {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.seedBodies) != 1 {
 		t.Fatal("Chaptarr sibling-format add body was not captured")
 	}
+	addBody := fake.seedBodies[0]
 
 	assertJSONFields(t, "book", addBody, map[string]any{
 		"authorId":                   float64(2101),
