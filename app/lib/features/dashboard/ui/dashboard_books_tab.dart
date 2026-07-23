@@ -35,6 +35,8 @@ class DashboardBooksTab extends ConsumerStatefulWidget {
 
 class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     with WidgetsBindingObserver {
+  static const _maxPrefixFallbacks = 8;
+
   final _controller = TextEditingController();
   Timer? _debounce;
   List<ChaptarrBook> _results = [];
@@ -150,17 +152,22 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
       if (!mounted || gen != _searchGen) return;
       var resultLookupTerm = term;
       if (books.isEmpty) {
-        final fallbackTerm = bookSearchPrefixFallbackTerm(term);
-        if (fallbackTerm != null) {
+        var previousTerm = term;
+        for (var attempt = 0;
+            attempt < _maxPrefixFallbacks;
+            attempt++) {
+          final fallbackTerm = bookSearchPrefixFallbackTerm(previousTerm);
+          if (fallbackTerm == null) break;
+          previousTerm = fallbackTerm;
           final fallbackBooks = await service.lookupBook(fallbackTerm);
           if (!mounted || gen != _searchGen) return;
           final matchingBooks = fallbackBooks
               .where((book) => stronglyMatchesBookSearch(term, book))
               .toList();
-          if (matchingBooks.isNotEmpty) {
-            books = matchingBooks;
-            resultLookupTerm = fallbackTerm;
-          }
+          if (matchingBooks.isEmpty) continue;
+          books = matchingBooks;
+          resultLookupTerm = fallbackTerm;
+          break;
         }
       }
       setState(() {

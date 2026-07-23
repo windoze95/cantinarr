@@ -25,7 +25,7 @@ void main() {
   });
 
   testWidgets(
-      'an empty exact lookup retries one prefix and keeps every strong match',
+      'an empty exact lookup retries bounded prefixes and keeps strong matches',
       (tester) async {
     _usePhoneSize(tester);
     final (:router, container: _, :adapter) = await _pumpRouter(
@@ -33,6 +33,15 @@ void main() {
       lookupHandler: (term) {
         if (term == 'haunting Adeline') return const <Object>[];
         if (term == 'haunting Adelin') {
+          return [
+            _lookupBook(
+              'Adeline: A Haunting Historical Portrait',
+              'Norah Vincent',
+              'unrelated-warmup',
+            ),
+          ];
+        }
+        if (term == 'haunting Ad') {
           return [
             _lookupBook(
               'Haunting Adeline (Cat and Mouse, #1)',
@@ -66,7 +75,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
-    expect(adapter.lookupTerms, ['haunting Adeline', 'haunting Adelin']);
+    expect(adapter.lookupTerms, [
+      'haunting Adeline',
+      'haunting Adelin',
+      'haunting Adeli',
+      'haunting Adel',
+      'haunting Ade',
+      'haunting Ad',
+    ]);
     expect(
       find.text('Haunting Adeline (Cat and Mouse, #1)'),
       findsNWidgets(2),
@@ -90,7 +106,7 @@ void main() {
     expect(adapter.requestBodies, hasLength(1));
     expect(
       adapter.requestBodies.single['book_selection']['lookup_term'],
-      'haunting Adelin',
+      'haunting Ad',
     );
     expect(
       adapter.requestBodies.single['book_selection']
