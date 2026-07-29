@@ -43,6 +43,11 @@ class _SonarrSeriesDetailScreenState
   String? _error;
   final Set<int> _togglingSeasons = {};
 
+  /// The series' queue, bucketed by season, so a card can say "downloading"
+  /// instead of calling an episode that is already in flight "missing".
+  Map<int, List<SonarrQueueItem>> _queueBySeason = const {};
+  List<SonarrQueueItem> _queue = const [];
+
   @override
   void initState() {
     super.initState();
@@ -57,10 +62,18 @@ class _SonarrSeriesDetailScreenState
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
+      // The queue only annotates the cards, so a queue that fails to load
+      // leaves the screen intact rather than taking it down.
+      final queueFuture = _service
+          .getSeriesQueue(_series.id)
+          .catchError((_) => const <SonarrQueueItem>[]);
       final series = await _service.getSeriesById(_series.id);
+      final queue = await queueFuture;
       if (!mounted) return;
       setState(() {
         _series = series;
+        _queue = queue;
+        _queueBySeason = _bySeason(queue);
         _isLoading = false;
         _error = null;
       });
@@ -71,6 +84,17 @@ class _SonarrSeriesDetailScreenState
         _error = 'Failed to load series: $e';
       });
     }
+  }
+
+  static Map<int, List<SonarrQueueItem>> _bySeason(
+      List<SonarrQueueItem> queue) {
+    final out = <int, List<SonarrQueueItem>>{};
+    for (final item in queue) {
+      final season = item.seasonNumber;
+      if (season == null) continue;
+      out.putIfAbsent(season, () => []).add(item);
+    }
+    return out;
   }
 
   Future<void> _toggleSeasonMonitored(SonarrSeason season) async {
@@ -278,10 +302,14 @@ class _SonarrSeriesDetailScreenState
                     children: [
                       if (_error != null)
                         ErrorBanner(message: _error!, onRetry: _load),
-                      _AllSeasonsCard(series: _series, onTap: _openAllSeasons),
+                      _AllSeasonsCard(
+                          series: _series,
+                          queue: _queue,
+                          onTap: _openAllSeasons),
                       const SizedBox(height: 4),
                       ...seasons.map((s) => _SeasonCard(
                             season: s,
+                            queue: _queueBySeason[s.seasonNumber] ?? const [],
                             busy: _togglingSeasons.contains(s.seasonNumber),
                             onTap: () => _openSeason(s),
                             onLongPress: () => _showSeasonActions(s),
@@ -311,11 +339,17 @@ String seasonLabel(int seasonNumber) =>
 class _AvailabilityLine extends StatelessWidget {
   final SonarrStatistics? stats;
   final bool moreToCome;
-  const _AvailabilityLine({required this.stats, required this.moreToCome});
+  final List<SonarrQueueItem> queue;
+  const _AvailabilityLine({
+    required this.stats,
+    required this.moreToCome,
+    required this.queue,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final line = seasonAvailabilityLine(stats, moreToCome: moreToCome);
+    final line =
+        seasonAvailabilityLine(stats, moreToCome: moreToCome, queue: queue);
     return Text(
       line.text,
       style: TextStyle(
@@ -329,8 +363,13 @@ class _AvailabilityLine extends StatelessWidget {
 
 class _AllSeasonsCard extends StatelessWidget {
   final SonarrSeries series;
+  final List<SonarrQueueItem> queue;
   final VoidCallback onTap;
-  const _AllSeasonsCard({required this.series, required this.onTap});
+  const _AllSeasonsCard({
+    required this.series,
+    required this.queue,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -364,7 +403,10 @@ class _AllSeasonsCard extends StatelessWidget {
                   ],
                   const SizedBox(height: 6),
                   _AvailabilityLine(
-                      stats: stats, moreToCome: series.hasUpcomingEpisodes),
+                    stats: stats,
+                    moreToCome: series.hasUpcomingEpisodes,
+                    queue: queue,
+                  ),
                 ],
               ),
             ),
@@ -378,6 +420,7 @@ class _AllSeasonsCard extends StatelessWidget {
 
 class _SeasonCard extends StatelessWidget {
   final SonarrSeason season;
+  final List<SonarrQueueItem> queue;
   final bool busy;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
@@ -385,6 +428,7 @@ class _SeasonCard extends StatelessWidget {
 
   const _SeasonCard({
     required this.season,
+    required this.queue,
     required this.busy,
     required this.onTap,
     required this.onLongPress,
@@ -440,7 +484,10 @@ class _SeasonCard extends StatelessWidget {
                   ],
                   const SizedBox(height: 6),
                   _AvailabilityLine(
-                      stats: stats, moreToCome: stats?.nextAiring != null),
+                    stats: stats,
+                    moreToCome: stats?.nextAiring != null,
+                    queue: queue,
+                  ),
                 ],
               ),
             ),

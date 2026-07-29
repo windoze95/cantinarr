@@ -20,6 +20,25 @@ SonarrStatistics _stats({
       nextAiring: nextAiring,
     );
 
+/// One queue row per episode, the way Sonarr expands a grab.
+List<SonarrQueueItem> _queue(
+  int count, {
+  required bool aired,
+  String state = 'downloading',
+}) =>
+    [
+      for (var i = 0; i < count; i++)
+        SonarrQueueItem(
+          id: 900 + i,
+          episodeId: 100 + i,
+          title: 'Release $i',
+          trackedDownloadState: state,
+          episodeAirDateUtc: aired
+              ? DateTime.utc(2003, 8, 7)
+              : DateTime.now().toUtc().add(const Duration(days: 30)),
+        ),
+    ];
+
 void main() {
   group('seasonAvailabilityLine', () {
     test('a caught-up airing season counts the episodes still to come', () {
@@ -95,6 +114,110 @@ void main() {
 
       expect(line.text, '0/0 Episodes Available');
       expect(line.color, AppTheme.textSecondary);
+    });
+  });
+
+  group('seasonAvailabilityLine with a queue', () {
+    test('a season parked in front of a broken import is not "missing"', () {
+      // Every episode downloaded and waiting to import: calling these missing
+      // points the admin at the indexer when the problem is the import step.
+      final line = seasonAvailabilityLine(
+        _stats(files: 0, obtainable: 13, total: 13),
+        moreToCome: false,
+        queue: _queue(13, aired: true, state: 'importPending'),
+      );
+
+      expect(line.text, '0/13 Episodes Available • 13 waiting to import');
+      expect(line.color, AppTheme.downloading);
+    });
+
+    test('episodes still transferring read as downloading', () {
+      final line = seasonAvailabilityLine(
+        _stats(files: 9, obtainable: 13, total: 13),
+        moreToCome: false,
+        queue: _queue(2, aired: true),
+      );
+
+      expect(line.text, '9/13 Episodes Available • 2 missing, 2 downloading');
+      // Two real holes nothing is working on: still red.
+      expect(line.color, AppTheme.error);
+    });
+
+    test('an in-flight unaired episode is counted once, not twice', () {
+      // The American Dad! case: both remaining episodes are unaired *and*
+      // already downloading, so "2 unaired, 2 downloading" would be one pair
+      // of episodes counted twice.
+      final line = seasonAvailabilityLine(
+        _stats(files: 11, obtainable: 11, total: 13),
+        moreToCome: true,
+        queue: _queue(2, aired: false),
+      );
+
+      expect(line.text, '11/13 Episodes Available • 2 downloading');
+      expect(line.color, AppTheme.downloading);
+    });
+
+    test('every bucket is named when the season is mid-flight', () {
+      final line = seasonAvailabilityLine(
+        _stats(files: 9, obtainable: 11, total: 13),
+        moreToCome: true,
+        queue: [..._queue(1, aired: true), ..._queue(1, aired: false)],
+      );
+
+      // 9 on disk + 1 missing + 2 downloading + 1 unaired = 13.
+      expect(line.text,
+          '9/13 Episodes Available • 1 missing, 2 downloading, 1 unaired');
+    });
+
+    test('a queued upgrade for a season already on disk stays complete', () {
+      final line = seasonAvailabilityLine(
+        _stats(files: 13, obtainable: 13, total: 13),
+        moreToCome: false,
+        queue: _queue(1, aired: true),
+      );
+
+      expect(line.text, '13/13 Episodes Available');
+      expect(line.color, AppTheme.available);
+    });
+
+    test('one grab per episode, even when Sonarr lists a season pack twice',
+        () {
+      final duplicated = [..._queue(2, aired: true), ..._queue(2, aired: true)];
+
+      final line = seasonAvailabilityLine(
+        _stats(files: 0, obtainable: 13, total: 13),
+        moreToCome: false,
+        queue: duplicated,
+      );
+
+      expect(line.text, '0/13 Episodes Available • 11 missing, 2 downloading');
+    });
+  });
+
+  group('SonarrQueueItem.episodeHasAired', () {
+    test('needs an air date that has passed', () {
+      expect(_queue(1, aired: true).single.episodeHasAired, isTrue);
+      expect(_queue(1, aired: false).single.episodeHasAired, isFalse);
+      expect(
+        const SonarrQueueItem(id: 1, title: 'No date').episodeHasAired,
+        isFalse,
+      );
+    });
+
+    test('reads the air date off the embedded episode', () {
+      final item = SonarrQueueItem.fromJson({
+        'id': 5,
+        'title': 'Release',
+        'episode': {
+          'id': 42,
+          'seasonNumber': 1,
+          'episodeNumber': 3,
+          'airDateUtc': '2003-08-07T02:00:00Z',
+        },
+      });
+
+      expect(item.episodeAirDateUtc, DateTime.utc(2003, 8, 7, 2));
+      expect(item.episodeHasAired, isTrue);
     });
   });
 

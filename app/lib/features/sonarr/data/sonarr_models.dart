@@ -466,6 +466,11 @@ class SonarrQueueItem {
   final int? seasonNumber;
   final int? episodeNumber;
   final String? episodeTitle;
+
+  /// The queued episode's air date, present when the queue was fetched with
+  /// `includeEpisode`. It tells an in-flight episode that has aired (a gap
+  /// being filled) from one that has not (a season still landing).
+  final DateTime? episodeAirDateUtc;
   final String status;
   final String? trackedDownloadState;
   final String? trackedDownloadStatus;
@@ -491,6 +496,7 @@ class SonarrQueueItem {
     this.seasonNumber,
     this.episodeNumber,
     this.episodeTitle,
+    this.episodeAirDateUtc,
     this.status = '',
     this.trackedDownloadState,
     this.trackedDownloadStatus,
@@ -535,6 +541,8 @@ class SonarrQueueItem {
           episode?['seasonNumber'] as int? ?? json['seasonNumber'] as int?,
       episodeNumber: episode?['episodeNumber'] as int?,
       episodeTitle: episode?['title'] as String?,
+      episodeAirDateUtc:
+          DateTime.tryParse(episode?['airDateUtc'] as String? ?? ''),
       status: json['status'] as String? ?? '',
       trackedDownloadState: json['trackedDownloadState'] as String?,
       trackedDownloadStatus: json['trackedDownloadStatus'] as String?,
@@ -563,6 +571,13 @@ class SonarrQueueItem {
       statusMessages.isNotEmpty ||
       trackedDownloadStatus == 'warning' ||
       trackedDownloadStatus == 'error';
+
+  /// Whether the queued episode has already aired, matching how the episode
+  /// list decides "Missing" vs "Unaired". An episode with no air date at all
+  /// (some specials) counts as not aired, as it does everywhere else.
+  bool get episodeHasAired =>
+      episodeAirDateUtc != null &&
+      !episodeAirDateUtc!.isAfter(DateTime.now().toUtc());
 
   /// e.g. "S01E05 • Episode title", or null when episode info is missing.
   String? get episodeLabel {

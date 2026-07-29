@@ -175,6 +175,20 @@ class SonarrApiService {
         .toList();
   }
 
+  /// Everything in the queue for one series, unpaged — the endpoint Sonarr's
+  /// own progress labels count for the "+N" beside a season. Prefer it over
+  /// [getQueueDetailed] when only one series matters: that one is paged, so a
+  /// busy instance can push this series' downloads off the page entirely.
+  Future<List<SonarrQueueItem>> getSeriesQueue(int seriesId) async {
+    final resp = await _dio.get('$_basePath/queue/details', queryParameters: {
+      'seriesId': seriesId,
+      'includeEpisode': true,
+    });
+    return (resp.data as List<dynamic>)
+        .map((r) => SonarrQueueItem.fromJson(r as Map<String, dynamic>))
+        .toList();
+  }
+
   /// Removes a queue item, optionally from the download client / blocklist.
   /// [changeCategory] hands the download to the post-import category instead of
   /// deleting it (e.g. for Unpackerr); [skipRedownload] suppresses the

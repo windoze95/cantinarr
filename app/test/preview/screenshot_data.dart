@@ -1260,6 +1260,15 @@ Object? screenshotBodyFor(String rawPath, Map<String, dynamic> query) {
   if (path.endsWith('/api/v3/queue')) {
     return path.contains('/sonarr') ? _sonarrQueue() : _radarrQueue();
   }
+  // queue/details is unpaged and series-scoped: what the season cards count so
+  // an episode already in flight isn't reported as missing.
+  if (path.endsWith('/api/v3/queue/details')) {
+    final seriesId = int.tryParse('${query['seriesId'] ?? ''}');
+    final records = (_sonarrQueue()['records'] as List<dynamic>)
+        .cast<Map<String, dynamic>>();
+    if (seriesId == null) return records;
+    return records.where((r) => r['seriesId'] == seriesId).toList();
+  }
   if (path.endsWith('/api/v3/calendar')) {
     // The instance id disambiguates movie vs episode calendars.
     return path.contains('/sonarr') ? _sonarrCalendar() : _radarrCalendar();
@@ -1317,6 +1326,7 @@ Map<String, dynamic> _sonarrQueue() => {
             'seasonNumber': 3,
             'episodeNumber': 3,
             'title': 'The Red Sowing',
+            'airDateUtc': '2026-07-20T02:00:00Z',
           },
         ),
       ],
