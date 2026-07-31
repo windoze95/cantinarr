@@ -2,76 +2,331 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
+	"sync"
+	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/request"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
+
+// ErrToolAuthorization is returned when an interactive tool call cannot prove
+// that its device-bound actor is still authorized at execution time.
+var ErrToolAuthorization = errors.New("tool authorization is no longer valid")
 
 // Tool describes a tool that the AI can invoke.
 type Tool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"input_schema"`
+	// AdminOnly marks tools that only admin-role users may execute.
+	AdminOnly bool `json:"-"`
+	// Permission is the RBAC capability required to list and execute this tool.
+	Permission auth.Permission `json:"-"`
+	// InAppChatOnly keeps tools whose safety depends on trusted chat-turn
+	// provenance out of external MCP discovery. Direct external calls still
+	// fail closed in the handler.
+	InAppChatOnly bool `json:"-"`
 }
+
+type CallOrigin string
+
+const (
+	OriginInteractiveChat CallOrigin = "interactive_chat"
+	OriginExternalMCP     CallOrigin = "external_mcp"
+)
+
+// CallContext carries per-call user identity into tool execution.
+type CallContext struct {
+	UserID          int64
+	Role            string
+	DeviceID        string
+	RequireSharedAI bool
+	// Reauthorize is an explicit marker retained on interactive call sites and
+	// observability hooks. ExecuteTool nevertheless reauthorizes every
+	// non-trusted call so omitting this marker cannot weaken enforcement.
+	Reauthorize bool
+	// TrustedInternal is reserved for server-owned workflows with no user
+	// session. It must be set only by a hardcoded dispatcher, never from request
+	// or model input; nonzero user/device identity makes the bypass invalid.
+	TrustedInternal bool
+	InstanceID      string // authoritative arr instance for scoped remediation reads
+	// Origin and the trusted turn fields are server-authored provenance. They
+	// must never be populated from model arguments, provider transcripts, or
+	// external MCP payloads.
+	Origin            CallOrigin
+	TrustedUserText   string
+	InteractiveTurnID string
+}
+
+// CallAuthorizer returns the actor's current role after re-checking the
+// authoritative account/device state represented by callCtx.
+type CallAuthorizer func(ctx context.Context, callCtx CallContext) (role string, err error)
 
 // ToolServer executes tools in-process on behalf of the AI.
 type ToolServer struct {
-	tmdb     *tmdb.Client
+	creds    *credentials.Registry
 	request  *request.Service
 	registry *instance.Registry
+	bridge   *tmdb.Bridge
+	// callAuthorizer is injected by the server's auth service. User-originated
+	// calls reauthorize by default; a missing hook fails closed. The server-owned
+	// remediation dispatcher is the sole production trusted bypass.
+	callAuthorizer CallAuthorizer
 
-	// Legacy direct clients (used when registry is nil)
-	radarr *radarr.Client
-	sonarr *sonarr.Client
+	// issueStore is the remediation write surface used ONLY by the agent-only
+	// tools (post_issue_message / conclude_issue). It is injected after
+	// construction via SetIssueStore (see issuestore.go) to avoid an import cycle.
+	// nil until remediation is wired; the agent-only tools handle nil gracefully.
+	issueStore IssueStore
+
+	toggleMu      sync.RWMutex
+	disabledTools map[string]bool
+	togglesLoaded bool
+
+	settingsMutationMu    sync.Mutex
+	settingsMutationLocks map[string]chan struct{}
+	profileChanges        *profileChangeStore
+	settingsChanges       *settingChangeStore
 }
 
-func NewToolServer(tmdbClient *tmdb.Client, requestSvc *request.Service, registry *instance.Registry, radarrClient *radarr.Client, sonarrClient *sonarr.Client) *ToolServer {
+// SetCallAuthorizer wires the live account/device authorization check used by
+// interactive AI and MCP tool calls. It must be set during server startup,
+// before any requests are served.
+func (s *ToolServer) SetCallAuthorizer(authorizer CallAuthorizer) {
+	s.callAuthorizer = authorizer
+}
+
+// SetSettingsChangeDatabase enables the durable ledger required before any AI
+// settings write. Production wires it during startup; tests that exercise a
+// mutation wire their isolated database through the same boundary.
+func (s *ToolServer) SetSettingsChangeDatabase(database *sql.DB) {
+	s.settingsChanges = newSettingChangeStore(database)
+}
+
+func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, registry *instance.Registry, bridge *tmdb.Bridge) *ToolServer {
 	return &ToolServer{
-		tmdb:     tmdbClient,
-		request:  requestSvc,
-		registry: registry,
-		radarr:   radarrClient,
-		sonarr:   sonarrClient,
+		creds:                 creds,
+		request:               requestSvc,
+		registry:              registry,
+		bridge:                bridge,
+		settingsMutationLocks: make(map[string]chan struct{}),
+		profileChanges:        newProfileChangeStore(),
 	}
+}
+
+// authorizeCall re-checks the current device-bound role for an interactive
+// call. Consequential handlers may call it again after waiting for a mutation
+// lock so a queued request cannot outlive a revocation.
+func (s *ToolServer) authorizeCall(ctx context.Context, callCtx CallContext) (CallContext, error) {
+	if err := ctx.Err(); err != nil {
+		return CallContext{}, err
+	}
+	trustedInternal := callCtx.TrustedInternal && callCtx.UserID == 0 && callCtx.DeviceID == "" && !callCtx.RequireSharedAI
+	if callCtx.TrustedInternal && !trustedInternal {
+		return CallContext{}, ErrToolAuthorization
+	}
+	if trustedInternal {
+		return callCtx, nil
+	}
+	if s.callAuthorizer == nil {
+		return CallContext{}, ErrToolAuthorization
+	}
+	currentRole, err := s.callAuthorizer(ctx, callCtx)
+	if err != nil {
+		return CallContext{}, ErrToolAuthorization
+	}
+	callCtx.Role = currentRole
+	return callCtx, nil
 }
 
 // GetRadarr returns the default Radarr client.
 func (s *ToolServer) GetRadarr() *radarr.Client {
+	return s.GetRadarrFor("")
+}
+
+func (s *ToolServer) GetRadarrFor(instanceID string) *radarr.Client {
 	if s.registry != nil {
+		if instanceID != "" {
+			client, err := s.registry.GetRadarrClient(instanceID)
+			if err == nil {
+				return client
+			}
+			return nil
+		}
 		client, _, err := s.registry.GetDefaultRadarrClient()
 		if err == nil && client != nil {
 			return client
 		}
 	}
-	return s.radarr
+	return nil
 }
 
 // GetSonarr returns the default Sonarr client.
 func (s *ToolServer) GetSonarr() *sonarr.Client {
+	return s.GetSonarrFor("")
+}
+
+func (s *ToolServer) GetSonarrFor(instanceID string) *sonarr.Client {
 	if s.registry != nil {
+		if instanceID != "" {
+			client, err := s.registry.GetSonarrClient(instanceID)
+			if err == nil {
+				return client
+			}
+			return nil
+		}
 		client, _, err := s.registry.GetDefaultSonarrClient()
 		if err == nil && client != nil {
 			return client
 		}
 	}
-	return s.sonarr
+	return nil
 }
 
-// GetTools returns the list of tools available to the AI.
-func (s *ToolServer) GetTools() []Tool {
+// GetChaptarr returns the default Chaptarr client. Chaptarr has no global
+// default flag, so GetDefaultChaptarrClient resolves an arbitrary configured
+// instance (and returns a nil client, no error, when none is configured).
+func (s *ToolServer) GetChaptarr() *chaptarr.Client {
+	return s.GetChaptarrFor("")
+}
+
+func (s *ToolServer) GetChaptarrFor(instanceID string) *chaptarr.Client {
+	if s.registry != nil {
+		if instanceID != "" {
+			client, err := s.registry.GetChaptarrClient(instanceID)
+			if err == nil {
+				return client
+			}
+			return nil
+		}
+		client, _, err := s.registry.GetDefaultChaptarrClient()
+		if err == nil && client != nil {
+			return client
+		}
+	}
+	return nil
+}
+
+// AllTools returns every tool definition regardless of enabled state.
+func (s *ToolServer) AllTools() []Tool {
 	return toolDefinitions
 }
 
+// GetTools returns all enabled tools. Prefer GetToolsForRole when serving a
+// user request so RBAC filtering happens before tools are offered to the model.
+func (s *ToolServer) GetTools() []Tool {
+	return s.GetToolsForRole(auth.RoleAdmin)
+}
+
+// GetToolsForRole returns the enabled tools a role is allowed to execute.
+func (s *ToolServer) GetToolsForRole(role string) []Tool {
+	tools := make([]Tool, 0, len(toolDefinitions))
+	for _, t := range toolDefinitions {
+		if s.IsToolEnabled(t.Name) && t.AllowedForRole(role) {
+			tools = append(tools, t)
+		}
+	}
+	return tools
+}
+
+func findToolDefinition(name string) *Tool {
+	for i := range toolDefinitions {
+		if toolDefinitions[i].Name == name {
+			return &toolDefinitions[i]
+		}
+	}
+	return nil
+}
+
+func (t Tool) RequiredPermission() auth.Permission {
+	if t.Permission != "" {
+		return t.Permission
+	}
+	if t.AdminOnly {
+		return auth.PermissionAdmin
+	}
+	return ""
+}
+
+func (t Tool) AllowedForRole(role string) bool {
+	return auth.HasPermission(role, t.RequiredPermission())
+}
+
+func (t Tool) IsAdminOnly() bool {
+	return t.AdminOnly || !auth.HasPermission(auth.RoleUser, t.RequiredPermission())
+}
+
 // ExecuteTool runs the named tool with the given JSON input.
-func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.RawMessage, userID int64) (string, error) {
+func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.RawMessage, callCtx CallContext) (result *ToolResult, err error) {
+	callCtx, err = s.authorizeCall(ctx, callCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	debug := s.IsAIDebugEnabled()
+	start := time.Now()
+	logName := safeToolLogName(name)
+	if debug {
+		// Tool input can contain credentials (notably release GUIDs). Debug mode
+		// records shape/size only; it is never permission to log request data.
+		log.Printf("ai debug: tool start name=%s user_id=%d role=%s input_bytes=%d", logName, callCtx.UserID, callCtx.Role, len(input))
+	}
+	defer func() {
+		errorType := ""
+		if err != nil {
+			errorType = fmt.Sprintf("%T", err)
+		}
+		structuredDropped := sanitizeToolResult(result)
+		switch {
+		case errors.Is(err, ErrToolAuthorization):
+			err = ErrToolAuthorization
+		case isPartialMutationError(err):
+			err = secrets.RedactError(err)
+		case errors.Is(err, context.Canceled):
+			err = context.Canceled
+		case errors.Is(err, context.DeadlineExceeded):
+			err = context.DeadlineExceeded
+		case err != nil:
+			err = secrets.RedactError(err)
+		}
+		if debug {
+			status := "ok"
+			if err != nil {
+				status = "error"
+			}
+			log.Printf("ai debug: tool end name=%s status=%s duration_ms=%d %s error_type=%s",
+				logName, status, time.Since(start).Milliseconds(), toolResultMetadata(result, structuredDropped), errorType)
+		}
+	}()
+
+	def := findToolDefinition(name)
+	if def == nil {
+		return nil, fmt.Errorf("unknown tool")
+	}
+	if !s.IsToolEnabled(name) {
+		return &ToolResult{Text: "This tool is disabled by the administrator."}, nil
+	}
+	if !def.AllowedForRole(callCtx.Role) {
+		return &ToolResult{Text: "This action is not permitted for your role."}, nil
+	}
+
 	switch name {
 	case "search_movies":
 		return s.searchMovies(input)
+	case "search_movie_collections":
+		return s.searchMovieCollections(input)
 	case "search_tv_shows":
 		return s.searchTVShows(input)
 	case "get_trending":
@@ -83,12 +338,117 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "get_recommendations":
 		return s.getRecommendations(input)
 	case "check_request_status":
-		return s.checkRequestStatus(input)
+		return s.checkRequestStatus(input, callCtx.UserID)
+	case "get_request_options":
+		return s.getRequestOptions(input, callCtx.UserID, callCtx.Role)
 	case "request_media":
-		return s.requestMedia(input, userID)
+		return s.requestMedia(input, callCtx.UserID)
 	case "list_my_requests":
-		return s.listMyRequests(userID)
+		return s.listMyRequests(callCtx.UserID)
+	case "search_books":
+		return s.searchBooks(input, callCtx.UserID)
+	case "display_media":
+		return s.displayMedia(input, callCtx.UserID)
+	case "get_queue":
+		return s.getQueue(input, callCtx.InstanceID)
+	case "get_calendar":
+		return s.getCalendar(input)
+	case "get_library":
+		return s.getLibrary(input, callCtx.InstanceID)
+	case "get_history":
+		return s.getHistory(input, callCtx.InstanceID)
+	case "trigger_search":
+		return s.triggerSearch(input)
+	case "search_releases":
+		return s.searchReleases(input, callCtx.InstanceID)
+	case "grab_release":
+		return s.grabRelease(input, callCtx.InstanceID)
+	case "remove_queue_item":
+		return s.removeQueueItem(input)
+	case "get_disk_space":
+		return s.getDiskSpace()
+	case "get_arr_health":
+		return s.getArrHealth(input, callCtx.InstanceID)
+	case "diagnose_queue":
+		return s.diagnoseQueue(input, callCtx.InstanceID)
+	case "get_manual_import_candidates":
+		return s.getManualImportCandidates(input, callCtx.InstanceID)
+	case "execute_manual_import":
+		return s.executeManualImport(input)
+	case "remediate_queue_item":
+		return s.remediateQueueItem(input)
+	case "rescan_media":
+		return s.rescanMedia(input)
+	case "list_arr_instances":
+		return s.listArrInstances(input)
+	case "get_quality_profiles":
+		return s.getQualityProfiles(ctx, input)
+	case "get_custom_formats":
+		return s.getCustomFormats(input)
+	case "upsert_custom_format":
+		return s.upsertCustomFormat(ctx, input, callCtx)
+	case "preview_profile_change":
+		return s.previewProfileChange(ctx, input, callCtx)
+	case "apply_profile_change":
+		return s.applyProfileChange(ctx, input, callCtx)
 	default:
-		return "", fmt.Errorf("unknown tool: %s", name)
+		return nil, fmt.Errorf("unknown tool")
 	}
+}
+
+func isPartialMutationError(err error) bool {
+	var partial interface{ PartialMutation() bool }
+	return errors.As(err, &partial) && partial.PartialMutation()
+}
+
+// sanitizeToolResult is the single output boundary for every ordinary MCP tool.
+// The result may flow to an MCP client, a chat provider, or the remediation
+// agent, so both its text and optional rich UI payload must be safe first.
+// true means an unencodable structured value was dropped fail-closed.
+func sanitizeToolResult(result *ToolResult) (structuredDropped bool) {
+	if result == nil {
+		return false
+	}
+	releaseCapabilities := make([]releaseCapability, 0, len(result.ReleaseCandidates))
+	for _, candidate := range result.ReleaseCandidates {
+		if candidate.Reference != "" && !isReleaseGUIDReference(candidate.Reference) {
+			releaseCapabilities = append(releaseCapabilities, releaseCapability{guid: candidate.Reference, indexerID: candidate.IndexerID})
+		}
+	}
+	result.Text = secrets.RedactText(scrubRawReleaseGUIDs(result.Text, releaseCapabilities))
+	for i := range result.ReleaseCandidates {
+		candidate := &result.ReleaseCandidates[i]
+		candidate.Reference = canonicalReleaseGUIDReference(candidate.Reference)
+		candidate.Title = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Title, releaseCapabilities))
+		candidate.Quality = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Quality, releaseCapabilities))
+		candidate.Protocol = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Protocol, releaseCapabilities))
+		candidate.Indexer = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Indexer, releaseCapabilities))
+		for j := range candidate.Rejections {
+			candidate.Rejections[j] = secrets.RedactText(scrubRawReleaseGUIDs(candidate.Rejections[j], releaseCapabilities))
+		}
+	}
+	if result.StructuredData != nil {
+		redacted, err := secrets.RedactJSONValue(result.StructuredData)
+		if err != nil {
+			result.StructuredData = nil
+			return true
+		}
+		result.StructuredData = redacted
+	}
+	return false
+}
+
+func toolResultMetadata(result *ToolResult, structuredDropped bool) string {
+	if result == nil {
+		return "result_present=false text_bytes=0 structured_present=false structured_dropped=false"
+	}
+	return fmt.Sprintf("result_present=true text_bytes=%d structured_present=%t structured_dropped=%t",
+		len(result.Text), result.StructuredData != nil, structuredDropped)
+}
+
+func safeToolLogName(name string) string {
+	if findToolDefinition(name) == nil {
+		return "<unknown>"
+	}
+	return name
 }

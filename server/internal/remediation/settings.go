@@ -1,0 +1,248 @@
+package remediation
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/windoze95/cantinarr-server/internal/credentials"
+)
+
+// remediationSettingsKey is the settings-table key holding the autonomous AI
+// remediation configuration (JSON blob), mirroring the request_settings storage
+// pattern (request/service.go GetGlobalSettings/SetGlobalSettings).
+const remediationSettingsKey = "remediation_settings"
+
+// Remediation modes control whether the agent may only investigate or may also
+// record a proposal for an administrator to approve. There is deliberately no
+// GLOBAL auto-execution mode: every action is consequential and, by default,
+// always crosses the human approval gate. The one narrow exception is
+// rule-scoped auto-approval (agent_approval_rules + sweepAutoApprovals): after
+// approving a specific (problem kind, fix kind, facet) pair by hand, an admin
+// may opt that exact pair in for future auto-detected issues. That preserves
+// this invariant's spirit — the default stays human-gated, the opt-in is
+// admin-authored and per-pair rather than a mode, and any failed or
+// unverifiable auto-approved outcome (or a non-resolved pipeline verdict of an
+// issue the rule acted on) pauses the rule and returns the admin to the loop.
+const (
+	ModeInvestigateOnly = "investigate_only"
+	ModeSupervised      = "supervised"
+
+	legacyAutonomyPropose  = "propose"
+	legacyAutonomyAutoSafe = "auto_safe"
+)
+
+// Absolute ceilings keep a typo or hand-edited settings payload from turning a
+// guardrail into an effectively unbounded agent run. The app may offer tighter
+// UX ranges; these are the authoritative server limits.
+const (
+	maxConfiguredSteps          = 50
+	maxConfiguredTurnTokens     = 32768
+	maxConfiguredWallClockSecs  = 1800
+	maxConfiguredDailyRuns      = 1000
+	maxConfiguredBreakerGiveups = 100
+	maxConfiguredUserWaitHours  = 24 * 30
+	maxObservationMinMinutes    = 24 * 60
+	maxObservationQuietMinutes  = 6 * 60
+	maxObservationSettleMinutes = 60
+	maxModelOverrideLength      = 256
+)
+
+// Settings is the autonomous AI remediation configuration. It is stored as the
+// remediation_settings JSON blob and unmarshalled over Defaults(), so adding a
+// field later is migration-free (older blobs simply keep the default for it).
+//
+// The remediation agent is provider-agnostic and reuses Cantinarr's existing
+// multi-provider AI layer. Provider and Model are deprecated wire-compatibility
+// fields and are always normalized empty. ModelOverride may select a different
+// model for autonomous work, but ModelOverrideProvider binds that tested model
+// to the live shared provider so it can never drift onto a different provider's
+// credential after an admin changes the global profile.
+type Settings struct {
+	Enabled                  bool   `json:"enabled"`                    // master switch — ships OFF
+	AutoDispatch             bool   `json:"auto_dispatch"`              // poller may open auto issues — ships OFF
+	AllowReporting           bool   `json:"allow_reporting"`            // user-visible "Report a problem" affordance
+	MarkResolvedAsRead       bool   `json:"mark_resolved_as_read"`      // mark an issue read when it resolves (default ON)
+	Mode                     string `json:"mode"`                       // investigate_only | supervised
+	Provider                 string `json:"provider"`                   // deprecated compatibility field; always normalized to ""
+	Model                    string `json:"model"`                      // deprecated compatibility field; always normalized to ""
+	ModelOverride            string `json:"model_override"`             // optional model used with the shared provider/credential
+	ModelOverrideProvider    string `json:"model_override_provider"`    // provider against which ModelOverride was tested
+	MaxSteps                 int    `json:"max_steps"`                  // total tool calls per investigation
+	MaxTurnTokens            int    `json:"max_turn_tokens"`            // per-turn output cap; Codex is interrupted at its next usage update
+	MaxWallClockSecs         int    `json:"max_wall_clock_secs"`        // active wall-clock budget
+	DailyRunCap              int    `json:"daily_run_cap"`              // max runs/day
+	CircuitBreakerGiveups    int    `json:"circuit_breaker_giveups"`    // consecutive auto give-ups -> auto-dispatch off
+	MaxUserWaitHours         int    `json:"max_user_wait_hours"`        // W4: reply-TTL — close an awaiting_user issue with no reply within this window
+	ObservationMinMinutes    int    `json:"observation_min_minutes"`    // minimum persistent-problem age before promotion
+	ObservationQuietMinutes  int    `json:"observation_quiet_minutes"`  // unchanged time before promotion
+	ObservationSettleMinutes int    `json:"observation_settle_minutes"` // queue-absence settle window
+}
+
+// UnmarshalJSON accepts the pre-mode "autonomy" field so existing stored blobs
+// and older clients retain their safety policy across the rename. mode wins when
+// it is explicitly valid; otherwise a recognized legacy value is translated.
+// Settings deliberately has no autonomy field, so marshaling emits only mode.
+func (g *Settings) UnmarshalJSON(data []byte) error {
+	type plainSettings Settings
+	decoded := plainSettings(*g)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var compatibility struct {
+		Mode     *string `json:"mode"`
+		Autonomy *string `json:"autonomy"`
+	}
+	if err := json.Unmarshal(data, &compatibility); err != nil {
+		return err
+	}
+
+	*g = Settings(decoded)
+	if compatibility.Autonomy != nil && (compatibility.Mode == nil || !validMode(*compatibility.Mode)) {
+		if mode, ok := legacyAutonomyMode(*compatibility.Autonomy); ok {
+			g.Mode = mode
+		}
+	}
+	return nil
+}
+
+func legacyAutonomyMode(autonomy string) (string, bool) {
+	switch autonomy {
+	case ModeInvestigateOnly:
+		return ModeInvestigateOnly, true
+	case legacyAutonomyPropose, legacyAutonomyAutoSafe, ModeSupervised:
+		return ModeSupervised, true
+	default:
+		return "", false
+	}
+}
+
+// Defaults returns the built-in remediation settings. With no model override,
+// the agent follows the configured included profile in full. Every mutation is
+// admin-approved (mode "supervised"); the feature ships OFF.
+func Defaults() Settings {
+	return Settings{
+		Enabled:                  false,
+		AutoDispatch:             false,
+		AllowReporting:           true,
+		MarkResolvedAsRead:       true,
+		Mode:                     ModeSupervised,
+		Provider:                 "",
+		Model:                    "",
+		ModelOverride:            "",
+		ModelOverrideProvider:    "",
+		MaxSteps:                 12,
+		MaxTurnTokens:            4096,
+		MaxWallClockSecs:         300,
+		DailyRunCap:              50,
+		CircuitBreakerGiveups:    5,
+		MaxUserWaitHours:         72, // W4: 3 days for a reporter to answer before wont_fix(user_unresponsive)
+		ObservationMinMinutes:    10,
+		ObservationQuietMinutes:  5,
+		ObservationSettleMinutes: 2,
+	}
+}
+
+// validMode reports whether a stored/submitted mode is implemented.
+func validMode(mode string) bool {
+	switch mode {
+	case ModeInvestigateOnly, ModeSupervised:
+		return true
+	}
+	return false
+}
+
+// normalize coerces any out-of-range or unknown field back to a safe default so
+// a hand-edited or partial blob can never disable the bounds. Mirrors the
+// request settings' defensive validSeasonScope fallback.
+func (g *Settings) normalize() {
+	d := Defaults()
+	// Provider and Model used to select a separate remediation profile. Discard
+	// those legacy fields and accept only the new provider-bound ModelOverride,
+	// which can change the model without changing the shared credential source.
+	g.Provider = ""
+	g.Model = ""
+	g.ModelOverride = strings.TrimSpace(g.ModelOverride)
+	g.ModelOverrideProvider = strings.TrimSpace(g.ModelOverrideProvider)
+	if g.ModelOverride == "" || len(g.ModelOverride) > maxModelOverrideLength ||
+		!credentials.IsValidAIProvider(g.ModelOverrideProvider) {
+		g.ModelOverride = ""
+		g.ModelOverrideProvider = ""
+	}
+	if !validMode(g.Mode) {
+		g.Mode = d.Mode
+	}
+	if g.MaxSteps <= 0 {
+		g.MaxSteps = d.MaxSteps
+	} else if g.MaxSteps > maxConfiguredSteps {
+		g.MaxSteps = maxConfiguredSteps
+	}
+	if g.MaxTurnTokens <= 0 {
+		g.MaxTurnTokens = d.MaxTurnTokens
+	} else if g.MaxTurnTokens > maxConfiguredTurnTokens {
+		g.MaxTurnTokens = maxConfiguredTurnTokens
+	}
+	if g.MaxWallClockSecs <= 0 {
+		g.MaxWallClockSecs = d.MaxWallClockSecs
+	} else if g.MaxWallClockSecs > maxConfiguredWallClockSecs {
+		g.MaxWallClockSecs = maxConfiguredWallClockSecs
+	}
+	if g.DailyRunCap <= 0 {
+		g.DailyRunCap = d.DailyRunCap
+	} else if g.DailyRunCap > maxConfiguredDailyRuns {
+		g.DailyRunCap = maxConfiguredDailyRuns
+	}
+	if g.CircuitBreakerGiveups <= 0 {
+		g.CircuitBreakerGiveups = d.CircuitBreakerGiveups
+	} else if g.CircuitBreakerGiveups > maxConfiguredBreakerGiveups {
+		g.CircuitBreakerGiveups = maxConfiguredBreakerGiveups
+	}
+	if g.MaxUserWaitHours <= 0 {
+		g.MaxUserWaitHours = d.MaxUserWaitHours
+	} else if g.MaxUserWaitHours > maxConfiguredUserWaitHours {
+		g.MaxUserWaitHours = maxConfiguredUserWaitHours
+	}
+	if g.ObservationMinMinutes <= 0 {
+		g.ObservationMinMinutes = d.ObservationMinMinutes
+	} else if g.ObservationMinMinutes > maxObservationMinMinutes {
+		g.ObservationMinMinutes = maxObservationMinMinutes
+	}
+	if g.ObservationQuietMinutes <= 0 {
+		g.ObservationQuietMinutes = d.ObservationQuietMinutes
+	} else if g.ObservationQuietMinutes > maxObservationQuietMinutes {
+		g.ObservationQuietMinutes = maxObservationQuietMinutes
+	}
+	if g.ObservationSettleMinutes <= 0 {
+		g.ObservationSettleMinutes = d.ObservationSettleMinutes
+	} else if g.ObservationSettleMinutes > maxObservationSettleMinutes {
+		g.ObservationSettleMinutes = maxObservationSettleMinutes
+	}
+}
+
+// Settings returns the stored global remediation settings, falling back to the
+// built-in defaults for any missing field (read exactly like
+// request.GetGlobalSettings).
+func (s *Service) Settings() Settings {
+	g := Defaults()
+	var v string
+	if err := s.db.QueryRow("SELECT value FROM settings WHERE key = ?", remediationSettingsKey).Scan(&v); err == nil && v != "" {
+		_ = json.Unmarshal([]byte(v), &g)
+	}
+	g.normalize()
+	return g
+}
+
+// SetSettings persists the global remediation settings (written exactly like
+// request.SetGlobalSettings) and returns the normalized value that was stored.
+func (s *Service) SetSettings(g Settings) (Settings, error) {
+	g.normalize()
+	data, err := json.Marshal(g)
+	if err != nil {
+		return Settings{}, fmt.Errorf("encode remediation settings: %w", err)
+	}
+	if _, err := s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", remediationSettingsKey, string(data)); err != nil {
+		return Settings{}, fmt.Errorf("save remediation settings: %w", err)
+	}
+	return g, nil
+}

@@ -9,6 +9,27 @@ final discoverServiceProvider = Provider<DiscoverApiService>(
   (ref) => DiscoverApiService(backendDio: ref.watch(backendClientProvider)),
 );
 
+/// The headline discovery row: a page of titles plus the feed that answered.
+/// The admin picks the feed server-side, so the row learns which one it got
+/// from the response rather than from a setting it would have to read itself.
+class FeaturedFeed {
+  final String source;
+  final List<MediaItem> items;
+
+  const FeaturedFeed({required this.source, required this.items});
+
+  static const empty = FeaturedFeed(source: '', items: []);
+}
+
+/// The row's title for a given source. A row named "Popular" over a trending
+/// feed would misdescribe what it is showing, so the title follows the source.
+String featuredRowTitle(String source, {required bool isTv}) =>
+    switch (source) {
+      'trakt_trending' => 'Trending Now',
+      'tmdb_popular' => isTv ? 'Popular TV Shows' : 'Popular Movies',
+      _ => 'Trending This Week',
+    };
+
 /// Unified discovery service that calls the Cantinarr backend (which proxies
 /// TMDB/Trakt). API keys never leave the server.
 class DiscoverApiService {
@@ -48,6 +69,30 @@ class DiscoverApiService {
       queryParameters: {'page': page},
     );
     return TmdbPage.fromJson(resp.data, MediaItem.fromTVJson);
+  }
+
+  /// The configured headline TV feed (TMDB trending, Trakt trending, or TMDB
+  /// popular). Every source arrives in the TMDB page shape.
+  Future<FeaturedFeed> fetchFeaturedTV() async {
+    final resp = await _dio.get('/api/discover/tv/featured');
+    return _featuredFeed(resp.data, MediaItem.fromTVJson);
+  }
+
+  /// The configured headline movie feed.
+  Future<FeaturedFeed> fetchFeaturedMovies() async {
+    final resp = await _dio.get('/api/discover/movies/featured');
+    return _featuredFeed(resp.data, MediaItem.fromMovieJson);
+  }
+
+  FeaturedFeed _featuredFeed(
+    dynamic data,
+    MediaItem Function(Map<String, dynamic>) fromJson,
+  ) {
+    final json = (data as Map).cast<String, dynamic>();
+    return FeaturedFeed(
+      source: json['source'] as String? ?? '',
+      items: TmdbPage.fromJson(json, fromJson).results,
+    );
   }
 
   Future<TmdbPage<MediaItem>> fetchTopRatedMovies({int page = 1}) async {

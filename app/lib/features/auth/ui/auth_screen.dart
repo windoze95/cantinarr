@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_panel.dart';
 import '../data/passkey_service.dart';
 import '../data/server_status.dart';
 import '../logic/auth_provider.dart';
@@ -62,7 +63,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     });
 
     try {
-      final status = await ref.read(authProvider.notifier).checkServer(serverUrl);
+      final status =
+          await ref.read(authProvider.notifier).checkServer(serverUrl);
       setState(() {
         _serverStatus = status;
         _isCheckingServer = false;
@@ -101,76 +103,105 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
     final auth = authState.valueOrNull;
-    final showPasskeyOffer = auth?.pendingPasskeyOffer == true &&
-        auth?.isAuthenticated == true;
+    final showPasskeyOffer =
+        auth?.pendingPasskeyOffer == true && auth?.isAuthenticated == true;
 
     return Scaffold(
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Logo
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    color: AppTheme.accent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Icon(Icons.movie_filter,
-                      color: AppTheme.accent, size: 40),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Cantinarr',
-                  style: TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  showPasskeyOffer ? 'Secure your account' : _subtitle,
-                  style: const TextStyle(
-                      color: AppTheme.textSecondary, fontSize: 15),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 40),
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 32),
+            // Login card: full-width buttons would otherwise stretch the
+            // column across a desktop window.
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: AppPanel(
+                padding: const EdgeInsets.fromLTRB(28, 30, 28, 28),
+                radius: AppTheme.radiusXLarge,
+                accentColor: AppTheme.signal,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Logo
+                    Container(
+                      width: 78,
+                      height: 78,
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [AppTheme.accent, AppTheme.signal],
+                        ),
+                        borderRadius: BorderRadius.circular(22),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppTheme.accent.withValues(alpha: 0.17),
+                            blurRadius: 24,
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(19),
+                        child: Image.asset(
+                          'assets/logo.png',
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    const Text(
+                      'CANTINARR',
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 27,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 2.2,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      showPasskeyOffer ? 'Secure your account' : _subtitle,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 15,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 34),
 
-                // Post-setup passkey offer takes priority
-                if (showPasskeyOffer)
-                  const _PasskeyOfferView()
-                else
-                  // View-specific content
-                  switch (_view) {
-                    _AuthView.serverUrl => _ServerUrlView(
-                        controller: _serverUrlController,
-                        isLoading: _isCheckingServer,
-                        error: _serverError,
-                        onCheck: _checkServer,
-                        onConnectLink: _showConnectLink,
-                      ),
-                    _AuthView.setup => _SetupView(
-                        serverUrl: _serverUrlController.text.trim(),
-                        serverStatus: _serverStatus!,
-                        onBack: _backToServerUrl,
-                      ),
-                    _AuthView.login => _LoginView(
-                        serverUrl: _serverUrlController.text.trim(),
-                        serverStatus: _serverStatus,
-                        onBack: _backToServerUrl,
-                        onConnectLink: _showConnectLink,
-                      ),
-                    _AuthView.connectLink => _ConnectLinkView(
-                        controller: _linkController,
-                        onBack: _backToServerUrl,
-                      ),
-                  },
-              ],
+                    // Post-setup passkey offer takes priority
+                    if (showPasskeyOffer)
+                      const _PasskeyOfferView()
+                    else
+                      // View-specific content
+                      switch (_view) {
+                        _AuthView.serverUrl => _ServerUrlView(
+                            controller: _serverUrlController,
+                            isLoading: _isCheckingServer,
+                            error: _serverError,
+                            onCheck: _checkServer,
+                            onConnectLink: _showConnectLink,
+                          ),
+                        _AuthView.setup => _SetupView(
+                            serverUrl: _serverUrlController.text.trim(),
+                            serverStatus: _serverStatus!,
+                            onBack: _backToServerUrl,
+                          ),
+                        _AuthView.login => _LoginView(
+                            serverUrl: _serverUrlController.text.trim(),
+                            serverStatus: _serverStatus,
+                            onBack: _backToServerUrl,
+                            onConnectLink: _showConnectLink,
+                          ),
+                        _AuthView.connectLink => _ConnectLinkView(
+                            controller: _linkController,
+                            onBack: _backToServerUrl,
+                          ),
+                      },
+                  ],
+                ),
+              ),
             ),
           ),
         ),
@@ -199,7 +230,20 @@ class _PasskeyOfferView extends ConsumerStatefulWidget {
 
 class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
   bool _isRegistering = false;
+  bool? _passkeyAvailable;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPasskeyAvailability();
+  }
+
+  Future<void> _loadPasskeyAvailability() async {
+    final available = await PasskeyService.isAvailableAsync();
+    if (!mounted) return;
+    setState(() => _passkeyAvailable = available);
+  }
 
   void _skip() {
     ref.read(authProvider.notifier).dismissPasskeyOffer();
@@ -221,7 +265,7 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
       if (mounted) {
         setState(() {
           _isRegistering = false;
-          _error = 'Could not register passkey. You can add one later in Settings.';
+          _error = _passkeyErrorMessage(e);
         });
       }
     }
@@ -229,7 +273,8 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
 
   @override
   Widget build(BuildContext context) {
-    final passkeyAvailable = PasskeyService.isAvailable();
+    final passkeyAvailable = _passkeyAvailable ?? false;
+    final checkingPasskeys = _passkeyAvailable == null;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -241,8 +286,8 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
             color: AppTheme.accent.withValues(alpha: 0.15),
             shape: BoxShape.circle,
           ),
-          child: const Icon(Icons.fingerprint,
-              color: AppTheme.accent, size: 36),
+          child:
+              const Icon(Icons.fingerprint, color: AppTheme.accent, size: 36),
         ),
         const SizedBox(height: 20),
         const Text(
@@ -255,14 +300,14 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
         ),
         const SizedBox(height: 8),
         Text(
-          passkeyAvailable
-              ? 'Sign in faster next time with Face ID, fingerprint, or your device PIN.'
-              : 'Passkeys require HTTPS. You can add one later in Settings after configuring a reverse proxy.',
-          style: const TextStyle(
-              color: AppTheme.textSecondary, fontSize: 14),
+          checkingPasskeys
+              ? 'Checking passkey support...'
+              : passkeyAvailable
+                  ? 'Sign in faster next time with Face ID, fingerprint, or your device PIN.'
+                  : 'Passkeys require HTTPS. You can add one later in Settings after configuring a reverse proxy.',
+          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
           textAlign: TextAlign.center,
         ),
-
         if (_error != null) ...[
           const SizedBox(height: 12),
           Text(
@@ -271,10 +316,13 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
             textAlign: TextAlign.center,
           ),
         ],
-
         const SizedBox(height: 28),
-
-        if (passkeyAvailable)
+        if (checkingPasskeys)
+          const SizedBox(
+            height: 50,
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (passkeyAvailable)
           SizedBox(
             width: double.infinity,
             height: 50,
@@ -293,9 +341,7 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
               label: Text(_isRegistering ? 'Registering...' : 'Add Passkey'),
             ),
           ),
-
         const SizedBox(height: 12),
-
         SizedBox(
           width: double.infinity,
           height: 50,
@@ -303,13 +349,23 @@ class _PasskeyOfferViewState extends ConsumerState<_PasskeyOfferView> {
             onPressed: _isRegistering ? null : _skip,
             child: const Text(
               'Skip for now',
-              style: TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 15),
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 15),
             ),
           ),
         ),
       ],
     );
+  }
+
+  String _passkeyErrorMessage(Object e) {
+    final message = e.toString().replaceFirst('Exception: ', '');
+    if (message.contains('passkey') ||
+        message.contains('Passkey') ||
+        message.contains('credential provider') ||
+        message.contains('Google account')) {
+      return message;
+    }
+    return 'Could not register passkey. You can add one later in Settings.';
   }
 }
 
@@ -347,7 +403,6 @@ class _ServerUrlView extends StatelessWidget {
           autocorrect: false,
           onSubmitted: (_) => onCheck(),
         ),
-
         if (error != null) ...[
           const SizedBox(height: 12),
           Text(
@@ -356,9 +411,7 @@ class _ServerUrlView extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
         ],
-
         const SizedBox(height: 24),
-
         SizedBox(
           width: double.infinity,
           height: 50,
@@ -376,9 +429,7 @@ class _ServerUrlView extends StatelessWidget {
                 : const Text('Continue'),
           ),
         ),
-
         const SizedBox(height: 24),
-
         TextButton(
           onPressed: onConnectLink,
           child: const Text(
@@ -593,10 +644,25 @@ class _LoginViewState extends ConsumerState<_LoginView> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
+  bool _platformPasskeyAvailable = false;
 
   bool get _showPasskey =>
-      (widget.serverStatus?.webAuthnAvailable ?? false) &&
-      PasskeyService.isAvailable();
+      (widget.serverStatus
+              ?.supportsPasskeyPlatform(PasskeyService.platformKind()) ??
+          false) &&
+      _platformPasskeyAvailable;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPasskeyAvailability();
+  }
+
+  Future<void> _loadPasskeyAvailability() async {
+    final available = await PasskeyService.isAvailableAsync();
+    if (!mounted) return;
+    setState(() => _platformPasskeyAvailable = available);
+  }
 
   @override
   void dispose() {
@@ -667,8 +733,8 @@ class _LoginViewState extends ConsumerState<_LoginView> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                textStyle: const TextStyle(
-                    fontWeight: FontWeight.w600, fontSize: 16),
+                textStyle:
+                    const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
               ),
             ),
           ),
@@ -679,8 +745,8 @@ class _LoginViewState extends ConsumerState<_LoginView> {
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: 12),
                 child: Text('or use password',
-                    style: TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 13)),
+                    style:
+                        TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
               ),
               Expanded(child: Divider(color: AppTheme.border)),
             ],
@@ -754,19 +820,16 @@ class _LoginViewState extends ConsumerState<_LoginView> {
               onPressed: widget.onBack,
               child: const Text(
                 'Back',
-                style:
-                    TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
             ),
             const Text('  |  ',
-                style:
-                    TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
             TextButton(
               onPressed: widget.onConnectLink,
               child: const Text(
                 'Have a connection link?',
-                style:
-                    TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
             ),
           ],
@@ -813,7 +876,6 @@ class _ConnectLinkView extends ConsumerWidget {
             }
           },
         ),
-
         if (error != null) ...[
           const SizedBox(height: 12),
           Text(
@@ -822,9 +884,7 @@ class _ConnectLinkView extends ConsumerWidget {
             textAlign: TextAlign.center,
           ),
         ],
-
         const SizedBox(height: 24),
-
         SizedBox(
           width: double.infinity,
           height: 50,
@@ -849,9 +909,7 @@ class _ConnectLinkView extends ConsumerWidget {
                 : const Text('Connect'),
           ),
         ),
-
         const SizedBox(height: 16),
-
         TextButton(
           onPressed: onBack,
           child: const Text(

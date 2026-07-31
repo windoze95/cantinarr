@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import '../../../core/theme/app_theme.dart';
 
 /// Full-screen YouTube trailer player using WebView.
 class TrailerPlayer extends StatefulWidget {

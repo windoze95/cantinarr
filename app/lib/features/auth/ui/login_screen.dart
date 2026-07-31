@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../logic/auth_provider.dart';
 
@@ -51,15 +50,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Logo
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    color: AppTheme.accent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(20),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 72,
+                    height: 72,
+                    fit: BoxFit.cover,
                   ),
-                  child: const Icon(Icons.movie_filter,
-                      color: AppTheme.accent, size: 40),
                 ),
                 const SizedBox(height: 16),
                 const Text(
@@ -151,17 +149,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             ),
                           )
                         : const Text('Sign In'),
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Invite link
-                TextButton(
-                  onPressed: () => context.go('/invite',
-                      extra: _serverUrlController.text.trim()),
-                  child: const Text(
-                    'Have an invite code?',
-                    style: TextStyle(color: AppTheme.accent),
                   ),
                 ),
               ],

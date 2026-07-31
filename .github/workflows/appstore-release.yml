@@ -1,0 +1,44 @@
+name: Submit App Store Release
+
+# Manual, deliberate step: submits the latest processed TestFlight build of the
+# current pubspec version for App Store review (phased release, manual rollout).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "submit" to confirm submitting for App Store review'
+        required: true
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/ios
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "submit" ]; then
+            echo "Confirmation input was not 'submit' - aborting."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Submit for review
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
+        run: |
+          VERSION=$(grep '^version:' ../pubspec.yaml | sed 's/version: //' | sed 's/+.*//')
+          gem install fastlane
+          APP_VERSION=$VERSION fastlane release

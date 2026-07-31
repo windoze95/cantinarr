@@ -5,12 +5,32 @@ on:
     branches: [main]
     paths:
       - "app/**"
+      - "!app/web/**"
+      - "!app/macos/**"
+      - "!app/android/**"
+      - "!app/windows/**"
+      - "!app/linux/**"
+      # Tests, dev tooling, and docs never change the shipped app — no build needed.
+      - "!app/test/**"
+      - "!app/tool/**"
+      - "!app/**/*.md"
+      # Listing copy/screenshots sync via storelisting.yml — no build needed.
+      - "!app/ios/fastlane/metadata/**"
+      - "!app/ios/fastlane/screenshots/**"
       - ".github/workflows/testflight.yml"
   workflow_dispatch:
 
+# Serialize TestFlight runs. The build number is latest_testflight_build_number + 1,
+# so two concurrent runs compute the SAME number and the second upload is rejected
+# as a duplicate (ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE). Queue instead of racing,
+# and never cancel an in-flight upload.
+concurrency:
+  group: testflight-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
-    runs-on: macos-15
+    runs-on: macos-26
 
     defaults:
       run:
@@ -35,10 +55,10 @@ jobs:
           gem install fastlane
           APP_VERSION=$VERSION fastlane next_build_number
 
-      - name: Setup Xcode 16
+      - name: Setup Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16"
+          xcode-version: latest-stable
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2

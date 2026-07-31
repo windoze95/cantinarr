@@ -1,19 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/network/backend_client.dart';
+import 'package:go_router/go_router.dart';
+import '../../../core/layout/adaptive.dart';
+import '../../../core/models/app_module.dart';
+import '../../../core/providers/module_provider.dart';
 import '../../../core/theme/app_theme.dart';
-import '../data/ai_chat_service.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../data/ai_models.dart';
+import '../data/ai_settings_service.dart';
 import '../logic/ai_chat_provider.dart';
 import 'chat_bubble.dart';
 
 /// The AI assistant chat screen.
 class AiChatScreen extends ConsumerStatefulWidget {
-  final bool aiAvailable;
+  /// Optional test/preview override. Production reads live per-user config.
+  final bool? aiAvailable;
 
   const AiChatScreen({
     super.key,
-    this.aiAvailable = false,
+    this.aiAvailable,
   });
 
   @override
@@ -26,20 +31,11 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
 
-  @override
-  void initState() {
-    super.initState();
-    if (widget.aiAvailable) {
-      _initNotifier();
-    }
-  }
-
-  void _initNotifier() {
-    final backendDio = ref.read(backendClientProvider);
-    _notifier = AiChatNotifier(
-      chatService: AiChatService(backendDio: backendDio),
-    );
-    _notifier!.addListener(_scrollToBottom);
+  void _setNotifier(AiChatNotifier? notifier) {
+    if (identical(_notifier, notifier)) return;
+    _notifier?.removeListener(_scrollToBottom);
+    _notifier = notifier;
+    _notifier?.addListener(_scrollToBottom);
   }
 
   void _scrollToBottom() {
@@ -57,7 +53,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
 
   @override
   void dispose() {
-    _notifier?.removeListener(_scrollToBottom);
+    _setNotifier(null);
     _inputController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
@@ -68,21 +64,85 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     final text = _inputController.text.trim();
     if (text.isEmpty || _notifier == null) return;
     _inputController.clear();
+    _dismissKeyboard();
     _notifier!.sendMessage(text);
+  }
+
+  void _dismissKeyboard() {
+    _focusNode.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _exitAssistant() {
+    if (context.canPop()) {
+      context.pop();
+      return;
+    }
+
+    ref.read(moduleProvider.notifier).setActiveModule(ModuleType.dashboard);
+    context.go('/dashboard/movies');
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.aiAvailable || _notifier == null) {
-      return Scaffold(
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
+    final cachedAiAvailable = (widget.aiAvailable ??
+            ref.watch(
+              authProvider.select(
+                (state) => state.valueOrNull?.connection?.services.ai ?? false,
+              ),
+            )) ==
+        true;
+    final aiSettings = ref.watch(aiSettingsProvider);
+    return aiSettings.when(
+      loading: () {
+        _setNotifier(null);
+        return _buildUnavailable(loading: true);
+      },
+      error: (_, __) {
+        if (cachedAiAvailable) return _buildAvailableChat(context);
+        _setNotifier(null);
+        return _buildUnavailable();
+      },
+      data: (settings) {
+        if (settings.effective.available) return _buildAvailableChat(context);
+        _setNotifier(null);
+        return _buildUnavailable(settings: settings);
+      },
+    );
+  }
+
+  Widget _buildAvailableChat(BuildContext context) {
+    final notifier = ref.watch(aiChatProvider);
+    _setNotifier(notifier);
+    return _buildChat(context, notifier);
+  }
+
+  Widget _buildUnavailable({
+    AiSettings? settings,
+    bool loading = false,
+  }) {
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: _exitAssistant,
+          tooltip: 'Exit assistant',
+        ),
+        title: const Text('AI Assistant'),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.smart_toy_outlined,
-                    size: 64, color: AppTheme.accent),
+                const Icon(
+                  Icons.smart_toy_outlined,
+                  size: 64,
+                  color: AppTheme.accent,
+                ),
                 const SizedBox(height: 16),
                 const Text(
                   'AI Assistant',
@@ -93,29 +153,87 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'The AI assistant is not configured on this server. Ask your server admin to set up an AI provider.',
-                  style:
-                      TextStyle(color: AppTheme.textSecondary, fontSize: 15),
-                  textAlign: TextAlign.center,
-                ),
+                if (loading)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: CircularProgressIndicator(
+                      color: AppTheme.accent,
+                      strokeWidth: 2,
+                    ),
+                  )
+                else ...[
+                  Text(
+                    _unavailableCopy(settings),
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 15,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 20),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      await context.push('/settings/ai');
+                      ref.invalidate(aiSettingsProvider);
+                    },
+                    icon: const Icon(Icons.tune_rounded, size: 18),
+                    label: const Text('Set up AI access'),
+                  ),
+                ],
               ],
             ),
           ),
         ),
-      );
-    }
+      ),
+    );
+  }
 
-    final state = _notifier!.state;
+  String _unavailableCopy(AiSettings? settings) {
+    if (settings == null) {
+      return 'AI access is not ready. Choose a personal provider or ask your '
+          'server admin about included access.';
+    }
+    final effective = settings.effective;
+    if (effective.source == AiAccessSource.personal) {
+      return 'Your selected personal provider needs attention. Cantinarr did '
+          'not fall back to included access.';
+    }
+    if (settings.shared.granted && !settings.shared.configured) {
+      return 'Your account has included AI access, but the server provider '
+          'still needs admin setup. You can use a personal provider now.';
+    }
+    if (!settings.shared.granted) {
+      return 'Add your own AI provider, or ask your server admin to include '
+          'AI access for this account.';
+    }
+    return 'Included AI is temporarily unavailable. You can use a personal '
+        'provider or ask your server admin to check the provider.';
+  }
+
+  Widget _buildChat(BuildContext context, AiChatNotifier notifier) {
+    final state = notifier.state;
+    final isAdmin =
+        ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
 
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: Icon(context.canPop() ? Icons.arrow_back : Icons.close),
+          onPressed: _exitAssistant,
+          tooltip: 'Exit assistant',
+        ),
         title: const Text('AI Assistant'),
         actions: [
+          if (isAdmin)
+            IconButton(
+              icon: const Icon(Icons.manage_history_outlined),
+              onPressed: () => context.push('/settings/change-history'),
+              tooltip: 'Configuration history',
+            ),
           IconButton(
-            icon: const Icon(Icons.delete_outline),
-            onPressed: _notifier!.clearChat,
-            tooltip: 'Clear chat',
+            icon: const Icon(Icons.add_comment_outlined),
+            onPressed: notifier.clearChat,
+            tooltip: 'New chat',
           ),
         ],
       ),
@@ -123,74 +241,108 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
         children: [
           // Messages
           Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(16),
-              itemCount:
-                  state.messages.length + (state.isLoading ? 1 : 0),
-              itemBuilder: (context, index) {
-                if (index >= state.messages.length) {
-                  return const _TypingIndicator();
-                }
-                return ChatBubble(message: state.messages[index]);
-              },
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _dismissKeyboard,
+              child: LayoutBuilder(builder: (context, constraints) {
+                // Only show the typing indicator before the assistant bubble
+                // materializes (text, tool activity, or media arriving).
+                final showTyping = state.isLoading &&
+                    (state.messages.isEmpty ||
+                        state.messages.last.role != ChatRole.assistant);
+                // Full-width scroll surface; the transcript column is capped
+                // and centered so bubbles stay readable on desktop.
+                final hPad = AppBreakpoints.centeredContentPadding(
+                  constraints.maxWidth,
+                );
+                return ListView.builder(
+                  controller: _scrollController,
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 16),
+                  itemCount: state.messages.length + (showTyping ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index >= state.messages.length) {
+                      return const _TypingIndicator();
+                    }
+                    final msg = state.messages[index];
+                    final isLast = index == state.messages.length - 1;
+                    return ChatBubble(
+                      message: msg,
+                      onRetry: isLast && msg.errorText != null
+                          ? notifier.retryLast
+                          : null,
+                    );
+                  },
+                );
+              }),
             ),
           ),
 
           // Error
           if (state.error != null)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Text(
-                state.error!,
-                style:
-                    const TextStyle(color: AppTheme.error, fontSize: 12),
-                maxLines: 2,
+            CenteredContent(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Text(
+                  state.error!,
+                  style: const TextStyle(color: AppTheme.error, fontSize: 12),
+                  maxLines: 2,
+                ),
               ),
             ),
 
-          // Input
+          // Input (capped to the transcript column width on desktop)
           Container(
             decoration: const BoxDecoration(
               color: AppTheme.surface,
               border: Border(top: BorderSide(color: AppTheme.border)),
             ),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: SafeArea(
               top: false,
-              child: Row(
-                children: [
-                  // Suggestions
-                  if (state.messages.length <= 1) ..._buildSuggestions(),
-
-                  Expanded(
-                    child: TextField(
-                      controller: _inputController,
-                      focusNode: _focusNode,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _send(),
-                      decoration: const InputDecoration(
-                        hintText: 'Ask me anything...',
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                      ),
-                      maxLines: 4,
-                      minLines: 1,
+              child: CenteredContent(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (state.messages.length <= 1) ...[
+                      _buildSuggestions(),
+                      const SizedBox(height: 8),
+                    ],
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _inputController,
+                            focusNode: _focusNode,
+                            keyboardType: TextInputType.multiline,
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: (_) => _send(),
+                            onTapOutside: (_) => _dismissKeyboard(),
+                            decoration: const InputDecoration(
+                              hintText: 'Ask me anything...',
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                            ),
+                            maxLines: 4,
+                            minLines: 1,
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: state.isLoading ? null : _send,
+                          icon: Icon(
+                            Icons.send_rounded,
+                            color: state.isLoading
+                                ? AppTheme.textSecondary
+                                : AppTheme.accent,
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                  IconButton(
-                    onPressed: state.isLoading ? null : _send,
-                    icon: Icon(
-                      Icons.send_rounded,
-                      color: state.isLoading
-                          ? AppTheme.textSecondary
-                          : AppTheme.accent,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -199,35 +351,30 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
     );
   }
 
-  List<Widget> _buildSuggestions() {
+  Widget _buildSuggestions() {
     final suggestions = [
       "What's trending?",
       'Recommend sci-fi movies',
       'Help me set up Plex',
     ];
 
-    return [
-      SizedBox(
-        height: 36,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          shrinkWrap: true,
-          itemCount: suggestions.length,
-          separatorBuilder: (_, __) => const SizedBox(width: 8),
-          itemBuilder: (_, index) => ActionChip(
-            label: Text(suggestions[index],
-                style: const TextStyle(fontSize: 12)),
-            backgroundColor: AppTheme.surfaceVariant,
-            side: const BorderSide(color: AppTheme.border),
-            onPressed: () {
-              _inputController.text = suggestions[index];
-              _send();
-            },
-          ),
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: suggestions.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, index) => ActionChip(
+          label: Text(suggestions[index], style: const TextStyle(fontSize: 12)),
+          backgroundColor: AppTheme.surfaceVariant,
+          side: const BorderSide(color: AppTheme.border),
+          onPressed: () {
+            _inputController.text = suggestions[index];
+            _send();
+          },
         ),
       ),
-      const SizedBox(width: 8),
-    ];
+    );
   }
 }
 
@@ -241,8 +388,7 @@ class _TypingIndicator extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
               color: AppTheme.surfaceVariant,
               borderRadius: BorderRadius.circular(16),

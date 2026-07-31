@@ -1,0 +1,507 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:cantinarr/core/models/backend_connection.dart';
+import 'package:cantinarr/core/models/user_profile.dart';
+import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/network/websocket_client.dart';
+import 'package:cantinarr/core/providers/realtime_provider.dart';
+import 'package:cantinarr/core/storage/preferences.dart';
+import 'package:cantinarr/core/widgets/cached_image.dart';
+import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/request/data/request_service.dart'
+    hide RequestOptions;
+import 'package:cantinarr/features/settings/data/request_settings_service.dart';
+import 'package:cantinarr/features/settings/ui/pending_requests_screen.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('blank requester names use safe, trimmed approval copy', () {
+    PendingRequestItem item(String username, int requesterCount) =>
+        PendingRequestItem.fromJson({
+          'username': username,
+          'requester_count': requesterCount,
+        });
+
+    expect(item('  reader  ', 1).requestedByLabel, 'Requested by reader');
+    expect(item('   ', 1).requestedByLabel, 'Requested by a user');
+    expect(
+      item('', 2).requestedByLabel,
+      'Requested by a user and 1 other',
+    );
+  });
+
+  test('queue rows address the content they were filed for', () {
+    PendingRequestItem item(Map<String, dynamic> json) =>
+        PendingRequestItem.fromJson(json);
+
+    expect(
+      item({'media_type': 'movie', 'tmdb_id': 603}).detailRoute,
+      '/detail/movie/603',
+    );
+    expect(
+      item({'media_type': 'tv', 'tmdb_id': 94997}).detailRoute,
+      '/detail/tv/94997',
+    );
+
+    // Books are addressed by their Chaptarr identity, and the row's own library
+    // rides along: an approval can outlive the admin switching drawers.
+    final book = item({
+      'media_type': 'book',
+      'foreign_id': 'edition/OL123',
+      'title': 'Flock',
+      'instance_id': 'chaptarr-1',
+    }).detailRoute;
+    expect(book, isNotNull);
+    expect(book, startsWith('/detail/book/edition%2FOL123?'));
+    final query = Uri.parse(book!).queryParameters;
+    expect(query['title'], 'Flock');
+    expect(query['instance_id'], 'chaptarr-1');
+
+    // Nothing to open: a legacy book row with no stored identity, and a row
+    // whose TMDB id never made it in.
+    expect(item({'media_type': 'book', 'title': 'Flock'}).detailRoute, isNull);
+    expect(item({'media_type': 'movie', 'tmdb_id': 0}).detailRoute, isNull);
+  });
+
+  testWidgets('an approval row shows its artwork and opens the title',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(pending: const [
+      {
+        'id': 4,
+        'user_id': 11,
+        'username': 'josie',
+        'media_type': 'tv',
+        'tmdb_id': 94997,
+        'title': 'House of the Dragon',
+        'poster_path': '/hotd.jpg',
+        'season_scope': 'latest',
+      },
+    ]);
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    String? pushedLocation;
+    final router = GoRouter(
+      routes: [
+        GoRoute(path: '/', builder: (_, __) => const PendingRequestsScreen()),
+        GoRoute(
+          path: '/detail/:type/:id',
+          builder: (_, state) {
+            pushedLocation = state.uri.toString();
+            return const Scaffold(body: SizedBox());
+          },
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The server sends a bare TMDB path; the row composes a thumbnail-width URL.
+    final image = tester.widget<CachedImage>(find.byType(CachedImage));
+    expect(image.url, 'https://image.tmdb.org/t/p/w185/hotd.jpg');
+
+    await tester.tap(find.text('House of the Dragon'));
+    await tester.pumpAndSettle();
+    expect(pushedLocation, '/detail/tv/94997');
+  });
+
+  testWidgets('a book row keeps its placeholder and stays inert without an id',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(pending: const [
+      {
+        'id': 5,
+        'user_id': 12,
+        'username': 'reader',
+        'media_type': 'book',
+        'title': 'Flock',
+        'book_format': 'ebook',
+      },
+    ]);
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // A pending book has no cover to resolve, and without a foreign id there is
+    // nothing to open — the row must not offer a dead tap.
+    final image = tester.widget<CachedImage>(find.byType(CachedImage));
+    expect(image.url, isNull);
+    expect(image.icon, Icons.menu_book);
+    expect(tester.widget<ListTile>(find.byType(ListTile).first).onTap, isNull);
+  });
+
+  testWidgets(
+      'empty approvals list keeps its menu visibility control available',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter();
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('No pending requests.'), findsOneWidget);
+    final toggle = find.byKey(
+      const ValueKey('approvals-conditional-menu-visibility'),
+    );
+    expect(toggle, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(container.read(approvalsMenuOnlyWhenPendingProvider), isTrue);
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+  });
+
+  testWidgets('an unknown book format is visible and cannot be approved',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(pending: [
+      {
+        'id': 7,
+        'user_id': 2,
+        'username': 'reader',
+        'media_type': 'book',
+        'title': 'Flock',
+        'book_format': 'future-format',
+      },
+    ]);
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Unsupported format'), findsOneWidget);
+    final approve = tester.widget<IconButton>(
+      find.ancestor(
+        of: find.byIcon(Icons.check_circle_outline),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(approve.onPressed, isNull);
+  });
+
+  testWidgets(
+      'book approval preserves the requested format and names its library',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final adapter = _ApprovalsAdapter(
+      pending: [
+        {
+          'id': 7,
+          'user_id': 2,
+          'username': 'reader',
+          'media_type': 'book',
+          'title': 'Flock',
+          'book_format': 'both',
+          'instance_name': 'Family Books',
+          'requester_count': 3,
+        },
+      ],
+      approvalResponse: const {
+        'status': 'partial',
+        'book_formats': {
+          'ebook': 'pending',
+          'audiobook': 'requested',
+        },
+      },
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Library: Family Books'), findsOneWidget);
+    expect(find.text('Requested by reader and 2 others'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.check_circle_outline));
+    await tester.pumpAndSettle();
+
+    final dialog = find.byType(AlertDialog);
+    expect(dialog, findsOneWidget);
+    expect(find.descendant(of: dialog, matching: find.text('Requested format')),
+        findsOneWidget);
+    expect(find.descendant(
+            of: dialog, matching: find.text('eBook + Audiobook')),
+        findsOneWidget);
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text('Library: Family Books'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text('Requested by reader and 2 others'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byType(DropdownButtonFormField<BookRequestFormat>),
+        findsNothing);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.approvalBodies, hasLength(1));
+    expect(adapter.approvalBodies.single, isEmpty);
+    expect(
+      find.text('Audiobook approved. eBook still needs attention.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('book approval errors use safe guidance from response JSON',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final adapter = _ApprovalsAdapter(
+      pending: const [
+        {
+          'id': 7,
+          'user_id': 2,
+          'username': 'reader',
+          'media_type': 'book',
+          'title': 'Flock',
+          'book_format': 'ebook',
+        },
+      ],
+      approvalStatusCode: 409,
+      approvalResponse: const {
+        'error': 'pending book request has no pinned Chaptarr instance',
+      },
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Future<void> approve() async {
+      await tester.tap(find.byIcon(Icons.check_circle_outline));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+      await tester.pumpAndSettle();
+    }
+
+    await approve();
+    expect(
+      find.text(
+        'This older request doesn’t identify a book library; deny it and ask the requester to submit it again.',
+      ),
+      findsOneWidget,
+    );
+    tester
+        .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+        .removeCurrentSnackBar();
+    await tester.pumpAndSettle();
+
+    adapter.approvalResponse = {
+      'error': 'quality profile selection is ambiguous',
+    };
+    await approve();
+    expect(
+      find.text('Check this book library’s paths and profiles, then try again.'),
+      findsOneWidget,
+    );
+  });
+}
+
+class _FakeAuthNotifier extends AuthNotifier {
+  @override
+  Future<AuthState> build() async => const AuthState(
+        connection: BackendConnection(
+          serverUrl: 'http://localhost',
+          accessToken: 'access',
+          refreshToken: 'refresh',
+        ),
+        user: UserProfile(id: 1, username: 'admin', role: 'admin'),
+      );
+}
+
+class _ApprovalsAdapter implements HttpClientAdapter {
+  final List<Map<String, dynamic>> pending;
+  Map<String, dynamic> approvalResponse;
+  final int approvalStatusCode;
+  final List<Map<String, dynamic>> approvalBodies = [];
+
+  _ApprovalsAdapter({
+    this.pending = const [],
+    this.approvalResponse = const {},
+    this.approvalStatusCode = 200,
+  });
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method == 'POST' &&
+        options.uri.path == '/api/admin/requests/7/approve') {
+      final bytes = <int>[];
+      if (requestStream != null) {
+        await for (final chunk in requestStream) {
+          bytes.addAll(chunk);
+        }
+      }
+      approvalBodies.add(
+        bytes.isEmpty
+            ? <String, dynamic>{}
+            : jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>,
+      );
+    }
+    final body = switch (options.uri.path) {
+      '/api/admin/requests' => pending,
+      '/api/admin/requests/7/approve' => approvalResponse,
+      '/api/admin/request-settings' => {
+          'settings': const <String, dynamic>{},
+          'radarr_profiles': const <dynamic>[],
+          'sonarr_profiles': const <dynamic>[],
+        },
+      _ => const <String, dynamic>{},
+    };
+    final statusCode = options.uri.path == '/api/admin/requests/7/approve'
+        ? approvalStatusCode
+        : 200;
+    return ResponseBody.fromString(
+      jsonEncode(body),
+      statusCode,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}

@@ -8,21 +8,28 @@ class RequestState {
   final bool isRequesting;
   final String? error;
 
+  /// Per-season availability for TV titles (empty for movies or series not yet
+  /// in the library). Drives the interactive season table.
+  final List<RequestSeasonStatus> seasons;
+
   const RequestState({
     this.status = RequestStatus.unavailable,
     this.isRequesting = false,
     this.error,
+    this.seasons = const [],
   });
 
   RequestState copyWith({
     RequestStatus? status,
     bool? isRequesting,
     String? error,
+    List<RequestSeasonStatus>? seasons,
   }) =>
       RequestState(
         status: status ?? this.status,
         isRequesting: isRequesting ?? this.isRequesting,
         error: error,
+        seasons: seasons ?? this.seasons,
       );
 }
 
@@ -47,31 +54,46 @@ class RequestNotifier extends ChangeNotifier {
         _tmdbId = tmdbId,
         _mediaType = mediaType;
 
-  /// Check current status from the backend.
+  /// Check current status from the backend, including the per-season breakdown
+  /// for TV titles.
   Future<void> checkStatus() async {
     try {
-      final status = await _service.checkStatus(_tmdbId, _mediaType);
-      state = state.copyWith(status: status);
+      final detail = await _service.checkStatusDetail(_tmdbId, _mediaType);
+      state = state.copyWith(status: detail.status, seasons: detail.seasons);
     } catch (e) {
       state = state.copyWith(error: 'Could not check status');
     }
   }
 
-  /// One-tap request action.
-  Future<void> request({String? title, int? tvdbId}) async {
+  /// Fetch the option set the current user may choose for this item.
+  Future<RequestOptions?> fetchOptions() => _service.fetchOptions(_mediaType);
+
+  /// Submit the request, optionally with chosen season scope / quality. The
+  /// resulting status (which may be [RequestStatus.pending]) is reflected in
+  /// state rather than assuming "requested".
+  Future<void> request({
+    String? title,
+    int? tvdbId,
+    String? seasonScope,
+    List<int>? seasons,
+    int? qualityProfileId,
+  }) async {
     if (state.isRequesting) return;
     state = state.copyWith(isRequesting: true, error: null);
 
-    final success = await _service.request(
+    final status = await _service.request(
       tmdbId: _tmdbId,
       mediaType: _mediaType,
       title: title,
       tvdbId: tvdbId,
+      seasonScope: seasonScope,
+      seasons: seasons,
+      qualityProfileId: qualityProfileId,
     );
 
-    if (success) {
+    if (status != null) {
       state = state.copyWith(
-        status: RequestStatus.requested,
+        status: status,
         isRequesting: false,
       );
     } else {

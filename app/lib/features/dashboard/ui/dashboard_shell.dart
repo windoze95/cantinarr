@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
-import '../../../core/theme/app_theme.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/models/app_module.dart';
+import '../../../core/widgets/module_scaffold.dart';
+import '../../auth/logic/auth_provider.dart';
 
-/// Dashboard module shell with bottom nav: Movies | TV Shows.
-class DashboardShell extends StatefulWidget {
+/// Dashboard module shell: Movies | TV Shows | Releases, plus a Books tab when
+/// the user has Chaptarr access (services.chaptarr). Books is the LAST branch
+/// so showing/hiding it never shifts the other tabs' indices. Pages render as
+/// a bottom nav on mobile and sidebar items on desktop.
+class DashboardShell extends ConsumerWidget {
   final int currentIndex;
   final ValueChanged<int> onTabChanged;
   final Widget child;
@@ -15,36 +21,18 @@ class DashboardShell extends StatefulWidget {
   });
 
   @override
-  State<DashboardShell> createState() => _DashboardShellState();
-}
-
-class _DashboardShellState extends State<DashboardShell> {
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: widget.child,
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          border:
-              Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
-        ),
-        child: BottomNavigationBar(
-          currentIndex: widget.currentIndex,
-          onTap: widget.onTabChanged,
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.movie_outlined),
-              activeIcon: Icon(Icons.movie),
-              label: 'Movies',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.tv_outlined),
-              activeIcon: Icon(Icons.tv),
-              label: 'TV Shows',
-            ),
-          ],
-        ),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final showBooks = ref.watch(
+      authProvider.select(
+        (a) => a.valueOrNull?.connection?.services.chaptarr ?? false,
       ),
+    );
+
+    return ModuleScaffold(
+      pages: modulePagesFor(ModuleType.dashboard, includeBooks: showBooks),
+      currentIndex: currentIndex,
+      onTabChanged: onTabChanged,
+      child: child,
     );
   }
 }

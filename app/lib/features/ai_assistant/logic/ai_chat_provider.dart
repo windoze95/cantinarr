@@ -1,7 +1,102 @@
-import 'package:flutter/foundation.dart';
+import 'dart:async';
+
+import 'package:dio/dio.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
+import '../../../core/network/backend_client.dart';
+import '../../config_changes/data/config_change_models.dart';
 import '../data/ai_models.dart';
 import '../data/ai_chat_service.dart';
+
+/// How long an assistant session can sit unused before it is refreshed.
+const aiChatSessionIdleTimeout = Duration(minutes: 30);
+
+/// Assistant conversation shared across visits to the focused chat route.
+///
+/// The keep-alive link lets users leave and reopen the assistant without
+/// losing the active conversation. Auto-dispose still gives us a natural
+/// refresh after the app is backgrounded or the assistant has no listeners for
+/// a while.
+final aiChatProvider =
+    ChangeNotifierProvider.autoDispose<AiChatNotifier>((ref) {
+  final backendDio = ref.watch(backendClientProvider);
+  final notifier = AiChatNotifier(
+    chatService: AiChatService(backendDio: backendDio),
+  );
+  final keepAliveLink = ref.keepAlive();
+
+  Timer? idleTimer;
+  Timer? backgroundTimer;
+
+  void expireSession() {
+    idleTimer?.cancel();
+    backgroundTimer?.cancel();
+    ref.invalidateSelf();
+  }
+
+  void startIdleTimer() {
+    idleTimer?.cancel();
+    idleTimer = Timer(aiChatSessionIdleTimeout, expireSession);
+  }
+
+  void cancelIdleTimer() {
+    idleTimer?.cancel();
+    idleTimer = null;
+  }
+
+  void startBackgroundTimer() {
+    backgroundTimer?.cancel();
+    backgroundTimer = Timer(aiChatSessionIdleTimeout, expireSession);
+  }
+
+  void cancelBackgroundTimer() {
+    backgroundTimer?.cancel();
+    backgroundTimer = null;
+  }
+
+  final lifecycleObserver = _AiChatLifecycleObserver(
+    onBackgrounded: startBackgroundTimer,
+    onResumed: cancelBackgroundTimer,
+  );
+
+  WidgetsBinding.instance.addObserver(lifecycleObserver);
+
+  ref.onCancel(startIdleTimer);
+  ref.onResume(cancelIdleTimer);
+  ref.onDispose(() {
+    cancelIdleTimer();
+    cancelBackgroundTimer();
+    WidgetsBinding.instance.removeObserver(lifecycleObserver);
+    keepAliveLink.close();
+  });
+
+  return notifier;
+});
+
+class _AiChatLifecycleObserver extends WidgetsBindingObserver {
+  final VoidCallback onBackgrounded;
+  final VoidCallback onResumed;
+
+  _AiChatLifecycleObserver({
+    required this.onBackgrounded,
+    required this.onResumed,
+  });
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      onResumed();
+      return;
+    }
+
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      onBackgrounded();
+    }
+  }
+}
 
 /// State for the AI chat conversation.
 class AiChatState {
@@ -34,10 +129,22 @@ class AiChatState {
 class AiChatNotifier extends ChangeNotifier {
   final AiChatService _chatService;
   final _uuid = const Uuid();
+  bool _disposed = false;
+  CancelToken? _activeCancelToken;
+
+  /// Server-assigned conversation ID; sent on every turn so the server can
+  /// keep full tool context. Reset when the chat is cleared.
+  String? _conversationId;
+  String? get conversationId => _conversationId;
+
+  /// Monotonic token tying stream updates to the chat session that started
+  /// them; clearChat/new turns bump it so stale streams stop mutating state.
+  int _generation = 0;
 
   AiChatState _state = const AiChatState();
   AiChatState get state => _state;
   set state(AiChatState value) {
+    if (_disposed) return;
     _state = value;
     notifyListeners();
   }
@@ -50,12 +157,18 @@ class AiChatNotifier extends ChangeNotifier {
       content:
           'Hey! I\'m your Cantinarr assistant. I can help you discover movies and TV shows, check what\'s available on your server, or help you get set up. What are you looking for?',
       timestamp: DateTime.now(),
+      excludeFromHistory: true,
     ));
   }
 
   /// Send a user message and stream the AI response.
   Future<void> sendMessage(String text) async {
+    if (_disposed) return;
     if (text.trim().isEmpty) return;
+    // One turn at a time: a second concurrent stream would corrupt chat
+    // state and race the server-side conversation store.
+    if (state.isLoading) return;
+    final generation = ++_generation;
 
     _addMessage(ChatMessage(
       id: _uuid.v4(),
@@ -66,60 +179,171 @@ class AiChatNotifier extends ChangeNotifier {
 
     state = state.copyWith(isLoading: true, error: null);
 
+    final responseId = _uuid.v4();
+    final buffer = StringBuffer();
+    final mediaItems = <MediaResultItem>[];
+    final configurationChanges = <ConfigChange>[];
+    final toolActivity = <ToolActivity>[];
+    final cancelToken = CancelToken();
+    _activeCancelToken = cancelToken;
+    String? errorText;
+
+    void upsertResponse({required bool streaming}) {
+      // A clearChat (or newer turn) since this stream started owns the
+      // state now — drop stale updates instead of resurrecting them.
+      if (generation != _generation) return;
+      final updated = List<ChatMessage>.from(state.messages);
+      final idx = updated.indexWhere((m) => m.id == responseId);
+      final message = ChatMessage(
+        id: responseId,
+        role: ChatRole.assistant,
+        content: buffer.toString(),
+        timestamp: DateTime.now(),
+        mediaResults: List.unmodifiable(mediaItems),
+        configurationChanges: List.unmodifiable(configurationChanges),
+        toolActivity: List.unmodifiable(toolActivity),
+        isStreaming: streaming,
+        errorText: errorText,
+        // A failed message with no text carries nothing worth re-sending.
+        excludeFromHistory: errorText != null && buffer.isEmpty,
+      );
+      if (idx >= 0) {
+        updated[idx] = message;
+      } else {
+        updated.add(message);
+      }
+      state = state.copyWith(messages: updated);
+    }
+
     try {
-      // Build conversation history (skip welcome message)
-      final conversationMessages = state.messages
-          .where((m) => m.role != ChatRole.system)
-          .skip(1)
-          .toList();
+      final history = _historyForApi();
 
-      final buffer = StringBuffer();
-      final responseId = _uuid.v4();
-
-      await for (final chunk
-          in _chatService.sendMessage(messages: conversationMessages)) {
-        buffer.write(chunk);
-
-        // Update the assistant message in-place for streaming effect
-        final updatedMessages = List<ChatMessage>.from(state.messages);
-
-        // Find or create the streaming message
-        final existingIdx =
-            updatedMessages.indexWhere((m) => m.id == responseId);
-        final streamingMessage = ChatMessage(
-          id: responseId,
-          role: ChatRole.assistant,
-          content: buffer.toString(),
-          timestamp: DateTime.now(),
-        );
-
-        if (existingIdx >= 0) {
-          updatedMessages[existingIdx] = streamingMessage;
-        } else {
-          updatedMessages.add(streamingMessage);
+      await for (final event in _chatService.sendMessage(
+        messages: history,
+        conversationId: _conversationId,
+        cancelToken: cancelToken,
+      )) {
+        // clearChat (or a future turn) owns every piece of conversation state,
+        // including the server-assigned ID, once the generation changes.
+        if (generation != _generation) break;
+        switch (event) {
+          case ConversationIdEvent(:final id):
+            _conversationId = id;
+          case TextChunkEvent(:final text):
+            buffer.write(text);
+          case MediaResultsEvent(:final items):
+            mediaItems.addAll(items);
+          case ConfigurationChangeEvent(:final change):
+            configurationChanges.add(change);
+          case ToolStartEvent(:final name, :final label):
+            toolActivity.add(ToolActivity(name: name, label: label));
+          case ToolEndEvent(:final name, :final ok):
+            final idx =
+                toolActivity.lastIndexWhere((t) => t.name == name && !t.done);
+            if (idx >= 0) {
+              toolActivity[idx] =
+                  toolActivity[idx].copyWith(done: true, ok: ok);
+            }
+          case StreamErrorEvent(:final message):
+            errorText = message;
         }
 
-        state = state.copyWith(messages: updatedMessages);
+        // Stop streaming on a server-reported error; the final state is
+        // written below with the partial text retained.
+        if (errorText != null) break;
+
+        // Only materialize the assistant bubble once there is something
+        // to show (text, media, or tool activity).
+        if (buffer.isNotEmpty ||
+            mediaItems.isNotEmpty ||
+            configurationChanges.isNotEmpty ||
+            toolActivity.isNotEmpty) {
+          upsertResponse(streaming: true);
+        }
       }
 
-      // If no content was streamed, the response was empty
-      if (buffer.isEmpty) {
-        _addMessage(ChatMessage(
-          id: responseId,
-          role: ChatRole.assistant,
-          content: 'I didn\'t get a response. Please try again.',
-          timestamp: DateTime.now(),
-        ));
+      // An empty response with no explicit error is still a failure from
+      // the user's perspective: surface it as a retryable inline error
+      // instead of injecting fake assistant text into the transcript.
+      if (errorText == null &&
+          buffer.isEmpty &&
+          mediaItems.isEmpty &&
+          configurationChanges.isEmpty) {
+        errorText = 'I didn\'t get a response. Please try again.';
       }
 
-      state = state.copyWith(isLoading: false);
+      upsertResponse(streaming: false);
+      if (generation == _generation) {
+        // A failed turn desyncs us from the server's stored transcript
+        // (which may also have been invalidated): start the next turn fresh
+        // from the client transcript rather than replaying a broken state.
+        if (errorText != null) _conversationId = null;
+        state = state.copyWith(isLoading: false);
+      }
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        error:
-            'Failed to get response: ${e.toString().length > 100 ? '${e.toString().substring(0, 100)}...' : e}',
-      );
+      errorText ??= _friendlyError(e);
+      upsertResponse(streaming: false);
+      if (generation == _generation) {
+        _conversationId = null;
+        state = state.copyWith(isLoading: false);
+      }
+    } finally {
+      if (identical(_activeCancelToken, cancelToken)) {
+        _activeCancelToken = null;
+      }
     }
+  }
+
+  /// Re-send the most recent user message (e.g. after an error).
+  ///
+  /// Removes the failed exchange from the transcript before retrying so the
+  /// history sent to the server stays clean.
+  Future<void> retryLast() async {
+    if (state.isLoading) return;
+    final messages = List<ChatMessage>.from(state.messages);
+    final lastUserIdx = messages.lastIndexWhere((m) => m.role == ChatRole.user);
+    if (lastUserIdx < 0) return;
+    final text = messages[lastUserIdx].content;
+    messages.removeRange(lastUserIdx, messages.length);
+    state = state.copyWith(messages: messages);
+    await sendMessage(text);
+  }
+
+  /// Conversation transcript to send to the server: skips display-only
+  /// messages (welcome text, synthetic notices) and empty content.
+  List<ChatMessage> _historyForApi() => state.messages
+      .where((m) =>
+          m.role != ChatRole.system &&
+          !m.excludeFromHistory &&
+          m.content.isNotEmpty)
+      .toList();
+
+  String _friendlyError(Object e) {
+    if (e is DioException) {
+      if (e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.sendTimeout) {
+        return 'The assistant did not finish responding in time. If this '
+            'request could change settings, check Configuration History '
+            'before retrying.';
+      }
+      if (e.type == DioExceptionType.connectionError ||
+          e.type == DioExceptionType.connectionTimeout) {
+        return 'Cantinarr could not reach the assistant. Check your '
+            'connection, then try again.';
+      }
+      if (e.type == DioExceptionType.cancel) {
+        return 'The assistant request was cancelled.';
+      }
+
+      final statusCode = e.response?.statusCode;
+      if (statusCode == 429) {
+        return 'The assistant is busy. Wait a moment, then try again.';
+      }
+      if (statusCode != null && statusCode >= 500) {
+        return 'The assistant service had a problem. Try again in a moment.';
+      }
+    }
+    return 'Something went wrong while contacting the assistant. Try again.';
   }
 
   void _addMessage(ChatMessage message) {
@@ -129,12 +353,27 @@ class AiChatNotifier extends ChangeNotifier {
   void clearError() => state = state.copyWith(error: null);
 
   void clearChat() {
+    if (_disposed) return;
+    _conversationId = null;
+    _generation++; // orphan any in-flight stream
+    _activeCancelToken?.cancel('Chat cleared');
+    _activeCancelToken = null;
     state = const AiChatState();
     _addMessage(ChatMessage(
       id: _uuid.v4(),
       role: ChatRole.assistant,
       content: 'Chat cleared! What can I help you find?',
       timestamp: DateTime.now(),
+      excludeFromHistory: true,
     ));
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _activeCancelToken?.cancel('Chat disposed');
+    _activeCancelToken = null;
+    _disposed = true;
+    super.dispose();
   }
 }

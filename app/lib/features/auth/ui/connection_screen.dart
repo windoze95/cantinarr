@@ -48,15 +48,14 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Logo
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    color: AppTheme.accent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(20),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 72,
+                    height: 72,
+                    fit: BoxFit.cover,
                   ),
-                  child: const Icon(Icons.movie_filter,
-                      color: AppTheme.accent, size: 40),
                 ),
                 const SizedBox(height: 16),
                 const Text(
@@ -70,8 +69,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                 const SizedBox(height: 4),
                 const Text(
                   'Paste your connection link to get started',
-                  style:
-                      TextStyle(color: AppTheme.textSecondary, fontSize: 15),
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 15),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 40),
@@ -96,8 +94,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                   const SizedBox(height: 8),
                   Text(
                     error,
-                    style:
-                        const TextStyle(color: AppTheme.error, fontSize: 13),
+                    style: const TextStyle(color: AppTheme.error, fontSize: 13),
                     textAlign: TextAlign.center,
                   ),
                 ],
@@ -129,8 +126,8 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
                   onPressed: _showAdminLogin,
                   child: const Text(
                     'Admin Login',
-                    style: TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 13),
+                    style:
+                        TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                   ),
                 ),
               ],
@@ -176,9 +173,7 @@ class _AdminLoginDialogState extends ConsumerState<_AdminLoginDialog> {
     });
 
     try {
-      await ref
-          .read(authProvider.notifier)
-          .login(serverUrl, 'admin', password);
+      await ref.read(authProvider.notifier).login(serverUrl, 'admin', password);
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       setState(() {
@@ -227,9 +222,8 @@ class _AdminLoginDialogState extends ConsumerState<_AdminLoginDialog> {
               labelText: 'Password',
               prefixIcon: const Icon(Icons.lock_outline),
               suffixIcon: IconButton(
-                icon: Icon(_obscurePassword
-                    ? Icons.visibility_off
-                    : Icons.visibility),
+                icon: Icon(
+                    _obscurePassword ? Icons.visibility_off : Icons.visibility),
                 onPressed: () =>
                     setState(() => _obscurePassword = !_obscurePassword),
               ),

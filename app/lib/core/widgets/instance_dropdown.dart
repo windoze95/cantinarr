@@ -9,16 +9,22 @@ class InstanceDropdown extends StatelessWidget {
   final String? activeInstanceId;
   final ValueChanged<String> onChanged;
 
+  /// Optional aggregate entry (e.g. the downloads "All" view) listed above
+  /// the instances; selecting it reports its id through [onChanged].
+  final ({String id, String label})? aggregateOption;
+
   const InstanceDropdown({
     super.key,
     required this.instances,
     required this.activeInstanceId,
     required this.onChanged,
+    this.aggregateOption,
   });
 
   @override
   Widget build(BuildContext context) {
     if (instances.length <= 1) return const SizedBox.shrink();
+    final aggregate = aggregateOption;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -39,12 +45,17 @@ class InstanceDropdown extends StatelessWidget {
           ),
           icon: const Icon(Icons.arrow_drop_down,
               color: AppTheme.textSecondary, size: 20),
-          items: instances
-              .map((inst) => DropdownMenuItem(
-                    value: inst.id,
-                    child: Text(inst.name),
-                  ))
-              .toList(),
+          items: [
+            if (aggregate != null)
+              DropdownMenuItem(
+                value: aggregate.id,
+                child: Text(aggregate.label),
+              ),
+            ...instances.map((inst) => DropdownMenuItem(
+                  value: inst.id,
+                  child: Text(inst.name),
+                )),
+          ],
           onChanged: (id) {
             if (id != null) onChanged(id);
           },

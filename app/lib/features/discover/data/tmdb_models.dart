@@ -439,6 +439,13 @@ class PersonCredit {
   }
 }
 
+/// Year of a TMDB date string (`release_date` / `first_air_date`), or null
+/// when absent or unparseable.
+int? tmdbPremiereYear(String? date) {
+  if (date == null || date.length < 4) return null;
+  return int.tryParse(date.substring(0, 4));
+}
+
 /// Helper to parse the nested videos response.
 List<Video> _parseVideos(Map<String, dynamic> json) {
   final videosData = json['videos'];

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,7 +14,13 @@ import (
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+)
+
+const (
+	passkeySetupAudience = "passkey_setup"
+	passkeySetupTTL      = 10 * time.Minute
 )
 
 // ─── Secure Context Check ────────────────────────────────
@@ -47,9 +54,9 @@ func rpIDFromRequest(r *http.Request) string {
 	return host
 }
 
-// rpConfigFromRequest derives the WebAuthn relying party config from the
+// baseRPConfigFromRequest derives the WebAuthn relying party config from the
 // incoming HTTP request. Each self-hosted deployment has a different domain.
-func rpConfigFromRequest(r *http.Request) *webauthn.Config {
+func baseRPConfigFromRequest(r *http.Request) *webauthn.Config {
 	host := r.Host
 
 	// RP ID is the hostname without port
@@ -75,6 +82,58 @@ func rpConfigFromRequest(r *http.Request) *webauthn.Config {
 		RPDisplayName: "Cantinarr",
 		RPOrigins:     []string{origin},
 	}
+}
+
+func (s *Service) rpConfigFromRequest(r *http.Request) *webauthn.Config {
+	cfg := baseRPConfigFromRequest(r)
+	cfg.RPOrigins = appendUnique(cfg.RPOrigins, s.webauthnOrigins...)
+	return cfg
+}
+
+func (s *Service) nativePasskeyStatusFromRequest(r *http.Request) NativePasskeyStatusResponse {
+	if !isSecureContext(r) {
+		return NativePasskeyStatusResponse{}
+	}
+	associationHost := isNativeAssociationHost(r)
+	return NativePasskeyStatusResponse{
+		AppleConfigured:      associationHost && len(s.appleAppIDs) > 0,
+		AndroidConfigured:    associationHost && len(s.androidCertFingerprints) > 0,
+		WindowsOriginTrusted: s.windowsNativeOriginTrusted(r),
+	}
+}
+
+func isNativeAssociationHost(r *http.Request) bool {
+	host := strings.ToLower(strings.Trim(rpIDFromRequest(r), "[]"))
+	if host == "localhost" || host == "" {
+		return false
+	}
+	return net.ParseIP(host) == nil
+}
+
+func (s *Service) windowsNativeOriginTrusted(r *http.Request) bool {
+	origin := "https://" + rpIDFromRequest(r)
+	for _, trusted := range s.rpConfigFromRequest(r).RPOrigins {
+		if trusted == origin {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(values []string, extras ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(extras))
+	result := make([]string, 0, len(values)+len(extras))
+	for _, value := range append(values, extras...) {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // ─── WebAuthn User Adapter ───────────────────────────────
@@ -272,7 +331,7 @@ func (s *Service) loadAllCredentials(userID int64) ([]webauthn.Credential, error
 }
 
 func (s *Service) BeginPasskeyRegistration(userID int64, r *http.Request) (interface{}, string, error) {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return nil, "", fmt.Errorf("create webauthn: %w", err)
@@ -281,6 +340,9 @@ func (s *Service) BeginPasskeyRegistration(userID int64, r *http.Request) (inter
 	waUser, err := s.loadWebAuthnUser(userID, cfg.RPID)
 	if err != nil {
 		return nil, "", fmt.Errorf("load user: %w", err)
+	}
+	if !passkeyAllowed(waUser.user) {
+		return nil, "", ErrPasskeyNotAllowed
 	}
 
 	options, session, err := wa.BeginRegistration(waUser,
@@ -295,7 +357,7 @@ func (s *Service) BeginPasskeyRegistration(userID int64, r *http.Request) (inter
 }
 
 func (s *Service) FinishPasskeyRegistration(userID int64, sessionID, credentialName string, r *http.Request) error {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return fmt.Errorf("create webauthn: %w", err)
@@ -332,8 +394,74 @@ func (s *Service) FinishPasskeyRegistration(userID int64, sessionID, credentialN
 	return nil
 }
 
+func (s *Service) CreatePasskeySetupToken(userID int64, deviceID string) (string, time.Time, error) {
+	user, err := s.getUserByID(userID)
+	if err != nil {
+		return "", time.Time{}, ErrInvalidCredentials
+	}
+	if deviceID == "" {
+		return "", time.Time{}, ErrInvalidCredentials
+	}
+	if err := s.requireActiveDevice(deviceID, user.ID); err != nil {
+		return "", time.Time{}, err
+	}
+	now := time.Now()
+	expiresAt := now.Add(passkeySetupTTL)
+	claims := &Claims{
+		UserID:   user.ID,
+		Username: user.Username,
+		Role:     user.Role,
+		DeviceID: deviceID,
+		Scope:    "passkey:create",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{passkeySetupAudience},
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			IssuedAt:  jwt.NewNumericDate(now),
+		},
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.jwtSecret)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("sign passkey setup token: %w", err)
+	}
+	return token, expiresAt, nil
+}
+
+func (s *Service) BeginPasskeySetup(token string, r *http.Request) (interface{}, string, error) {
+	claims, err := s.ValidateToken(token)
+	if err != nil {
+		return nil, "", ErrInvalidCredentials
+	}
+	if !hasAudience(claims, passkeySetupAudience) {
+		return nil, "", ErrInvalidCredentials
+	}
+	if claims.DeviceID == "" {
+		return nil, "", ErrInvalidCredentials
+	}
+	if err := s.requireActiveDevice(claims.DeviceID, claims.UserID); err != nil {
+		return nil, "", err
+	}
+	return s.BeginPasskeyRegistration(claims.UserID, r)
+}
+
+func (s *Service) FinishPasskeySetup(token, sessionID, credentialName string, r *http.Request) error {
+	claims, err := s.ValidateToken(token)
+	if err != nil {
+		return ErrInvalidCredentials
+	}
+	if !hasAudience(claims, passkeySetupAudience) {
+		return ErrInvalidCredentials
+	}
+	if claims.DeviceID == "" {
+		return ErrInvalidCredentials
+	}
+	if err := s.requireActiveDevice(claims.DeviceID, claims.UserID); err != nil {
+		return err
+	}
+	return s.FinishPasskeyRegistration(claims.UserID, sessionID, credentialName, r)
+}
+
 func (s *Service) BeginPasskeyLogin(r *http.Request) (interface{}, string, error) {
-	cfg := rpConfigFromRequest(r)
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return nil, "", fmt.Errorf("create webauthn: %w", err)
@@ -350,7 +478,32 @@ func (s *Service) BeginPasskeyLogin(r *http.Request) (interface{}, string, error
 }
 
 func (s *Service) FinishPasskeyLogin(sessionID string, r *http.Request) (*TokenResponse, error) {
-	cfg := rpConfigFromRequest(r)
+	waUser, err := s.finishPasskeyLoginUser(sessionID, r)
+	if err != nil {
+		return nil, err
+	}
+
+	// Bind the session to a device, sourced from the same query params the app
+	// sends on every other auth path (model name + stable hardware id).
+	deviceID, err := s.upsertDevice(
+		waUser.user.ID,
+		r.URL.Query().Get("device_name"),
+		r.URL.Query().Get("hardware_id"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.generateTokens(waUser.user, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	resp.DeviceID = deviceID
+	return resp, nil
+}
+
+func (s *Service) finishPasskeyLoginUser(sessionID string, r *http.Request) (*WebAuthnUser, error) {
+	cfg := s.rpConfigFromRequest(r)
 	wa, err := webauthn.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create webauthn: %w", err)
@@ -379,6 +532,11 @@ func (s *Service) FinishPasskeyLogin(sessionID string, r *http.Request) (*TokenR
 		return nil, fmt.Errorf("finish login: %w", err)
 	}
 
+	waUser := user.(*WebAuthnUser)
+	if !passkeyAllowed(waUser.user) {
+		return nil, ErrPasskeyNotAllowed
+	}
+
 	// Update sign count and last_used_at
 	credID := hex.EncodeToString(cred.ID)
 	_, _ = s.db.Exec(
@@ -386,25 +544,7 @@ func (s *Service) FinishPasskeyLogin(sessionID string, r *http.Request) (*TokenR
 		cred.Authenticator.SignCount, time.Now(), credID,
 	)
 
-	// Extract user ID from the WebAuthn user
-	waUser := user.(*WebAuthnUser)
-
-	// Create device and generate tokens
-	deviceID := uuid.New().String()
-	_, err = s.db.Exec(
-		"INSERT INTO devices (id, user_id, device_name) VALUES (?, ?, ?)",
-		deviceID, waUser.user.ID, "Passkey",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create device: %w", err)
-	}
-
-	resp, err := s.generateTokens(waUser.user, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	resp.DeviceID = deviceID
-	return resp, nil
+	return waUser, nil
 }
 
 func (s *Service) ListPasskeys(userID int64, rpID string) ([]PasskeyInfo, error) {

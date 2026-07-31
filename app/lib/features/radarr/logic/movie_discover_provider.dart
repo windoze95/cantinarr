@@ -4,49 +4,59 @@ import '../../discover/data/tmdb_models.dart';
 
 /// Discovery state for the Movies tab.
 class MovieDiscoverState {
-  final List<MediaItem> popularMovies;
+  /// The headline row, from whichever feed the admin configured.
+  final List<MediaItem> featured;
+
+  /// Which feed answered, so the row can title itself honestly.
+  final String featuredSource;
   final List<MediaItem> topRated;
   final List<MediaItem> upcoming;
   final List<MediaItem> anticipated;
-  final bool isLoadingPopular;
+  final bool isLoadingFeatured;
   final bool isLoadingTopRated;
   final bool isLoadingUpcoming;
   final bool isLoadingAnticipated;
 
   const MovieDiscoverState({
-    this.popularMovies = const [],
+    this.featured = const [],
+    this.featuredSource = '',
     this.topRated = const [],
     this.upcoming = const [],
     this.anticipated = const [],
-    this.isLoadingPopular = false,
+    this.isLoadingFeatured = false,
     this.isLoadingTopRated = false,
     this.isLoadingUpcoming = false,
     this.isLoadingAnticipated = false,
   });
 
+  /// The row's title for the feed that answered.
+  String get featuredTitle => featuredRowTitle(featuredSource, isTv: false);
+
   MovieDiscoverState copyWith({
-    List<MediaItem>? popularMovies,
+    List<MediaItem>? featured,
+    String? featuredSource,
     List<MediaItem>? topRated,
     List<MediaItem>? upcoming,
     List<MediaItem>? anticipated,
-    bool? isLoadingPopular,
+    bool? isLoadingFeatured,
     bool? isLoadingTopRated,
     bool? isLoadingUpcoming,
     bool? isLoadingAnticipated,
   }) =>
       MovieDiscoverState(
-        popularMovies: popularMovies ?? this.popularMovies,
+        featured: featured ?? this.featured,
+        featuredSource: featuredSource ?? this.featuredSource,
         topRated: topRated ?? this.topRated,
         upcoming: upcoming ?? this.upcoming,
         anticipated: anticipated ?? this.anticipated,
-        isLoadingPopular: isLoadingPopular ?? this.isLoadingPopular,
+        isLoadingFeatured: isLoadingFeatured ?? this.isLoadingFeatured,
         isLoadingTopRated: isLoadingTopRated ?? this.isLoadingTopRated,
         isLoadingUpcoming: isLoadingUpcoming ?? this.isLoadingUpcoming,
         isLoadingAnticipated: isLoadingAnticipated ?? this.isLoadingAnticipated,
       );
 }
 
-/// Fetches movie discovery rows (Popular, Top Rated, Coming Soon).
+/// Fetches movie discovery rows (the headline feed, Top Rated, Coming Soon).
 class MovieDiscoverNotifier extends StateNotifier<MovieDiscoverState> {
   final DiscoverApiService _api;
 
@@ -54,23 +64,24 @@ class MovieDiscoverNotifier extends StateNotifier<MovieDiscoverState> {
 
   Future<void> bootstrap() async {
     await Future.wait([
-      _fetchPopularMovies(),
+      _fetchFeatured(),
       _fetchTopRatedMovies(),
       _fetchUpcomingMovies(),
       _fetchAnticipatedMovies(),
     ]);
   }
 
-  Future<void> _fetchPopularMovies() async {
-    state = state.copyWith(isLoadingPopular: true);
+  Future<void> _fetchFeatured() async {
+    state = state.copyWith(isLoadingFeatured: true);
     try {
-      final page = await _api.fetchPopularMovies();
+      final feed = await _api.fetchFeaturedMovies();
       state = state.copyWith(
-        popularMovies: page.results,
-        isLoadingPopular: false,
+        featured: feed.items,
+        featuredSource: feed.source,
+        isLoadingFeatured: false,
       );
     } catch (_) {
-      state = state.copyWith(isLoadingPopular: false);
+      state = state.copyWith(isLoadingFeatured: false);
     }
   }
 

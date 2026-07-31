@@ -1,0 +1,4 @@
+{"type":"message","role":"user","content":[{"type":"input_text","text":"find dune"}]}
+{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Searching now."}]}
+{"type":"function_call","name":"search_movies","arguments":"{\"query\":\"dune\"}","call_id":"codex_smoke_1"}
+{"type":"function_call_output","call_id":"codex_smoke_1","output":"found 2 movies"}

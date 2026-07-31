@@ -1,14 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/featured_media_hero.dart';
+import '../../../core/widgets/horizontal_item_row.dart';
+import '../../../core/widgets/media_card.dart';
+import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/ui/category_row.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/logic/tv_discover_provider.dart';
+import '../logic/library_rows.dart';
 
-/// Dashboard TV tab: discovery rows + simplified Sonarr library sections.
+/// How far back the "Recently Downloaded" row looks. Sonarr writes one import
+/// record per episode, so a season pack spends a dozen of these on one series —
+/// the page has to be deep enough that a single big import does not crowd every
+/// other show out of the row.
+const _importHistoryPageSize = 100;
+
+/// Dashboard TV tab: discovery rows + Sonarr library rows.
 class DashboardTvTab extends ConsumerStatefulWidget {
   const DashboardTvTab({super.key});
 
@@ -16,18 +28,36 @@ class DashboardTvTab extends ConsumerStatefulWidget {
   ConsumerState<DashboardTvTab> createState() => _DashboardTvTabState();
 }
 
-class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
+class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
+    with WidgetsBindingObserver {
   List<SonarrSeries> _recentlyDownloaded = [];
-  List<SonarrSeries> _continuing = [];
+  List<SonarrSeries> _airingNext = [];
   bool _isLoadingLibrary = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(tvDiscoverProvider.notifier).bootstrap();
       _loadLibraryPreview();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The library may have changed while the app was backgrounded (downloads
+    // finishing, an admin working directly in the arr) — otherwise these rows
+    // only refresh on pull-to-refresh and this tab is the landing screen.
+    if (state == AppLifecycleState.resumed && !_isLoadingLibrary) {
+      _loadLibraryPreview();
+    }
   }
 
   Future<void> _loadLibraryPreview() async {
@@ -36,28 +66,56 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
     if (defaultSonarr == null) return;
 
     setState(() => _isLoadingLibrary = true);
-    try {
-      final backendDio = ref.read(backendClientProvider);
-      final service = SonarrApiService(
-          backendDio: backendDio, instanceId: defaultSonarr.id);
-      final series = await service.getSeries();
 
-      final downloaded = series
-          .where((s) => s.percentComplete > 0)
-          .toList()
-        ..sort((a, b) =>
-            b.percentComplete.compareTo(a.percentComplete));
-      final continuing =
-          series.where((s) => s.status == 'continuing').toList();
+    final backendDio = ref.read(backendClientProvider);
+    final service =
+        SonarrApiService(backendDio: backendDio, instanceId: defaultSonarr.id);
+
+    // Both rows are the library joined to a second source, so a failed series
+    // fetch leaves nothing to join and the dependent calls are skipped. The
+    // rows keep what they are already showing rather than blanking the landing
+    // screen over one transient error.
+    final List<SonarrSeries> series;
+    try {
+      series = await service.getSeries();
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingLibrary = false);
+      return;
+    }
+    if (!mounted) return;
+
+    try {
+      final imports = await service.getHistory(
+        pageSize: _importHistoryPageSize,
+        eventType: SonarrHistoryRecord.importedEventTypeId,
+      );
+      if (!mounted) return;
 
       setState(() {
-        _recentlyDownloaded = downloaded.take(10).toList();
-        _continuing = continuing.take(10).toList();
-        _isLoadingLibrary = false;
+        _recentlyDownloaded = recentlyDownloadedSeries(series, imports.records);
       });
     } catch (_) {
-      setState(() => _isLoadingLibrary = false);
+      // History fetch failed. A series record carries no import date, so there
+      // is no second source to fall back to — leave the row as it is rather
+      // than ordering it by something that is not recency.
     }
+
+    try {
+      final now = DateTime.now();
+      final calendarEntries = await service.getCalendar(
+        start: now.toIso8601String(),
+        end: now.add(const Duration(days: 7)).toIso8601String(),
+      );
+      if (!mounted) return;
+
+      setState(() {
+        _airingNext = airingNextSeries(series, calendarEntries);
+      });
+    } catch (_) {
+      // Calendar fetch failed; leave _airingNext as it is.
+    }
+
+    if (mounted) setState(() => _isLoadingLibrary = false);
   }
 
   Future<void> _onRefresh() async {
@@ -77,10 +135,18 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
       child: ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
+          if (discover.featured.isNotEmpty)
+            FeaturedMediaHero(
+              item: discover.featured.first,
+              eyebrow: 'Series spotlight',
+              onTap: () => context.push(
+                '/detail/tv/${discover.featured.first.id}',
+              ),
+            ),
           CategoryRow(
-            title: 'Popular TV Shows',
-            items: discover.popularTV,
-            isLoading: discover.isLoadingPopular,
+            title: discover.featuredTitle,
+            items: discover.featured.skip(1).toList(growable: false),
+            isLoading: discover.isLoadingFeatured,
           ),
           if (discover.anticipated.isNotEmpty)
             CategoryRow(
@@ -89,119 +155,75 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab> {
               isLoading: discover.isLoadingAnticipated,
             ),
 
-          if (_recentlyDownloaded.isNotEmpty || _continuing.isNotEmpty) ...[
-            _SectionHeader(title: 'Your Library'),
-            if (_isLoadingLibrary)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(
-                    child:
-                        CircularProgressIndicator(color: AppTheme.accent)),
-              ),
-            if (_continuing.isNotEmpty)
-              _CompactSeriesSection(
-                title: 'Airing Now',
-                series: _continuing,
-                color: AppTheme.downloading,
-              ),
-            if (_recentlyDownloaded.isNotEmpty)
-              _CompactSeriesSection(
-                title: 'Recently Downloaded',
-                series: _recentlyDownloaded,
-                color: AppTheme.available,
-              ),
-          ],
+          // Sonarr library rows (same style as discovery)
+          if (_recentlyDownloaded.isNotEmpty || _isLoadingLibrary)
+            _buildRow(
+              title: 'Recently Downloaded',
+              items: _recentlyDownloaded,
+              statusLabel: 'Downloaded',
+              statusColor: AppTheme.available,
+            ),
+          if (_airingNext.isNotEmpty || _isLoadingLibrary)
+            _buildRow(
+              title: 'Airing Next',
+              items: _airingNext,
+              statusLabel: 'Airing',
+              statusColor: AppTheme.downloading,
+            ),
         ],
       ),
     );
   }
-}
 
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  const _SectionHeader({required this.title});
+  /// All-seasons availability line for a TV card, e.g. "18/24 eps". Returns null
+  /// when Sonarr reported no episode statistics for the series.
+  String? _availabilityLine(SonarrSeries series) {
+    final stats = series.statistics;
+    if (stats == null || stats.episodeCount == 0) return null;
+    return '${stats.episodeFileCount}/${stats.episodeCount} eps';
+  }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildRow({
+    required String title,
+    required List<SonarrSeries> items,
+    required String statusLabel,
+    required Color statusColor,
+  }) {
+    final viewportWidth = MediaQuery.sizeOf(context).width;
+    final cardWidth =
+        viewportWidth >= 900 ? 124.0 : (viewportWidth >= 600 ? 116.0 : 108.0);
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 28, 16, 8),
-      child: Row(
+      padding: const EdgeInsets.only(top: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: Container(height: 1, color: AppTheme.border)),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              title,
-              style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
-              ),
+            padding: EdgeInsets.symmetric(
+              horizontal: MediaQuery.sizeOf(context).width >= 900 ? 24 : 16,
+            ),
+            child: SectionHeader(title: title),
+          ),
+          const SizedBox(height: 12),
+          HorizontalItemRow<SonarrSeries>(
+            items: items,
+            isLoading: _isLoadingLibrary,
+            height: cardWidth * 1.5 + 68,
+            itemBuilder: (series) => MediaCard(
+              id: series.id,
+              title: series.title,
+              posterPath: series.posterUrl,
+              statusLabel: statusLabel,
+              statusColor: statusColor,
+              subtitle: _availabilityLine(series),
+              width: cardWidth,
+              onTap: series.tmdbId != null
+                  ? () => context.push('/detail/tv/${series.tmdbId}')
+                  : null,
             ),
           ),
-          Expanded(child: Container(height: 1, color: AppTheme.border)),
         ],
       ),
-    );
-  }
-}
-
-class _CompactSeriesSection extends StatelessWidget {
-  final String title;
-  final List<SonarrSeries> series;
-  final Color color;
-
-  const _CompactSeriesSection({
-    required this.title,
-    required this.series,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Row(
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '$title (${series.length})',
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-        ...series.map((s) => ListTile(
-              dense: true,
-              leading: Icon(Icons.tv_outlined,
-                  color: color, size: 20),
-              title: Text(
-                s.title,
-                style: const TextStyle(
-                    color: AppTheme.textPrimary, fontSize: 14),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                '${s.year != null ? s.year.toString() : ''} ${s.status == 'continuing' ? '• Continuing' : ''}',
-                style: const TextStyle(
-                    color: AppTheme.textSecondary, fontSize: 12),
-              ),
-            )),
-      ],
     );
   }
 }

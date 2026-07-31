@@ -28,11 +28,15 @@ class AuthService {
     String serverUrl,
     String username,
     String password,
+    String deviceName,
+    String hardwareId,
   ) async {
     final dio = _createDio(serverUrl);
     final resp = await dio.post('/api/auth/setup', data: {
       'username': username,
       'password': password,
+      'device_name': deviceName,
+      if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
     });
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
@@ -42,27 +46,15 @@ class AuthService {
     String serverUrl,
     String username,
     String password,
+    String deviceName,
+    String hardwareId,
   ) async {
     final dio = _createDio(serverUrl);
     final resp = await dio.post('/api/auth/login', data: {
       'username': username,
       'password': password,
-    });
-    return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
-  }
-
-  /// Register a new account using an invite code.
-  Future<AuthResponse> register(
-    String serverUrl,
-    String username,
-    String password,
-    String inviteCode,
-  ) async {
-    final dio = _createDio(serverUrl);
-    final resp = await dio.post('/api/auth/register', data: {
-      'username': username,
-      'password': password,
-      'invite_code': inviteCode,
+      'device_name': deviceName,
+      if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
     });
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
   }
@@ -84,13 +76,58 @@ class AuthService {
     String serverUrl,
     String token,
     String deviceName,
+    String hardwareId,
   ) async {
     final dio = _createDio(serverUrl);
     final resp = await dio.post('/api/auth/connect', data: {
       'token': token,
       'device_name': deviceName,
+      if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
     });
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Fetch the authenticated user's profile, including whether a password is
+  /// set (`has_password`).
+  Future<UserProfile> fetchMe(
+    String serverUrl,
+    String accessToken,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.get(
+      '/api/auth/me',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return UserProfile.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Create or replace the authenticated user's password.
+  Future<void> setPassword(
+    String serverUrl,
+    String accessToken,
+    String newPassword,
+  ) async {
+    final dio = _createDio(serverUrl);
+    await dio.post(
+      '/api/auth/password',
+      data: {'password': newPassword},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
+  /// Share or update the email the user wants their Plex invite sent to.
+  /// The server notifies admins when the address is new or changed.
+  Future<void> setPlexEmail(
+    String serverUrl,
+    String accessToken,
+    String email,
+  ) async {
+    final dio = _createDio(serverUrl);
+    await dio.post(
+      '/api/auth/plex-email',
+      data: {'email': email},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
   }
 
   /// Fetch server configuration (TMDB key, available services, etc.).
@@ -150,6 +187,88 @@ class AuthService {
     );
   }
 
+  /// List all user accounts (admin only).
+  Future<List<UserSummary>> listUsers(
+    String serverUrl,
+    String accessToken,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.get(
+      '/api/admin/users',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return (resp.data as List<dynamic>)
+        .map((u) => UserSummary.fromJson(u as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Change a user's role (admin only).
+  Future<UserSummary> updateUserRole(
+    String serverUrl,
+    String accessToken,
+    int userId,
+    String role,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.patch(
+      '/api/admin/users/$userId',
+      data: {'role': role},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return UserSummary.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Delete a user account (admin only).
+  Future<void> deleteUser(
+    String serverUrl,
+    String accessToken,
+    int userId,
+  ) async {
+    final dio = _createDio(serverUrl);
+    await dio.delete(
+      '/api/admin/users/$userId',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
+  /// Enable or disable a user's password / passkey sign-in (admin only).
+  /// Omitted fields are left unchanged; disabling is a real revoke server-side.
+  Future<UserSummary> updateUserAuthMethods(
+    String serverUrl,
+    String accessToken,
+    int userId, {
+    bool? passwordEnabled,
+    bool? passkeyEnabled,
+  }) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.patch(
+      '/api/admin/users/$userId/auth-methods',
+      data: {
+        if (passwordEnabled != null) 'password_enabled': passwordEnabled,
+        if (passkeyEnabled != null) 'passkey_enabled': passkeyEnabled,
+      },
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return UserSummary.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Grant or revoke use of the server's shared AI provider. Personal AI
+  /// credentials remain self-service and are not affected by this switch.
+  Future<UserSummary> updateUserAiAccess(
+    String serverUrl,
+    String accessToken,
+    int userId,
+    bool sharedAiEnabled,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.put(
+      '/api/admin/users/$userId/ai-access',
+      data: {'shared_ai_enabled': sharedAiEnabled},
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return UserSummary.fromJson(resp.data as Map<String, dynamic>);
+  }
+
   // ─── Passkey API Methods ─────────────────────────────
 
   /// Begin passkey registration (authenticated).
@@ -187,6 +306,19 @@ class AuthService {
     );
   }
 
+  /// Create a short-lived browser link for passkey setup.
+  Future<PasskeySetupLinkResponse> createPasskeySetupLink(
+    String serverUrl,
+    String accessToken,
+  ) async {
+    final dio = _createDio(serverUrl);
+    final resp = await dio.post(
+      '/api/auth/passkey/setup-link',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+    return PasskeySetupLinkResponse.fromJson(resp.data as Map<String, dynamic>);
+  }
+
   /// Begin passkey login (public).
   Future<BeginLoginResponse> beginPasskeyLogin(String serverUrl) async {
     final dio = _createDio(serverUrl);
@@ -199,11 +331,17 @@ class AuthService {
     String serverUrl,
     String sessionId,
     Map<String, dynamic> assertionResponse,
+    String deviceName,
+    String hardwareId,
   ) async {
     final dio = _createDio(serverUrl);
     final resp = await dio.post(
       '/api/auth/passkey/login/finish',
-      queryParameters: {'session_id': sessionId},
+      queryParameters: {
+        'session_id': sessionId,
+        'device_name': deviceName,
+        if (hardwareId.isNotEmpty) 'hardware_id': hardwareId,
+      },
       data: assertionResponse,
     );
     return AuthResponse.fromJson(resp.data as Map<String, dynamic>);
@@ -302,30 +440,101 @@ class DeviceInfo {
       );
 }
 
+/// Enriched user account returned by the admin users endpoint.
+class UserSummary {
+  final int id;
+  final String username;
+  final String role;
+  final List<String> permissions;
+  final String createdAt;
+  final int deviceCount;
+  final bool hasPassword;
+  final bool passwordEnabled;
+  final bool passkeyEnabled;
+  final bool hasPendingInvite;
+  final bool sharedAiEnabled;
+
+  /// The email this user shared for their Plex server invite ('' = none yet),
+  /// and when Cantinarr last sent their invite (null = never).
+  final String plexEmail;
+  final String? plexInvitedAt;
+
+  const UserSummary({
+    required this.id,
+    required this.username,
+    required this.role,
+    required this.permissions,
+    required this.createdAt,
+    required this.deviceCount,
+    required this.hasPassword,
+    required this.passwordEnabled,
+    required this.passkeyEnabled,
+    required this.hasPendingInvite,
+    this.sharedAiEnabled = false,
+    this.plexEmail = '',
+    this.plexInvitedAt,
+  });
+
+  bool get isAdmin => role == 'admin';
+
+  factory UserSummary.fromJson(Map<String, dynamic> json) => UserSummary(
+        id: json['id'] as int,
+        username: json['username'] as String,
+        role: json['role'] as String,
+        permissions: (json['permissions'] as List<dynamic>?)
+                ?.map((p) => p as String)
+                .toList() ??
+            const [],
+        createdAt: json['created_at'] as String? ?? '',
+        deviceCount: json['device_count'] as int? ?? 0,
+        hasPassword: json['has_password'] as bool? ?? false,
+        passwordEnabled: json['password_enabled'] as bool? ?? false,
+        passkeyEnabled: json['passkey_enabled'] as bool? ?? false,
+        hasPendingInvite: json['has_pending_invite'] as bool? ?? false,
+        sharedAiEnabled: json['ai_shared_enabled'] as bool? ?? false,
+        plexEmail: json['plex_email'] as String? ?? '',
+        plexInvitedAt: json['plex_invited_at'] as String?,
+      );
+}
+
 /// Server-provided configuration returned after authentication.
 class ServerConfig {
   final String serverName;
+
+  /// The running server version, from the `version` field of /api/config.
+  final String? serverVersion;
   final AvailableServices services;
   final List<ServiceInstance> instances;
 
+  /// Whether the AI-remediation feature is enabled server-side.
+  final bool issuesEnabled;
+
+  /// Whether users may see the "Report a problem" affordance.
+  final bool allowReporting;
+
   const ServerConfig({
     required this.serverName,
+    this.serverVersion,
     required this.services,
     this.instances = const [],
+    this.issuesEnabled = false,
+    this.allowReporting = false,
   });
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) {
     final instancesList = (json['instances'] as List<dynamic>?)
-            ?.map((i) =>
-                ServiceInstance.fromJson(i as Map<String, dynamic>))
+            ?.map((i) => ServiceInstance.fromJson(i as Map<String, dynamic>))
             .toList() ??
         [];
 
     return ServerConfig(
       serverName: json['server_name'] as String? ?? 'Cantinarr',
+      serverVersion: json['version'] as String?,
       services: AvailableServices.fromJson(
           json['services'] as Map<String, dynamic>? ?? {}),
       instances: instancesList,
+      issuesEnabled: json['issues_enabled'] as bool? ?? false,
+      allowReporting: json['allow_reporting'] as bool? ?? false,
     );
   }
 }
@@ -361,6 +570,23 @@ class BeginLoginResponse {
       BeginLoginResponse(
         options: json['options'] as Map<String, dynamic>,
         sessionId: json['session_id'] as String,
+      );
+}
+
+/// Response from passkey setup-link generation.
+class PasskeySetupLinkResponse {
+  final String link;
+  final String expiresAt;
+
+  const PasskeySetupLinkResponse({
+    required this.link,
+    required this.expiresAt,
+  });
+
+  factory PasskeySetupLinkResponse.fromJson(Map<String, dynamic> json) =>
+      PasskeySetupLinkResponse(
+        link: json['link'] as String,
+        expiresAt: json['expires_at'] as String,
       );
 }
 

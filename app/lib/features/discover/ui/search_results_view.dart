@@ -1,18 +1,13 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shimmer/shimmer.dart';
 import '../../../core/config/app_config.dart';
+import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../person/ui/person_detail_sheet.dart';
 import '../data/tmdb_models.dart';
-
-/// Library presence indicator for search results.
-class LibraryStatus {
-  final String label;
-  final Color color;
-  const LibraryStatus({required this.label, required this.color});
-}
+import '../logic/search_library_status.dart';
 
 /// List view of search results with poster thumbnails and metadata.
 class SearchResultsView extends StatelessWidget {
@@ -20,7 +15,11 @@ class SearchResultsView extends StatelessWidget {
   final bool isLoading;
   final String query;
   final void Function(MediaItem)? onLoadMore;
-  final Map<int, LibraryStatus> libraryStatus;
+  final VoidCallback? onResultTap;
+
+  /// Availability chips keyed by (media type, TMDB id) — see
+  /// [buildSearchLibraryStatus] for why a bare id is not identity.
+  final Map<(MediaType, int), LibraryStatus> libraryStatus;
 
   const SearchResultsView({
     super.key,
@@ -28,13 +27,17 @@ class SearchResultsView extends StatelessWidget {
     required this.isLoading,
     required this.query,
     this.onLoadMore,
+    this.onResultTap,
     this.libraryStatus = const {},
   });
 
   @override
   Widget build(BuildContext context) {
     if (results.isEmpty && isLoading) {
-      return _buildLoadingList();
+      return LayoutBuilder(
+        builder: (context, constraints) =>
+            _buildLoadingList(_horizontalPadding(constraints)),
+      );
     }
 
     if (results.isEmpty && !isLoading && query.isNotEmpty) {
@@ -47,43 +50,60 @@ class SearchResultsView extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               'No results for "$query"',
-              style: const TextStyle(
-                  color: AppTheme.textSecondary, fontSize: 16),
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 16),
             ),
             const SizedBox(height: 4),
             const Text(
               'Try a different search term',
-              style:
-                  TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ],
         ),
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: results.length + (isLoading ? 3 : 0),
-      separatorBuilder: (_, __) => const SizedBox.shrink(),
-      itemBuilder: (context, index) {
-        if (index >= results.length) {
-          return _buildShimmerRow();
-        }
-        final item = results[index];
-        if (onLoadMore != null && index >= results.length - 5) {
-          onLoadMore!(item);
-        }
-        return _SearchResultTile(
-          item: item,
-          status: libraryStatus[item.id],
-        );
-      },
-    );
+    // Full-width scroll surface; the result column is capped and centered so
+    // rows stay readable on desktop widths.
+    return LayoutBuilder(builder: (context, constraints) {
+      final hPad = _horizontalPadding(constraints);
+      return ListView.separated(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 8),
+        itemCount: results.length + (isLoading ? 3 : 0),
+        separatorBuilder: (_, __) => const SizedBox.shrink(),
+        itemBuilder: (context, index) {
+          if (index >= results.length) {
+            return _buildShimmerRow();
+          }
+          final item = results[index];
+          final tile = _SearchResultTile(
+            item: item,
+            status: libraryStatus[(item.mediaType, item.id)],
+            onTap: onResultTap,
+          );
+          final triggerIndex = results.length > 5 ? results.length - 5 : 0;
+          if (onLoadMore != null && index == triggerIndex) {
+            return _LoadMoreBoundary(
+              key: ValueKey('search-page-${results.length}-${item.id}'),
+              item: item,
+              onAppear: onLoadMore!,
+              child: tile,
+            );
+          }
+          return tile;
+        },
+      );
+    });
   }
 
-  Widget _buildLoadingList() {
+  double _horizontalPadding(BoxConstraints constraints) =>
+      AppBreakpoints.centeredContentPadding(constraints.maxWidth);
+
+  Widget _buildLoadingList(double horizontalPadding) {
     return ListView.separated(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: 8),
       itemCount: 8,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (_, __) => _buildShimmerRow(),
@@ -157,9 +177,41 @@ class SearchResultsView extends StatelessWidget {
   }
 }
 
+/// Defers pagination until after layout instead of mutating provider state
+/// from ListView's itemBuilder.
+class _LoadMoreBoundary extends StatefulWidget {
+  final MediaItem item;
+  final ValueChanged<MediaItem> onAppear;
+  final Widget child;
+
+  const _LoadMoreBoundary({
+    super.key,
+    required this.item,
+    required this.onAppear,
+    required this.child,
+  });
+
+  @override
+  State<_LoadMoreBoundary> createState() => _LoadMoreBoundaryState();
+}
+
+class _LoadMoreBoundaryState extends State<_LoadMoreBoundary> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onAppear(widget.item);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 class _SearchResultTile extends StatelessWidget {
   final MediaItem item;
   final LibraryStatus? status;
+  final VoidCallback? onTap;
 
   static const _titleStyle = TextStyle(
     color: AppTheme.textPrimary,
@@ -167,7 +219,7 @@ class _SearchResultTile extends StatelessWidget {
     fontWeight: FontWeight.w600,
   );
 
-  const _SearchResultTile({required this.item, this.status});
+  const _SearchResultTile({required this.item, this.status, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -178,135 +230,103 @@ class _SearchResultTile extends StatelessWidget {
   }
 
   Widget _buildPersonTile(BuildContext context) {
-    final imageUrl = item.posterPath != null &&
-            item.posterPath!.startsWith('http')
-        ? item.posterPath!
-        : AppConfig.tmdbPoster(item.posterPath, width: 154);
+    final imageUrl =
+        item.posterPath != null && item.posterPath!.startsWith('http')
+            ? item.posterPath!
+            : AppConfig.tmdbPoster(item.posterPath, width: 154);
 
-    return GestureDetector(
-      onTap: () => showPersonDetailSheet(
-        context,
-        personId: item.id,
-        personName: item.title,
-        profilePath: item.posterPath,
-      ),
+    return _resultSurface(
+      context,
+      semanticLabel: 'View ${item.title}, person',
+      onPressed: () {
+        onTap?.call();
+        showPersonDetailSheet(
+          context,
+          personId: item.id,
+          personName: item.title,
+          profilePath: item.posterPath,
+        );
+      },
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.all(12),
         child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Circular profile thumbnail
-          ClipOval(
-            child: SizedBox(
-              width: 50,
-              height: 50,
-              child: item.posterPath != null
-                  ? CachedNetworkImage(
-                      imageUrl: imageUrl,
-                      fit: BoxFit.cover,
-                      placeholder: (_, __) => Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.person,
-                              color: AppTheme.textSecondary, size: 18),
-                        ),
-                      ),
-                      errorWidget: (_, __, ___) => Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.person,
-                              color: AppTheme.textSecondary, size: 18),
-                        ),
-                      ),
-                    )
-                  : Container(
-                      color: AppTheme.surfaceVariant,
-                      child: const Center(
-                        child: Icon(Icons.person,
-                            color: AppTheme.textSecondary, size: 18),
-                      ),
-                    ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: _titleStyle,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Circular profile thumbnail
+            ClipOval(
+              child: SizedBox(
+                width: 50,
+                height: 50,
+                child: CachedImage(
+                  url: item.posterPath == null ? null : imageUrl,
+                  fit: BoxFit.cover,
+                  icon: Icons.person,
+                  iconSize: 18,
                 ),
-                const SizedBox(height: 3),
-                const Text(
-                  'Person',
-                  style: TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 12,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: _titleStyle,
                   ),
-                ),
-              ],
+                  const SizedBox(height: 3),
+                  const Text(
+                    'Person',
+                    style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildMediaTile(BuildContext context) {
-    final imageUrl = item.posterPath != null &&
-            item.posterPath!.startsWith('http')
-        ? item.posterPath!
-        : AppConfig.tmdbPoster(item.posterPath, width: 154);
+    final imageUrl =
+        item.posterPath != null && item.posterPath!.startsWith('http')
+            ? item.posterPath!
+            : AppConfig.tmdbPoster(item.posterPath, width: 154);
 
     final year = item.releaseDate != null && item.releaseDate!.length >= 4
         ? item.releaseDate!.substring(0, 4)
         : null;
 
-    return GestureDetector(
-      onTap: () => context.push(
-        '/detail/${item.mediaType.name}/${item.id}',
-      ),
+    return _resultSurface(
+      context,
+      semanticLabel: 'View ${item.title}, ${item.mediaType.displayName}',
+      onPressed: () {
+        onTap?.call();
+        context.push('/detail/${item.mediaType.name}/${item.id}');
+      },
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.all(12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Poster thumbnail
             ClipRRect(
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
               child: SizedBox(
                 width: 50,
                 height: 75,
-                child: item.posterPath != null
-                    ? CachedNetworkImage(
-                        imageUrl: imageUrl,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.movie_outlined,
-                                color: AppTheme.textSecondary, size: 18),
-                          ),
-                        ),
-                        errorWidget: (_, __, ___) => Container(
-                          color: AppTheme.surfaceVariant,
-                          child: const Center(
-                            child: Icon(Icons.broken_image_outlined,
-                                color: AppTheme.textSecondary, size: 18),
-                          ),
-                        ),
-                      )
-                    : Container(
-                        color: AppTheme.surfaceVariant,
-                        child: const Center(
-                          child: Icon(Icons.movie_outlined,
-                              color: AppTheme.textSecondary, size: 18),
-                        ),
-                      ),
+                child: CachedImage(
+                  url: item.posterPath == null ? null : imageUrl,
+                  fit: BoxFit.cover,
+                  icon: Icons.movie_outlined,
+                  iconSize: 18,
+                ),
               ),
             ),
             const SizedBox(width: 10),
@@ -319,11 +339,14 @@ class _SearchResultTile extends StatelessWidget {
                     text: TextSpan(text: item.title, style: _titleStyle),
                     maxLines: 3,
                     textDirection: TextDirection.ltr,
+                    textScaler: MediaQuery.textScalerOf(context),
                   )..layout(maxWidth: constraints.maxWidth);
-                  final titleLines =
-                      titlePainter.computeLineMetrics().length;
-                  final descMaxLines =
-                      titleLines <= 1 ? 2 : titleLines <= 2 ? 1 : 0;
+                  final titleLines = titlePainter.computeLineMetrics().length;
+                  final descMaxLines = titleLines <= 1
+                      ? 2
+                      : titleLines <= 2
+                          ? 1
+                          : 0;
                   final hasOverview = descMaxLines > 0 &&
                       item.overview != null &&
                       item.overview!.isNotEmpty;
@@ -400,6 +423,37 @@ class _SearchResultTile extends StatelessWidget {
       ),
     );
   }
+
+  Widget _resultSurface(
+    BuildContext context, {
+    required String semanticLabel,
+    required VoidCallback onPressed,
+    required Widget child,
+  }) {
+    return Semantics(
+      button: true,
+      label: semanticLabel,
+      excludeSemantics: true,
+      onTap: onPressed,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Material(
+          color: AppTheme.surfaceVariant.withValues(alpha: 0.68),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+            side: const BorderSide(color: AppTheme.border),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onPressed,
+            hoverColor: AppTheme.signal.withValues(alpha: 0.045),
+            focusColor: AppTheme.signal.withValues(alpha: 0.08),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _Chip extends StatelessWidget {
@@ -419,14 +473,15 @@ class _Chip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: backgroundColor,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+        border: Border.all(color: color.withValues(alpha: 0.26)),
       ),
       child: Text(
         label,
         style: TextStyle(
           color: color,
           fontSize: 11,
-          fontWeight: FontWeight.w500,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );

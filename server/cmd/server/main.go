@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,17 +17,27 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/api"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/cache"
+	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/config"
+	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/discover"
+	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/mediafiles"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
-	"github.com/windoze95/cantinarr-server/internal/radarr"
+	"github.com/windoze95/cantinarr-server/internal/push"
+	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
-	"github.com/windoze95/cantinarr-server/internal/sonarr"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
+	"github.com/windoze95/cantinarr-server/internal/serversettings"
+	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
-	"github.com/windoze95/cantinarr-server/internal/trakt"
+	"github.com/windoze95/cantinarr-server/internal/update"
+	"github.com/windoze95/cantinarr-server/internal/version"
+	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
 
@@ -47,91 +59,231 @@ func main() {
 	}
 	defer database.Close()
 
+	// Secrets-at-rest cipher: env key > key file next to the DB
+	encKey, err := secrets.LoadKey(cfg.EncryptionKeyFile)
+	if err != nil {
+		log.Fatalf("Failed to resolve encryption key: %v", err)
+	}
+	cipher, err := secrets.NewCipher(encKey)
+	if err != nil {
+		log.Fatalf("Failed to initialize secrets cipher: %v", err)
+	}
+	if err := secrets.VerifyKeyIdentity(database, cipher); err != nil {
+		log.Fatalf("Encryption key check failed: %v", err)
+	}
+	secretSettings := append([]string{"jwt_secret", "push_api_key"}, credentials.AllKeys...)
+	if n, err := secrets.EncryptExisting(database, cipher, secretSettings); err != nil {
+		log.Fatalf("Failed to encrypt existing secrets: %v", err)
+	} else if n > 0 {
+		log.Printf("Encrypted %d existing secret value(s) at rest", n)
+	}
+
 	// Resolve JWT secret: env var > DB > generate and persist
 	if cfg.JWTSecret == "" {
-		cfg.JWTSecret, err = ensureJWTSecret(database)
+		cfg.JWTSecret, err = ensureJWTSecret(database, cipher)
 		if err != nil {
 			log.Fatalf("Failed to resolve JWT secret: %v", err)
 		}
 	}
 
+	// Credentials registry (lazy-creates TMDB/Trakt clients from DB)
+	creds := credentials.NewRegistry(database, cipher)
+	credHandler := credentials.NewHandler(creds)
+
 	// Auth
-	authService := auth.NewService(database, cfg.JWTSecret)
-	// Migrate setup state for existing deployments
+	authService := auth.NewService(database, cfg.JWTSecret, auth.WebAuthnConfig{
+		ExtraOrigins:            cfg.WebAuthnExtraOrigins,
+		AppleAppIDs:             cfg.AppleAppIDs,
+		AndroidCertFingerprints: cfg.AndroidCertFingerprints,
+	})
 	if err := authService.MigrateSetupState(); err != nil {
 		log.Fatalf("Failed to migrate setup state: %v", err)
 	}
-	// Backward compat: CANTINARR_ADMIN_PASSWORD still works but is deprecated
-	if cfg.AdminPassword != "" {
-		log.Println("WARNING: CANTINARR_ADMIN_PASSWORD is deprecated. Use the setup wizard in the web UI instead. This env var will be removed in a future version.")
-		if err := authService.EnsureAdmin(cfg.AdminPassword); err != nil {
-			log.Fatalf("Failed to ensure admin: %v", err)
-		}
-	}
 	authHandler := auth.NewHandler(authService)
 
-	// TMDB (optional)
-	var tmdbClient *tmdb.Client
-	if cfg.TMDBEnabled() {
-		tmdbClient = tmdb.NewClient(cfg.TMDBAccessToken)
-	}
-
-	// Trakt (optional)
-	var traktClient *trakt.Client
-	if cfg.TraktEnabled() {
-		traktClient = trakt.NewClient(cfg.TraktClientID)
-	}
-
-	// Bridge
-	bridge := tmdb.NewBridge(tmdbClient, traktClient, database)
+	// Bridge (uses credentials registry for TMDB/Trakt clients)
+	bridge := tmdb.NewBridge(creds, database)
 
 	// Instance store and registry
-	instanceStore := instance.NewStore(database)
-	seedInstancesFromEnv(instanceStore, cfg)
+	instanceStore := instance.NewStore(database, cipher)
 	registry := instance.NewRegistry(instanceStore)
-	instanceHandler := instance.NewHandler(instanceStore, registry)
-
-	// Legacy direct clients (for backward compat, also used as fallback)
-	var radarrClient *radarr.Client
-	if cfg.RadarrEnabled() {
-		radarrClient = radarr.NewClient(cfg.RadarrURL, cfg.RadarrKey)
+	instanceHandler := instance.NewHandler(instanceStore, registry, cfg.PublicURL)
+	instanceHandler.SetMediaDownloadRoots(cfg.MediaDownloadRoots)
+	mediaFilesHandler, err := mediafiles.NewHandler(instanceStore, registry, authService, cfg.MediaDownloadRoots)
+	if err != nil {
+		log.Fatalf("Failed to initialize media downloads: %v", err)
 	}
-	var sonarrClient *sonarr.Client
-	if cfg.SonarrEnabled() {
-		sonarrClient = sonarr.NewClient(cfg.SonarrURL, cfg.SonarrKey)
+	defer func() {
+		if err := mediaFilesHandler.Close(); err != nil {
+			log.Printf("Failed to close media download roots: %v", err)
+		}
+	}()
+
+	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission queue management)
+	downloadsHandler := downloads.NewHandler(instanceStore, registry)
+
+	// Tautulli handler (Plex monitoring)
+	tautulliHandler := tautulli.NewHandler(instanceStore, registry)
+
+	// Server-lifetime context: drives the WebSocket hub and the push manager's
+	// background enrollment retry.
+	ctx := context.Background()
+	logger := slog.Default()
+
+	// Push notifications via the self-hosted gateway. A single push.Manager owns
+	// the lazily-built gateway client: the key is resolved (explicit env key > a
+	// key auto-enrolled on a previous start > self-enroll) on first use, and a
+	// gateway that was down at boot — or tokens registered while push was off —
+	// self-heal without a restart. The manager is nil (and push disabled) only
+	// when no gateway URL is set; this keeps the hub's content notifier and the
+	// request composite off exactly as before.
+	var pushManager *push.Manager
+	if cfg.PushGatewayURL != "" {
+		pushManager = push.NewManager(database, cipher, cfg.PushGatewayURL, cfg.PushAPIKey, cfg.PushEnrollToken, cfg.ServerName, logger)
+		// Try once now (non-blocking) and keep retrying in the background until
+		// the gateway is reachable; both are no-ops once enrolled.
+		go pushManager.Ensure(ctx)
+		pushManager.StartRetry(ctx)
+		log.Printf("Push notifications enabled via %s", cfg.PushGatewayURL)
+	} else {
+		log.Println("Push notifications disabled (CANTINARR_PUSH_GATEWAY_URL unset)")
+	}
+	pushHandler := push.NewHandler(database, pushManager, logger)
+
+	// One push notifier drives both the request-decision/pending fan-out and the
+	// new-content (movie/episode available) pushes. It is built only when push is
+	// configured (gateway URL set) so the hub's content notifier and the request
+	// composite stay off otherwise; it no-ops on its own while the gateway is
+	// unreachable (manager.Client() == nil).
+	var pushNotifier *push.Notifier
+	if pushManager != nil {
+		pushNotifier = push.NewNotifier(database, pushManager, logger)
 	}
 
-	// Request service
-	requestService := request.NewService(database, registry, radarrClient, sonarrClient, bridge)
+	// WebSocket hub (built before the request service so request approvals and
+	// denials can push realtime events to the requester). The push notifier is
+	// passed so download completions also fan out to opted-in devices; passing
+	// an untyped nil keeps new-content pushes off when push is disabled.
+	var contentNotifier ws.ContentNotifier
+	if pushNotifier != nil {
+		contentNotifier = pushNotifier
+	}
+	// The auto-dispatch opener is wired after the remediation service exists (it
+	// depends on the notifier composite, which depends on this hub). The hub's
+	// poll loop is therefore started LATER, once SetIssueOpener has run.
+	wsHub := ws.NewHub(authService, registry, instanceStore, database, contentNotifier, nil)
+
+	// Notifier composite. Request decisions and issue events fan out to both the
+	// WebSocket hub (live clients) and the push gateway (offline devices). The
+	// push notifier is only added to the fan-out when push is configured. The
+	// concrete *push.Composite satisfies both request.Notifier and
+	// remediation.Notifier, so the same fan-out drives both.
+	var notifier *push.Composite
+	if pushNotifier != nil {
+		notifier = push.NewComposite(wsHub, pushNotifier)
+	} else {
+		notifier = push.NewComposite(wsHub)
+	}
+	// Plex integration: linked-account invites (one-tap and auto). The auth
+	// handler's access-request hook routes "user shared their Plex email"
+	// through the plex service, which auto-invites when configured and
+	// notifies admins with the outcome; wired late because the composite
+	// needs the hub.
+	plexService := plex.NewService(database, cipher, plex.NewClient(), notifier, logger)
+	plexHandler := plex.NewHandler(plexService, logger)
+	authHandler.SetAccessRequestHook(plexService.OnAccessRequest)
+	requestService := request.NewService(database, registry, bridge, notifier)
 	requestHandler := request.NewHandler(requestService)
 
+	// Remediation (issue reporting) service + handler. Records/threads issues, runs
+	// the read-only agent, and (Wave 5) accepts auto-dispatched issues from the
+	// poller. AutoDispatch ships OFF; the opener re-checks the live toggle per call.
+	remediationService := remediation.NewService(database, registry, bridge, notifier)
+	remediationHandler := remediation.NewHandler(remediationService)
+
 	// Proxy handler
-	proxyHandler := proxy.NewHandler(cfg.RadarrURL, cfg.RadarrKey, cfg.SonarrURL, cfg.SonarrKey, instanceStore)
+	proxyHandler := proxy.NewHandler(instanceStore)
 
-	// MCP tool server
-	toolServer := mcp.NewToolServer(tmdbClient, requestService, registry, radarrClient, sonarrClient)
-
-	// AI service
-	var aiService *ai.Service
-	if cfg.AIEnabled() {
-		aiService = ai.NewService(cfg.AnthropicKey, toolServer)
+	// MCP tool server + AI handler
+	toolServer := mcp.NewToolServer(creds, requestService, registry, bridge)
+	toolServer.SetSettingsChangeDatabase(database)
+	toolServer.SetCallAuthorizer(func(ctx context.Context, callCtx mcp.CallContext) (string, error) {
+		return authService.AuthorizeInteractiveToolCall(
+			ctx,
+			callCtx.UserID,
+			callCtx.DeviceID,
+			callCtx.RequireSharedAI,
+		)
+	})
+	codexManager := codexapp.NewManager(database, cipher, toolServer, codexapp.Options{
+		Binary:     cfg.CodexBin,
+		RuntimeDir: cfg.CodexRuntimeDir,
+	})
+	if !codexManager.Available() {
+		log.Printf("OpenAI OAuth provider unavailable: %v", codexManager.AvailabilityError())
 	}
-	aiHandler := ai.NewHandler(aiService)
+	aiHandler := ai.NewHandler(creds, toolServer, codexManager)
+	aiHandler.SetPermissionAuthorizer(authService.AuthorizePermission)
+	credHandler.SetPermissionAuthorizer(authService.AuthorizePermission)
+	credHandler.SetSharedAIConfigured(aiHandler.ProviderConfigured)
+	aiHandler.SetSharedAIHealthIssueSink(remediationService)
+	if pushNotifier != nil {
+		// Push cannot report its own failure through push, so a run of failed
+		// sends raises an admin issue instead — visible in the app whether or
+		// not a notification ever arrives.
+		pushNotifier.SetDeliveryHealthSink(remediationService)
+	}
+	credHandler.SetSharedAIValidator(aiHandler.ValidateSharedAISettings, aiHandler.SharedAISettingsValidated)
+	remediationHandler.SetSharedModelOverrideValidator(aiHandler.ValidateSharedAIModelOverride)
+	aiHandler.StartSharedAIHealthMonitor(ctx)
 
-	// Discover handler (caching proxy for TMDB/Trakt)
+	// Remediation read-only agent (Wave 2). The agent investigates one issue
+	// read-only and posts a diagnosis; it has NO path to mutate the *arr (the
+	// Runner's hardcoded read-tool allow-list is the enforcement boundary). Inject
+	// the remediation write surface into the tool server so the agent-only tools
+	// (post_issue_message / conclude_issue) can record findings, then start a
+	// small bounded worker pool that drains enqueued investigation jobs.
+	toolServer.SetIssueStore(remediationService)
+	remediationProcToken := newProcToken()
+	remediationRunner := remediation.NewRunner(database, remediationService, toolServer, aiHandler, remediationProcToken)
+	remediationService.StartWorkers(ctx, remediationRunner, 2)
+	// Reply-TTL sweep (Wave 4): periodically close awaiting_user issues whose
+	// reporter never answered the agent's clarifying question within the window.
+	remediationService.StartReplyTTLSweeper(ctx)
+
+	// Auto-dispatch (Wave 5, highest-risk trigger, ships OFF). The hub's poller
+	// hands stuck/blocked downloads to this opener, which re-checks the live
+	// Enabled && AutoDispatch toggles, opens a deduped issue, and enqueues the
+	// Runner off the poll goroutine. Wire it before starting the hub's poll loop
+	// (SetIssueOpener is not safe to call once Run is polling). Passing the opener
+	// only here keeps a server with the feature unwired from ever fetching the
+	// detailed queue.
+	autoDispatcher := remediation.NewAutoDispatcher(remediationService)
+	autoDispatcher.StartObservationSweeper(ctx)
+	wsHub.SetIssueOpener(autoDispatcher)
+	go wsHub.Run(ctx)
+
+	// Server settings: the admin-configured management-portal URL the update
+	// banner links to, plus the discovery preferences the rows read per request.
+	// The Trakt probe is read per call, so adding or removing that credential
+	// moves the default row source without a restart.
+	serverSettings := serversettings.NewService(database, func() bool { return creds.Trakt() != nil })
+
+	// Discover handler (always created — checks credentials at request time)
 	apiCache := cache.New()
 	defer apiCache.Close()
-	var discoverHandler *discover.Handler
-	if tmdbClient != nil {
-		discoverHandler = discover.NewHandler(tmdbClient, traktClient, apiCache, cfg)
-	}
+	discoverHandler := discover.NewHandler(creds, apiCache, serverSettings)
 
-	// WebSocket hub
-	wsHub := ws.NewHub(authService, registry, instanceStore, radarrClient, sonarrClient, cfg.AllowedOrigins)
-	go wsHub.Run(context.Background())
+	// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook): pushes
+	// out-of-band library changes (manual imports, deletes) into the same WS
+	// events and content pushes the queue-poll witness emits.
+	webhookHandler := webhooks.NewHandler(instanceStore, registry, wsHub, requestService, contentNotifier)
+
+	// Update checker (GitHub release comparison).
+	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService, updateChecker, serverSettings)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
@@ -140,13 +292,32 @@ func main() {
 	}
 }
 
+// newProcToken returns a random per-process token stamped on each agent_runs row
+// so a future watchdog can distinguish a run crashed mid-investigation (its token
+// != the current process token) from one parked by design. Best-effort: a random
+// failure falls back to a constant, which only weakens crash detection, not
+// correctness.
+func newProcToken() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "proc"
+	}
+	return hex.EncodeToString(b)
+}
+
 // ensureJWTSecret loads the JWT secret from the settings table, or generates
 // and persists a new one. This ensures tokens survive server restarts.
-func ensureJWTSecret(database *sql.DB) (string, error) {
-	var secret string
-	err := database.QueryRow("SELECT value FROM settings WHERE key = 'jwt_secret'").Scan(&secret)
+// Only a definitively-missing row may trigger generation: minting a fresh
+// secret on a transient read fault would invalidate every outstanding access
+// token, so any other error refuses to boot instead.
+func ensureJWTSecret(database *sql.DB, cipher *secrets.Cipher) (string, error) {
+	var stored string
+	err := database.QueryRow("SELECT value FROM settings WHERE key = 'jwt_secret'").Scan(&stored)
 	if err == nil {
-		return secret, nil
+		return cipher.Decrypt(stored)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("read persisted secret: %w", err)
 	}
 
 	// Generate a new secret
@@ -154,60 +325,17 @@ func ensureJWTSecret(database *sql.DB) (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generate secret: %w", err)
 	}
-	secret = hex.EncodeToString(b)
+	secret := hex.EncodeToString(b)
 
-	_, err = database.Exec("INSERT INTO settings (key, value) VALUES ('jwt_secret', ?)", secret)
+	enc, err := cipher.Encrypt(secret)
+	if err != nil {
+		return "", fmt.Errorf("encrypt secret: %w", err)
+	}
+	_, err = database.Exec("INSERT INTO settings (key, value) VALUES ('jwt_secret', ?)", enc)
 	if err != nil {
 		return "", fmt.Errorf("persist secret: %w", err)
 	}
 
 	log.Println("Generated and persisted JWT secret")
 	return secret, nil
-}
-
-// seedInstancesFromEnv creates default service instances from environment variables
-// if the service_instances table is empty and env vars are set.
-func seedInstancesFromEnv(store *instance.Store, cfg *config.Config) {
-	all, err := store.ListAll()
-	if err != nil {
-		log.Printf("Warning: could not check existing instances: %v", err)
-		return
-	}
-	if len(all) > 0 {
-		return // Already have instances, don't seed
-	}
-
-	if cfg.RadarrEnabled() {
-		inst := &instance.Instance{
-			ID:          "radarr-default",
-			ServiceType: "radarr",
-			Name:        "Movies",
-			URL:         cfg.RadarrURL,
-			APIKey:      cfg.RadarrKey,
-			IsDefault:   true,
-			SortOrder:   0,
-		}
-		if err := store.Create(inst); err != nil {
-			log.Printf("Warning: failed to seed Radarr instance: %v", err)
-		} else {
-			log.Println("Seeded default Radarr instance from env vars")
-		}
-	}
-
-	if cfg.SonarrEnabled() {
-		inst := &instance.Instance{
-			ID:          "sonarr-default",
-			ServiceType: "sonarr",
-			Name:        "TV Shows",
-			URL:         cfg.SonarrURL,
-			APIKey:      cfg.SonarrKey,
-			IsDefault:   true,
-			SortOrder:   0,
-		}
-		if err := store.Create(inst); err != nil {
-			log.Printf("Warning: failed to seed Sonarr instance: %v", err)
-		} else {
-			log.Println("Seeded default Sonarr instance from env vars")
-		}
-	}
 }

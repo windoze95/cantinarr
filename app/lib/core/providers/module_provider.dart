@@ -25,14 +25,16 @@ class ModuleState {
       ModuleState(
         modules: modules ?? this.modules,
         activeModuleType: activeModuleType ?? this.activeModuleType,
-        activeInstanceId:
-            clearInstanceId ? null : (activeInstanceId ?? this.activeInstanceId),
+        activeInstanceId: clearInstanceId
+            ? null
+            : (activeInstanceId ?? this.activeInstanceId),
       );
 
   int get activeIndex {
     for (int i = 0; i < modules.length; i++) {
       final m = modules[i];
-      if (m.type == activeModuleType && m.instanceId == activeInstanceId) {
+      if (m.type == activeModuleType &&
+          (m.instanceId == null || m.instanceId == activeInstanceId)) {
         return i;
       }
     }
@@ -45,41 +47,63 @@ class ModuleNotifier extends Notifier<ModuleState> {
   ModuleState build() {
     final auth = ref.watch(authProvider).valueOrNull;
     final connection = auth?.connection;
-    final modules = _buildModules(connection);
+    final isAdmin = auth?.user?.isAdmin ?? false;
+    final modules = _buildModules(connection, isAdmin: isAdmin);
 
     return ModuleState(modules: modules);
   }
 
-  List<AppModule> _buildModules(BackendConnection? connection) {
+  List<AppModule> _buildModules(BackendConnection? connection,
+      {bool isAdmin = false}) {
     final modules = <AppModule>[];
 
-    // Dashboard is always available
+    // Discover (the browse/home surface) is always available. Kept internally
+    // as ModuleType.dashboard / the /dashboard/* routes; only the user-facing
+    // label reads "Discover".
     modules.add(const AppModule(
       type: ModuleType.dashboard,
-      label: 'Dashboard',
-      icon: Icons.dashboard,
+      label: 'Discover',
+      icon: Icons.explore,
     ));
 
     if (connection != null) {
-      // Radarr instances
-      for (final inst in connection.radarrInstances) {
-        modules.add(AppModule(
+      if (isAdmin && connection.radarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
           type: ModuleType.radarr,
-          label: inst.name,
+          label: 'Radarr',
           icon: Icons.movie,
-          instanceId: inst.id,
-          instanceName: inst.name,
         ));
       }
 
-      // Sonarr instances
-      for (final inst in connection.sonarrInstances) {
-        modules.add(AppModule(
+      if (isAdmin && connection.sonarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
           type: ModuleType.sonarr,
-          label: inst.name,
+          label: 'Sonarr',
           icon: Icons.tv,
-          instanceId: inst.id,
-          instanceName: inst.name,
+        ));
+      }
+
+      if (isAdmin && connection.chaptarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
+          type: ModuleType.chaptarr,
+          label: 'Chaptarr',
+          icon: Icons.menu_book,
+        ));
+      }
+
+      if (isAdmin && connection.downloadInstances.isNotEmpty) {
+        modules.add(const AppModule(
+          type: ModuleType.downloads,
+          label: 'Downloads',
+          icon: Icons.download,
+        ));
+      }
+
+      if (isAdmin && connection.tautulliInstances.isNotEmpty) {
+        modules.add(const AppModule(
+          type: ModuleType.tautulli,
+          label: 'Tautulli',
+          icon: Icons.monitor_heart,
         ));
       }
 

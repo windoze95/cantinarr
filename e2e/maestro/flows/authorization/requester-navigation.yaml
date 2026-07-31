@@ -1,0 +1,45 @@
+url: ${MAESTRO_SERVER_URL}
+name: Requester navigation boundary smoke
+tags:
+  - smoke
+  - lab
+  - authorization
+  - requester
+---
+# AUTH-022 (partial), NAV-003 (partial)
+- launchApp
+- extendedWaitUntil:
+    visible: "Sign in to your server"
+    timeout: 15000
+- tapOn:
+    id: "Username"
+- inputText: ${MAESTRO_USERNAME}
+- tapOn:
+    id: "Password"
+- inputText:
+    text: ${MAESTRO_PASSWORD}
+    label: Enter the selected lab user's password
+- pressKey: enter
+- extendedWaitUntil:
+    visible: "View Cantinarr Fixture Moon details"
+    timeout: 20000
+
+- tapOn:
+    point: "7%,4%"
+- assertVisible: "Navigate to Discover"
+- assertVisible: "Navigate to Settings"
+# The fixed tall viewport renders the complete drawer inventory, so none of
+# these negative checks can pass merely because a leaked module is offscreen.
+- assertNotVisible:
+    text: "Navigate to Radarr"
+- assertNotVisible:
+    text: "Navigate to Sonarr"
+- assertNotVisible:
+    text: "Navigate to Chaptarr"
+- assertNotVisible:
+    text: "Navigate to Downloads"
+- assertNotVisible:
+    text: "Navigate to Tautulli"
+- assertNotVisible: "Navigate to AI Assistant"
+- assertNotVisible: "Navigate to Approvals"
+- assertNotVisible: "Navigate to Agent fixes"

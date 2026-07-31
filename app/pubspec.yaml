@@ -1,10 +1,10 @@
 name: cantinarr
-description: A frictionless media request app for Plex/Jellyfin servers.
+description: An intelligent self-hosted media manager for Plex and Jellyfin.
 publish_to: 'none'
 version: 0.1.0+1
 
 environment:
-  sdk: '>=3.3.0 <4.0.0'
+  sdk: '>=3.4.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -20,10 +20,14 @@ dependencies:
 
   # Networking
   dio: ^5.7.0
+  http: ^1.6.0
   retrofit: ^4.4.1
 
   # Image loading
   cached_network_image: ^3.4.1
+  # Direct dep for ImageRenderMethodForWeb (not re-exported by the main lib).
+  cached_network_image_platform_interface: ^4.1.1
+  flutter_cache_manager: ^3.4.1
 
   # Storage
   flutter_secure_storage: ^9.2.3
@@ -32,13 +36,12 @@ dependencies:
   # UI
   shimmer: ^3.0.0
   flutter_animate: ^4.5.2
-  google_fonts: ^6.2.1
 
   # WebSocket
   web_socket_channel: ^3.0.1
 
   # App info
-  package_info_plus: ^8.0.0
+  package_info_plus: ^9.0.0
 
   # Deep linking
   app_links: ^6.3.2
@@ -50,6 +53,11 @@ dependencies:
   equatable: ^2.0.7
   intl: ^0.19.0
   uuid: ^4.5.1
+  passkeys_platform_interface: ^2.6.0
+  passkeys_android: ^2.12.0
+  passkeys_ios: ^2.9.0
+  passkeys_windows: ^0.1.1
+  device_info_plus: ^12.4.0
 
 dev_dependencies:
   flutter_test:
@@ -62,10 +70,10 @@ dev_dependencies:
   retrofit_generator: ^9.1.5
 
 flutter_native_splash:
-  color: "#0F0801"
+  color: "#0C0805"
   image: assets/splash_icon.png
   android_12:
-    color: "#0F0801"
+    color: "#0C0805"
     image: assets/splash_icon.png
 
 flutter:

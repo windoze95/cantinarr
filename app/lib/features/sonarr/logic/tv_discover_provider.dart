@@ -4,33 +4,43 @@ import '../../discover/data/tmdb_models.dart';
 
 /// Discovery state for the TV Shows tab.
 class TvDiscoverState {
-  final List<MediaItem> popularTV;
+  /// The headline row, from whichever feed the admin configured.
+  final List<MediaItem> featured;
+
+  /// Which feed answered, so the row can title itself honestly.
+  final String featuredSource;
   final List<MediaItem> anticipated;
-  final bool isLoadingPopular;
+  final bool isLoadingFeatured;
   final bool isLoadingAnticipated;
 
   const TvDiscoverState({
-    this.popularTV = const [],
+    this.featured = const [],
+    this.featuredSource = '',
     this.anticipated = const [],
-    this.isLoadingPopular = false,
+    this.isLoadingFeatured = false,
     this.isLoadingAnticipated = false,
   });
 
+  /// The row's title for the feed that answered.
+  String get featuredTitle => featuredRowTitle(featuredSource, isTv: true);
+
   TvDiscoverState copyWith({
-    List<MediaItem>? popularTV,
+    List<MediaItem>? featured,
+    String? featuredSource,
     List<MediaItem>? anticipated,
-    bool? isLoadingPopular,
+    bool? isLoadingFeatured,
     bool? isLoadingAnticipated,
   }) =>
       TvDiscoverState(
-        popularTV: popularTV ?? this.popularTV,
+        featured: featured ?? this.featured,
+        featuredSource: featuredSource ?? this.featuredSource,
         anticipated: anticipated ?? this.anticipated,
-        isLoadingPopular: isLoadingPopular ?? this.isLoadingPopular,
+        isLoadingFeatured: isLoadingFeatured ?? this.isLoadingFeatured,
         isLoadingAnticipated: isLoadingAnticipated ?? this.isLoadingAnticipated,
       );
 }
 
-/// Fetches TV discovery rows (Popular TV Shows).
+/// Fetches TV discovery rows (the headline feed + Most Anticipated).
 class TvDiscoverNotifier extends StateNotifier<TvDiscoverState> {
   final DiscoverApiService _api;
 
@@ -38,21 +48,22 @@ class TvDiscoverNotifier extends StateNotifier<TvDiscoverState> {
 
   Future<void> bootstrap() async {
     await Future.wait([
-      _fetchPopularTV(),
+      _fetchFeatured(),
       _fetchAnticipatedShows(),
     ]);
   }
 
-  Future<void> _fetchPopularTV() async {
-    state = state.copyWith(isLoadingPopular: true);
+  Future<void> _fetchFeatured() async {
+    state = state.copyWith(isLoadingFeatured: true);
     try {
-      final page = await _api.fetchPopularTV();
+      final feed = await _api.fetchFeaturedTV();
       state = state.copyWith(
-        popularTV: page.results,
-        isLoadingPopular: false,
+        featured: feed.items,
+        featuredSource: feed.source,
+        isLoadingFeatured: false,
       );
     } catch (_) {
-      state = state.copyWith(isLoadingPopular: false);
+      state = state.copyWith(isLoadingFeatured: false);
     }
   }
 

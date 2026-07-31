@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "suites": {
+    "smoke": [
+      {
+        "flow": "e2e/maestro/flows/auth/password-login.yaml",
+        "user": "lab-admin-b"
+      },
+      {
+        "flow": "e2e/maestro/flows/navigation/admin-modules.yaml",
+        "user": "lab-admin-b"
+      },
+      {
+        "flow": "e2e/maestro/flows/authorization/requester-navigation.yaml",
+        "user": "lab-no-grants"
+      }
+    ]
+  }
+}

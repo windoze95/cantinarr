@@ -4,23 +4,39 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/auth/logic/auth_provider.dart';
 import '../config/app_config.dart';
 import 'backend_auth_interceptor.dart';
+import 'backend_http_adapter.dart';
+import 'safe_http_log_interceptor.dart';
 
 /// Provides an authenticated Dio instance configured for the backend.
+///
+/// Keyed only on the connection's [serverUrl] (via `select`) so the Dio is
+/// rebuilt only when the target server actually changes — not on every
+/// [authProvider] emission. The access/refresh tokens are read dynamically by
+/// the interceptor below, so token refreshes and the optimistic→validated
+/// session handoff on launch reuse the same Dio instead of replacing it. That
+/// keeps downstream providers which `watch` this one (discovery rows, search,
+/// etc.) from being torn down and silently losing their already-fetched state
+/// mid-session.
 final backendClientProvider = Provider<Dio>((ref) {
-  final authState = ref.watch(authProvider);
-  final connection = authState.valueOrNull?.connection;
+  final serverUrl = ref.watch(
+    authProvider.select((s) => s.valueOrNull?.connection?.serverUrl),
+  );
 
-  if (connection == null) {
+  if (serverUrl == null) {
     // Return a no-op Dio that will fail gracefully
     return Dio(BaseOptions(baseUrl: 'http://localhost'));
   }
 
   final dio = Dio(BaseOptions(
-    baseUrl: connection.serverUrl,
+    baseUrl: serverUrl,
     connectTimeout: AppConfig.requestTimeout,
     receiveTimeout: AppConfig.requestTimeout,
     headers: {'Content-Type': 'application/json'},
   ));
+  final platformAdapter = createBackendHttpClientAdapter();
+  if (platformAdapter != null) {
+    dio.httpClientAdapter = platformAdapter;
+  }
 
   final authNotifier = ref.read(authProvider.notifier);
 
@@ -37,15 +53,15 @@ final backendClientProvider = Provider<Dio>((ref) {
     onAuthExpired: () {
       authNotifier.onAuthExpired();
     },
+    // Retrying through the same adapter preserves incremental Fetch streaming
+    // when a Web chat request first has to refresh an expired access token.
+    getRetryAdapter: () => dio.httpClientAdapter,
   ));
 
   if (kDebugMode) {
-    dio.interceptors.add(LogInterceptor(
-      requestBody: true,
-      responseBody: true,
-      logPrint: (obj) => debugPrint(obj.toString()),
-    ));
+    dio.interceptors.add(SafeHttpLogInterceptor(logPrint: debugPrint));
   }
 
+  ref.onDispose(() => dio.close(force: true));
   return dio;
 });

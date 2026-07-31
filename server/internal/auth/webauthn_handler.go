@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"errors"
 	"log"
 	"net/http"
+	"net/url"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -16,6 +18,10 @@ func (h *Handler) BeginPasskeyRegistration(w http.ResponseWriter, r *http.Reques
 
 	options, sessionID, err := h.service.BeginPasskeyRegistration(claims.UserID, r)
 	if err != nil {
+		if errors.Is(err, ErrPasskeyNotAllowed) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "passkeys are not enabled for your account"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to begin registration"})
 		return
 	}
@@ -48,6 +54,67 @@ func (h *Handler) FinishPasskeyRegistration(w http.ResponseWriter, r *http.Reque
 	err := h.service.FinishPasskeyRegistration(claims.UserID, sessionID, credentialName, r)
 	if err != nil {
 		log.Printf("FinishPasskeyRegistration error: %v", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "registered"})
+}
+
+func (h *Handler) CreatePasskeySetupLink(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	token, expiresAt, err := h.service.CreatePasskeySetupToken(claims.UserID, claims.DeviceID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create passkey setup link"})
+		return
+	}
+
+	link := publicBaseURL(r) + "/passkeys/create?token=" + url.QueryEscape(token)
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"link":       link,
+		"expires_at": expiresAt,
+	})
+}
+
+func (h *Handler) BeginPasskeySetup(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token required"})
+		return
+	}
+
+	options, sessionID, err := h.service.BeginPasskeySetup(token, r)
+	if err != nil {
+		if errors.Is(err, ErrPasskeyNotAllowed) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "passkeys are not enabled for your account"})
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired token"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"options":    options,
+		"session_id": sessionID,
+	})
+}
+
+func (h *Handler) FinishPasskeySetup(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	sessionID := r.URL.Query().Get("session_id")
+	credentialName := r.URL.Query().Get("credential_name")
+	if token == "" || sessionID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token and session_id required"})
+		return
+	}
+
+	if err := h.service.FinishPasskeySetup(token, sessionID, credentialName, r); err != nil {
+		log.Printf("FinishPasskeySetup error: %v", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

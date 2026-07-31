@@ -1,0 +1,430 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../../core/layout/adaptive.dart';
+import '../../../core/providers/realtime_provider.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/attention_menu_visibility_switch.dart';
+import '../data/agent_action_models.dart';
+import '../logic/issues_provider.dart';
+import 'issue_refresh_banner.dart';
+import 'proposed_action_card.dart';
+
+/// Admin review and history surface for AI-remediation fixes, grouped by the
+/// issue they belong to.
+///
+/// Mirrors `PendingRequestsScreen`: a [RefreshIndicator] over a scrolling list,
+/// kept live by `agent_action_pending` / `agent_action_decided` pings, and
+/// seeding the drawer badge on load. Each proposal renders as a
+/// [ProposedActionCard]; once decided it moves from Awaiting review to History.
+class PendingAgentActionsScreen extends ConsumerStatefulWidget {
+  const PendingAgentActionsScreen({super.key});
+
+  @override
+  ConsumerState<PendingAgentActionsScreen> createState() =>
+      _PendingAgentActionsScreenState();
+}
+
+class _PendingAgentActionsScreenState
+    extends ConsumerState<PendingAgentActionsScreen>
+    with WidgetsBindingObserver {
+  List<AgentAction>? _actions;
+  bool _isLoading = true;
+  String? _error;
+  bool _batchBusy = false;
+  _AgentActionsTab _tab = _AgentActionsTab.awaitingReview;
+  int _loadEpoch = 0;
+  Timer? _realtimeDebounce;
+  Timer? _poll;
+
+  static const _pollInterval = Duration(seconds: 30);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    _poll = Timer.periodic(_pollInterval, (_) => _load());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Reconcile proposals decided while the app was backgrounded. The drawer
+    // badge also refreshes on resume, but this screen owns its own snapshot.
+    if (state == AppLifecycleState.resumed) _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _realtimeDebounce?.cancel();
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  void _scheduleLoad() {
+    _realtimeDebounce?.cancel();
+    _realtimeDebounce = Timer(const Duration(milliseconds: 250), _load);
+  }
+
+  String _friendlyError(Object e) {
+    final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
+    return m != null ? m.group(1)! : 'Something went wrong';
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    final epoch = ++_loadEpoch;
+    setState(() {
+      _isLoading = _actions == null;
+      if (_actions == null) _error = null;
+    });
+    try {
+      final actions = await ref.read(issuesServiceProvider).listAllActions();
+      if (!mounted || epoch != _loadEpoch) return;
+      setState(() {
+        _actions = actions;
+        _isLoading = false;
+        _error = null;
+      });
+      // Keep the drawer badge in sync with the queue we just loaded.
+      ref
+          .read(pendingAgentActionsProvider.notifier)
+          .setCount(actions.where((a) => a.canTakeAction).length);
+    } catch (e) {
+      if (!mounted || epoch != _loadEpoch) return;
+      setState(() {
+        _error = e.toString();
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// After a decision, refresh the queue + badge so the resolved proposal drops
+  /// out and any sibling counts update.
+  void _onDecided(AgentAction _) => _load();
+
+  /// The proposals currently offering decision controls — the exact set the
+  /// awaiting tab renders as actionable, and therefore the only ids "Approve
+  /// all" may submit.
+  List<AgentAction> get _decidableActions =>
+      (_actions ?? const <AgentAction>[])
+          .where((a) => a.canTakeAction)
+          .toList();
+
+  /// Approve every reviewed proposal in one request. The id list is captured
+  /// before the confirmation dialog, so a proposal that parks while the admin
+  /// is reading it is never approved sight-unseen; the server skips anything
+  /// that recovered or changed in the meantime and reports it per item.
+  Future<void> _approveAll() async {
+    if (_batchBusy || _error != null) return;
+    final targets = _decidableActions;
+    if (targets.length < 2) return;
+    final ids = targets.map((a) => a.id).toList();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: Text(
+          'Approve all ${ids.length} fixes?',
+          style: const TextStyle(color: AppTheme.textPrimary),
+        ),
+        content: Text(
+          'Cantinarr will apply all ${ids.length} fixes awaiting review, one '
+          'at a time, in the connected media services shown on their cards. '
+          'Each fix runs at most once, and a fix whose download already '
+          'recovered or whose state changed is skipped. This cannot be '
+          'undone from Cantinarr.',
+          style: const TextStyle(color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.available,
+              foregroundColor: AppTheme.background,
+            ),
+            child: const Text('Approve all'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    setState(() => _batchBusy = true);
+    try {
+      final results =
+          await ref.read(issuesServiceProvider).approveActionsBatch(ids);
+      if (!mounted) return;
+      _showSnack(_batchSummary(results));
+    } catch (_) {
+      if (!mounted) return;
+      // The server runs the batch to completion even when this response is
+      // lost, so never claim nothing happened; the reload shows the truth.
+      _showSnack('Could not confirm the results. Refresh to see what ran.');
+    } finally {
+      if (mounted) setState(() => _batchBusy = false);
+    }
+    _load();
+  }
+
+  /// One honest line for the whole gesture, in requester-free admin
+  /// vocabulary: applied / skipped / needs attention.
+  String _batchSummary(List<AgentActionBatchResult> results) {
+    final applied = results.where((r) => r.applied).length;
+    final skipped = results.where((r) => r.skipped).length;
+    final attention = results.where((r) => r.needsAttention).length;
+    if (results.isNotEmpty && applied == results.length) {
+      return 'All $applied fixes applied.';
+    }
+    final parts = <String>[
+      if (applied > 0) '$applied applied',
+      if (skipped > 0) '$skipped skipped',
+      if (attention > 0) '$attention need${attention == 1 ? 's' : ''} attention',
+    ];
+    return parts.isEmpty
+        ? 'No fixes were applied.'
+        : 'Approve all: ${parts.join(' · ')}.';
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // A proposal raised or decided elsewhere reloads the queue.
+    ref.listen(agentActionsChangedProvider, (_, __) => _scheduleLoad());
+
+    // Offered only while the awaiting tab shows two or more actionable
+    // proposals (a single fix is a single card tap), and kept visible with a
+    // spinner while a batch is running so the affordance doesn't vanish as
+    // live refreshes drain the queue mid-flight.
+    final showApproveAll = _tab == _AgentActionsTab.awaitingReview &&
+        _error == null &&
+        (_batchBusy || _decidableActions.length >= 2);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Agent fixes'),
+        actions: [
+          if (showApproveAll)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: TextButton.icon(
+                onPressed: _batchBusy ? null : _approveAll,
+                icon: _batchBusy
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppTheme.available),
+                      )
+                    : const Icon(Icons.done_all, size: 18),
+                label: const Text('Approve all'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.available,
+                ),
+              ),
+            ),
+        ],
+      ),
+      body: CenteredContent(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+              child: SizedBox(
+                width: double.infinity,
+                child: SegmentedButton<_AgentActionsTab>(
+                  segments: const [
+                    ButtonSegment(
+                      value: _AgentActionsTab.awaitingReview,
+                      label: Text('Awaiting review'),
+                      icon: Icon(Icons.fact_check_outlined),
+                    ),
+                    ButtonSegment(
+                      value: _AgentActionsTab.history,
+                      label: Text('History'),
+                      icon: Icon(Icons.history),
+                    ),
+                  ],
+                  selected: {_tab},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (selection) =>
+                      setState(() => _tab = selection.first),
+                ),
+              ),
+            ),
+            if (_error != null && _actions != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+                child: IssueRefreshBanner(
+                  message:
+                      "Couldn't refresh agent fixes. Showing the last update.",
+                  onRetry: _load,
+                ),
+              ),
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppTheme.accent))
+                  : _error != null && _actions == null
+                      ? _ErrorView(
+                          message: _friendlyError(_error!), onRetry: _load)
+                      : RefreshIndicator(
+                          color: AppTheme.accent,
+                          onRefresh: _load,
+                          child: _visibleActions.isEmpty
+                              ? ListView(
+                                  physics:
+                                      const AlwaysScrollableScrollPhysics(),
+                                  children: [
+                                    const SizedBox(height: 120),
+                                    Center(
+                                      child: Text(
+                                        _tab == _AgentActionsTab.awaitingReview
+                                            ? 'No fixes awaiting review.'
+                                            : 'No agent-fix history yet.',
+                                        style: const TextStyle(
+                                            color: AppTheme.textSecondary),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              : _buildGroupedList(_visibleActions),
+                        ),
+            ),
+            const Divider(color: AppTheme.border, height: 1),
+            const SafeArea(
+              top: false,
+              child: AttentionMenuVisibilitySwitch(
+                item: AttentionMenuItem.agentFixes,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<AgentAction> get _visibleActions {
+    final actions = _actions ?? const <AgentAction>[];
+    return switch (_tab) {
+      _AgentActionsTab.awaitingReview =>
+        actions.where((action) => action.canTakeAction).toList(),
+      _AgentActionsTab.history =>
+        actions.where((action) => !action.canTakeAction).toList(),
+    };
+  }
+
+  Widget _buildGroupedList(List<AgentAction> actions) {
+    // Group by issue id, preserving the server's newest-first order. The
+    // grouped layout makes "two proposals for the same problem" legible.
+    final order = <int>[];
+    final groups = <int, List<AgentAction>>{};
+    for (final a in actions) {
+      groups.putIfAbsent(a.issueId, () {
+        order.add(a.issueId);
+        return [];
+      }).add(a);
+    }
+
+    return ListView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+      itemCount: order.length,
+      itemBuilder: (context, index) {
+        final issueId = order[index];
+        final group = groups[issueId]!;
+        final title = group.first.issueTitle.isEmpty
+            ? 'Issue #$issueId'
+            : group.first.issueTitle;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Issue header — tap to open the full thread.
+            InkWell(
+              onTap: () async {
+                await context.push('/issues/$issueId');
+                if (mounted) _load();
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(4, 12, 4, 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right,
+                        size: 18, color: AppTheme.textSecondary),
+                  ],
+                ),
+              ),
+            ),
+            for (final action in group)
+              ProposedActionCard(
+                key: ValueKey(
+                  '${action.id}-${action.statusRaw}-${action.canDecide}',
+                ),
+                action: action,
+                // A running batch owns the queue: per-card decisions pause so
+                // an admin can't race their own bulk approval.
+                decisionsEnabled: _error == null && !_batchBusy,
+                onDecided: _onDecided,
+                onViewActivity: action.runId != null
+                    ? () => context.push('/agent-runs/${action.runId}')
+                    : null,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+enum _AgentActionsTab { awaitingReview, history }
+
+class _ErrorView extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _ErrorView({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(message,
+                style: const TextStyle(color: AppTheme.error),
+                textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            ElevatedButton(onPressed: onRetry, child: const Text('Retry')),
+          ],
+        ),
+      ),
+    );
+  }
+}

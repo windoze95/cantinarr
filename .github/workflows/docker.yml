@@ -9,7 +9,23 @@ on:
       - "server/**"
       - "Dockerfile"
       - ".github/workflows/docker.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "server/**"
+      - "Dockerfile"
+      - ".github/workflows/docker.yml"
   workflow_dispatch:
+    inputs:
+      multi-arch:
+        description: "Build for arm64 in addition to amd64"
+        type: boolean
+        default: false
+
+concurrency:
+  group: docker-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -20,8 +36,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history: the web bundle's build number is a commit count.
+          fetch-depth: 0
+
+      - name: Derive web build number
+        id: app_build
+        # Counts commits that touched app/, so Settings → About names the
+        # bundle a deployment is running. Tied to app/ rather than the run
+        # number so a rebuild of the same commit reports the same build and
+        # server-only changes keep the cached Flutter layer.
+        run: |
+          echo "number=$(git rev-list --count HEAD -- app)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -44,14 +73,109 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
+            type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
 
-      - name: Build and push
+      - name: Build published image for smoke test
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: cantinarr-root-smoke:${{ github.sha }}
+          cache-from: type=gha,scope=published
+          cache-to: type=gha,mode=max,scope=published
+
+      - name: Verify published-image Codex runtime and notices
+        run: |
+          docker run --rm cantinarr-root-smoke:${{ github.sha }} sh -ec '
+            test -x /usr/local/bin/codex-app-server
+            test -s /usr/share/licenses/codex-app-server/LICENSE
+            test -s /usr/share/licenses/codex-app-server/NOTICE
+            /usr/local/bin/codex-app-server --help | grep -q -- --listen
+          '
+
+      - name: Verify the served web bundle carries the build number
+        # End-to-end proof of the chain behind Settings → About: build arg →
+        # `flutter build web --build-number` → version.json → embedded in the
+        # binary → served. Dropping the arg from any build silently reverts
+        # every deployment to pubspec's placeholder build 1.
+        run: |
+          docker run --rm -d --name cantinarr-version-smoke \
+            -p 8585:8585 cantinarr-root-smoke:${{ github.sha }}
+          served=""
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8585/version.json >/tmp/version.json \
+              && { served=1; break; }
+            sleep 1
+          done
+          [ -n "$served" ] || docker logs cantinarr-version-smoke
+          docker rm -f cantinarr-version-smoke
+          cat /tmp/version.json
+          grep -q '"build_number":"${{ steps.app_build.outputs.number }}"' /tmp/version.json
+
+      - name: Build arm64 published image for smoke test
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: cantinarr-root-arm64-smoke:${{ github.sha }}
+          cache-from: type=gha,scope=published
+          cache-to: type=gha,mode=max,scope=published
+
+      - name: Verify arm64 Codex runtime and notices
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
+        run: |
+          docker run --rm --platform linux/arm64 cantinarr-root-arm64-smoke:${{ github.sha }} sh -ec '
+            test -x /usr/local/bin/codex-app-server
+            test -s /usr/share/licenses/codex-app-server/LICENSE
+            test -s /usr/share/licenses/codex-app-server/NOTICE
+            /usr/local/bin/codex-app-server --help | grep -q -- --listen
+          '
+
+      - name: Build server-only image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: server
+          file: server/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: cantinarr-server-smoke:${{ github.sha }}
+          cache-from: type=gha,scope=server-only
+          cache-to: type=gha,mode=max,scope=server-only
+
+      - name: Verify server-only Codex runtime and notices
+        run: |
+          docker run --rm cantinarr-server-smoke:${{ github.sha }} sh -ec '
+            test -x /usr/local/bin/codex-app-server
+            test -s /usr/share/licenses/codex-app-server/LICENSE
+            test -s /usr/share/licenses/codex-app-server/NOTICE
+            /usr/local/bin/codex-app-server --help | grep -q -- --listen
+          '
+
+      - name: Build and push
+        # Fork PRs run with a read-only GITHUB_TOKEN, so pushing the pr-N tag
+        # is denied; the smoke-test builds above still prove both Dockerfiles.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
+          platforms: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch) && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=published
+          cache-to: type=gha,mode=max,scope=published

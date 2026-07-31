@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../../../core/layout/adaptive.dart';
+import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -15,6 +17,7 @@ class DevicesScreen extends ConsumerStatefulWidget {
 
 class _DevicesScreenState extends ConsumerState<DevicesScreen> {
   List<DeviceInfo>? _devices;
+  String? _currentDeviceId;
   bool _isLoading = true;
   String? _error;
 
@@ -31,8 +34,12 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     });
     try {
       final devices = await ref.read(authProvider.notifier).listDevices();
+      final currentId = await ref
+          .read(storageServiceProvider)
+          .read(key: StorageKeys.deviceId);
       setState(() {
         _devices = devices;
+        _currentDeviceId = currentId;
         _isLoading = false;
       });
     } catch (e) {
@@ -91,7 +98,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Connected Devices')),
-      body: _buildBody(),
+      body: CenteredContent(child: _buildBody()),
     );
   }
 
@@ -157,48 +164,83 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                   ),
                 ),
               ),
-              ...userDevices.map((device) => Dismissible(
-                    key: Key(device.id),
-                    direction: DismissDirection.endToStart,
-                    background: Container(
-                      alignment: Alignment.centerRight,
-                      padding: const EdgeInsets.only(right: 20),
-                      color: AppTheme.error,
-                      child: const Icon(Icons.delete, color: Colors.white),
+              ...userDevices.map((device) {
+                final isCurrent = device.id == _currentDeviceId;
+                return Dismissible(
+                  key: Key(device.id),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 20),
+                    color: AppTheme.error,
+                    child: const Icon(
+                      Icons.delete,
+                      color: AppTheme.background,
                     ),
-                    confirmDismiss: (_) async {
-                      await _revokeDevice(device);
-                      return false; // We handle removal via _loadDevices
-                    },
-                    child: ListTile(
-                      leading: Icon(
-                        _deviceIcon(device.deviceName),
+                  ),
+                  confirmDismiss: (_) async {
+                    await _revokeDevice(device);
+                    return false; // We handle removal via _loadDevices
+                  },
+                  child: ListTile(
+                    leading: Icon(
+                      _deviceIcon(device.deviceName),
+                      color:
+                          isCurrent ? AppTheme.accent : AppTheme.textSecondary,
+                    ),
+                    title: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            device.deviceName,
+                            style: const TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        if (isCurrent) ...[
+                          const SizedBox(width: 8),
+                          _thisDeviceBadge(),
+                        ],
+                      ],
+                    ),
+                    subtitle: Text(
+                      'Last seen ${_formatTime(device.lastSeenAt)}',
+                      style: const TextStyle(
                         color: AppTheme.textSecondary,
-                      ),
-                      title: Text(
-                        device.deviceName,
-                        style: const TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      subtitle: Text(
-                        'Last seen ${_formatTime(device.lastSeenAt)}',
-                        style: const TextStyle(
-                          color: AppTheme.textSecondary,
-                          fontSize: 13,
-                        ),
-                      ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.close,
-                            color: AppTheme.textSecondary, size: 20),
-                        onPressed: () => _revokeDevice(device),
+                        fontSize: 13,
                       ),
                     ),
-                  )),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.close,
+                          color: AppTheme.textSecondary, size: 20),
+                      onPressed: () => _revokeDevice(device),
+                    ),
+                  ),
+                );
+              }),
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _thisDeviceBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Text(
+        'This device',
+        style: TextStyle(
+          color: AppTheme.accent,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
