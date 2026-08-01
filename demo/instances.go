@@ -2,11 +2,10 @@
 // the arr-proxy dispatcher /api/instances/{instanceID}/* (srv-instances §1–2,
 // app-admin §4, gap-plan §1.9).
 //
-// Created/deleted instances live in a domain-local overlay (instMgmtCreated /
-// instMgmtDeletedIDs) because the frozen core store has no add/remove
-// accessors; the seeded instances stay authoritative for every sibling
-// domain. All rendering goes through copies so no shared pointer escapes a
-// lock.
+// Created/deleted instances go straight into the shared registry
+// (registerInstance/removeInstance) so config, per-user defaults, pins, and
+// the proxy stay coherent. All rendering goes through copies so no shared
+// pointer escapes a lock.
 package main
 
 import (
@@ -39,80 +38,35 @@ const instMgmtEnumError = "service_type must be one of 'radarr', 'sonarr', 'chap
 
 var (
 	instMgmtMu         sync.Mutex
-	instMgmtCreated    []*DemoInstance     // instances created through POST /api/instances
-	instMgmtDeletedIDs = map[string]bool{} // seeded instances the admin deleted
 	instMgmtSortOrders = map[string]int{}  // instance id -> sort_order (absent = 0)
 	instMgmtWebhookSet = map[string]bool{} // instance id -> webhook already configured
 )
 
-// instMgmtResolve returns a defensive copy of the instance with the given id
-// (seeded or overlay-created), or nil when unknown/deleted.
+// instMgmtResolve returns a defensive copy of the instance with the given id,
+// or nil when unknown.
 func instMgmtResolve(id string) *DemoInstance {
-	instMgmtMu.Lock()
-	deleted := instMgmtDeletedIDs[id]
-	instMgmtMu.Unlock()
-	if deleted {
-		return nil
-	}
 	var cp *DemoInstance
-	if withInstance(id, func(i *DemoInstance) {
+	withInstance(id, func(i *DemoInstance) {
 		c := *i
 		c.MediaPathMappings = append([]map[string]string{}, i.MediaPathMappings...)
 		cp = &c
-	}) {
-		return cp
-	}
-	instMgmtMu.Lock()
-	defer instMgmtMu.Unlock()
-	for _, i := range instMgmtCreated {
-		if i.ID == id {
-			c := *i
-			c.MediaPathMappings = append([]map[string]string{}, i.MediaPathMappings...)
-			return &c
-		}
-	}
-	return nil
+	})
+	return cp
 }
 
-// instMgmtWith mutates an instance (seeded or overlay) under the appropriate
-// lock; reports whether it exists. fn must only set plain fields.
+// instMgmtWith mutates an instance under the state lock; reports whether it
+// exists. fn must only set plain fields.
 func instMgmtWith(id string, fn func(*DemoInstance)) bool {
-	instMgmtMu.Lock()
-	deleted := instMgmtDeletedIDs[id]
-	instMgmtMu.Unlock()
-	if deleted {
-		return false
-	}
-	if withInstance(id, fn) {
-		return true
-	}
-	instMgmtMu.Lock()
-	defer instMgmtMu.Unlock()
-	for _, i := range instMgmtCreated {
-		if i.ID == id {
-			fn(i)
-			return true
-		}
-	}
-	return false
+	return withInstance(id, fn)
 }
 
-// instMgmtAll returns copies of every live instance (seeded minus deleted,
-// plus overlay-created), unsorted.
+// instMgmtAll returns copies of every live instance, unsorted.
 func instMgmtAll() []*DemoInstance {
 	out := []*DemoInstance{}
 	for _, i := range allInstances() {
 		if cp := instMgmtResolve(i.ID); cp != nil {
 			out = append(out, cp)
 		}
-	}
-	instMgmtMu.Lock()
-	created := append([]*DemoInstance{}, instMgmtCreated...)
-	instMgmtMu.Unlock()
-	for _, i := range created {
-		c := *i
-		c.MediaPathMappings = append([]map[string]string{}, i.MediaPathMappings...)
-		out = append(out, &c)
 	}
 	return out
 }
@@ -327,12 +281,12 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 	if isDefault {
 		instMgmtClearDefaults(inst.ServiceType, inst.ID)
 	}
-	instMgmtMu.Lock()
-	instMgmtCreated = append(instMgmtCreated, inst)
+	registerInstance(inst)
 	if body.SortOrder != nil {
+		instMgmtMu.Lock()
 		instMgmtSortOrders[inst.ID] = *body.SortOrder
+		instMgmtMu.Unlock()
 	}
-	instMgmtMu.Unlock()
 
 	writeJSON(w, http.StatusCreated, instMgmtJSON(instMgmtResolve(inst.ID)))
 }
@@ -432,18 +386,18 @@ func instMgmtHandleDelete(w http.ResponseWriter, r *http.Request) {
 			"instance has pending book requests: cannot delete instance while 1 book request(s) await approval")
 		return
 	}
-	instMgmtMu.Lock()
-	removedFromOverlay := false
-	for idx, c := range instMgmtCreated {
-		if c.ID == id {
-			instMgmtCreated = append(instMgmtCreated[:idx], instMgmtCreated[idx+1:]...)
-			removedFromOverlay = true
-			break
+	removeInstance(id)
+	// Deleting the stored default leaves the type defaultless; promote the
+	// first survivor so admin views keep exactly one default per type.
+	if inst.IsDefault && inst.ServiceType != serviceChaptarr {
+		for _, s := range instMgmtAll() {
+			if s.ServiceType == inst.ServiceType {
+				instMgmtWith(s.ID, func(i *DemoInstance) { i.IsDefault = true })
+				break
+			}
 		}
 	}
-	if !removedFromOverlay {
-		instMgmtDeletedIDs[id] = true
-	}
+	instMgmtMu.Lock()
 	delete(instMgmtSortOrders, id)
 	delete(instMgmtWebhookSet, id)
 	instMgmtMu.Unlock()
@@ -668,9 +622,6 @@ func instMgmtProxyAllowed(serviceType, rest string) bool {
 				return true
 			}
 			if tail[0] == "wanted" && (tail[1] == "missing" || tail[1] == "cutoff") {
-				return true
-			}
-			if tail[0] == "queue" && tail[1] == "details" {
 				return true
 			}
 		}

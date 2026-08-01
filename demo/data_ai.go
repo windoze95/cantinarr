@@ -195,7 +195,7 @@ func aiBookItem(b *DemoBook) map[string]any {
 		item["overview"] = b.Overview
 	}
 	if cp := b.CoverPath(); cp != "" {
-		item["poster_url"] = demoServerURL + "/api/instances/" + instChaptarr + cp
+		item["poster_url"] = demoServerURL + "/api/instances/" + instChaptarr + "/api/v1" + cp
 	}
 	return item
 }

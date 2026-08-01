@@ -176,9 +176,10 @@ func issHandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		if i.Status != "observing" && i.Status != "recovering" {
 			i.Read = false
 		}
-		id, status := i.ID, i.Status
+		id, status, rid := i.ID, i.Status, i.ReporterID
 		issMu.Unlock()
 		wsToAdmins(evtIssueUpdated, map[string]any{"issue_id": id})
+		wsToUser(rid, evtIssueUpdated, map[string]any{"issue_id": id})
 		writeJSON(w, http.StatusOK, map[string]any{"issue_id": id, "status": status})
 		return
 	}
@@ -201,9 +202,10 @@ func issHandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			issLockedAppendMsg(i.ID, "user", u.Username, req.Reason, now)
 		}
 		i.UpdatedAt = now
-		id, status := i.ID, i.Status
+		id, status, rid := i.ID, i.Status, i.ReporterID
 		issMu.Unlock()
 		wsToAdmins(evtIssueUpdated, map[string]any{"issue_id": id})
+		wsToUser(rid, evtIssueUpdated, map[string]any{"issue_id": id})
 		writeJSON(w, http.StatusOK, map[string]any{"issue_id": id, "status": status})
 		return
 	}

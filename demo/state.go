@@ -715,6 +715,28 @@ func withInstance(id string, fn func(*DemoInstance)) bool {
 	return true
 }
 
+// registerInstance adds an admin-created instance to the shared registry so
+// config, defaults, pins, and the proxy all see it.
+func registerInstance(inst *DemoInstance) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	demoInstances = append(demoInstances, inst)
+}
+
+// removeInstance deletes an instance from the shared registry; reports
+// whether it existed.
+func removeInstance(id string) bool {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	for idx, inst := range demoInstances {
+		if inst.ID == id {
+			demoInstances = append(demoInstances[:idx], demoInstances[idx+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
 // visibleInstances returns the instances a user may see: admins get all;
 // regular users get their effective radarr + sonarr instances plus a chaptarr
 // instance only when granted via DefaultInstances. Renderers must emit

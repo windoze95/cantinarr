@@ -67,6 +67,7 @@ var (
 	dlLastSnapshot []byte
 	dlNextSpawnID  = 100
 	dlSpawnCursor  int
+	dlRecycleCount int
 )
 
 // dlRespawnPool keeps the simulated queue alive forever: when an item
@@ -240,11 +241,17 @@ func dlAdvance(interval time.Duration) bool {
 		}
 	}
 	for _, done := range completed {
-		// Move to history (newest first)…
+		// Move to history (newest first). Every 7th recycle fails so the
+		// app's failure styling stays demonstrable at any uptime.
+		dlRecycleCount++
+		status, errText := "Completed", ""
+		if dlRecycleCount%7 == 0 {
+			status, errText = "Failed", "Unpacking failed, archive is damaged"
+		}
 		dlHistory = append([]dlHistoryItemJSON{{
-			Name: done.Name, Status: "Completed", SizeBytes: done.SizeBytes,
+			Name: done.Name, Status: status, SizeBytes: done.SizeBytes,
 			CompletedAt: time.Now().UTC().Format(time.RFC3339),
-			Category:    done.Category, Error: "",
+			Category:    done.Category, Error: errText,
 		}}, dlHistory...)
 		if len(dlHistory) > 40 {
 			dlHistory = dlHistory[:40]
