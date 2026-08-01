@@ -1,6 +1,6 @@
 # Cantinarr Demo Server
 
-A self-contained mock backend for App Store distribution review. Simulates the full Cantinarr API with in-memory data — no external services or databases required.
+A self-contained mock backend for App Store distribution review and product demos. It simulates the full current Cantinarr API with in-memory data — no external services, arr instances, or databases required. All seeded content is public-domain works or fiction invented for the demo.
 
 ## Running
 
@@ -11,6 +11,10 @@ go run .
 
 The server starts on **port 8484**.
 
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `DEMO_SERVER_URL` | `http://localhost:8484` | Advertised base URL, embedded in generated `cantinarr://connect` links |
+
 ## Demo Credentials
 
 | Username | Password | Role  |
@@ -18,17 +22,64 @@ The server starts on **port 8484**.
 | admin    | demo     | admin |
 | user     | demo     | user  |
 
-New accounts can be registered with invite code: `DEMO42`
+There is **no registration endpoint and no invite code** — accounts come from the seeds above or from admin-generated connect links (a third seeded account, `riley`, has a pending invite to demo that flow).
+
+A **well-known multi-use connect token** is baked in for reviewers, bound to the `user` account and exempt from single-use redemption:
+
+```
+cantinarr://connect?token=demo0000000000000000000000000000000000000000000000000000connect1&server=<urlencoded DEMO_SERVER_URL>
+```
 
 ## What's Simulated
 
-- Authentication (JWT login, registration, token refresh)
-- Media discovery and search (movies, TV, persons)
-- Download requests with progress simulation via WebSocket
-- Radarr/Sonarr API proxies (quality profiles, root folders)
-- Trakt integration (trending, popular, calendar, lists)
-- AI chat with streaming SSE responses
-- All content uses public domain films and metadata
+Full parity with the current Cantinarr API surface:
+
+- **Auth & session** — JWT login, opaque `cnr1.` refresh tokens, connect-link redemption, per-user permissions, device management
+- **Discovery** — trending/popular rows, full-text search, movie/TV/person details, genres, watch providers, Trakt lists/anticipated/calendar
+- **Requests** — movie, TV (per-season), and book (ebook/audiobook) requests with the full approval flow: pending → approve/deny → simulated download progress → available/partial
+- **AI chat** — streaming SSE assistant with tool calls and media results, plus AI settings/credentials surfaces
+- **Admin console** — instance management, arr library browsing (fake Radarr/Sonarr/Chaptarr proxies), download-client queue/history, Tautulli monitoring, issues + AI remediation (agent actions, runs, approval rules), configuration change history, Plex linking + invites, users/devices, the setup checklist, and update status
+- **Live updates** — WebSocket hub pushing download progress, request status changes, queue snapshots, approvals, issues, agent actions, and Plex invite events to the right audiences
+
+## File Map
+
+| File | Owns |
+|------|------|
+| `main.go` | Env/flags (`DEMO_SERVER_URL`), middleware (auth/CORS), router assembly, landing page |
+| `types.go` | Shared enums/constants (statuses, media/service types, WS event names), JSON helpers |
+| `state.go` | In-memory store: users, devices, tokens, instances, sessions; seeds and accessors |
+| `ws.go` | WebSocket hub: auth, broadcast/admin/user scopes, envelope, pings |
+| `auth.go` | `/api/auth/*` — status, login, refresh, connect, me, password, plex-email, passkey stubs |
+| `config.go` | `/api/config` (per-user visibility), `/api/admin/setup-status`, `/api/admin/update-status` |
+| `users_admin.go` | Admin users, devices, connect tokens, test-push, Plex invites, default instances, per-user request settings |
+| `plex.go` | `/api/admin/plex/*` — link PIN simulation, servers, libraries, settings |
+| `instances.go` | Instance CRUD, media roots, per-instance users, test, proxy dispatch |
+| `requests.go` | `/api/requests*` — create, options, TMDB status, lifecycle machine |
+| `requests_admin.go` | Admin request queue, approve/deny, global request settings |
+| `books.go` | Book status/library/recent + the book request lifecycle |
+| `discover.go` | `/api/discover/*`, `/api/search`, `/api/media/*`, genres, providers |
+| `trakt.go` | `/api/trakt/*` — flat lists, anticipated, calendar |
+| `ai.go` | `/api/ai/chat` SSE + AI settings/credentials + personal Codex flow |
+| `ai_admin.go` | Admin credentials, Codex, AI tools, debug, external settings changes |
+| `issues.go` | `/api/issues*` + `/api/admin/issues*` (+ activity) |
+| `remediation.go` | Agent actions, agent runs, approval rules, remediation settings |
+| `arr_radarr.go` | Fake Radarr v3 behind `/api/instances/{id}/api/v3` + non-admin allowlist |
+| `arr_sonarr.go` | Fake Sonarr v3 |
+| `arr_chaptarr.go` | Fake Chaptarr v1 + MediaCover image bytes |
+| `downloads.go` | `/api/downloads/{instanceID}/*` — queue, history, actions |
+| `tautulli.go` | `/api/tautulli/{instanceID}/*` — activity, history, stats |
+| `mediafiles.go` | Media-file coverage, tickets, ticketed downloads |
+| `notifications.go` | Push tokens + notification preferences |
+| `data_movies.go` | 18-film public-domain catalog with poster/backdrop maps |
+| `data_tv.go` | 6 fictional shows with seasons/episodes fixtures |
+| `data_people.go` | Person entries + credits |
+| `data_books.go` | Public-domain authors/books/editions/bookfiles + lookup corpus |
+| `data_arr.go` | Arr queues, history, wanted, calendar, release fixtures |
+| `data_issues.go` | Issues, threads, agent actions/runs/rules seeds |
+| `data_requests.go` | Request-log rows, request policy, availability states, quality-profile fixtures |
+| `data_ai.go` | Canned AI chat scripts + seeded external-settings-changes history |
+| `data_misc.go` | Genres, fictional watch providers, Trakt list fixtures |
+| `assets/` | `go:embed` — book covers, sample download file, landing HTML |
 
 ## Branch Workflow
 

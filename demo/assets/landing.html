@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cantinarr Demo Server</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+  .container{max-width:640px;padding:2rem;text-align:center}
+  h1{color:#ffd700;font-size:2.5rem;margin-bottom:.5rem}
+  .subtitle{color:#888;margin-bottom:2rem}
+  .card{background:#16213e;border-radius:12px;padding:1.5rem;margin:1rem 0;text-align:left}
+  .card h3{color:#ffd700;margin-bottom:.5rem}
+  code{background:#0f3460;padding:.2rem .5rem;border-radius:4px;font-size:.9rem;color:#e94560}
+  .credentials{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  .cred{background:#0f3460;border-radius:8px;padding:1rem;text-align:center}
+  .cred .label{color:#888;font-size:.8rem;text-transform:uppercase}
+  .cred .value{color:#ffd700;font-size:1.2rem;margin-top:.25rem}
+  .footer{margin-top:2rem;color:#555;font-size:.85rem}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Cantinarr</h1>
+  <p class="subtitle">Demo Server</p>
+  <div class="card">
+    <h3>Connect Your App</h3>
+    <p>Point your Cantinarr app at <code>__DEMO_SERVER_URL__</code> and sign in with either account below, or open the connect link on a device with the app installed.</p>
+  </div>
+  <div class="credentials">
+    <div class="cred"><div class="label">Admin Login</div><div class="value">admin / demo</div></div>
+    <div class="cred"><div class="label">User Login</div><div class="value">user / demo</div></div>
+  </div>
+  <div class="card">
+    <h3>Connect Link</h3>
+    <p>Signs a device in as the <em>user</em> account without a password:<br><code style="word-break:break-all;font-size:.75rem">cantinarr://connect?token=demo0000000000000000000000000000000000000000000000000000connect1&amp;server=__DEMO_SERVER_URL_QUERY__</code></p>
+  </div>
+  <div class="card">
+    <h3>What You Can Try</h3>
+    <p>Discover public-domain movies &amp; TV, request titles (books included, via Chaptarr), watch simulated downloads complete in real time, and chat with the AI assistant. As <strong>admin</strong>, explore the full console: instance management, download-client and Tautulli monitoring, issues with AI remediation, and request approvals.</p>
+  </div>
+  <p class="footer">All content is public domain or fictional. This is a demo server for distribution review.</p>
+</div>
+</body>
+</html>

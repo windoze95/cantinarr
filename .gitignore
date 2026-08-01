@@ -49,6 +49,6 @@ origin-key.pem
 *.db-wal
 *.db-shm
 
-# Demo deployment material (TLS origin certs/keys live here — never commit)
-demo/
+# Demo deployment material (TLS origin certs/keys — never commit; demo/ source is tracked on this branch)
+demo/cantinarr-demo
 *.pem
