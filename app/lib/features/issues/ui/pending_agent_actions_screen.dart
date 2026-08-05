@@ -142,17 +142,15 @@ class _PendingAgentActionsScreenState
     final resolved = n('issues_resolved');
     final zeroTouch = n('zero_touch');
     final byRules = n('rule_approved');
-    final selfCleared = n('self_cleared');
     final needsAdmin = n('needs_admin_open');
     final paused = n('paused_rules');
+    // Incidents that cleared before promotion are deliberately absent from this
+    // card. That is ordinary *arr life — an archive mid-extract, an import that
+    // lands a minute later — and the server does not report the count at all.
     final parts = <String>[
       '$resolved resolved',
       if (zeroTouch > 0) '$zeroTouch zero-touch',
       if (byRules > 0) '$byRules by your rules',
-      // Kept visibly apart from the agent's own numbers: these never reached a
-      // human or the agent, they came right on their own. Informative about the
-      // stack, but claiming them as fixes is what made this card read as 680.
-      if (selfCleared > 0) '$selfCleared cleared on their own',
       if (needsAdmin > 0) '$needsAdmin need you',
       if (paused > 0) '$paused rule(s) paused',
     ];

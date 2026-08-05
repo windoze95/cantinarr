@@ -519,8 +519,8 @@ func TestAgentDigestCountsZeroTouch(t *testing.T) {
 
 // The scoreboard must not count the queue's own churn as agent work. An auto
 // incident that never promoted cleared before anyone was asked to look, and it
-// closed silently by design — so it belongs in self_cleared, never in the
-// "resolved"/"zero-touch" headline. Regression pin: a live instance showed
+// closed silently by design — ordinary *arr life, reported nowhere, and never
+// part of the "resolved"/"zero-touch" headline. Regression pin: a live instance showed
 // "680 resolved · 667 zero-touch · 1 by your rules", which is the shape of a
 // number counting observation noise. A reporter's own issue can also carry an
 // unpromoted observation row, so the filter is scoped to auto issues.
@@ -563,9 +563,6 @@ func TestAgentDigestExcludesNeverPromotedNoise(t *testing.T) {
 	d, err := svc.Digest(7)
 	if err != nil {
 		t.Fatalf("Digest: %v", err)
-	}
-	if d.SelfCleared != 1 {
-		t.Fatalf("selfCleared = %d, want the 1 never-promoted auto incident", d.SelfCleared)
 	}
 	if d.IssuesResolved != 3 {
 		t.Fatalf("resolved = %d, want 3 (two promoted + the user report), not the noise", d.IssuesResolved)

@@ -216,7 +216,7 @@ Request statuses: `unavailable`, `requested`, `pending` (awaiting approval), `de
 ```
 POST   /api/issues                         # user: report a problem; requires instance_id plus media scope — tmdb/tvdb ids
 GET    /api/issues                         # reporter inbox: the caller's OWN reports, newest first, requester copy applied
-GET    /api/admin/agent-digest             # the agent scoreboard: rolling window of resolved/zero-touch/rule-approved/self-cleared counts, tokens, and what needs a human
+GET    /api/admin/agent-digest             # the agent scoreboard: rolling window of resolved/zero-touch/rule-approved counts, tokens, and what needs a human; incidents that cleared before promotion are excluded, not reported
 GET    /api/admin/agent-approval-rules/candidates  # triples the admin has hand-approved and could automate (grounded; active-ruled triples excluded)
 POST   /api/admin/agent-approval-rules     # arm a rule from the catalog — server re-checks the triple was actually hand-approved
                                            #   for movie/tv, foreign_id (+book_format when both formats exist) for book

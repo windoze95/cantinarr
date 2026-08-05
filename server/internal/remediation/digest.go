@@ -22,11 +22,14 @@ type AgentDigest struct {
 	// silentNotifications for exactly these). Counting them made a busy queue
 	// read as agent accomplishment — a live instance reported 680 "resolved"
 	// against a single rule-approved fix.
+	//
+	// That excluded population is not reported anywhere, on purpose. It is
+	// ordinary *arr life: an archive still extracting, an import that lands a
+	// minute later, a download the client resumes. Some of it is the arr's own
+	// retry machinery working, and some was never a problem at all — the sweep
+	// simply looked mid-flight. Neither is something the agent did, and a large
+	// number sitting next to a small honest one is read as the big number.
 	IssuesResolved int64 `json:"issues_resolved"`
-	// SelfCleared is that excluded population, named rather than hidden: auto
-	// incidents whose arr state came right on its own. Real information about a
-	// stack that heals itself, but it is not something the agent did.
-	SelfCleared int64 `json:"self_cleared"`
 	// ZeroTouch counts resolved issues where automation carried the whole way:
 	// at least one action actually EXECUTED and no human decided any of them.
 	// The executed requirement is what keeps "earned autonomy doing its job end
@@ -70,17 +73,15 @@ func (s *Service) Digest(days int) (*AgentDigest, error) {
 	// matters — a USER-reported issue can also carry an observation row (see
 	// cancelExecutingForRecovery), and a reporter's issue is real work by
 	// definition, so it must never be filtered out by this clause.
-	const selfCleared = `EXISTS (SELECT 1 FROM issue_observations o
+	const observationNoise = `EXISTS (SELECT 1 FROM issue_observations o
 		WHERE o.issue_id = i.id AND o.promoted_at IS NULL) AND i.source = ?3`
 
 	row := s.db.QueryRow(`SELECT
 		(SELECT COUNT(1) FROM issues WHERE created_at >= datetime('now', ?1)),
 		(SELECT COUNT(1) FROM issues i WHERE i.closed_at >= datetime('now', ?1) AND i.status = 'resolved'
-		   AND NOT (`+selfCleared+`)),
+		   AND NOT (`+observationNoise+`)),
 		(SELECT COUNT(1) FROM issues i WHERE i.closed_at >= datetime('now', ?1) AND i.status = 'resolved'
-		   AND `+selfCleared+`),
-		(SELECT COUNT(1) FROM issues i WHERE i.closed_at >= datetime('now', ?1) AND i.status = 'resolved'
-		   AND NOT (`+selfCleared+`)
+		   AND NOT (`+observationNoise+`)
 		   AND EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.status = 'executed')
 		   AND NOT EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.decided_by IS NOT NULL)),
 		(SELECT COUNT(1) FROM agent_actions WHERE executed_at >= datetime('now', ?1) AND status = 'executed'),
@@ -94,7 +95,7 @@ func (s *Service) Digest(days int) (*AgentDigest, error) {
 		(SELECT COUNT(1) FROM agent_approval_rules WHERE status = 'paused')`,
 		cutoff, ResolutionReporterConfirmed, SourceAuto,
 	)
-	if err := row.Scan(&d.IssuesOpened, &d.IssuesResolved, &d.SelfCleared, &d.ZeroTouch, &d.ActionsExecuted,
+	if err := row.Scan(&d.IssuesOpened, &d.IssuesResolved, &d.ZeroTouch, &d.ActionsExecuted,
 		&d.RuleApproved, &d.ReporterClosed, &d.TokensIn, &d.TokensOut,
 		&d.NeedsAdminOpen, &d.PendingProposals, &d.PausedRules); err != nil {
 		return nil, fmt.Errorf("compute agent digest: %w", err)
