@@ -225,3 +225,99 @@ func TestCredentialStatusIncludesDurableAIHealthMetadata(t *testing.T) {
 		t.Fatalf("health metadata = %#v", response.AI.Health)
 	}
 }
+
+func TestCredentialStatusReportsBuiltInTMDB(t *testing.T) {
+	getTMDBStatus := func(t *testing.T, handler *Handler) (configured, builtin bool) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		handler.Get(recorder, httptest.NewRequest(http.MethodGet, "/api/admin/credentials", nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var response struct {
+			Credentials      map[string]bool `json:"credentials"`
+			TMDBUsingBuiltin bool            `json:"tmdb_using_builtin"`
+		}
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response.Credentials[KeyTMDBAccessToken], response.TMDBUsingBuiltin
+	}
+
+	// Helper registries carry no built-in token: neither configured nor built-in.
+	handler, _ := newCredentialHandlerTest(t)
+	if configured, builtin := getTMDBStatus(t, handler); configured || builtin {
+		t.Fatalf("no built-in token: configured=%t builtin=%t, want false/false", configured, builtin)
+	}
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x35}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(database, cipher, WithDefaultTMDBToken("builtin-public-token"))
+	builtinHandler := NewHandler(registry)
+	if configured, builtin := getTMDBStatus(t, builtinHandler); configured || !builtin {
+		t.Fatalf("built-in token: configured=%t builtin=%t, want false/true", configured, builtin)
+	}
+
+	if err := registry.SetCredential(KeyTMDBAccessToken, "admin-token"); err != nil {
+		t.Fatal(err)
+	}
+	registry.Invalidate()
+	if configured, builtin := getTMDBStatus(t, builtinHandler); !configured || builtin {
+		t.Fatalf("admin token: configured=%t builtin=%t, want true/false", configured, builtin)
+	}
+}
+
+func TestCredentialStatusReportsBuiltInTrakt(t *testing.T) {
+	getTraktStatus := func(t *testing.T, handler *Handler) (configured, builtin bool) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		handler.Get(recorder, httptest.NewRequest(http.MethodGet, "/api/admin/credentials", nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var response struct {
+			Credentials       map[string]bool `json:"credentials"`
+			TraktUsingBuiltin bool            `json:"trakt_using_builtin"`
+		}
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response.Credentials[KeyTraktClientID], response.TraktUsingBuiltin
+	}
+
+	// Helper registries carry no built-in ID: neither configured nor built-in.
+	handler, _ := newCredentialHandlerTest(t)
+	if configured, builtin := getTraktStatus(t, handler); configured || builtin {
+		t.Fatalf("no built-in ID: configured=%t builtin=%t, want false/false", configured, builtin)
+	}
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x36}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(database, cipher, WithDefaultTraktClientID("builtin-public-client-id"))
+	builtinHandler := NewHandler(registry)
+	if configured, builtin := getTraktStatus(t, builtinHandler); configured || !builtin {
+		t.Fatalf("built-in ID: configured=%t builtin=%t, want false/true", configured, builtin)
+	}
+
+	if err := registry.SetCredential(KeyTraktClientID, "admin-client-id"); err != nil {
+		t.Fatal(err)
+	}
+	registry.Invalidate()
+	if configured, builtin := getTraktStatus(t, builtinHandler); !configured || builtin {
+		t.Fatalf("admin ID: configured=%t builtin=%t, want true/false", configured, builtin)
+	}
+}

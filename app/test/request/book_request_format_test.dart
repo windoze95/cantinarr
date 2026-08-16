@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cantinarr/features/request/data/book_ownership.dart';
 import 'package:cantinarr/features/request/data/request_service.dart'
     hide RequestOptions;
 import 'package:cantinarr/features/settings/data/request_settings_service.dart';
@@ -149,6 +150,40 @@ void main() {
     }
   });
 
+  test('an answered rejection is definitive; gateway statuses stay unconfirmed',
+      () async {
+    Future<RequestSubmissionException> submit(int statusCode) async {
+      final adapter = _CaptureAdapter(
+        statusCode: statusCode,
+        response: {'error': 'add failed in a way the app has no label for'},
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+        ..httpClientAdapter = adapter;
+      try {
+        await RequestService(backendDio: dio).requestBook(
+          foreignId: 'book-123',
+          title: 'A Book',
+          format: BookRequestFormat.ebook,
+        );
+        fail('requestBook did not throw for status $statusCode');
+      } on RequestSubmissionException catch (e) {
+        return e;
+      }
+    }
+
+    final rejected = await submit(500);
+    expect(rejected.definitive, isTrue,
+        reason: 'the server answered, so the failure is a confirmed outcome');
+    expect(rejected.message,
+        'The library could not complete this request. Try again later.');
+
+    final gateway = await submit(503);
+    expect(gateway.definitive, isFalse,
+        reason: 'a proxy answering for the server leaves the outcome unknown');
+    expect(gateway.message,
+        'This book could not be requested. Check the connection and try again.');
+  });
+
   test('pending book requests expose media and format labels', () {
     final item = PendingRequestItem.fromJson({
       'id': 1,
@@ -246,6 +281,150 @@ void main() {
 
     expect(result?.message, isEmpty);
   });
+
+  test('a submission carries the durable wait, not just the one-shot message',
+      () async {
+    final adapter = _CaptureAdapter(response: {
+      'status': 'requested',
+      'book_formats': {'ebook': 'requested'},
+      'message': 'This book’s author is still being added to the library.',
+      'book_format_waits': {
+        'ebook': {
+          'reason': 'author_import',
+          'waiting_since': '2026-08-14T20:27:36Z',
+          'last_attempt_at': '2026-08-15T02:35:49Z',
+        },
+      },
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    final result = await RequestService(backendDio: dio).requestBook(
+      foreignId: 'book-123',
+      title: 'A Book',
+      format: BookRequestFormat.ebook,
+    );
+
+    final wait = result?.formatWaits[BookRequestFormat.ebook];
+    expect(wait?.reason, BookWaitReason.authorImport);
+    expect(wait?.waitingSince, DateTime.utc(2026, 8, 14, 20, 27, 36).toLocal());
+    expect(wait?.lastAttemptAt, DateTime.utc(2026, 8, 15, 2, 35, 49).toLocal());
+  });
+
+  test('a waiting book reads as waiting, stays covered, and cannot be re-asked',
+      () async {
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = _StatusAdapter({
+        'status': 'requested',
+        'book_formats': {'ebook': 'requested', 'audiobook': 'unavailable'},
+        'book_format_waits': {
+          'ebook': {
+            'reason': 'author_import',
+            'waiting_since': '2026-08-14T20:27:36Z',
+          },
+        },
+      });
+
+    final detail =
+        await RequestService(backendDio: dio).checkBookStatusDetail('book-123');
+
+    final wait = detail.waitFor(BookRequestFormat.ebook);
+    expect(wait, isNotNull);
+    expect(wait!.label, 'Waiting for library');
+    expect(wait.explanation, contains('still adding this author'));
+    expect(wait.explanation, contains('no action is needed'));
+    // The status word the server had to send for older clients is unchanged,
+    // and coverage still comes from it: a wait must never re-open the row.
+    expect(detail.statusFor(BookRequestFormat.ebook), RequestStatus.requested);
+    expect(detail.isRequestable(BookRequestFormat.ebook), isFalse);
+    expect(detail.hasFormatWait, isTrue);
+    // The format nobody asked for is untouched.
+    expect(detail.waitFor(BookRequestFormat.audiobook), isNull);
+    expect(detail.isRequestable(BookRequestFormat.audiobook), isTrue);
+  });
+
+  test('an unknown wait reason is still a wait, described generically',
+      () async {
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = _StatusAdapter({
+        'status': 'requested',
+        'book_formats': {'ebook': 'requested'},
+        'book_format_waits': {
+          'ebook': {'reason': 'some_future_reason'},
+        },
+      });
+
+    final detail =
+        await RequestService(backendDio: dio).checkBookStatusDetail('book-123');
+
+    final wait = detail.waitFor(BookRequestFormat.ebook);
+    expect(wait?.reason, BookWaitReason.unknown);
+    expect(wait?.label, 'Waiting for library');
+    expect(wait?.explanation, contains('isn’t ready for this book yet'));
+    expect(detail.isRequestable(BookRequestFormat.ebook), isFalse);
+    // A malformed extra must not fail the status closed — coverage came from
+    // book_formats and is unaffected.
+    expect(detail.isKnown, isTrue);
+  });
+
+  test('an older server without waits behaves exactly as it did', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = _StatusAdapter({
+        'status': 'requested',
+        'book_formats': {'ebook': 'requested'},
+      });
+
+    final detail =
+        await RequestService(backendDio: dio).checkBookStatusDetail('book-123');
+
+    expect(detail.waitFor(BookRequestFormat.ebook), isNull);
+    expect(detail.hasFormatWait, isFalse);
+    expect(detail.statusFor(BookRequestFormat.ebook), RequestStatus.requested);
+    expect(detail.isKnown, isTrue);
+  });
+
+  test('live truth retires the wait with the absence it explained', () {
+    const wait = BookFormatWait(reason: BookWaitReason.authorImport);
+    // A wait the server sent moments ago, against an ownership digest that has
+    // since seen the file. Explaining why a book is missing, next to the book,
+    // is its own kind of wrong.
+    const detail = BookRequestStatusDetail(
+      status: RequestStatus.requested,
+      formats: {BookRequestFormat.ebook: RequestStatus.requested},
+      formatWaits: {BookRequestFormat.ebook: wait},
+      ownership: BookOwnership(
+        ebook: FormatOwnership(monitored: true, downloaded: true),
+      ),
+    );
+
+    expect(detail.statusFor(BookRequestFormat.ebook), RequestStatus.available);
+    expect(detail.waitFor(BookRequestFormat.ebook), isNull);
+    expect(detail.hasFormatWait, isFalse);
+  });
+}
+
+/// Answers any GET with one fixed status payload.
+class _StatusAdapter implements HttpClientAdapter {
+  final Map<String, dynamic> response;
+
+  _StatusAdapter(this.response);
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async =>
+      ResponseBody.fromString(
+        jsonEncode(response),
+        200,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+
+  @override
+  void close({bool force = false}) {}
 }
 
 class _CaptureAdapter implements HttpClientAdapter {

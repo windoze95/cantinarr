@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -393,6 +394,37 @@ func TestGetImportHistoryRejectsTruncatedResult(t *testing.T) {
 	}
 }
 
+// TestGetQueueReadsOneCompleteBoundedPage pins the lean queue read's contract:
+// explicit paging (an unpaged read is the server's silent 10-row default page),
+// unknown-series rows included, and truncation an error rather than a shorter
+// queue.
+func TestGetQueueReadsOneCompleteBoundedPage(t *testing.T) {
+	body := `{"totalRecords":2,"records":[{"seriesId":42,"title":"Andor","status":"downloading"},{"seriesId":0,"title":"Unmatched.Release","status":"downloading"}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("page") != "1" || q.Get("pageSize") != "1000" {
+			t.Errorf("queue was not requested in one bounded page: %s", r.URL.RawQuery)
+		}
+		if q.Get("includeUnknownSeriesItems") != "true" {
+			t.Errorf("includeUnknownSeriesItems = %q, want true", q.Get("includeUnknownSeriesItems"))
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+	items, err := NewClient(server.URL, "key").GetQueue()
+	if err != nil {
+		t.Fatalf("GetQueue: %v", err)
+	}
+	if len(items) != 2 || items[0].SeriesID != 42 || items[1].SeriesID != 0 {
+		t.Fatalf("items = %+v, want the matched row and the unknown-series row", items)
+	}
+
+	body = `{"totalRecords":2,"records":[{"seriesId":42}]}`
+	if _, err := NewClient(server.URL, "key").GetQueue(); err == nil {
+		t.Fatal("accepted a truncated queue as a complete page")
+	}
+}
+
 func TestGetQueueDetailedRejectsClampedSinglePage(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -471,5 +503,217 @@ func TestGetImportHistorySinceCarriesSeriesIdentity(t *testing.T) {
 	}
 	if len(records) != 2 || records[0].SeriesID != 6 || records[1].SeriesID != 6 {
 		t.Fatalf("in-window records = %+v, want two series-6 imports", records)
+	}
+}
+
+// TestGetEpisodeFilesReadsSeriesScopedFileFacts pins the series-wide file read:
+// one seriesId-scoped call, and the fields that identify a file apart from the
+// episode it sits on (scene name, import time, quality) survive decoding.
+func TestGetEpisodeFilesReadsSeriesScopedFileFacts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/episodefile" || r.URL.RawQuery != "seriesId=28" {
+			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if got := r.Header.Get("X-Api-Key"); got != "files-key" {
+			t.Errorf("X-Api-Key = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"id":501,"seriesId":28,"seasonNumber":11,"relativePath":"Season 11/S11E07.mkv","path":"/tv/Season 11/S11E07.mkv","size":900,
+			 "sceneName":"Futurama.S11E07.Love.at.First.Scam.1080p.WEB.h264","dateAdded":"2026-07-21T09:30:00Z",
+			 "quality":{"quality":{"name":"WEBDL-1080p"}}},
+			{"id":502,"seriesId":28,"seasonNumber":11}]`))
+	}))
+	t.Cleanup(server.Close)
+
+	files, err := NewClient(server.URL, "files-key").GetEpisodeFiles(28)
+	if err != nil {
+		t.Fatalf("GetEpisodeFiles() error = %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("files = %d, want 2", len(files))
+	}
+	if files[0].SceneName != "Futurama.S11E07.Love.at.First.Scam.1080p.WEB.h264" {
+		t.Errorf("sceneName = %q", files[0].SceneName)
+	}
+	if files[0].DateAdded == nil || !files[0].DateAdded.Equal(time.Date(2026, 7, 21, 9, 30, 0, 0, time.UTC)) {
+		t.Errorf("dateAdded = %v, want 2026-07-21T09:30:00Z", files[0].DateAdded)
+	}
+	if files[0].Quality.Quality.Name != "WEBDL-1080p" {
+		t.Errorf("quality = %q", files[0].Quality.Quality.Name)
+	}
+	// A file Sonarr sent without those fields must decode as absent, not as a
+	// zero timestamp that would read as "imported in year 1".
+	if files[1].DateAdded != nil || files[1].SceneName != "" {
+		t.Errorf("missing file facts decoded as present: %#v", files[1])
+	}
+}
+
+func TestDeleteEpisodeFileUsesExactAuthenticatedEndpoint(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/v3/episodefile/501" || r.URL.RawQuery != "" {
+			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if got := r.Header.Get("X-Api-Key"); got != "delete-key" {
+			t.Errorf("X-Api-Key = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	if err := NewClient(server.URL, "delete-key").DeleteEpisodeFile(501); err != nil {
+		t.Fatalf("DeleteEpisodeFile() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+// TestGetSeriesHistoryScopesToSeriesAndSeason pins the scoped-history read that
+// makes months-old records reachable: it hits /history/series (server-side
+// filtered, bare JSON array — no records envelope), asks for the series and
+// episode context, and sends seasonNumber only when the caller named a season.
+func TestGetSeriesHistoryScopesToSeriesAndSeason(t *testing.T) {
+	var queries []url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/history/series" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		queries = append(queries, r.URL.Query())
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"id":9001,"episodeId":301,"seriesId":28,"eventType":"downloadFolderImported","downloadId":"SAB123","date":"2026-07-21T09:30:00Z","quality":{"quality":{"name":"WEBDL-1080p"}}},
+			{"id":9000,"episodeId":301,"seriesId":28,"eventType":"grabbed","downloadId":"SAB123","date":"2026-07-21T09:00:00Z","data":{"releaseSource":"Rss"}}]`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "key")
+	records, err := client.GetSeriesHistory(28, 0, 0)
+	if err != nil {
+		t.Fatalf("GetSeriesHistory() error = %v", err)
+	}
+	if len(records) != 2 || records[0].ID != 9001 || records[0].EventType != "downloadFolderImported" ||
+		records[0].Quality.Quality.Name != "WEBDL-1080p" || records[1].DownloadID != "SAB123" ||
+		records[1].Data["releaseSource"] != "Rss" {
+		t.Fatalf("records = %+v", records)
+	}
+
+	if _, err := client.GetSeriesHistory(28, 11, 0); err != nil {
+		t.Fatalf("GetSeriesHistory(season) error = %v", err)
+	}
+	if len(queries) != 2 {
+		t.Fatalf("requests = %d, want 2", len(queries))
+	}
+	for i, q := range queries {
+		if q.Get("seriesId") != "28" || q.Get("includeSeries") != "true" || q.Get("includeEpisode") != "true" {
+			t.Errorf("query[%d] = %v", i, q)
+		}
+	}
+	if _, ok := queries[0]["seasonNumber"]; ok {
+		t.Errorf("season 0 sent seasonNumber = %q, want the whole series", queries[0].Get("seasonNumber"))
+	}
+	if got := queries[1].Get("seasonNumber"); got != "11" {
+		t.Errorf("seasonNumber = %q, want 11", got)
+	}
+}
+
+// TestGetSeriesHistoryCapsClientSide pins pageSize as OUR cap, not Sonarr's:
+// /history/series takes no page size, so the request must not invent one and
+// the caller's bound is applied to the (newest-first) records it returned.
+func TestGetSeriesHistoryCapsClientSide(t *testing.T) {
+	var query url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":3},{"id":2},{"id":1}]`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "key")
+	records, err := client.GetSeriesHistory(28, 11, 2)
+	if err != nil {
+		t.Fatalf("GetSeriesHistory() error = %v", err)
+	}
+	if len(records) != 2 || records[0].ID != 3 || records[1].ID != 2 {
+		t.Fatalf("capped records = %+v, want the two newest", records)
+	}
+	if _, ok := query["pageSize"]; ok {
+		t.Errorf("request sent pageSize = %q to an unpaged endpoint", query.Get("pageSize"))
+	}
+	if _, ok := query["page"]; ok {
+		t.Errorf("request sent page = %q to an unpaged endpoint", query.Get("page"))
+	}
+
+	all, err := client.GetSeriesHistory(28, 11, 0)
+	if err != nil {
+		t.Fatalf("GetSeriesHistory(uncapped) error = %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("uncapped records = %d, want all 3", len(all))
+	}
+}
+
+// TestMarkHistoryFailedPostsGrabRecord pins the only route Sonarr offers for
+// blocklisting an already-imported release: a bodiless POST to the grab's own
+// history id.
+func TestMarkHistoryFailedPostsGrabRecord(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v3/history/failed/9000" || r.URL.RawQuery != "" {
+			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if got := r.Header.Get("X-Api-Key"); got != "failed-key" {
+			t.Errorf("X-Api-Key = %q", got)
+		}
+		if body, _ := io.ReadAll(r.Body); len(body) != 0 {
+			t.Errorf("body = %q, want empty", body)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(server.Close)
+
+	if err := NewClient(server.URL, "failed-key").MarkHistoryFailed(9000); err != nil {
+		t.Fatalf("MarkHistoryFailed() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+// TestGetFailedDownloadPolicyReadsInstanceSetting pins where the replacement
+// decision comes from: the instance's own download-client config, not us. Each
+// case sets autoRedownloadFailedFromInteractiveSearch to the OPPOSITE value —
+// it is a neighbouring setting about a different trigger, and a reader that
+// grabbed it instead would otherwise pass.
+func TestGetFailedDownloadPolicyReadsInstanceSetting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"enabled", `{"enableCompletedDownloadHandling":true,"autoRedownloadFailed":true,"autoRedownloadFailedFromInteractiveSearch":false}`, true},
+		{"disabled", `{"enableCompletedDownloadHandling":true,"autoRedownloadFailed":false,"autoRedownloadFailedFromInteractiveSearch":true}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v3/config/downloadclient" || r.URL.RawQuery != "" {
+					t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(server.Close)
+
+			autoRedownload, err := NewClient(server.URL, "key").GetFailedDownloadPolicy()
+			if err != nil {
+				t.Fatalf("GetFailedDownloadPolicy() error = %v", err)
+			}
+			if autoRedownload != tc.want {
+				t.Errorf("autoRedownloadFailed = %v, want %v", autoRedownload, tc.want)
+			}
+		})
 	}
 }

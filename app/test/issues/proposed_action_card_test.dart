@@ -85,6 +85,55 @@ AgentAction _specialSearch() => AgentAction.fromJson({
       'instance_service_type': 'sonarr',
     });
 
+/// A trigger_search proposal that still carries the removed `aired_only` flag.
+/// The server can no longer emit it, so the card must treat it as an
+/// unrecognized field and refuse to offer a decision.
+AgentAction _staleAiredOnlySearch() => AgentAction.fromJson({
+      'id': 15,
+      'issue_id': 5,
+      'kind': 'trigger_search',
+      'params': {
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 11,
+        'aired_only': true,
+      },
+      'rationale': 'Search only what has come out so far.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Show',
+      'issue_media_type': 'tv',
+      'instance_id': 'sonarr-living-room',
+      'instance_name': 'Living Room TV',
+      'instance_service_type': 'sonarr',
+    });
+
+/// A deletion of files the media service already imported. [blocklist] is the
+/// facet under test: the same nine files either just go, or go and take their
+/// releases out of circulation with them.
+AgentAction _deleteFiles({required bool blocklist}) => AgentAction.fromJson({
+      'id': 16,
+      'issue_id': 5,
+      'kind': 'delete_media_files',
+      'params': {
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 11,
+        'episodes': [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        'blocklist': blocklist,
+      },
+      'rationale': 'Every file was imported before its episode aired.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Show',
+      'issue_media_type': 'tv',
+      'instance_id': 'sonarr-living-room',
+      'instance_name': 'Living Room TV',
+      'instance_service_type': 'sonarr',
+    });
+
 /// A fake service that returns canned decision results without any network I/O.
 class _FakeIssuesService extends IssuesService {
   _FakeIssuesService() : super(backendDio: Dio());
@@ -98,6 +147,9 @@ class _FakeIssuesService extends IssuesService {
   /// The `remember` value of the last approveAction call, so tests can prove
   /// the dialog checkbox (and only the checkbox) arms a standing rule.
   bool? lastRemember;
+
+  /// The `override` of the last approveAction call — the episode-sparing edit.
+  Object? lastOverride;
 
   @override
   Future<AgentAction> denyAction(int id, {String? note}) async {
@@ -114,6 +166,7 @@ class _FakeIssuesService extends IssuesService {
     bool remember = false,
   }) async {
     lastRemember = remember;
+    lastOverride = override;
     final error = approveError;
     if (error != null) throw error;
     final base = _proposed();
@@ -295,6 +348,145 @@ void main() {
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
   });
 
+  testWidgets('a search still carrying aired_only is frozen, not decidable',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _staleAiredOnlySearch(),
+    );
+
+    // No scope row survives, and the extra key blocks the decision outright
+    // instead of being silently dropped from a fix an admin then authorises.
+    expect(find.text('Scope'), findsNothing);
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsNothing);
+    expect(
+      find.textContaining('does not recognize'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a blocklisting deletion states the exact, irreversible target',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _deleteFiles(blocklist: true),
+    );
+
+    expect(
+      find.text('Delete the wrong files, block those releases from coming '
+          'back, and look for replacements'),
+      findsOneWidget,
+    );
+    // The exact target, from validated integers — the show's title is not in
+    // the params, so season + episode numbers + count carry it.
+    expect(find.text('Season'), findsOneWidget);
+    expect(find.text('11'), findsOneWidget);
+    expect(find.text('Episodes'), findsOneWidget);
+    expect(find.text('1–9'), findsOneWidget);
+    expect(find.text('Files to delete'), findsOneWidget);
+    expect(find.text('9'), findsOneWidget);
+    expect(find.text('Block the release'), findsOneWidget);
+    expect(find.text('yes'), findsOneWidget);
+    // An irreversible fix is still an approvable one.
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
+
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining(
+          'permanently delete 9 files from your library — season 11, '
+          'episodes 1–9'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+          'This cannot be undone: the files are removed from disk'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+          'will not download those same releases again'),
+      findsOneWidget,
+    );
+    // The repair does not stop at the deletion: the same approval covers
+    // getting back what has already aired, and only what has already aired.
+    expect(
+      find.textContaining('Cantinarr then looks for replacements, but only for '
+          'the episodes of this season that have already aired. The rest of '
+          'the season is left alone — your media service will grab each '
+          'episode as it comes out.'),
+      findsOneWidget,
+    );
+    // Blocking is the one thing that can make the media service search first,
+    // and then Cantinarr stands down rather than duplicating it.
+    expect(
+      find.textContaining('If blocking those releases already sent your media '
+          'service looking for replacements itself, Cantinarr leaves that to '
+          'it.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a files-only deletion warns the same release can return',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _deleteFiles(blocklist: false),
+    );
+
+    expect(
+      find.text('Delete the wrong files already in your library and look for '
+          'replacements'),
+      findsOneWidget,
+    );
+    expect(find.text('Block the release'), findsOneWidget);
+    expect(find.text('no'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
+
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining(
+          'permanently delete 9 files from your library — season 11, '
+          'episodes 1–9'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('This cannot be undone'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('The releases those files came from are not blocked'),
+      findsOneWidget,
+    );
+    // The replacement half of the repair is promised either way.
+    expect(
+      find.textContaining('Cantinarr then looks for replacements, but only for '
+          'the episodes of this season that have already aired. The rest of '
+          'the season is left alone — your media service will grab each '
+          'episode as it comes out.'),
+      findsOneWidget,
+    );
+    // Nothing was blocked, so there is no media-service search to stand down
+    // for — the card must not hedge a search it will definitely run.
+    expect(
+      find.textContaining('Cantinarr leaves that to it'),
+      findsNothing,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('a non-admin sees a read-only "waiting on an admin" footer',
       (tester) async {
     await _pump(
@@ -343,6 +535,7 @@ void main() {
       action: _proposed(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     expect(find.text('Approve this change?'), findsOneWidget);
@@ -392,6 +585,7 @@ void main() {
       action: _proposed(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
@@ -414,6 +608,7 @@ void main() {
       action: _proposed(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
@@ -535,6 +730,7 @@ void main() {
       action: _proposed(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     expect(find.byType(CheckboxListTile), findsNothing);
@@ -556,6 +752,7 @@ void main() {
       action: _proposedWithOffer(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     // The checkbox and its server-typed label render only because the server
@@ -589,6 +786,7 @@ void main() {
       action: _proposedWithOffer(reactivates: true),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     // A paused rule's offer says checking the box re-arms it.
@@ -635,6 +833,101 @@ void main() {
     );
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsNothing);
   });
+
+  // The one edit with no wrong answer: unchecking an episode on a destructive
+  // delete sends an approval override that spares it — never an empty delete.
+  testWidgets('delete card episode chips build a sparing override',
+      (tester) async {
+    final service = _FakeIssuesService();
+    final action = AgentAction.fromJson(<String, dynamic>{
+      'id': 14,
+      'issue_id': 5,
+      'run_id': 9,
+      'kind': 'delete_media_files',
+      'params': {
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 11,
+        'episodes': [1, 2, 3],
+        'blocklist': true,
+      },
+      'rationale': 'impossible files',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_title': 'Futurama',
+      'issue_media_type': 'tv',
+      'issue_status': 'awaiting_approval',
+      'instance_id': 'inst-1',
+      'instance_name': 'TV',
+      'instance_service_type': 'sonarr',
+      'created_at': '2026-06-23T10:00:00Z',
+    });
+    await _pump(tester, auth: _adminState, service: service, action: action);
+
+    expect(find.text('E1'), findsOneWidget);
+    await tester.tap(find.text('E2'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    // Confirm dialog: press its approve button.
+    await tester.tap(find.byType(ElevatedButton).last);
+    await tester.pumpAndSettle();
+
+    final override = service.lastOverride as Map<String, dynamic>?;
+    expect(override, isNotNull, reason: 'a shrunk selection must override');
+    expect(override!['episodes'], [1, 3]);
+    await _drainSnackBar(tester);
+  });
+
+  // The approver must never decide with less evidence than the model: the
+  // card renders the server's remediation memory, recurrence called out, and
+  // the exact media scope.
+  testWidgets('prior attempts render with the recurrence verdict',
+      (tester) async {
+    final action = AgentAction.fromJson(<String, dynamic>{
+      'id': 13,
+      'issue_id': 5,
+      'run_id': 9,
+      'kind': 'remediate_queue',
+      'params': {
+        'media_type': 'tv',
+        'queue_id': 4,
+        'action': 'blocklist_search',
+      },
+      'rationale': 'try again',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_title': 'Loop Show',
+      'issue_media_type': 'tv',
+      'issue_status': 'awaiting_approval',
+      'instance_id': 'inst-1',
+      'instance_name': 'TV',
+      'instance_service_type': 'sonarr',
+      'created_at': '2026-06-23T10:00:00Z',
+      'issue_season': 2,
+      'issue_episode': 3,
+      'issue_occurrences': 3,
+      'prior_attempts': [
+        {
+          'kind': 'remediate_queue',
+          'facet': 'blocklist_search',
+          'executed_at': '2026-06-23T09:00:00Z',
+          'recurred': true,
+        },
+      ],
+    });
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: action,
+    );
+    expect(find.textContaining('came back'), findsOneWidget);
+    expect(find.textContaining('did not hold'), findsOneWidget);
+    expect(find.textContaining('S02E03'), findsOneWidget);
+    expect(find.textContaining('seen 3 times'), findsOneWidget);
+  });
 }
 
 /// A manual-import proposal carrying the server's standing-rule offer.
@@ -662,3 +955,8 @@ AgentAction _proposedWithOffer({bool reactivates = false}) =>
         'reactivates_paused_rule': reactivates,
       },
     });
+
+// The approver must never decide with less evidence than the model: the card
+// renders the server's remediation memory, with recurrence called out.
+void main2() {}
+

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:app_links/app_links.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -8,11 +9,13 @@ import 'core/network/websocket_client.dart';
 import 'core/providers/realtime_provider.dart';
 import 'core/storage/preferences.dart';
 import 'core/theme/app_theme.dart';
+import 'core/utils/version_compat.dart';
 import 'core/widgets/app_ambient_background.dart';
 import 'features/auth/logic/auth_provider.dart';
 import 'features/issues/logic/issues_provider.dart';
 import 'features/notifications/push_service.dart';
 import 'features/request/logic/pending_approvals_provider.dart';
+import 'features/settings/logic/app_version_provider.dart';
 import 'features/settings/logic/update_status_provider.dart';
 import 'navigation/app_router.dart';
 
@@ -468,10 +471,13 @@ class _ReconnectingBar extends StatelessWidget {
   }
 }
 
-/// A persistent, admin-only banner shown at the top of the app when a newer
-/// Cantinarr release is available. Its action links to the admin's configured
-/// management portal (if set) or the update guide otherwise, and it is
-/// dismissible per release — dismissing silences only the offered version.
+/// The persistent banner slot at the top of the app, showing at most one
+/// notice in priority order: this app is older than the server's floor
+/// (everyone — the viewer can fix that one themselves), the server is older
+/// than this app's floor (admins), a newer Cantinarr release exists (admins).
+/// All are warn-only by design — a hard block would be a deliberate future
+/// escalation — and each is dismissible per exact version (pair), so a
+/// dismissal frees the slot and resurfaces only when the versions change.
 class _UpdateBanner extends ConsumerWidget {
   const _UpdateBanner({required this.child});
 
@@ -482,59 +488,117 @@ class _UpdateBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isAdmin = ref.watch(
-      authProvider.select((s) => s.valueOrNull?.user?.isAdmin ?? false),
-    );
-    final status = ref.watch(updateStatusProvider);
-    final dismissed = ref.watch(dismissedUpdateVersionProvider);
-
-    final update = status?.update;
-    if (!isAdmin ||
-        update == null ||
-        !update.available ||
-        update.latest.isEmpty ||
-        dismissed == update.latest) {
-      return child;
-    }
+    final bar = _pickBar(ref);
+    if (bar == null) return child;
 
     return Column(
       children: [
         Material(
           color: AppTheme.surfaceVariant,
-          child: SafeArea(
-            bottom: false,
-            child: _UpdateBannerBar(
-              latest: update.latest,
-              releaseUrl: update.url,
-              managementUrl: status?.managementUrl ?? '',
-              guideUrl: _updateGuideUrl,
-              onDismiss: () => ref
-                  .read(dismissedUpdateVersionProvider.notifier)
-                  .set(update.latest),
-            ),
-          ),
+          child: SafeArea(bottom: false, child: bar),
         ),
         Expanded(child: child),
       ],
     );
   }
+
+  /// The admin's primary update action: their configured management portal,
+  /// else the update guide.
+  (String, String) _updateAction(String managementUrl) =>
+      managementUrl.isNotEmpty
+          ? ('Update', managementUrl)
+          : ('How to update', _updateGuideUrl);
+
+  Widget? _pickBar(WidgetRef ref) {
+    final isAdmin = ref.watch(
+      authProvider.select((s) => s.valueOrNull?.user?.isAdmin ?? false),
+    );
+    final connection =
+        ref.watch(authProvider.select((s) => s.valueOrNull?.connection));
+    final status = ref.watch(updateStatusProvider);
+    final appVersion = ref.watch(appVersionProvider).valueOrNull?.version;
+    final serverFloor = connection?.minAppVersion;
+    final appFloor = ref.watch(minServerVersionProvider);
+
+    final skew = evaluateVersionSkew(
+      isWeb: kIsWeb,
+      isAdmin: isAdmin,
+      appVersion: appVersion,
+      serverVersion: connection?.serverVersion,
+      serverMinAppVersion: serverFloor,
+      minServerVersionFloor: appFloor,
+    );
+
+    switch (skew) {
+      case VersionSkewWarning.appTooOld:
+        final pair = '$appVersion|$serverFloor';
+        if (ref.watch(dismissedAppSkewPairProvider) != pair) {
+          return _UpdateBannerBar(
+            icon: Icons.warning_amber_rounded,
+            message: 'This app is older than your server supports — '
+                'update it from the app store',
+            onDismiss: () =>
+                ref.read(dismissedAppSkewPairProvider.notifier).set(pair),
+          );
+        }
+      case VersionSkewWarning.serverTooOld:
+        final pair = '${connection?.serverVersion}|$appFloor';
+        if (ref.watch(dismissedServerSkewPairProvider) != pair) {
+          final (label, url) = _updateAction(status?.managementUrl ?? '');
+          return _UpdateBannerBar(
+            icon: Icons.warning_amber_rounded,
+            message: 'Server ${connection?.serverVersion} is older than '
+                'this app supports — update the server',
+            actionLabel: label,
+            actionUrl: url,
+            onDismiss: () =>
+                ref.read(dismissedServerSkewPairProvider.notifier).set(pair),
+          );
+        }
+      case null:
+        break;
+    }
+
+    final update = status?.update;
+    final dismissed = ref.watch(dismissedUpdateVersionProvider);
+    if (isAdmin &&
+        update != null &&
+        update.available &&
+        update.latest.isNotEmpty &&
+        dismissed != update.latest) {
+      final (label, url) = _updateAction(status?.managementUrl ?? '');
+      return _UpdateBannerBar(
+        icon: Icons.system_update,
+        message: 'Cantinarr ${update.latest} is available',
+        notesUrl: update.url,
+        actionLabel: label,
+        actionUrl: url,
+        onDismiss: () => ref
+            .read(dismissedUpdateVersionProvider.notifier)
+            .set(update.latest),
+      );
+    }
+    return null;
+  }
 }
 
-/// The update banner's visual content: a short message plus a "Notes" link, the
-/// primary update action, and a dismiss button.
+/// The banner slot's visual content: an icon, a short message, an optional
+/// "Notes" link, an optional primary action, and a dismiss button.
 class _UpdateBannerBar extends StatelessWidget {
   const _UpdateBannerBar({
-    required this.latest,
-    required this.releaseUrl,
-    required this.managementUrl,
-    required this.guideUrl,
+    required this.icon,
+    required this.message,
+    this.notesUrl,
+    this.actionLabel,
+    this.actionUrl,
     required this.onDismiss,
   });
 
-  final String latest;
-  final String releaseUrl;
-  final String managementUrl;
-  final String guideUrl;
+  final IconData icon;
+  final String message;
+  final String? notesUrl;
+  final String? actionLabel;
+  final String? actionUrl;
   final VoidCallback onDismiss;
 
   void _open(String url) {
@@ -546,16 +610,17 @@ class _UpdateBannerBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasPortal = managementUrl.isNotEmpty;
+    final notes = notesUrl;
+    final label = actionLabel;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
       child: Row(
         children: [
-          const Icon(Icons.system_update, size: 18, color: AppTheme.accent),
+          Icon(icon, size: 18, color: AppTheme.accent),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Cantinarr $latest is available',
+              message,
               style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 13,
@@ -564,20 +629,23 @@ class _UpdateBannerBar extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          if (releaseUrl.isNotEmpty)
+          if (notes != null && notes.isNotEmpty)
             TextButton(
-              onPressed: () => _open(releaseUrl),
+              onPressed: () => _open(notes),
               child: const Text('Notes'),
             ),
-          TextButton(
-            onPressed: () => _open(hasPortal ? managementUrl : guideUrl),
-            child: Text(hasPortal ? 'Update' : 'How to update'),
-          ),
+          if (label != null)
+            TextButton(
+              onPressed: () => _open(actionUrl ?? ''),
+              child: Text(label),
+            ),
           IconButton(
             onPressed: onDismiss,
-            icon: const Icon(Icons.close, size: 18),
+            // No tooltip: this bar renders above MaterialApp's Navigator, so
+            // there is no Overlay for one to mount into. The semantic label
+            // keeps the button readable to screen readers.
+            icon: const Icon(Icons.close, size: 18, semanticLabel: 'Dismiss'),
             color: AppTheme.textSecondary,
-            tooltip: 'Dismiss',
             visualDensity: VisualDensity.compact,
           ),
         ],

@@ -8,16 +8,22 @@ import '../../core/network/backend_client.dart';
 import '../../core/storage/secure_storage.dart';
 import '../../navigation/app_router.dart';
 
-/// Bridges native APNs registration to the Cantinarr backend.
+/// Bridges native push registration (APNs on iOS, FCM on Android) to the
+/// Cantinarr backend.
 ///
-/// On iOS this owns a [MethodChannel] to the native `AppDelegate`, which
-/// requests notification authorization, registers with APNs, and reports the
-/// device token back. The token is then sent to the backend's device registry.
+/// Both platforms implement the same [MethodChannel] contract — iOS in
+/// `AppDelegate.swift`, Android in `MainActivity.kt`/`PushMessagingService.kt`
+/// — which requests notification authorization, obtains the platform token,
+/// and reports it back. The token is then sent to the backend's device
+/// registry. The method names keep their historical `Apns` spelling; the token
+/// is opaque to Dart and is an FCM registration token on Android.
 ///
-/// This is a pure platform-channel integration (no Firebase): foreground
-/// notification presentation is handled natively by the
-/// `UNUserNotificationCenterDelegate`. All operations are best-effort and must
-/// never block or break the auth flow, so failures are logged and swallowed.
+/// This is a pure platform-channel integration (no Flutter Firebase plugin):
+/// notification presentation is handled natively on both platforms (iOS via
+/// `UNUserNotificationCenterDelegate`, Android by rendering the gateway's
+/// data-only FCM messages in the messaging service). All operations are
+/// best-effort and must never block or break the auth flow, so failures are
+/// logged and swallowed.
 class PushService {
   PushService(this._ref) {
     // Listen for tokens pushed from native (initial registration and APNs
@@ -29,11 +35,11 @@ class PushService {
 
   final Ref _ref;
 
-  /// The last APNs token successfully sent to the backend, used to avoid
+  /// The last push token successfully sent to the backend, used to avoid
   /// redundant registration calls when the token hasn't changed.
   String? _registeredToken;
 
-  bool get _isSupported => !kIsWeb && Platform.isIOS;
+  bool get _isSupported => !kIsWeb && (Platform.isIOS || Platform.isAndroid);
 
   Future<dynamic> _handleNativeCall(MethodCall call) async {
     switch (call.method) {
@@ -73,7 +79,8 @@ class PushService {
 
   /// Returns the current notification authorization status as reported by the
   /// OS: one of `authorized`, `denied`, `notDetermined`, `provisional`, or
-  /// `ephemeral`. Off-iOS (or on any failure) reports `notDetermined`.
+  /// `ephemeral` (Android only ever reports the first three). On unsupported
+  /// platforms (or on any failure) reports `notDetermined`.
   Future<String> authorizationStatus() async {
     if (!_isSupported) return 'notDetermined';
     try {
@@ -97,7 +104,9 @@ class PushService {
   }
 
   /// Sets the home-screen app-icon badge to [count] (0 clears it), mirroring
-  /// the in-app approvals count. Best-effort; a no-op on unsupported platforms.
+  /// the in-app approvals count. Best-effort; a no-op on unsupported platforms
+  /// and on Android (no public numeric-badge API — launcher dots are
+  /// automatic, so the native side succeeds without doing anything).
   Future<void> setBadgeCount(int count) async {
     if (!_isSupported) return;
     try {
@@ -136,9 +145,17 @@ class PushService {
     switch (type) {
       case 'request_pending':
         router.push('/approvals');
+      case 'agent_digest':
+        router.push('/agent-actions');
       case 'agent_action_pending':
         // A fix needs approval — go straight to the agent approval queue.
         router.push('/agent-actions');
+      case 'profile_change_pending':
+        // An external assistant parked a quality-profile change. The
+        // approvals screen shows every pending proposal with the newest
+        // first, so the list is the right destination whether or not this
+        // particular proposal is still pending on arrival.
+        router.push('/settings/profile-approvals');
       case 'plex_access_request':
         // A user shared their Plex email — the Users screen shows it with the
         // invite actions.
@@ -164,6 +181,10 @@ class PushService {
       case 'new_movie':
       case 'new_episode':
       case 'new_book':
+      // An admin's quality-upgrade alert carries the same identity shape as
+      // the new-content payloads (tmdb_id for movie/tv, foreign_id for
+      // books), so it deep-links to the same media detail.
+      case 'content_upgraded':
         // Books never carry a TMDB id (the server sends tmdb_id 0; a book is
         // keyed on its Chaptarr foreignBookId, carried as foreign_id on
         // decision and new_book payloads). With a foreign_id, deep-link to
@@ -210,6 +231,9 @@ class PushService {
           return;
         }
         router.push('/issues/$createdId');
+      case 'issue_question':
+      case 'issue_fix_confirm':
+      case 'issue_closed':
       case 'issue_updated':
       case 'issue_resolved':
       case 'agent_action_decided':
@@ -278,7 +302,9 @@ class PushService {
     }
   }
 
-  /// POSTs the APNs token to the backend device registry.
+  /// POSTs the push token to the backend device registry. The `apns_token`
+  /// field name is the historical wire contract — the server stores and
+  /// forwards it verbatim for every platform, so it carries the FCM token too.
   Future<void> _sendToken(String token) async {
     try {
       final storage = _ref.read(storageServiceProvider);
@@ -292,7 +318,7 @@ class PushService {
       await dio.post('/api/devices/push-token', data: {
         'device_id': deviceId,
         'apns_token': token,
-        'platform': 'ios',
+        'platform': Platform.isAndroid ? 'android' : 'ios',
       });
       _registeredToken = token;
     } catch (e) {
@@ -383,7 +409,7 @@ String describePushTest(PushTestResult r, {String? username}) {
     return 'No devices were reached — the push gateway has no active token for '
         '${username ?? 'this account'}. Have them reopen the app to re-register.';
   }
-  final hint = _apnsHint(r.firstError);
+  final hint = _providerHint(r.firstError);
   if (r.sent > 0) {
     return 'Sent to ${r.sent}, but ${r.failed} failed$hint.';
   }
@@ -393,10 +419,28 @@ String describePushTest(PushTestResult r, {String? username}) {
       : '$username: delivery failed for $n$hint.';
 }
 
-/// Maps the common APNs rejection reasons to a short hint; otherwise echoes the
-/// raw reason in parentheses (or empty when there is none).
-String _apnsHint(String? error) {
+/// Maps the common APNs/FCM rejection reasons to a short hint; otherwise
+/// echoes the raw reason in parentheses (or empty when there is none). The
+/// all-caps codes are FCM's; the CamelCase ones are APNs' — check the specific
+/// FCM codes first so `UNREGISTERED` never falls through to a substring match.
+String _providerHint(String? error) {
   if (error == null || error.isEmpty) return '';
+  if (error.contains('UNREGISTERED')) {
+    return ' (Google says the token is no longer valid — the app was removed, '
+        'reinstalled, or its data cleared; it re-registers on next launch)';
+  }
+  if (error.contains('SENDER_ID_MISMATCH')) {
+    return ' (the token belongs to a different Firebase project — the app was '
+        'built against a different google-services.json than the push gateway '
+        'serves)';
+  }
+  if (error.contains('INVALID_ARGUMENT')) {
+    return ' (Google rejected the send — a malformed token or payload)';
+  }
+  if (error.contains('provider_not_enabled')) {
+    return ' (the push gateway does not have this platform’s provider '
+        'enabled)';
+  }
   if (error.contains('BadDeviceToken')) {
     return ' (Apple rejected the token — usually a dev build’s sandbox '
         'token sent to production APNs, or a stale token)';

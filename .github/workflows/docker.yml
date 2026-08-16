@@ -23,12 +23,32 @@ on:
         type: boolean
         default: false
 
+# Keyed on the ref rather than the SHA for pushes: back-to-back merges must not
+# race to publish `latest`, and cancelling the older run is what keeps the
+# newest commit's image the one that wins.
 concurrency:
   group: docker-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Nothing reaches GHCR until CI has passed on this exact commit. A pull
+  # request is deliberately exempt: its build below is one of the PR's own
+  # checks, and the pr-N preview image is meant to be pullable while the rest
+  # of the checks are still running.
+  gate:
+    # The repo's default token is contents/packages read only, and a called
+    # workflow can't request a scope its caller doesn't hold — so the scope
+    # that reads another workflow's run status is granted here.
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/require-ci-green.yml
+    with:
+      sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      enforce: ${{ github.event_name != 'pull_request' }}
+
   build:
+    needs: [gate]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,6 +68,20 @@ jobs:
         # server-only changes keep the cached Flutter layer.
         run: |
           echo "number=$(git rev-list --count HEAD -- app)" >> "$GITHUB_OUTPUT"
+
+      - name: Derive build version
+        id: version
+        # Needs the same fetch-depth: 0 checkout as the build-number step
+        # above (git describe wants the tags). Tag builds resolve to the exact
+        # tag (v0.1.0); main/PR builds after a tag exists resolve to
+        # v0.1.0-N-gSHA, which the server's update checker parses as 0.1.0 —
+        # so the `latest` channel compares itself against releases and nags on
+        # release cadence, not per merge. Before any v* tag this falls back to
+        # a bare SHA and the checker stays dormant. --match keeps a future
+        # non-version tag from hijacking the version and silently disabling
+        # the checker.
+        run: |
+          echo "version=$(git describe --tags --always --match 'v[0-9]*')" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
@@ -80,7 +114,7 @@ jobs:
         with:
           context: .
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ steps.version.outputs.version }}
             APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
           platforms: linux/amd64
           load: true
@@ -123,7 +157,7 @@ jobs:
         with:
           context: .
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ steps.version.outputs.version }}
             APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
           platforms: linux/arm64
           load: true
@@ -147,6 +181,8 @@ jobs:
         with:
           context: server
           file: server/Dockerfile
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
           platforms: linux/amd64
           load: true
           push: false
@@ -171,7 +207,7 @@ jobs:
         with:
           context: .
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ steps.version.outputs.version }}
             APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
           platforms: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch) && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: true
@@ -179,3 +215,36 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=published
           cache-to: type=gha,mode=max,scope=published
+
+  # The GitHub Release is what the server's update checker polls
+  # (releases/latest) and what the banner's "Notes" button opens. It must
+  # never precede the image it announces, so it waits on the publish job; the
+  # gate already held everything until CI was green on this exact commit (a
+  # v* tag reuses the CI verdict from the main push of the same commit).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release for ${{ github.ref_name }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Workflow re-runs must not fail on an already-created release.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to do."
+            exit 0
+          fi
+          # A -suffixed tag (v0.2.0-rc.1) is a prerelease: GitHub keeps it off
+          # releases/latest, so the banner only ever offers stable releases.
+          prerelease_flag=""
+          case "$TAG" in *-*) prerelease_flag="--prerelease" ;; esac
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --generate-notes \
+            $prerelease_flag

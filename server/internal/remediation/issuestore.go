@@ -105,11 +105,14 @@ func (s *Service) concludeIssueCAS(ctx context.Context, issueID int64, status, r
 }
 
 type issueClosureOptions struct {
-	expectedStatus      string
-	expectedRunID       int64
-	ageModifier         string
-	conflictIfClosed    bool
-	adminID             int64
+	expectedStatus   string
+	expectedRunID    int64
+	ageModifier      string
+	conflictIfClosed bool
+	adminID          int64
+	// reporterID attributes the closing thread message to the person who filed
+	// the issue, for the one closure kind that is their own judgment.
+	reporterID          int64
 	silentNotifications bool
 }
 
@@ -153,7 +156,8 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	// preference overrides it. Explicit admin completion and dismissal are human
 	// decisions already seen by an admin, so they close read.
 	read := 0
-	if status == IssueDismissed || resolutionKind == ResolutionAdminCompleted || (status == IssueResolved && s.Settings().MarkResolvedAsRead) {
+	if status == IssueDismissed || resolutionKind == ResolutionAdminCompleted ||
+		resolutionKind == ResolutionReporterConfirmed || (status == IssueResolved && s.Settings().MarkResolvedAsRead) {
 		read = 1
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -161,7 +165,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		return false, fmt.Errorf("begin conclude issue: %w", err)
 	}
 	defer tx.Rollback()
-	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
 		var executing int
 		if err := tx.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
@@ -176,7 +180,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 			return false, fmt.Errorf("an approved fix is still executing; wait for its outcome before closing the issue")
 		}
 	}
-	if resolutionKind == ResolutionArrStateCleared {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement {
 		var unknown int
 		if err := tx.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
@@ -280,7 +284,12 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	if len(autoRuleIDs) > 0 {
 		switch {
 		case status == IssueResolved &&
-			(resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAgentConcluded):
+			(resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAgentConcluded ||
+				resolutionKind == ResolutionReporterConfirmed ||
+				// Removed-and-blocklisted with no replacement available IS the
+				// intended outcome of the rule's own action; issue 859's rule
+				// was paused by its success for want of this membership.
+				resolutionKind == ResolutionRemovedNoReplacement):
 			for _, ruleID := range autoRuleIDs {
 				if _, err := tx.ExecContext(ctx,
 					`UPDATE agent_approval_rules
@@ -310,7 +319,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	// An external observation/admin close can race a running or parked agent.
 	// Terminalize those runs here; an agent-concluded run is finalized by the
 	// Runner immediately after this transaction and must not be mislabeled.
-	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionReporterTimeout || resolutionKind == ResolutionAdminCompleted {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionReporterTimeout || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
 		stopReason := "external_resolution"
 		if resolutionKind == ResolutionAdminDismissed {
 			stopReason = "admin_dismissed"
@@ -320,8 +329,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 			stopReason = stopUserUnresponsive
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE agent_runs SET status = 'aborted', stop_reason = ?, deadline_at = NULL,
-				 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = ?, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 				 WHERE issue_id = ? AND status IN ('running','waiting_user','waiting_approval','resume_pending')
 				   AND (? = 0 OR id != ?)`,
 			stopReason, issueID, opts.expectedRunID, opts.expectedRunID,
@@ -336,6 +344,20 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 			issueID, AuthorAdmin, opts.adminID, resolution,
 		); err != nil {
 			return false, fmt.Errorf("record admin resolution note: %w", err)
+		}
+	}
+	if resolutionKind == ResolutionReporterConfirmed {
+		// Written HERE rather than by the caller so the reporter's word and the
+		// close are one transaction. Outside it, a double tap could thread the
+		// confirmation twice before one lost the CAS, and a confirmation that
+		// lost a race with a starting dispatch would leave its message sitting
+		// on a still-open issue.
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+			 VALUES (?, ?, ?, ?)`,
+			issueID, AuthorUser, opts.reporterID, reporterConfirmedMessage,
+		); err != nil {
+			return false, fmt.Errorf("record reporter confirmation: %w", err)
 		}
 	}
 	if resolutionKind == ResolutionReporterTimeout {
@@ -382,6 +404,85 @@ func (s *Service) EscalateIssue(ctx context.Context, issueID int64, reason strin
 // GiveUpIssue atomically terminalizes the active run and moves its issue to
 // needs_admin with the human-readable message. A process loss can therefore
 // never leave an investigating issue pointing at a gave_up run.
+// ParkAwaitingConfirmation ends a user-report investigation whose fix EXECUTED
+// but whose subjective verdict remains with the reporter. Same transactional
+// shape as GiveUpIssue — run finalized, claim released, pending proposals
+// superseded, message threaded — with three deliberate differences: the issue
+// parks at awaiting_confirmation instead of needs_admin, it stays READ (this
+// state pages the reporter, never the admin queue — the 7-day sweep is what
+// escalates an unanswered wait), and no rule is paused and no breaker fed —
+// a fix awaiting its verdict is not yet a failure verdict for anything.
+func (s *Service) ParkAwaitingConfirmation(ctx context.Context, issueID, runID int64, stopReason, message string) (bool, error) {
+	message = secrets.RedactText(message)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin confirm-park transition: %w", err)
+	}
+	defer tx.Rollback()
+	if runID != 0 {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE agent_runs SET status = ?, stop_reason = ?, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			 WHERE id = ? AND issue_id = ? AND status IN (?, ?)`,
+			runStatusGaveUp, stopReason, runID, issueID, runStatusRunning, runStatusResumePending,
+		)
+		if err != nil {
+			return false, fmt.Errorf("finalize confirm-park run: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return false, nil
+		}
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE issues SET status = ?, resolution = '', resolution_kind = '', read = 1,
+		 active_run_id = NULL, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND closed_at IS NULL AND active_run_id = ? AND source = ?`,
+		IssueAwaitingConfirmation, issueID, runID, SourceUser,
+	)
+	if err != nil {
+		return false, fmt.Errorf("park issue awaiting confirmation: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE agent_actions SET status = ?, decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP),
+		 result_text = COALESCE(result_text, 'Superseded: the applied fix now awaits the reporter''s confirmation.')
+		 WHERE issue_id = ? AND status = ?`,
+		ActionSuperseded, issueID, ActionProposed,
+	); err != nil {
+		return false, fmt.Errorf("supersede confirm-park proposals: %w", err)
+	}
+	if message != "" {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+			 VALUES (?, ?, NULL, ?)`, issueID, AuthorAgent, message,
+		); err != nil {
+			return false, fmt.Errorf("record confirm-park message: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit confirm-park transition: %w", err)
+	}
+	s.pingIssueUpdated(issueID)
+	s.notifyReporter(issueID, "issue_fix_confirm")
+	return true, nil
+}
+
+// notifyReporter fires a reporter-loop push/WS event at the issue's reporter.
+// Event names match the push notifier's reporter-loop switch; unknown names
+// simply ride the websocket. Best-effort: a lost push never blocks a
+// transition.
+func (s *Service) notifyReporter(issueID int64, eventType string) {
+	if s.notifier == nil {
+		return
+	}
+	var reporterID sql.NullInt64
+	if err := s.db.QueryRow("SELECT reporter_id FROM issues WHERE id = ?", issueID).Scan(&reporterID); err != nil || !reporterID.Valid {
+		return
+	}
+	s.notifier.NotifyUser(reporterID.Int64, eventType, map[string]interface{}{"issue_id": issueID})
+}
+
 func (s *Service) GiveUpIssue(ctx context.Context, issueID, runID int64, stopReason, message, reason string) (bool, error) {
 	message = secrets.RedactText(message)
 	reason = secrets.RedactText(reason)
@@ -392,8 +493,7 @@ func (s *Service) GiveUpIssue(ctx context.Context, issueID, runID int64, stopRea
 	defer tx.Rollback()
 	if runID != 0 {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL,
-			 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = ?, stop_reason = ?, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 			 WHERE id = ? AND issue_id = ? AND status IN (?, ?)`,
 			runStatusGaveUp, stopReason, runID, issueID, runStatusRunning, runStatusResumePending,
 		)
@@ -448,7 +548,7 @@ func (s *Service) GiveUpIssue(ctx context.Context, issueID, runID int64, stopRea
 	}
 	var pausedRules []int64
 	for _, autoRuleID := range autoRuleIDs {
-		paused, err := pauseRuleForFailureTx(tx, autoRuleID, issueID, autoRulePausedIssueUnresolved)
+		paused, err := pauseRuleForFailureTx(tx, autoRuleID, issueID, autoRulePausedNeedsAdmin)
 		if err != nil {
 			return false, err
 		}
@@ -542,6 +642,15 @@ func (s *Service) ProposeAction(ctx context.Context, issueID int64, kindStr stri
 	canonical, verr := validateActionParams(kind, rawParams)
 	if verr != nil {
 		return 0, false, verr
+	}
+	// The moment a label first matters for rule matching: a season-scoped user
+	// wrong-content report earns the typed pre-air label here when the server's
+	// own season check trips. Best-effort and outside the proposal tx — the
+	// stamp is a rule-matching fact, never a proposal precondition.
+	if kind == ActionDeleteMediaFiles {
+		if issue, ierr := s.GetIssue(issueID); ierr == nil {
+			s.stampUserContentLabel(issue)
+		}
 	}
 	if toolUseID == "" {
 		return 0, false, fmt.Errorf("proposal requires its model tool gate id")
@@ -685,7 +794,12 @@ func (s *Service) notifyIssueResolved(issueID int64, status string) {
 	}
 	data := map[string]interface{}{"issue_id": issueID, "status": status}
 	var reporterID sql.NullInt64
-	if err := s.db.QueryRow("SELECT reporter_id FROM issues WHERE id = ?", issueID).Scan(&reporterID); err == nil && reporterID.Valid {
+	var resolutionKind sql.NullString
+	if err := s.db.QueryRow("SELECT reporter_id, resolution_kind FROM issues WHERE id = ?", issueID).Scan(&reporterID, &resolutionKind); err == nil && reporterID.Valid {
+		// issue_closed is the reporter's push; a close THEY made needs no page.
+		if resolutionKind.String != ResolutionReporterConfirmed {
+			s.notifier.NotifyUser(reporterID.Int64, "issue_closed", data)
+		}
 		s.notifier.NotifyUser(reporterID.Int64, "issue_updated", data)
 	}
 	s.notifier.NotifyAdmins("issue_updated", data)

@@ -26,6 +26,21 @@ class MediaPathMapping {
       };
 }
 
+/// One instance's live instant-updates state. `state` explains a
+/// not-configured answer ('missing', 'stale', 'credential_missing',
+/// 'no_public_url'); unknown values from a newer server render generically.
+class InstanceWebhookStatus {
+  final bool supported;
+  final bool configured;
+  final String state;
+
+  const InstanceWebhookStatus({
+    required this.supported,
+    required this.configured,
+    required this.state,
+  });
+}
+
 /// Calls the backend instance CRUD API endpoints.
 class InstanceApiService {
   final Dio _dio;
@@ -143,6 +158,22 @@ class InstanceApiService {
   /// Connect webhook. Its callback credential remains entirely server-side.
   Future<void> configureWebhook(String id) async {
     await _dio.post('/api/instances/$id/webhook');
+  }
+
+  /// Live instant-updates state, derived by the server from the arr's own
+  /// Connect list on every call — never a stored flag, which would drift the
+  /// moment an admin edited the arr directly. Older servers without the route
+  /// answer 404/405; that propagates for the caller to treat as unknown.
+  Future<InstanceWebhookStatus> webhookStatus(String id) async {
+    final resp = await _dio.get('/api/instances/$id/webhook');
+    final map = resp.data is Map<String, dynamic>
+        ? resp.data as Map<String, dynamic>
+        : const <String, dynamic>{};
+    return InstanceWebhookStatus(
+      supported: map['supported'] == true,
+      configured: map['configured'] == true,
+      state: map['state'] as String? ?? '',
+    );
   }
 
   /// Per-user default pins for this instance's service type, keyed by user id.

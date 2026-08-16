@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,18 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 )
+
+// queueEnvelope wraps a records array in the paged envelope the arr queue
+// endpoint serves; the client's bounded-page read fails closed unless
+// totalRecords matches the page.
+func queueEnvelope(records string) string {
+	if records == "" {
+		records = "[]"
+	}
+	var rows []json.RawMessage
+	_ = json.Unmarshal([]byte(records), &rows)
+	return fmt.Sprintf(`{"totalRecords":%d,"records":%s}`, len(rows), records)
+}
 
 // witnessDB opens a file-backed database with the full schema. File-backed
 // rather than :memory: so two hubs can share it the way two processes share the
@@ -122,7 +135,7 @@ func TestQueueWitnessResumesRadarrDepartureAcrossRestart(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == "/api/v3/queue":
-			fmt.Fprintf(w, `{"records":%s}`, queue)
+			fmt.Fprint(w, queueEnvelope(queue))
 		case r.URL.Path == "/api/v3/movie/42":
 			fmt.Fprint(w, `{"id":42,"title":"The Matrix","tmdbId":603,"hasFile":true,"monitored":true}`)
 		default:
@@ -144,6 +157,44 @@ func TestQueueWitnessResumesRadarrDepartureAcrossRestart(t *testing.T) {
 
 	if got := after.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
 		t.Fatalf("resumed movie witness = %v, want exactly The Matrix|603", got)
+	}
+}
+
+// TestPollSkipsUnknownMediaRows pins the unknown-item contract: a queue row
+// the arr could not match to a library record (media id 0) is visible to the
+// poller — the read no longer drops it — but it has no identity to look up,
+// witness, or announce, so its departure must alert on the matched row only
+// and must never fetch /movie/0.
+func TestPollSkipsUnknownMediaRows(t *testing.T) {
+	database := witnessDB(t)
+	var queue string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v3/queue":
+			fmt.Fprint(w, queueEnvelope(queue))
+		case r.URL.Path == "/api/v3/movie/42":
+			fmt.Fprint(w, `{"id":42,"title":"The Matrix","tmdbId":603,"hasFile":true,"monitored":true}`)
+		case r.URL.Path == "/api/v3/movie/0":
+			t.Error("poller looked up movie id 0 for an unknown-media queue row")
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		default:
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := radarr.NewClient(srv.URL, "test-key")
+
+	queue = `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50},` +
+		`{"id":2,"movieId":0,"title":"Unmatched.Release","status":"downloading","size":100,"sizeleft":80}]`
+	content := &recordingContent{}
+	hub := NewHub(nil, nil, nil, database, content, nil)
+	hub.pollRadarrInstance("movies-a", client)
+
+	queue = `[]`
+	hub.pollRadarrInstance("movies-a", client)
+	if got := content.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
+		t.Fatalf("departure alerts = %v, want exactly the matched movie", got)
 	}
 }
 
@@ -495,6 +546,9 @@ func (p *probeContent) NotifyNewBook(title, foreignID, instanceID, format string
 		p.onBook()
 	}
 }
+func (p *probeContent) NotifyUpgradedMovie(title string, tmdbID int)                   {}
+func (p *probeContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int)           {}
+func (p *probeContent) NotifyUpgradedBook(title, foreignID, instanceID, format string) {}
 
 func joinComma(parts []string) string {
 	out := ""

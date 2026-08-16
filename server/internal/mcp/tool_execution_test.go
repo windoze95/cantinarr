@@ -425,7 +425,11 @@ func newRemediationRadarr(t *testing.T, recorder *callRecorder, queueJSON string
 
 const remediationMovieQueueJSON = `{"totalRecords":1,"records":[{"id":42,"movieId":7,"downloadId":"dl-1","protocol":"usenet","title":"Stuck.Release","movie":{"id":7,"title":"Scoped Movie","year":2026,"tmdbId":550}}]}`
 
-func TestRemediateQueueItemBlocklistSearchRemovesThenSearchesSameMovie(t *testing.T) {
+// Blocklisting is what triggers the service's own failed-download handling, so
+// Cantinarr must add no search of its own — an agent that did would produce
+// behaviour no human clicking the same button gets, and would override settings
+// the administrator already made.
+func TestRemediateQueueItemBlocklistSearchLeavesReplacementToTheService(t *testing.T) {
 	recorder := &callRecorder{}
 	arrServer := newRemediationRadarr(t, recorder, remediationMovieQueueJSON)
 
@@ -439,22 +443,52 @@ func TestRemediateQueueItemBlocklistSearchRemovesThenSearchesSameMovie(t *testin
 	if err != nil {
 		t.Fatalf("remediate_queue_item: %v", err)
 	}
-	if !strings.Contains(result.Text, "Removed and blocklisted queue item 42") || !strings.Contains(result.Text, "Scoped Movie") {
+	if !strings.Contains(result.Text, "Removed and blocklisted queue item 42") ||
+		!strings.Contains(result.Text, "failed-download handling") {
 		t.Fatalf("result = %q", result.Text)
 	}
 
 	mutations := recorder.mutations()
-	if len(mutations) != 2 {
-		t.Fatalf("mutations = %+v, want remove followed by search", mutations)
+	if len(mutations) != 1 {
+		t.Fatalf("mutations = %+v, want the blocklisting DELETE alone", mutations)
 	}
 	if mutations[0].Method != http.MethodDelete ||
 		mutations[0].URI != "/api/v3/queue/42?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false" {
-		t.Fatalf("first mutation = %+v, want blocklisting DELETE of queue 42", mutations[0])
+		t.Fatalf("mutation = %+v, want a DELETE that leaves redownload to the service", mutations[0])
 	}
-	command := decodeBody(t, mutations[1].Body)
-	movieIDs, _ := command["movieIds"].([]any)
-	if command["name"] != "MoviesSearch" || len(movieIDs) != 1 || movieIDs[0] != float64(7) {
-		t.Fatalf("replacement search command = %v, want MoviesSearch for movie 7", command)
+}
+
+// The whole point of blocklist_only is the search that does NOT happen: when the
+// library already holds a copy, an automatic replacement hunt is how a dead
+// release gets re-grabbed from a listing the blocklist does not match. The
+// blocklist must still be set, or the service's own RSS pass brings it straight
+// back.
+func TestRemediateQueueItemBlocklistOnlyBlocklistsWithoutSearching(t *testing.T) {
+	recorder := &callRecorder{}
+	arrServer := newRemediationRadarr(t, recorder, remediationMovieQueueJSON)
+
+	server := newDefaultInstanceToolServer(t, map[string]string{"radarr": arrServer.URL})
+	result, err := server.ExecuteTool(
+		context.Background(),
+		"remediate_queue_item",
+		json.RawMessage(`{"queue_id":42,"media_type":"movie","action":"blocklist_only"}`),
+		adminCallContext(),
+	)
+	if err != nil {
+		t.Fatalf("remediate_queue_item: %v", err)
+	}
+	if !strings.Contains(result.Text, "Removed and blocklisted queue item 42") ||
+		!strings.Contains(result.Text, "without searching for a replacement") {
+		t.Fatalf("result = %q", result.Text)
+	}
+
+	mutations := recorder.mutations()
+	if len(mutations) != 1 {
+		t.Fatalf("mutations = %+v, want the DELETE alone with no replacement search", mutations)
+	}
+	if mutations[0].Method != http.MethodDelete ||
+		mutations[0].URI != "/api/v3/queue/42?removeFromClient=true&blocklist=true&skipRedownload=true&changeCategory=false" {
+		t.Fatalf("mutation = %+v, want a blocklisting DELETE with skipRedownload=true", mutations[0])
 	}
 }
 
@@ -482,7 +516,9 @@ func TestRemediateQueueItemChangeCategoryKeepsDownloadInClient(t *testing.T) {
 	}
 }
 
-func TestRemediateQueueItemTVBlocklistSearchTargetsExactEpisode(t *testing.T) {
+// Same contract on the TV side: clear and blocklist the exact episode's item,
+// and leave the replacement question to Sonarr's own settings.
+func TestRemediateQueueItemTVBlocklistSearchLeavesReplacementToTheService(t *testing.T) {
 	recorder := &callRecorder{}
 	arrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -514,16 +550,11 @@ func TestRemediateQueueItemTVBlocklistSearchTargetsExactEpisode(t *testing.T) {
 	}
 
 	mutations := recorder.mutations()
-	if len(mutations) != 2 {
-		t.Fatalf("mutations = %+v, want remove followed by episode search", mutations)
+	if len(mutations) != 1 {
+		t.Fatalf("mutations = %+v, want the blocklisting DELETE alone", mutations)
 	}
 	if mutations[0].URI != "/api/v3/queue/8?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false" {
-		t.Fatalf("first mutation = %+v", mutations[0])
-	}
-	command := decodeBody(t, mutations[1].Body)
-	episodeIDs, _ := command["episodeIds"].([]any)
-	if command["name"] != "EpisodeSearch" || len(episodeIDs) != 1 || episodeIDs[0] != float64(55) {
-		t.Fatalf("replacement search command = %v, want EpisodeSearch for episode 55", command)
+		t.Fatalf("mutation = %+v, want a DELETE that leaves redownload to Sonarr", mutations[0])
 	}
 }
 
@@ -539,7 +570,7 @@ func TestRemediateQueueItemRejectsUnknownTargetsBeforeMutating(t *testing.T) {
 			json.RawMessage(`{"queue_id":42,"media_type":"movie","action":"nuke"}`),
 			adminCallContext(),
 		)
-		assertRejectedWith(t, err, `action must be "remove", "blocklist_search", or "change_category"`)
+		assertRejectedWith(t, err, `action must be "remove", "blocklist_search", "blocklist_only", or "change_category"`)
 	})
 
 	t.Run("missing queue item", func(t *testing.T) {
@@ -1147,7 +1178,12 @@ func TestGetQueueRendersProgressErrorsAndExactScopeVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("absent-target get_queue: %v", err)
 	}
-	if !strings.Contains(result.Text, "Movie queue: empty.") {
+	// Empty, and explicit about what that does and does not rule out: the
+	// typed Verification below is the machine answer, this is the one the
+	// model reads.
+	if !strings.Contains(result.Text, "Movie queue: empty") ||
+		!strings.Contains(result.Text, "queue item 41") ||
+		!strings.Contains(result.Text, "already in the library") {
 		t.Fatalf("absent-target render = %q", result.Text)
 	}
 	if result.Verification == nil || !result.Verification.ExactScope || result.Verification.TargetPresent {

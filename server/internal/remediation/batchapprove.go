@@ -47,7 +47,8 @@ type BatchApprovalItem struct {
 //
 // No overrides and no remember: editing params or arming a standing
 // auto-approval rule are deliberate per-proposal decisions that keep their
-// own single-action flow.
+// own single-action flow. Destructive kinds are refused per-item for the same
+// reason (see the D6 skip below): file deletion keeps its single-card confirm.
 func (s *Service) ApproveActions(adminID int64, ids []int64) []BatchApprovalItem {
 	results := make([]BatchApprovalItem, 0, len(ids))
 	seen := make(map[int64]struct{}, len(ids))
@@ -56,6 +57,21 @@ func (s *Service) ApproveActions(adminID int64, ids []int64) []BatchApprovalItem
 			continue
 		}
 		seen[id] = struct{}{}
+		// D6: a destructive fix never rides a batch. delete_media_files is the
+		// one kind that destroys files on disk, and its single-card confirm
+		// (which repeats the exact episodes and says it cannot be undone) is
+		// the decision surface it deserves — a batch dialog's per-card warnings
+		// are exactly the ones nobody read. Structural, not UI copy: the server
+		// refuses it here whatever client sent the list.
+		var kind string
+		if err := s.db.QueryRow("SELECT kind FROM agent_actions WHERE id = ?", id).Scan(&kind); err == nil &&
+			ActionKind(kind) == ActionDeleteMediaFiles {
+			results = append(results, BatchApprovalItem{
+				ID: id, Status: "skipped",
+				Detail: "Deleting imported files needs its own approval — open this fix and approve it individually.",
+			})
+			continue
+		}
 		act, err := s.ApproveAction(adminID, id, nil)
 		switch {
 		case errors.Is(err, ErrActionDecisionConflict):

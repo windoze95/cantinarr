@@ -2,6 +2,7 @@ package arr
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -429,5 +430,115 @@ func TestDiagnoseFirstMatchWins(t *testing.T) {
 	got := Diagnose(sig)
 	if got.Problem != "Nothing importable in the folder" {
 		t.Fatalf("first-match-wins broken: got %q", got.Problem)
+	}
+}
+
+// fileID is a shorthand for the tri-state library file field.
+func fileID(id int64) *int64 { return &id }
+
+// bp is a shorthand for the tri-state provenance field.
+func bp(v bool) *bool { return &v }
+
+// Dropping a dead release without replacing it needs BOTH halves to be true:
+// the library already has a copy, AND nobody went looking for this download.
+// Each half rules out a different mistake — a library gap that RSS alone will
+// never fill (it carries only newly POSTED releases), and overruling someone
+// who explicitly asked for the thing.
+func TestDeadReleaseIsOnlyAbandonedWhenNobodyAskedAndACopyExists(t *testing.T) {
+	stalled := QueueSignal{
+		TrackedDownloadStatus: "error",
+		ErrorMessage:          "The download is stalled with no connections",
+	}
+
+	cases := []struct {
+		name        string
+		mediaFileID *int64
+		opportunist *bool
+		wantActions []string
+	}{
+		{
+			name: "nobody asked and a copy exists", mediaFileID: fileID(622), opportunist: bp(true),
+			wantActions: []string{ActionBlocklistOnly},
+		},
+		{
+			name: "a search produced it, so someone wanted it now", mediaFileID: fileID(622), opportunist: bp(false),
+			wantActions: []string{ActionBlocklistSearch},
+		},
+		{
+			name: "unknown provenance never assumes nobody asked", mediaFileID: fileID(622), opportunist: nil,
+			wantActions: []string{ActionBlocklistSearch},
+		},
+		{
+			name: "a library gap is filled even when nobody asked", mediaFileID: fileID(0), opportunist: bp(true),
+			wantActions: []string{ActionBlocklistSearch},
+		},
+		{
+			name: "unknown file state fails safe toward replacing", mediaFileID: nil, opportunist: bp(true),
+			wantActions: []string{ActionBlocklistSearch},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			sig := stalled
+			sig.MediaFileID = tt.mediaFileID
+			sig.GrabbedOpportunistically = tt.opportunist
+			got := Diagnose(sig)
+			if !slices.Equal(got.SuggestedActions, tt.wantActions) {
+				t.Fatalf("actions = %v, want %v", got.SuggestedActions, tt.wantActions)
+			}
+			// The problem label is a persisted rule key: it must NOT fork on
+			// library state or provenance, or standing rules keyed on it
+			// silently stop matching.
+			if got.Problem != "Download stalled" {
+				t.Fatalf("problem = %q, want the label unchanged", got.Problem)
+			}
+			abandoning := slices.Equal(tt.wantActions, []string{ActionBlocklistOnly})
+			if abandoning != strings.Contains(got.Transparency, "nobody asked") {
+				t.Fatalf("transparency does not match the fix: %q", got.Transparency)
+			}
+		})
+	}
+}
+
+// Resolving provenance costs a history read, so the classifier has to tell
+// callers when it would actually change the answer.
+func TestProvenanceIsOnlyWorthReadingWhenItChangesTheFix(t *testing.T) {
+	dead := QueueSignal{TrackedDownloadStatus: "error", ErrorMessage: "The download is stalled with no connections"}
+	withCopy := dead
+	withCopy.MediaFileID = fileID(622)
+	if !Diagnose(withCopy).ReplacementIsOptional(withCopy) {
+		t.Fatal("a dead release with a copy on disk should invite a provenance read")
+	}
+	gap := dead
+	gap.MediaFileID = fileID(0)
+	if Diagnose(gap).ReplacementIsOptional(gap) {
+		t.Fatal("a library gap must be filled regardless of who asked")
+	}
+	importable := QueueSignal{
+		TrackedDownloadStatus: "warning", TrackedDownloadState: "importBlocked",
+		StatusMessages: msg("Invalid video file: sample.mkv"), MediaFileID: fileID(622),
+	}
+	if Diagnose(importable).ReplacementIsOptional(importable) {
+		t.Fatal("a verdict that still offers an import is not a throw-it-away verdict")
+	}
+}
+
+// A verdict that also offers a manual import is about a file that may still be
+// importable — a different question from whether the library has a copy. Those
+// keep their replacement search.
+func TestDiagnoseKeepsTheSearchWhenAnImportIsStillWorthTrying(t *testing.T) {
+	sig := QueueSignal{
+		TrackedDownloadStatus: "warning",
+		TrackedDownloadState:  "importBlocked",
+		StatusMessages:        msg("Invalid video file: sample.mkv"),
+		MediaFileID:           fileID(622),
+	}
+	got := Diagnose(sig)
+	want := []string{ActionForceImport, ActionBlocklistSearch}
+	if !slices.Equal(got.SuggestedActions, want) {
+		t.Fatalf("actions = %v, want %v left alone", got.SuggestedActions, want)
+	}
+	if strings.Contains(got.Transparency, "already have a copy") {
+		t.Fatalf("multi-option verdict gained the abandon copy: %q", got.Transparency)
 	}
 }

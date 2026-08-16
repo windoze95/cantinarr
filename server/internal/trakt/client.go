@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/version"
 )
 
 // Client talks to the Trakt API. baseURL is a field so tests can point it at
@@ -26,6 +28,16 @@ func NewClient(clientID string) *Client {
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
+}
+
+// setHeaders applies Trakt's required request headers. The User-Agent
+// identifies the app by name and build, which matters once every install
+// shares the built-in client ID.
+func (c *Client) setHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("trakt-api-version", "2")
+	req.Header.Set("trakt-api-key", c.clientID)
+	req.Header.Set("User-Agent", "cantinarr/"+version.Version)
 }
 
 type IDResult struct {
@@ -53,9 +65,7 @@ func (c *Client) DoGetRaw(path string, params url.Values) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create trakt request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("trakt-api-version", "2")
-	req.Header.Set("trakt-api-key", c.clientID)
+	c.setHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -75,9 +85,7 @@ func (c *Client) SearchByTMDB(tmdbID int, mediaType string) (*IDResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("trakt-api-version", "2")
-	req.Header.Set("trakt-api-key", c.clientID)
+	c.setHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

@@ -311,22 +311,34 @@ class _ChaptarrBookDetailSheetState
   }
 }
 
-String _historyEventLabel(ChaptarrHistoryRecord r) {
+/// Exported for the wire-vocabulary test: every event name Chaptarr's
+/// history enum can emit must map to a readable label, never the raw name.
+String chaptarrBookHistoryEventLabel(ChaptarrHistoryRecord r) {
   switch (r.eventType) {
     case 'grabbed':
       final indexer = r.indexer;
       return indexer != null && indexer.isNotEmpty
           ? 'Grabbed from $indexer'
           : 'Grabbed';
+    // Chaptarr's history enum spells whole-download imports downloadImported;
+    // the previously matched downloadFolderImported never occurs on the wire.
     case 'bookFileImported':
-    case 'downloadFolderImported':
+    case 'downloadImported':
       return 'Imported';
+    case 'bookImportIncomplete':
+      return 'Import incomplete';
     case 'downloadFailed':
       return 'Download failed';
     case 'bookFileDeleted':
       return 'File deleted';
     case 'bookFileRenamed':
       return 'File renamed';
+    case 'bookFileRetagged':
+      return 'File retagged';
+    case 'bookFileConverted':
+      return 'File converted';
+    case 'bookFileConversionFailed':
+      return 'Conversion failed';
     case 'downloadIgnored':
       return 'Download ignored';
     default:
@@ -368,7 +380,7 @@ class _HistoryTile extends StatelessWidget {
           Text(
             record.sourceTitle.isNotEmpty
                 ? record.sourceTitle
-                : _historyEventLabel(record),
+                : chaptarrBookHistoryEventLabel(record),
             style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 13,
@@ -381,7 +393,7 @@ class _HistoryTile extends StatelessWidget {
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
           const SizedBox(height: 2),
-          Text(_historyEventLabel(record),
+          Text(chaptarrBookHistoryEventLabel(record),
               style: const TextStyle(color: AppTheme.requested, fontSize: 12)),
           if (format != BookFormat.unknown) ...[
             const SizedBox(height: 4),

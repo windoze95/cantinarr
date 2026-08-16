@@ -82,7 +82,7 @@ func TestPreflightKeepsPromotedSeasonPackEpisodeActionable(t *testing.T) {
 	if err := svc.observeQueueSnapshot("sonarr", "sonarr-pack", items, base); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 2 {
 		t.Fatalf("pack episodes did not scope per incident: %+v", issues)
 	}

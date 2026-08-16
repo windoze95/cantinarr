@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "990168494881",
+    "project_id": "ferrous-acronym-501521-n3",
+    "storage_bucket": "ferrous-acronym-501521-n3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:990168494881:android:1edb8f59e0e07465ab4460",
+        "android_client_info": {
+          "package_name": "codes.julian.cantinarr"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBZiR7QY7kVPwa2zazgC5wc2IGkPL_bFlg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

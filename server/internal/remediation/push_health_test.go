@@ -13,7 +13,7 @@ func TestPushDeliveryHealthDedupesAdminOnlySystemIssueAndRecovers(t *testing.T) 
 	if err := service.RecordPushDeliveryHealth(false, "2 push notifications in a row failed to reach the gateway."); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := service.ListIssues("")
+	issues, _, err := service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestPushDeliveryHealthDedupesAdminOnlySystemIssueAndRecovers(t *testing.T) 
 	if err := service.RecordPushDeliveryHealth(false, "5 push notifications in a row failed to reach the gateway."); err != nil {
 		t.Fatal(err)
 	}
-	issues, err = service.ListIssues("")
+	issues, _, err = service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestPushDeliveryHealthDedupesAdminOnlySystemIssueAndRecovers(t *testing.T) 
 	if err := service.RecordPushDeliveryHealth(true, ""); err != nil {
 		t.Fatal(err)
 	}
-	issues, err = service.ListIssues("")
+	issues, _, err = service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestPushDeliveryHealthSuccessWithoutAnIssueIsFree(t *testing.T) {
 	if err := service.RecordPushDeliveryHealth(true, ""); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := service.ListIssues("")
+	issues, _, err := service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

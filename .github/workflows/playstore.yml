@@ -45,7 +45,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # No AAB reaches Play until CI has passed on this exact commit. The pull
+  # request trigger is a build-only check that uploads nothing, so it is exempt.
+  gate:
+    # The repo's default token is contents/packages read only, and a called
+    # workflow can't request a scope its caller doesn't hold — so the scope
+    # that reads another workflow's run status is granted here.
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/require-ci-green.yml
+    with:
+      sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      enforce: ${{ github.event_name != 'pull_request' }}
+
   deploy:
+    needs: [gate]
     runs-on: ubuntu-latest
 
     defaults:

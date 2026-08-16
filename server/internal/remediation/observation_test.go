@@ -152,7 +152,7 @@ func TestUserReportAdoptsMatchingSilentAutoObservation(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", []arr.QueueObservation{item}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	before, err := svc.ListIssues("")
+	before, _, err := svc.ListIssues("", 0)
 	if err != nil || len(before) != 1 || before[0].Source != SourceAuto || before[0].Status != IssueObserving {
 		t.Fatalf("initial automatic observation=%+v err=%v", before, err)
 	}
@@ -164,7 +164,7 @@ func TestUserReportAdoptsMatchingSilentAutoObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := svc.ListIssues("")
+	after, _, err := svc.ListIssues("", 0)
 	if err != nil || len(after) != 1 {
 		t.Fatalf("adopted issues=%+v err=%v", after, err)
 	}
@@ -207,7 +207,7 @@ func TestEmptySnapshotSettlesThenMissingPromotes(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", nil, base.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 1 || issues[0].ClosedAt != nil || issues[0].Status != IssueRecovering {
 		t.Fatalf("settling issue = %+v", issues)
 	}
@@ -257,7 +257,7 @@ func TestAbsentToPresentExactFileClosesUnpromotedObservationSilently(t *testing.
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", nil, base.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 1 || issues[0].Status != IssueResolved || issues[0].ClosedAt == nil || issues[0].ResolutionKind != ResolutionArrStateCleared {
 		t.Fatalf("resolved issue = %+v", issues)
 	}
@@ -312,7 +312,7 @@ func TestSonarrAlreadyImportedQueueRowClosesWithoutAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,18 +327,35 @@ func TestSonarrAlreadyImportedQueueRowClosesWithoutAttention(t *testing.T) {
 
 func TestBaselineCaughtImportRequiresFreshArrAttemptReceipt(t *testing.T) {
 	base := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
-	attemptAdded := base
+	// Older than the stalled dwell (the fixture item is stalled-classified), so
+	// the incident is still born at `base`. Every receipt relation this test
+	// pins is against the attempt time, and all of them survive the shift: the
+	// hour-old receipt still predates the attempt, the +1m receipts still
+	// postdate it.
+	attemptAdded := base.Add(-20 * time.Minute)
 	queueFileID, differentFileID := int64(0), int64(19)
 	for _, tc := range []struct {
 		name           string
 		addedAt        *time.Time
 		snapshotFileID *int64
 		importDate     time.Time
+		proven         bool
 	}{
+		// The boundary's real protections: a receipt predating this download
+		// attempt (a reused torrent infohash resurrecting an old import) and an
+		// attempt with no known added time both stay refused.
 		{name: "old receipt for reused download id", addedAt: &attemptAdded, snapshotFileID: &queueFileID, importDate: base.Add(-time.Hour)},
 		{name: "missing arr attempt boundary", snapshotFileID: &queueFileID, importDate: base.Add(time.Minute)},
-		{name: "missing exact queue file state", addedAt: &attemptAdded, importDate: base.Add(time.Minute)},
-		{name: "different queue file", addedAt: &attemptAdded, snapshotFileID: &differentFileID, importDate: base.Add(time.Minute)},
+		// Updated with the 2026-08-10 incident (seven false pages): the
+		// queue-time file id is NOT part of the receipt's identity. A snapshot
+		// that omitted file state, and — the incident class itself — a queue row
+		// observed pre-import whose file id is the OLD file the upgrade
+		// replaced, are both proven by the receipt's own bindings (download id,
+		// event type, imported file id, media identity, date at-or-after the
+		// attempt). Requiring queue-file equality made every fast upgrade's
+		// recovery unprovable.
+		{name: "missing exact queue file state", addedAt: &attemptAdded, importDate: base.Add(time.Minute), proven: true},
+		{name: "different queue file", addedAt: &attemptAdded, snapshotFileID: &differentFileID, importDate: base.Add(time.Minute), proven: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fileState := &testFileState{
@@ -362,9 +379,20 @@ func TestBaselineCaughtImportRequiresFreshArrAttemptReceipt(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			issues, err := svc.ListIssues("")
+			issues, _, err := svc.ListIssues("", 0)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.proven {
+				if len(issues) != 1 || issues[0].Status != IssueResolved ||
+					issues[0].ClosedAt == nil || issues[0].ResolutionKind != ResolutionArrStateCleared {
+					t.Fatalf("bound receipt did not prove recovery: %+v", issues)
+				}
+				deliverIssueAlerts(svc, base.Add(11*time.Minute))
+				if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_updated" || drainJobs(svc) != 0 {
+					t.Fatalf("proven recovery drew attention: events=%v", notifier.adminEvents)
+				}
+				return
 			}
 			if len(issues) != 1 || issues[0].Status != IssueOpen || issues[0].ClosedAt != nil {
 				t.Fatalf("ambiguous receipt falsely proved recovery: %+v", issues)
@@ -514,7 +542,7 @@ func TestWrongImportWitnessNeverSilentlyCloses(t *testing.T) {
 			if err := svc.observeQueueSnapshot("radarr", "radarr-observe", nil, base.Add(11*time.Minute)); err != nil {
 				t.Fatal(err)
 			}
-			issues, _ := svc.ListIssues("")
+			issues, _, _ := svc.ListIssues("", 0)
 			if len(issues) != 1 || issues[0].Status != IssueNeedsAdmin || issues[0].ClosedAt != nil || drainJobs(svc) != 0 {
 				t.Fatalf("issue=%+v", issues)
 			}
@@ -540,7 +568,7 @@ func TestPreexistingFileDoesNotProveUpgradeRecovery(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", nil, base.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 1 || issues[0].Status != IssueOpen || issues[0].ClosedAt != nil {
 		t.Fatalf("preexisting file falsely proved recovery: %+v", issues)
 	}
@@ -558,7 +586,7 @@ func TestFailedPendingAtRestartCreatesRecoveringTracking(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", []arr.QueueObservation{item}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 1 || issues[0].Status != IssueRecovering || !issues[0].Read {
 		t.Fatalf("issues=%+v", issues)
 	}
@@ -582,7 +610,7 @@ func TestIDLessAutoIncidentEscalatesAfterUncertainSettleWithoutAgent(t *testing.
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", nil, base.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	jobs := drainJobs(svc)
 	deliverIssueAlerts(svc, base.Add(11*time.Minute))
 	if len(issues) != 1 || issues[0].Status != IssueNeedsAdmin || jobs != 0 || len(notifier.adminEvents) != 1 {
@@ -652,7 +680,7 @@ func TestProgressSignatureResetsQuietWithoutGrowingAttemptAudit(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", []arr.QueueObservation{item}, base.Add(9*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issue, _ := svc.ListIssues("")
+	issue, _, _ := svc.ListIssues("", 0)
 	if issue[0].Status != IssueObserving {
 		t.Fatalf("promoted before quiet window: %+v", issue[0])
 	}
@@ -680,7 +708,7 @@ func TestRecoverySupersedesProposalAndAbortsParkedRun(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", []arr.QueueObservation{problem}, base); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	issueID := issues[0].ID
 	run, _ := svc.db.Exec("INSERT INTO agent_runs(issue_id,trigger,status,model) VALUES (?,'auto','waiting_approval','m')", issueID)
 	runID, _ := run.LastInsertId()
@@ -716,7 +744,7 @@ func TestChangedProblemSignatureReclaimsPendingProposal(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", []arr.QueueObservation{problem}, base); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	issueID := issues[0].ID
 	run, _ := svc.db.Exec("INSERT INTO agent_runs(issue_id,trigger,status,model) VALUES (?,'auto','waiting_approval','m')", issueID)
 	runID, _ := run.LastInsertId()

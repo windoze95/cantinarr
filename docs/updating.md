@@ -16,6 +16,9 @@ docker compose pull
 docker compose up -d
 ```
 
+(If your checkout predates the image-based compose file, run `git pull` once first so
+`docker compose pull` has a published image to pull instead of a local build.)
+
 ## docker run
 
 ```sh
@@ -48,7 +51,20 @@ Prefer to control upgrades explicitly? Pin a tag instead of `latest` — e.g.
 `ghcr.io/windoze95/cantinarr:1.4.0` — and bump it when you choose. The banner compares
 your running version against the latest published GitHub release.
 
+## Version compatibility
+
+The server and the mobile apps each advertise the oldest counterpart version they
+fully support. When a pairing falls below a floor — say a store-updated phone app
+against a server that hasn't been updated across a breaking change — the app shows a
+warning banner: "update the server" to admins, "update this app" to everyone. These
+warnings never block anything, and the floors only move when a release actually
+breaks compatibility (both are currently `0.0.0`, i.e. no floor). The web app is
+served by the server itself, so it is always exactly in step and never warns about
+itself.
+
 ## Turning the check off
 
-The update check is best-effort and only runs on tagged release builds. To disable it
-entirely, set `CANTINARR_DISABLE_UPDATE_CHECK=1` in the container's environment.
+The update check is best-effort and only runs on builds stamped with a comparable
+version (release images, and `latest` images published after the first release). To
+disable it entirely, set `CANTINARR_DISABLE_UPDATE_CHECK=1` in the container's
+environment.

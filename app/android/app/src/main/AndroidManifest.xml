@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Declared explicitly (not inherited from plugin manifests): the app is
+         networked, and push rendering needs the 13+ runtime permission. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="Cantinarr"
         android:name="${applicationName}"
@@ -32,6 +36,15 @@
                 <data android:scheme="cantinarr" android:host="passkeys"/>
             </intent-filter>
         </activity>
+        <!-- Push: the gateway sends data-only FCM messages; this service
+             renders every notification itself (see PushMessagingService). -->
+        <service
+            android:name=".PushMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT"/>
+            </intent-filter>
+        </service>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -68,7 +69,7 @@ type issueContext struct {
 // client resolution. A non-nil error is a DEFINITIVE failure (the caller marks
 // the action failed); a benign "not configured / not found" outcome is returned
 // as resultText with a nil error.
-func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage) (resultText string, err error) {
+func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time) (resultText string, err error) {
 	ic, err := e.loadIssueContext(issueID)
 	if err != nil {
 		return "", beforeMutation(err)
@@ -149,7 +150,28 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		if p.BookID != 0 {
 			bookIDs = []int{p.BookID}
 		}
-		return mcp.TriggerSearchHelper(e.bridge, rc, sc, cc, p.MediaType, p.TmdbID, p.Season, p.Episode, p.AuthorID, bookIDs)
+		// airedOnly is false here on purpose: replacing what a bad import
+		// destroyed belongs to delete_media_files, so a proposed search is
+		// always the plain one. See TriggerSearchParams.
+		return mcp.TriggerSearchHelper(e.bridge, rc, sc, cc, p.MediaType, p.TmdbID, p.Season, p.Episode, false, p.AuthorID, bookIDs)
+
+	case ActionDeleteMediaFiles:
+		var p DeleteMediaFilesParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return "", beforeMutation(fmt.Errorf("decode delete_media_files params: %w", err))
+		}
+		if err := requireConfiguredClient(p.MediaType, rc, sc, cc); err != nil {
+			return "", beforeMutation(err)
+		}
+		// There is no queue row to re-validate here — the download this is
+		// cleaning up finished successfully, possibly weeks ago. The identity gate
+		// is the library lookup itself: the helper resolves the series/movie/book
+		// from the issue's own authoritative id and deletes only files hanging
+		// off that record.
+		if p.MediaType == "book" {
+			return mcp.DeleteBookFilesHelper(cc, p.BookID, p.Blocklist, proposedAt)
+		}
+		return mcp.DeleteMediaFilesHelper(e.bridge, rc, sc, p.MediaType, p.TmdbID, p.Season, p.Episodes, p.Blocklist, proposedAt)
 
 	case ActionRescan:
 		var p RescanParams

@@ -2,6 +2,7 @@ package chaptarr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -247,8 +248,10 @@ func TestGetAllBooks(t *testing.T) {
 	}
 }
 
-// TestGetQueue asserts GetQueue hits the queue endpoint with includeAuthor=true
-// and decodes the records array.
+// TestGetQueue asserts GetQueue reads the queue as one complete bounded page —
+// explicit pageSize (the server's default page is 10 rows, a silent
+// truncation) — with author context and the unknown-author rows Chaptarr
+// would otherwise drop before the page is even assembled.
 func TestGetQueue(t *testing.T) {
 	var gotPath string
 	var gotQuery url.Values
@@ -257,7 +260,7 @@ func TestGetQueue(t *testing.T) {
 		gotPath = r.URL.Path
 		gotQuery = r.URL.Query()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"records":[{"id":1,"bookId":42,"title":"Some Book"}]}`)
+		_, _ = io.WriteString(w, `{"totalRecords":2,"records":[{"id":1,"bookId":42,"title":"Some Book"},{"id":2,"bookId":0,"title":"Unmatched.Release.epub"}]}`)
 	}))
 	defer srv.Close()
 
@@ -273,8 +276,14 @@ func TestGetQueue(t *testing.T) {
 	if gotQuery.Get("includeAuthor") != "true" {
 		t.Errorf("includeAuthor = %q, want true (query %v)", gotQuery.Get("includeAuthor"), gotQuery)
 	}
-	if len(items) != 1 || items[0].BookID != 42 {
-		t.Fatalf("items = %+v, want one item with bookId 42", items)
+	if gotQuery.Get("pageSize") != "1000" {
+		t.Errorf("pageSize = %q, want 1000 — an unpaged read is the server's 10-row default page", gotQuery.Get("pageSize"))
+	}
+	if gotQuery.Get("includeUnknownAuthorItems") != "true" {
+		t.Errorf("includeUnknownAuthorItems = %q, want true (query %v)", gotQuery.Get("includeUnknownAuthorItems"), gotQuery)
+	}
+	if len(items) != 2 || items[0].BookID != 42 || items[1].BookID != 0 {
+		t.Fatalf("items = %+v, want the matched item and the unknown-author item", items)
 	}
 }
 
@@ -363,6 +372,81 @@ func TestAddBookToleratesStringGenres(t *testing.T) {
 	}
 	if len(book.Genres) != 2 || book.Genres[0] != "Science Fiction" {
 		t.Fatalf("genres = %#v, want [Science Fiction, Fantasy]", []string(book.Genres))
+	}
+}
+
+// TestAddBookClassifiesAuthorPendingImport pins the 0.9.879+ refusal: the fork
+// queues an unknown author for an asynchronous metadata import and 400s the add
+// until it lands. The body below is the live validation payload shape; the
+// classified error must be errors.Is-able without echoing the upstream text.
+func TestAddBookClassifiesAuthorPendingImport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `[{"propertyName":"Author","errorMessage":"Author 'Shiv Shivakumar' isn't available yet on our metadata server. It has been queued for import (pending ID: 3) and will be imported automatically when it becomes available."}]`)
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL, "key").AddBook(AddBookRequest{ForeignBookID: "gr:253739298"})
+	if !errors.Is(err, ErrAuthorPendingImport) {
+		t.Fatalf("AddBook error = %v, want ErrAuthorPendingImport", err)
+	}
+	if strings.Contains(err.Error(), "Shivakumar") {
+		t.Fatalf("error echoed upstream validation text: %v", err)
+	}
+}
+
+// TestAddBookClassifiesEditionsNotHydrated pins the second named 0.9.879+
+// refusal: an add whose payload carried no editions before the fork's metadata
+// service could hydrate them.
+func TestAddBookClassifiesEditionsNotHydrated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `[{"propertyName":"Editions","errorMessage":"Cannot add book: no editions were supplied. Retry the add so Chaptarr can hydrate edition metadata from the metadata server."}]`)
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL, "key").AddBook(AddBookRequest{ForeignBookID: "x"})
+	if !errors.Is(err, ErrEditionsNotHydrated) {
+		t.Fatalf("AddBook error = %v, want ErrEditionsNotHydrated", err)
+	}
+}
+
+// TestAddBookOtherRejectionsStayGenericStatusErrors keeps every other non-2xx —
+// an unmatched validation failure, a non-array error body, a plain 500 — on the
+// existing sanitized status-only error, never a classified verdict.
+func TestAddBookOtherRejectionsStayGenericStatusErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"unmatched validation", http.StatusBadRequest, `[{"propertyName":"QualityProfileId","errorMessage":"At least one quality profile must be selected"}]`},
+		{"non-array body", http.StatusBadRequest, `{"message":"Validation failed"}`},
+		{"server error", http.StatusInternalServerError, `{"message":"Object reference not set to an instance of an object."}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+
+			_, err := NewClient(srv.URL, "key").AddBook(AddBookRequest{ForeignBookID: "x"})
+			if err == nil {
+				t.Fatal("AddBook returned nil error")
+			}
+			if errors.Is(err, ErrAuthorPendingImport) || errors.Is(err, ErrEditionsNotHydrated) {
+				t.Fatalf("error = %v, misclassified as a named rejection", err)
+			}
+			want := fmt.Sprintf("returned status %d", tc.status)
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %v, want it to carry %q", err, want)
+			}
+		})
 	}
 }
 

@@ -17,6 +17,7 @@ import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
+import '../../issues/logic/issues_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
@@ -102,6 +103,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       if (mounted) _resolveArrLink();
     });
     _requestNotifier.checkStatus();
+    _loadMyOpenReport();
     if (widget.mediaType == MediaType.tv) {
       _requestNotifier.fetchOptions().then((opts) {
         if (mounted && opts != null) setState(() => _requestOptions = opts);
@@ -181,6 +183,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                 pinned: true,
                 delegate: MediaHeroDelegate(
                   title: state.title,
+                  year: tmdbPremiereYear(state.movieDetail?.releaseDate),
                   posterPath: state.posterPath,
                   backdropPath: state.backdropPath,
                   expandedExtent: MediaHeroDelegate.expandedExtentFor(
@@ -256,7 +259,19 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                                   .state.status.label,
                                             ),
                                           ),
-                                          if (_canReport(
+                                          if (_myOpenReportId != null)
+                                            TextButton.icon(
+                                              onPressed: () => context.push(
+                                                  '/issues/$_myOpenReportId'),
+                                              icon: const Icon(
+                                                Icons.flag,
+                                                size: 17,
+                                              ),
+                                              label: const Text(
+                                                'View your report',
+                                              ),
+                                            )
+                                          else if (_canReport(
                                             _requestNotifier.state.status,
                                           ))
                                             TextButton.icon(
@@ -693,6 +708,30 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     );
   }
 
+  /// The caller's own OPEN report for this exact title, when one exists — the
+  /// detail page then offers the thread instead of a duplicate report. Loaded
+  /// once per screen from the self-scoped inbox; best-effort (a failed read
+  /// just leaves the plain Report button).
+  int? _myOpenReportId;
+
+  Future<void> _loadMyOpenReport() async {
+    try {
+      final mine = await ref.read(issuesServiceProvider).listMyIssues();
+      if (!mounted) return;
+      final wantType = widget.mediaType == MediaType.movie ? 'movie' : 'tv';
+      for (final issue in mine) {
+        if (issue.closedAt == null &&
+            issue.mediaType == wantType &&
+            issue.tmdbId == widget.id) {
+          setState(() => _myOpenReportId = issue.id);
+          return;
+        }
+      }
+    } catch (_) {
+      // The chip is a convenience; the report flow works without it.
+    }
+  }
+
   /// Reporting is offered only once the title is at least partially in the
   /// library (so there's a download to complain about) and the server allows
   /// it.
@@ -777,16 +816,109 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                       color: AppTheme.textSecondary),
                   title: Text('Season ${s.seasonNumber}',
                       style: const TextStyle(color: AppTheme.textPrimary)),
-                  onTap: () => Navigator.of(sheetContext).pop(
-                    ReportScope.series(
-                      instanceId: instanceId,
-                      tmdbId: widget.id,
-                      tvdbId: tvdbId,
-                      seasonNumber: s.seasonNumber,
-                      title: title,
+                  trailing: (s.episodeCount ?? 0) > 0
+                      ? const Icon(Icons.chevron_right,
+                          color: AppTheme.textSecondary, size: 18)
+                      : null,
+                  onTap: () async {
+                    // A season with a known episode list narrows once more —
+                    // "wrong episode" deserves an episode-shaped report, and a
+                    // tighter scope is a cheaper diagnosis. No count, no
+                    // second step.
+                    final episodes = s.episodeCount ?? 0;
+                    if (episodes <= 0) {
+                      Navigator.of(sheetContext).pop(
+                        ReportScope.series(
+                          instanceId: instanceId,
+                          tmdbId: widget.id,
+                          tvdbId: tvdbId,
+                          seasonNumber: s.seasonNumber,
+                          title: title,
+                        ),
+                      );
+                      return;
+                    }
+                    final scope = await _pickSeasonScope(
+                        sheetContext, s.seasonNumber, episodes,
+                        title: title, tvdbId: tvdbId, instanceId: instanceId);
+                    if (scope != null && sheetContext.mounted) {
+                      Navigator.of(sheetContext).pop(scope);
+                    }
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// The second picker step for one season: the whole season, or one episode.
+  Future<ReportScope?> _pickSeasonScope(
+      BuildContext parentContext, int seasonNumber, int episodeCount,
+      {required String title, int? tvdbId, required String instanceId}) {
+    return showAppSheet<ReportScope>(
+      parentContext,
+      builder: (sheetContext) {
+        return AppSheet(
+          padding: EdgeInsets.zero,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(
+                  'Season $seasonNumber — which part?',
+                  style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.video_library_outlined,
+                    color: AppTheme.textSecondary),
+                title: Text('All of Season $seasonNumber',
+                    style: const TextStyle(color: AppTheme.textPrimary)),
+                onTap: () => Navigator.of(sheetContext).pop(
+                  ReportScope.series(
+                    instanceId: instanceId,
+                    tmdbId: widget.id,
+                    tvdbId: tvdbId,
+                    seasonNumber: seasonNumber,
+                    title: title,
+                  ),
+                ),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (var e = 1; e <= episodeCount; e++)
+                          ActionChip(
+                            label: Text('E$e'),
+                            onPressed: () => Navigator.of(sheetContext).pop(
+                              ReportScope.episode(
+                                instanceId: instanceId,
+                                tmdbId: widget.id,
+                                tvdbId: tvdbId,
+                                seasonNumber: seasonNumber,
+                                episodeNumber: e,
+                                title: title,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
+              ),
               const SizedBox(height: 8),
             ],
           ),

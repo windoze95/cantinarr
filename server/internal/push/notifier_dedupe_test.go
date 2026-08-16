@@ -153,3 +153,56 @@ func TestClaimContentAlertBreaksStorms(t *testing.T) {
 		t.Error("an alert after the window lapsed must send")
 	}
 }
+
+// TestSilentClaimAbsorbsPollerAndSpendsNoBudget pins the upgrade-suppression
+// mechanics: a proven upgrade claims the broadcast key without sending, so the
+// queue poller's re-witness of the same import finds the claim and stays
+// quiet — and none of those silent claims counts toward the broadcast storm
+// cap, so a mass upgrade sweep cannot starve a genuine new-content alert.
+func TestSilentClaimAbsorbsPollerAndSpendsNoBudget(t *testing.T) {
+	n, _ := newDedupeNotifier(t)
+
+	// A whole sweep of silent claims — deliberately more than the cap.
+	for i := 1; i <= contentAlertStormCap+5; i++ {
+		n.claimContentAlertSilently(CategoryNewMovie, "movie", fmt.Sprint(i), fmt.Sprintf("Movie %d", i))
+	}
+	// The poller re-witnessing one of those imports is absorbed.
+	if n.claimContentAlert(CategoryNewMovie, "movie", "1", "Movie 1") {
+		t.Error("a silently claimed key must suppress the poller's broadcast attempt")
+	}
+	// A genuine new movie still alerts: the silent sweep spent no budget.
+	if !n.claimContentAlert(CategoryNewMovie, "movie", "9000", "Actually New") {
+		t.Error("a fresh broadcast was suppressed by silent upgrade claims spending the storm budget")
+	}
+}
+
+// TestUpgradeStormBudgetIsIndependentOfBroadcast pins that delivered upgrade
+// alerts spend their own 12-per-window cap: the 13th upgrade in a window is
+// suppressed (claim recorded), while broadcast alerts are untouched in both
+// directions.
+func TestUpgradeStormBudgetIsIndependentOfBroadcast(t *testing.T) {
+	n, database := newDedupeNotifier(t)
+
+	for i := 1; i <= contentAlertStormCap; i++ {
+		if !n.claimContentAlertScoped(CategoryContentUpgraded, "movie", fmt.Sprint(i), fmt.Sprintf("Movie %d", i), stormScopeUpgrade) {
+			t.Fatalf("upgrade alert %d of %d was suppressed below the cap", i, contentAlertStormCap)
+		}
+	}
+	if n.claimContentAlertScoped(CategoryContentUpgraded, "movie", "999", "Movie 999", stormScopeUpgrade) {
+		t.Fatal("the upgrade alert past the cap must be suppressed")
+	}
+	// The suppressed upgrade's claim is still recorded so the other witness
+	// cannot re-try it.
+	var claimed int
+	if err := database.QueryRow(
+		`SELECT COUNT(*) FROM content_alert_claims WHERE alert_key LIKE 'content_upgraded%999%'`).Scan(&claimed); err != nil {
+		t.Fatalf("count suppressed claim: %v", err)
+	}
+	if claimed != 1 {
+		t.Fatalf("suppressed upgrade left %d claim rows, want 1", claimed)
+	}
+	// A full upgrade window leaves the broadcast budget untouched.
+	if !n.claimContentAlert(CategoryNewMovie, "movie", "9000", "Actually New") {
+		t.Error("a broadcast alert was suppressed by the upgrade window's spending")
+	}
+}

@@ -130,6 +130,10 @@ var arrToolDefinitions = []Tool{
 					"type":        "integer",
 					"description": "TV only: limit the search to this episode (requires season_number)",
 				},
+				"aired_only": map[string]interface{}{
+					"type":        "boolean",
+					"description": "TV season search only: search just the episodes that have already aired and are missing a file, leaving the rest of the season for the service to grab as it airs",
+				},
 				"author_id": map[string]interface{}{
 					"type":        "integer",
 					"description": "Book only: search all monitored books of this Chaptarr author id (used when book_id is absent)",
@@ -287,9 +291,102 @@ var arrToolDefinitions = []Tool{
 		},
 	},
 	{
+		Name:        "get_episode_timeline",
+		Permission:  auth.PermissionArrRead,
+		Description: "Show one TV season episode by episode: air date, whether it has aired yet, and the file the library holds for it (release name, quality, and when it was imported). Flags files the service imported BEFORE that episode aired — content that cannot be what it claims to be — and lists the aired episodes that are missing. Use this for any \"wrong episode\", \"wrong season\", or \"this isn't what I asked for\" report, and after a fix to confirm the season is clean. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"tv"},
+					"description": "Only TV has an episode timeline",
+				},
+				"tmdb_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The series' TMDB id, from get_library",
+				},
+				"season_number": map[string]interface{}{
+					"type":        "integer",
+					"description": "Which season to lay out; omit for a per-season rollup of the whole series",
+				},
+			},
+			"required": []string{"media_type"},
+		},
+	},
+	{
+		Name:        "get_media_file_details",
+		Permission:  auth.PermissionArrRead,
+		Description: "Inspect the file(s) the library actually holds for one movie or one TV season: resolution, video codec and dynamic range, audio codec/channels/languages, embedded subtitles, runtime, size, quality label, scene name, and import date — the arr's own analysis of what is on disk. Use this for any \"wrong audio\", \"no subtitles\", \"bad quality\", or \"upscaled\" report: it is the difference between judging a release NAME and judging the file. A file the arr has not analyzed yet says so explicitly (that is blindness, not absence). Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"movie", "tv"},
+					"description": "Book files carry no media-property analysis in Chaptarr",
+				},
+				"tmdb_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The title's TMDB id, from get_library",
+				},
+				"season_number": map[string]interface{}{
+					"type":        "integer",
+					"description": "TV: which season's files to inspect",
+				},
+			},
+			"required": []string{"media_type", "tmdb_id"},
+		},
+	},
+	{
+		Name:        "get_service_config",
+		Permission:  auth.PermissionArrRead,
+		Description: "Read-only summary of one settings section on Radarr, Sonarr, or Chaptarr: indexers (protocol, rss/auto-search, priority, min seeders), delay_profiles, release_profiles (Sonarr/Chaptarr only), download_clients (protocol, enabled, category), or remote_path_mappings. These are the settings recurring problems trace back to; values are bounded summaries and credentials/URLs are never included. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"service": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"radarr", "sonarr", "chaptarr"},
+					"description": "Which service to read",
+				},
+				"instance_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Exact instance; omit for the default",
+				},
+				"section": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"indexers", "delay_profiles", "release_profiles", "download_clients", "remote_path_mappings"},
+					"description": "Which settings section to summarize",
+				},
+			},
+			"required": []string{"service", "section"},
+		},
+	},
+	{
+		Name:        "get_book_timeline",
+		Permission:  auth.PermissionArrRead,
+		Description: "Join what the library HOLDS for one book (its files, with import dates) to what HAPPENED (grab and import history with download identities, newest first). Use this for any \"wrong book\", \"wrong edition\", or \"bad copy\" book report — it is the receipts, where a title string proves nothing — and after a fix to confirm the record is clean. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"book"},
+					"description": "Only books have a book timeline",
+				},
+				"book_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The issue's durable Chaptarr book record id",
+				},
+			},
+			"required": []string{"media_type", "book_id"},
+		},
+	},
+	{
 		Name:        "diagnose_queue",
 		Permission:  auth.PermissionArrRead,
-		Description: "Import Doctor: scan the Radarr/Sonarr/Chaptarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
+		Description: "Import Doctor: scan the Radarr/Sonarr/Chaptarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, blocklist_only, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -351,7 +448,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "remediate_queue_item",
 		AdminOnly:   true,
 		Permission:  auth.PermissionDownloadsManage,
-		Description: "Apply a one-click fix to a stuck queue item: remove (delete it and the download), blocklist_search (remove, blocklist the release, and start a fresh search for a different one), or change_category (hand the download to the client's post-import category for tools like Unpackerr). Admin only",
+		Description: "Apply a one-click fix to a stuck queue item: remove (delete it and the download), blocklist_search (remove and blocklist the release, leaving the replacement to the service's own failed-download settings), blocklist_only (remove and blocklist, and suppress the service's replacement search too — the right choice when the library already holds a copy AND nobody asked for this download), or change_category (hand the download to the client's post-import category for tools like Unpackerr). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -366,7 +463,7 @@ var arrToolDefinitions = []Tool{
 				},
 				"action": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"remove", "blocklist_search", "change_category"},
+					"enum":        []string{"remove", "blocklist_search", "blocklist_only", "change_category"},
 					"description": "The remediation to apply",
 				},
 			},
@@ -603,7 +700,7 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 				return nil, err
 			}
 			if len(items) == 0 {
-				sections = append(sections, "Movie queue: empty.")
+				sections = append(sections, emptyQueueText("Movie queue", scope))
 			} else {
 				matchedTargets += len(items)
 				shown := items
@@ -636,7 +733,7 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 				return nil, err
 			}
 			if len(items) == 0 {
-				sections = append(sections, "TV queue: empty.")
+				sections = append(sections, emptyQueueText("TV queue", scope))
 			} else {
 				matchedTargets += len(items)
 				shown := items
@@ -666,7 +763,7 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 			}
 			items = filterChaptarrQueue(items, scope)
 			if len(items) == 0 {
-				sections = append(sections, "Book queue: empty.")
+				sections = append(sections, emptyQueueText("Book queue", scope))
 			} else {
 				matchedTargets += len(items)
 				shown := items
@@ -1136,6 +1233,14 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		// Filtering after fetching only the requested 20 records can falsely hide
 		// a title whose last event is slightly older. Fetch the bounded maximum,
 		// then return at most the caller's requested count.
+		//
+		// For a scoped title this is still only a mitigation: a busy library
+		// generates 100 global records in days, and a scoped read of anything
+		// older then returns "no history found" — indistinguishable from a title
+		// that genuinely has none. Radarr and Sonarr both expose a per-title
+		// history endpoint, so a scoped read asks the service for that title's
+		// records instead of sifting a global page for them. The client-side
+		// filter still runs afterwards as the identity gate.
 		fetchLimit = 100
 	}
 
@@ -1145,7 +1250,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		if radarrClient == nil {
 			return &ToolResult{Text: "Radarr is not configured."}, nil
 		}
-		records, err := radarrClient.GetHistory(fetchLimit)
+		records, perTitle, err := scopedRadarrHistory(radarrClient, scope, fetchLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -1157,7 +1262,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 			records = records[:limit]
 		}
 		if len(records) == 0 {
-			return &ToolResult{Text: "No movie history found."}, nil
+			return &ToolResult{Text: noHistoryText("movie", scope, perTitle, fetchLimit)}, nil
 		}
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Recent movie history (%d records):", len(records))
@@ -1180,7 +1285,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		if sonarrClient == nil {
 			return &ToolResult{Text: "Sonarr is not configured."}, nil
 		}
-		records, err := sonarrClient.GetHistory(fetchLimit)
+		records, perTitle, err := scopedSonarrHistory(s.bridge, sonarrClient, scope, fetchLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -1192,7 +1297,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 			records = records[:limit]
 		}
 		if len(records) == 0 {
-			return &ToolResult{Text: "No TV history found."}, nil
+			return &ToolResult{Text: noHistoryText("TV", scope, perTitle, fetchLimit)}, nil
 		}
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Recent TV history (%d records):", len(records))
@@ -1230,7 +1335,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 			records = records[:limit]
 		}
 		if len(records) == 0 {
-			return &ToolResult{Text: "No book history found."}, nil
+			return &ToolResult{Text: noHistoryText("book", scope, false, fetchLimit)}, nil
 		}
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Recent book history (%d records):", len(records))
@@ -1267,6 +1372,7 @@ func (s *ToolServer) triggerSearch(input json.RawMessage) (*ToolResult, error) {
 		MediaType     string `json:"media_type"`
 		SeasonNumber  *int   `json:"season_number"`
 		EpisodeNumber *int   `json:"episode_number"`
+		AiredOnly     bool   `json:"aired_only"`
 		AuthorID      int    `json:"author_id"`
 		BookID        int    `json:"book_id"`
 	}
@@ -1278,7 +1384,7 @@ func (s *ToolServer) triggerSearch(input json.RawMessage) (*ToolResult, error) {
 	if params.BookID != 0 {
 		bookIDs = []int{params.BookID}
 	}
-	text, err := TriggerSearchHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.TmdbID, params.SeasonNumber, params.EpisodeNumber, params.AuthorID, bookIDs)
+	text, err := TriggerSearchHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.TmdbID, params.SeasonNumber, params.EpisodeNumber, params.AiredOnly, params.AuthorID, bookIDs)
 	if err != nil {
 		return nil, err
 	}

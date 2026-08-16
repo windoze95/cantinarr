@@ -547,8 +547,11 @@ func TestIssueTerminalAccounting(t *testing.T) {
 			t.Fatalf("GiveUpIssue = %v, %v", gaveUp, err)
 		}
 		rule := ruleRow(t, svc, ruleID)
-		if rule.Status != ApprovalRulePaused || rule.PausedReason == nil || *rule.PausedReason != autoRulePausedIssueUnresolved {
-			t.Fatalf("rule after give-up = %+v, want paused", rule)
+		// The give-up pause's own copy: the issue PARKED needs_admin — it did
+		// not close — and the note must not claim otherwise (issue 859's pause
+		// said "closed without being resolved" about an issue that never closed).
+		if rule.Status != ApprovalRulePaused || rule.PausedReason == nil || *rule.PausedReason != autoRulePausedNeedsAdmin {
+			t.Fatalf("rule after give-up = %+v, want paused with the handed-to-admin reason", rule)
 		}
 		if countAdminEvents(notifier, "agent_autoapproval_paused") != 1 {
 			t.Fatalf("give-up pause notified %d times, want 1", countAdminEvents(notifier, "agent_autoapproval_paused"))
@@ -736,5 +739,96 @@ func TestProblemKindPersistedForAutoIssues(t *testing.T) {
 	}
 	if err := svc.db.QueryRow("SELECT COALESCE(problem_kind, '') FROM issues").Scan(&stored); err != nil || stored != problem.Diagnosis.Problem {
 		t.Fatalf("problem_kind after refresh = %q (%v)", stored, err)
+	}
+}
+
+// A paused rule carries its evidence: WHICH issue stood it down, and how many
+// times the admin has approved the same triple by hand since — the
+// server-computed argument for resuming.
+func TestPausedRuleCarriesEvidenceAndSincePauseCount(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_approval_rules (problem_kind, action_kind, action_facet, status, paused_reason, paused_at, paused_by_issue_id, created_at, updated_at)
+		 VALUES ('Download stalled', 'remediate_queue', 'blocklist_search', 'paused', 'failed once', datetime('now', '-2 days'), 41, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed paused rule: %v", err)
+	}
+	res, err := svc.db.Exec(
+		`INSERT INTO issues (source, status, category, media_type, tmdb_id, title, detail, problem_kind)
+		 VALUES ('auto', 'resolved', NULL, 'movie', 9, 'M', 'stalled', 'Download stalled')`,
+	)
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	issueID, _ := res.LastInsertId()
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (3, 'boss', '', 'admin')"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	// One matching MANUAL approval since the pause, one non-matching facet.
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, rationale, risk, status, decided_by, decided_at, executed_at, fingerprint, tool_use_id)
+		 VALUES (?, 'remediate_queue', '{"media_type":"movie","queue_id":1,"action":"blocklist_search"}', 'r', 'mutating', 'executed', 3, datetime('now','-1 day'), datetime('now','-1 day'), 'fp-a', 'tu-a'),
+		        (?, 'remediate_queue', '{"media_type":"movie","queue_id":2,"action":"remove"}', 'r', 'mutating', 'executed', 3, datetime('now','-1 day'), datetime('now','-1 day'), 'fp-b', 'tu-b')`,
+		issueID, issueID,
+	); err != nil {
+		t.Fatalf("seed manual approvals: %v", err)
+	}
+
+	rules, err := svc.ListApprovalRules()
+	if err != nil {
+		t.Fatalf("ListApprovalRules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("rules = %d, want 1", len(rules))
+	}
+	rule := rules[0]
+	if rule.PausedByIssueID == nil || *rule.PausedByIssueID != 41 {
+		t.Fatalf("paused_by_issue_id = %v, want the pausing issue", rule.PausedByIssueID)
+	}
+	if rule.ApprovedSincePause != 1 {
+		t.Fatalf("approved_since_pause = %d, want exactly the matching-facet manual approval", rule.ApprovedSincePause)
+	}
+}
+
+// The catalog is grounded by construction: only hand-approved triples appear,
+// active-ruled triples vanish, and arming an unseen triple is refused.
+func TestRuleCatalogGroundedArming(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (3, 'boss', '', 'admin')"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	res, _ := svc.db.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, problem_kind)
+		 VALUES ('user', 'resolved', 'movie', 9, 'M', 'stalled', 'Download stalled')`)
+	issueID, _ := res.LastInsertId()
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, rationale, risk, status, decided_by, decided_at, executed_at, fingerprint, tool_use_id)
+		 VALUES (?, 'remediate_queue', '{"media_type":"movie","queue_id":1,"action":"blocklist_only"}', 'r', 'mutating', 'executed', 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'fp-c1', 'tu-c1')`,
+		issueID,
+	); err != nil {
+		t.Fatalf("seed approval: %v", err)
+	}
+
+	candidates, err := svc.ListRuleCandidates()
+	if err != nil {
+		t.Fatalf("ListRuleCandidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ActionFacet != "blocklist_only" || candidates[0].ApprovedCount != 1 {
+		t.Fatalf("candidates = %+v, want the one hand-approved triple", candidates)
+	}
+
+	if _, err := svc.ArmRuleFromCatalog(3, "Download stalled", "remediate_queue", "remove"); err == nil {
+		t.Fatalf("armed a never-approved facet")
+	}
+	ruleID, err := svc.ArmRuleFromCatalog(3, "Download stalled", "remediate_queue", "blocklist_only")
+	if err != nil || ruleID <= 0 {
+		t.Fatalf("grounded arm = (%d, %v)", ruleID, err)
+	}
+	after, err := svc.ListRuleCandidates()
+	if err != nil {
+		t.Fatalf("ListRuleCandidates after arm: %v", err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("armed triple still listed: %+v", after)
 	}
 }

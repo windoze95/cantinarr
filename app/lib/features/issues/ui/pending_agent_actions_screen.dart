@@ -121,7 +121,14 @@ class _PendingAgentActionsScreenState
   /// that recovered or changed in the meantime and reports it per item.
   Future<void> _approveAll() async {
     if (_batchBusy || _error != null) return;
-    final targets = _decidableActions;
+    // D6: deleting imported files never rides a batch — the server refuses it
+    // per-item too; excluding it here keeps the dialog honest about what will
+    // actually run and leaves the destructive card its own confirm.
+    final all = _decidableActions;
+    final targets = all
+        .where((a) => a.kind != AgentActionKind.deleteMediaFiles)
+        .toList(growable: false);
+    final destructiveHeld = all.length - targets.length;
     if (targets.length < 2) return;
     final ids = targets.map((a) => a.id).toList();
     final confirmed = await showDialog<bool>(
@@ -137,7 +144,8 @@ class _PendingAgentActionsScreenState
           'at a time, in the connected media services shown on their cards. '
           'Each fix runs at most once, and a fix whose download already '
           'recovered or whose state changed is skipped. This cannot be '
-          'undone from Cantinarr.',
+          'undone from Cantinarr.'
+          '${destructiveHeld > 0 ? '\n\n$destructiveHeld fix(es) that delete imported files are NOT included — each needs its own approval.' : ''}',
           style: const TextStyle(color: AppTheme.textSecondary),
         ),
         actions: [
@@ -326,6 +334,20 @@ class _PendingAgentActionsScreenState
     };
   }
 
+  /// The history tab reads as a timeline: day headers over the same
+  /// issue-grouped cards, so "what did the agent do last Tuesday" is
+  /// answerable at a glance instead of an undated wall.
+  String _dayLabel(DateTime when) {
+    final local = when.toLocal();
+    final today = DateTime.now();
+    final thatDay = DateTime(local.year, local.month, local.day);
+    final startOfToday = DateTime(today.year, today.month, today.day);
+    final diff = startOfToday.difference(thatDay).inDays;
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Yesterday';
+    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+  }
+
   Widget _buildGroupedList(List<AgentAction> actions) {
     // Group by issue id, preserving the server's newest-first order. The
     // grouped layout makes "two proposals for the same problem" legible.
@@ -338,6 +360,22 @@ class _PendingAgentActionsScreenState
       }).add(a);
     }
 
+    // Day headers for the history tab: the first group of each calendar day
+    // (by the newest action's decided/created time) carries the label.
+    final dayForGroup = <int, String>{};
+    if (_tab == _AgentActionsTab.history) {
+      String? lastDay;
+      for (final issueId in order) {
+        final newest = groups[issueId]!.first;
+        final when = newest.decidedAt ?? newest.createdAt;
+        final label = when != null ? _dayLabel(when) : '';
+        if (label.isNotEmpty && label != lastDay) {
+          dayForGroup[issueId] = label;
+          lastDay = label;
+        }
+      }
+    }
+
     return ListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
@@ -348,9 +386,23 @@ class _PendingAgentActionsScreenState
         final title = group.first.issueTitle.isEmpty
             ? 'Issue #$issueId'
             : group.first.issueTitle;
+        final dayHeader = dayForGroup[issueId];
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (dayHeader != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 18, 4, 0),
+                child: Text(
+                  dayHeader,
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
             // Issue header — tap to open the full thread.
             InkWell(
               onTap: () async {

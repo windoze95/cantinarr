@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
+import 'backend_http_adapter.dart';
 
 /// Dio interceptor that handles JWT authentication and automatic token refresh.
 ///
@@ -90,18 +91,31 @@ class BackendAuthInterceptor extends Interceptor {
     try {
       // A dedicated client with explicit timeouts: a hung refresh would
       // otherwise block every queued 401 retry behind the shared completer.
+      // On web it rides the Fetch transport — the default browser adapter was
+      // observed stalling this exact call for the full receive timeout while
+      // Fetch requests from the same page completed instantly.
       final dio = Dio(BaseOptions(
         connectTimeout: AppConfig.requestTimeout,
         receiveTimeout: AppConfig.requestTimeout,
       ));
+      final authAdapter = createAuthHttpClientAdapter();
+      if (authAdapter != null) {
+        dio.httpClientAdapter = authAdapter;
+      }
       final serverUrl = getServerUrl();
       final refreshToken = getRefreshToken();
 
-      final resp = await dio.post(
-        '$serverUrl/api/auth/refresh',
-        data: {'refresh_token': refreshToken},
-        options: Options(headers: {'Content-Type': 'application/json'}),
-      );
+      // The outer timeout is the last line of defense: no adapter behavior may
+      // leave the shared completer unsettled, or every future 401 retry queues
+      // behind it forever. A TimeoutException lands in the generic catch below
+      // and is treated as a transport failure (session kept).
+      final resp = await dio
+          .post(
+            '$serverUrl/api/auth/refresh',
+            data: {'refresh_token': refreshToken},
+            options: Options(headers: {'Content-Type': 'application/json'}),
+          )
+          .timeout(AppConfig.requestTimeout * 2);
 
       if (resp.statusCode == 200) {
         final data = resp.data as Map<String, dynamic>;

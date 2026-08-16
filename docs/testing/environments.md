@@ -55,9 +55,9 @@ the suites:
   real model turn at save time, so dummy keys cannot be configured; the
   Codex provider needs a real ChatGPT account and the pinned app-server
   binary.
-- **APNs delivery** — the push gateway holds the Apple credentials;
-  Cantinarr-side enrollment needs none, but a push reaching a device is
-  Apple-live.
+- **APNs/FCM delivery** — the push gateway holds the Apple and Google
+  credentials; Cantinarr-side enrollment needs none, but a push reaching a
+  device is Apple/Google-live.
 - **GitHub update check** — live but anonymous; disable with
   `CANTINARR_DISABLE_UPDATE_CHECK`.
 

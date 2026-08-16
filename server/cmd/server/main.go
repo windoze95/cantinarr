@@ -35,6 +35,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
+	"github.com/windoze95/cantinarr-server/internal/trakt"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/version"
 	"github.com/windoze95/cantinarr-server/internal/webhooks"
@@ -86,8 +87,12 @@ func main() {
 		}
 	}
 
-	// Credentials registry (lazy-creates TMDB/Trakt clients from DB)
-	creds := credentials.NewRegistry(database, cipher)
+	// Credentials registry (lazy-creates TMDB/Trakt clients from DB). Both
+	// fall back to built-in public credentials when no admin value is stored.
+	creds := credentials.NewRegistry(database, cipher,
+		credentials.WithDefaultTMDBToken(tmdb.DefaultAccessToken),
+		credentials.WithDefaultTraktClientID(trakt.DefaultClientID),
+	)
 	credHandler := credentials.NewHandler(creds)
 
 	// Auth
@@ -201,12 +206,31 @@ func main() {
 	remediationService := remediation.NewService(database, registry, bridge, notifier)
 	remediationHandler := remediation.NewHandler(remediationService)
 
+	// Parked book requests (Chaptarr 0.9.879+ still importing the author) are
+	// server-owned: the sweep retries them to completion and only a stall
+	// becomes an auto-resolving system issue — wired here because the issue
+	// store lives in remediation.
+	requestService.SetBookImportStallSink(remediationService)
+	requestService.StartBookParkMaintenance(ctx)
+
+	// Watches the one database connection from outside and logs when nothing
+	// can get through. Deliberately not wired to the issue store above: a
+	// wedged pool is precisely the failure that cannot be written to the
+	// database, so the log is the only channel that still works.
+	db.NewStallWatchdog(database).Start(ctx)
+
 	// Proxy handler
 	proxyHandler := proxy.NewHandler(instanceStore)
 
 	// MCP tool server + AI handler
 	toolServer := mcp.NewToolServer(creds, requestService, registry, bridge)
 	toolServer.SetSettingsChangeDatabase(database)
+	if pushNotifier != nil {
+		// Pages admins when an external MCP agent parks a profile-change
+		// proposal; without push the proposal still parks and the app's
+		// approval screen lists it.
+		toolServer.SetAdminNotifier(pushNotifier)
+	}
 	toolServer.SetCallAuthorizer(func(ctx context.Context, callCtx mcp.CallContext) (string, error) {
 		return authService.AuthorizeInteractiveToolCall(
 			ctx,
@@ -278,6 +302,14 @@ func main() {
 	// out-of-band library changes (manual imports, deletes) into the same WS
 	// events and content pushes the queue-poll witness emits.
 	webhookHandler := webhooks.NewHandler(instanceStore, registry, wsHub, requestService, contentNotifier)
+	// An import that lands on an episode which has not aired yet is the one
+	// arr event Cantinarr can act on before anyone notices; see
+	// remediation.RecordPreAirImport.
+	webhookHandler.SetPreAirImportWitness(remediationService)
+	// Chaptarr's AuthorAdded callback fires the moment a queued author import
+	// lands, so parked book requests resume immediately instead of on the
+	// five-minute maintenance tick.
+	webhookHandler.SetBookParkResumer(requestService)
 
 	// Update checker (GitHub release comparison).
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)

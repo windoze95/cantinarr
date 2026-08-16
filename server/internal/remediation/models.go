@@ -28,11 +28,22 @@ const (
 	IssueInvestigating    = "investigating"
 	IssueAwaitingUser     = "awaiting_user"
 	IssueAwaitingApproval = "awaiting_approval"
-	IssueNeedsAdmin       = "needs_admin"
-	IssueResolved         = "resolved"
-	IssueWontFix          = "wont_fix"
-	IssueFailed           = "failed"
-	IssueDismissed        = "dismissed"
+	// IssueAwaitingConfirmation is a user report whose fix has EXECUTED and now
+	// waits on the one person whose judgment it was: the reporter. It is not an
+	// admin state (the issue closes read, without paging anyone) and not a
+	// terminal (the reporter's tap or the confirm-wait sweep ends it).
+	IssueAwaitingConfirmation = "awaiting_confirmation"
+	IssueNeedsAdmin           = "needs_admin"
+	// IssueWaiting is a system-owned wait on an external service doing its own
+	// work (today: a Chaptarr author import parked past the stall horizon).
+	// The server retries and resolves it itself, so there is no human verdict
+	// to record: clients present it as passive tracking — no completion verbs,
+	// no attention badge. Like needs_admin it is never enqueued for an agent
+	// run (the worker allowlists open/investigating).
+	IssueWaiting   = "waiting"
+	IssueResolved  = "resolved"
+	IssueWontFix   = "wont_fix"
+	IssueDismissed = "dismissed"
 )
 
 // Issue source values.
@@ -69,14 +80,38 @@ const ResolutionUserUnresponsive = "user_unresponsive"
 // seeing a queue signal disappear proves only that the original incident is no
 // longer present, not who fixed it.
 const (
-	ResolutionAgentConcluded       = "agent_concluded"
-	ResolutionArrStateCleared      = "arr_state_cleared"
-	ResolutionReporterTimeout      = "reporter_timeout"
+	ResolutionAgentConcluded  = "agent_concluded"
+	ResolutionArrStateCleared = "arr_state_cleared"
+	ResolutionReporterTimeout = "reporter_timeout"
+	// ResolutionReporterConfirmed is the reporter's own verdict that the applied
+	// fix worked. It is the only closure the server accepts on a subjective
+	// judgment, because it comes from the one person whose judgment it was.
+	ResolutionReporterConfirmed    = "reporter_confirmed"
 	ResolutionAdminDismissed       = "admin_dismissed"
 	ResolutionAdminCompleted       = "admin_completed"
 	ResolutionAIHealthRestored     = "ai_health_restored"
 	ResolutionPushDeliveryRestored = "push_delivery_restored"
-	ResolutionLegacyUnknown        = "legacy_unknown"
+	ResolutionBookImportCleared    = "book_import_cleared"
+	// ResolutionRemovedNoReplacement closes a book incident whose dispatched fix
+	// removed and blocklisted a dead download and whose replacement search came
+	// back empty. Before this kind existed that shape had no terminal at all:
+	// the want went 0 files → 0 files with no import receipt, so the recovery
+	// proof could conclude neither success nor failure, the issue re-promoted
+	// forever, and the eventual needs_admin claimed the fix "could not be
+	// verified" — about the one thing in the story that verifiably ran (issue
+	// 859, 2026-08-13). The honest reading is terminal: the fix did its job, no
+	// copy exists to grab today, and the library keeps monitoring, so a future
+	// release is grabbed without anyone's involvement.
+	ResolutionRemovedNoReplacement = "removed_no_replacement"
+	// ResolutionRemediationProviderConfigured closes the "remediation is on but
+	// has no AI provider" system issue when the runner first resolves a shared
+	// turn again.
+	ResolutionRemediationProviderConfigured = "remediation_provider_configured"
+	// ResolutionPreventionSettingChanged closes a recurrence notice because the
+	// settings it named CHANGED — advice that notices being taken. If the
+	// pattern re-forms from newer incidents, a fresh notice says so.
+	ResolutionPreventionSettingChanged = "prevention_setting_changed"
+	ResolutionLegacyUnknown            = "legacy_unknown"
 )
 
 // AdminIssueDisposition is the explicit human judgment recorded by the admin
@@ -105,11 +140,28 @@ type ActionKind string
 
 const (
 	ActionGrabRelease    ActionKind = "grab_release"
-	ActionRemediateQueue ActionKind = "remediate_queue" // remove | blocklist_search | change_category
+	ActionRemediateQueue ActionKind = "remediate_queue" // remove | blocklist_search | blocklist_only | change_category
 	ActionManualImport   ActionKind = "manual_import"   // force bool
 	ActionTriggerSearch  ActionKind = "trigger_search"
 	ActionRescan         ActionKind = "rescan"
+	// ActionDeleteMediaFiles removes files the *arr has already IMPORTED, and
+	// optionally blocklists the releases that brought them. Every other kind acts
+	// on a live queue row; this one is the only route to a download that already
+	// finished successfully — which is the shape of every "you gave me the wrong
+	// content" report, because by the time anyone watches it the queue is empty.
+	ActionDeleteMediaFiles ActionKind = "delete_media_files"
 )
+
+// ProposableActionKinds is the canonical proposal vocabulary. It is
+// load-bearing, not documentation: validateActionParams admits only members, so
+// a kind added to the consts above but not here fails its own feature tests
+// immediately — and the vocabulary-parity test pins mcp's wire copy (schema
+// enum, validator, correction text) equal to this list, so neither package can
+// gain a kind the other silently lacks.
+var ProposableActionKinds = []ActionKind{
+	ActionGrabRelease, ActionRemediateQueue, ActionManualImport,
+	ActionTriggerSearch, ActionRescan, ActionDeleteMediaFiles,
+}
 
 // Issue is one row of the issues table as returned to clients. Nullable columns
 // (category, reporter) are exposed as pointers so the JSON carries null, matching
@@ -139,6 +191,19 @@ type Issue struct {
 	// instance that owns the affected media so investigation cannot drift to a
 	// different Radarr/Sonarr/Chaptarr installation. AuthorID/BookID are the
 	// Chaptarr record ids that stand in for TMDB/TVDB identity on book issues.
+	// CanConfirmFixed tells the reporter's own client whether the "this is
+	// fixed" action is available. Computed only on the single-issue read the
+	// thread screen uses; a list read leaves it false rather than paying a
+	// per-row query for a control no list renders.
+	CanConfirmFixed bool `json:"can_confirm_fixed"`
+
+	// IsPrevention marks a recurrence notice — advice about a setting, not an
+	// incident. Computed at read from the dedupe namespace so clients render
+	// the dedicated tile and disclose the closure verbs' mute durations
+	// (resolve 60d / dismiss 180d / close-without-fix 365d) at the point of
+	// decision instead of hiding a 12-month choice behind a generic button.
+	IsPrevention bool `json:"is_prevention"`
+
 	InstanceID string `json:"instance_id"`
 	DownloadID string `json:"-"`
 	ArrQueueID int    `json:"-"`
@@ -191,6 +256,11 @@ type CreateIssueResponse struct {
 // ListIssuesResponse is the GET /api/admin/issues result.
 type ListIssuesResponse struct {
 	Issues []Issue `json:"issues"`
+	// ClosedTotal is how many closed issues exist, against however many the
+	// payload actually carries. A client that shows history must be able to say
+	// "the most recent N of M" — a truncated list rendered as the whole list is
+	// how a reader stops looking for something that is still there.
+	ClosedTotal int64 `json:"closed_total"`
 }
 
 // AgentAction is one row of the agent_actions table as returned to the admin
@@ -244,9 +314,35 @@ type AgentAction struct {
 	AutoRuleLabel     *string            `json:"auto_rule_label"`
 	AutoApprovalOffer *AutoApprovalOffer `json:"auto_approval_offer,omitempty"`
 
+	// Joined issue identity for the approval card: what the fix is about, in
+	// the reader's own terms — poster identity (media type + tmdb id is the
+	// poster key everywhere in the app), exact season/episode scope, and how
+	// many times this problem has recurred.
+	IssueTmdbID      int `json:"issue_tmdb_id"`
+	IssueSeason      int `json:"issue_season"`
+	IssueEpisode     int `json:"issue_episode"`
+	IssueOccurrences int `json:"issue_occurrences"`
+
+	// PriorAttempts is the same server-recorded memory the agent's PRIOR
+	// ATTEMPTS prompt block reads, rendered for the approving human — the
+	// admin must never decide with less evidence than the model. Populated on
+	// decidable proposals only.
+	PriorAttempts []ActionPriorAttempt `json:"prior_attempts,omitempty"`
+
 	// Joined issue fields used only to compute the offer; not on the wire.
 	IssueSource      string `json:"-"`
 	IssueProblemKind string `json:"-"`
+}
+
+// ActionPriorAttempt is one executed, download-attributed fix on the same
+// issue. Recurred means the arr re-added that SAME download after the fix ran
+// — the machine-checkable proof the fix did not hold, and the strongest reason
+// an approver could have to say no to a repeat.
+type ActionPriorAttempt struct {
+	Kind       string    `json:"kind"`
+	Facet      string    `json:"facet,omitempty"`
+	ExecutedAt time.Time `json:"executed_at"`
+	Recurred   bool      `json:"recurred"`
 }
 
 // AutoApprovalOffer invites the approving admin to arm a standing rule for
@@ -264,23 +360,31 @@ type AutoApprovalOffer struct {
 // AgentApprovalRule is one standing auto-approval rule as returned to the
 // admin rules surface.
 type AgentApprovalRule struct {
-	ID             int64      `json:"id"`
-	ProblemKind    string     `json:"problem_kind"`
-	ActionKind     string     `json:"action_kind"`
-	ActionFacet    string     `json:"action_facet"`
-	Label          string     `json:"label"`
-	Status         string     `json:"status"` // active | paused
-	PausedReason   *string    `json:"paused_reason"`
-	PausedAt       *time.Time `json:"paused_at"`
-	CreatedBy      *int64     `json:"created_by"`
-	CreatedByName  *string    `json:"created_by_name"`
-	SeedActionID   *int64     `json:"seed_action_id"`
-	ApprovedCount  int64      `json:"approved_count"`
-	ResolvedCount  int64      `json:"resolved_count"`
-	LastApprovedAt *time.Time `json:"last_approved_at"`
-	LastResolvedAt *time.Time `json:"last_resolved_at"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID           int64      `json:"id"`
+	ProblemKind  string     `json:"problem_kind"`
+	ActionKind   string     `json:"action_kind"`
+	ActionFacet  string     `json:"action_facet"`
+	Label        string     `json:"label"`
+	Status       string     `json:"status"` // active | paused
+	PausedReason *string    `json:"paused_reason"`
+	PausedAt     *time.Time `json:"paused_at"`
+	// PausedByIssueID deep-links the issue whose outcome stood the rule down —
+	// the evidence, not just the verdict.
+	PausedByIssueID *int64 `json:"paused_by_issue_id"`
+	// ApprovedSincePause counts MANUAL approvals of this rule's exact triple
+	// since it paused: "you have automated this and keep doing it by hand" is
+	// the argument for resuming, computed by the server so clients never
+	// re-derive facets.
+	ApprovedSincePause int64      `json:"approved_since_pause"`
+	CreatedBy          *int64     `json:"created_by"`
+	CreatedByName      *string    `json:"created_by_name"`
+	SeedActionID       *int64     `json:"seed_action_id"`
+	ApprovedCount      int64      `json:"approved_count"`
+	ResolvedCount      int64      `json:"resolved_count"`
+	LastApprovedAt     *time.Time `json:"last_approved_at"`
+	LastResolvedAt     *time.Time `json:"last_resolved_at"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // ListApprovalRulesResponse is the GET /api/admin/agent-approval-rules result.

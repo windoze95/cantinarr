@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -28,12 +29,17 @@ func (s *Service) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
+			// Every 401 names its cause and source in the log: a client dying on
+			// silent 401s is otherwise undiagnosable from the server side. Only
+			// the reason and remote address are logged — never token material.
+			log.Printf("auth: 401 %s %s from %s: no authorization header", r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
 			return
 		}
 
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		if token == authHeader {
+			log.Printf("auth: 401 %s %s from %s: malformed authorization header", r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, `{"error":"invalid authorization format"}`, http.StatusUnauthorized)
 			return
 		}
@@ -44,9 +50,13 @@ func (s *Service) AuthMiddleware(next http.Handler) http.Handler {
 			// rejection: clients treat 401 as "session dead". Answer 503 so
 			// they retry with the same credentials.
 			if errors.Is(err, ErrAuthUnavailable) {
+				log.Printf("auth: 503 %s %s from %s (session kept, client retries): %v", r.Method, r.URL.Path, r.RemoteAddr, err)
 				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
 				return
 			}
+			// The validation error text describes the failure class (expired,
+			// bad signature, revoked device) and never contains the token.
+			log.Printf("auth: 401 %s %s from %s: %v", r.Method, r.URL.Path, r.RemoteAddr, err)
 			http.Error(w, `{"error":"invalid or expired token"}`, http.StatusUnauthorized)
 			return
 		}

@@ -207,6 +207,14 @@ class _StubAdapter implements HttpClientAdapter {
           {'paused': false, 'speed_bps': 0, 'items': <Object>[]};
     } else if (path.contains('/downloads/') && path.endsWith('/history')) {
       body = {'items': <Object>[]};
+    } else if (path.endsWith('/api/admin/discovery-settings')) {
+      // Must beat the generic '/discover' branch below.
+      body = {
+        'source': 'tmdb_trending',
+        'english_only': true,
+        'sources': ['tmdb_trending', 'trakt_trending', 'tmdb_popular'],
+        'trakt_configured': false,
+      };
     } else if (path.contains('/discover') || path.contains('/search')) {
       body = {'results': [], 'page': 1, 'total_pages': 1, 'total_results': 0};
     } else if (path.contains('/issues')) {
@@ -215,6 +223,87 @@ class _StubAdapter implements HttpClientAdapter {
       body = {'actions': []};
     } else if (path.contains('/requests')) {
       body = {'requests': []};
+    } else if (path.endsWith('/api/admin/credentials')) {
+      // Discover hosts the TMDB/Trakt credential sections; built-in TMDB is
+      // the fresh-server truth.
+      body = {
+        'credentials': <String, bool>{},
+        'tmdb_using_builtin': true,
+        'ai': <String, dynamic>{},
+      };
+    } else if (path.endsWith('/api/admin/request-settings')) {
+      // Defaults-shaped so the Request Defaults screen (a settings-search
+      // deep-link target) renders its controls instead of the error state.
+      body = {
+        'settings': <String, dynamic>{},
+        'radarr_profiles': <Object>[],
+        'sonarr_profiles': <Object>[],
+      };
+    } else if (path.endsWith('/api/notifications/preferences')) {
+      body = <String, dynamic>{};
+    } else if (path.endsWith('/api/ai/settings')) {
+      // Included AI active so the AI Access screen shows its covered state.
+      body = {
+        'providers': [
+          {
+            'id': 'anthropic',
+            'label': 'Anthropic',
+            'credential_key': 'anthropic_key',
+            'models': [
+              {'id': 'claude-sonnet-4-6', 'label': 'Claude Sonnet 4.6'},
+            ],
+          },
+          {
+            'id': 'openai',
+            'label': 'OpenAI',
+            'credential_key': 'openai_key',
+            'models': [
+              {'id': 'gpt-5.4-mini', 'label': 'GPT-5.4 mini'},
+            ],
+          },
+          {
+            'id': 'gemini',
+            'label': 'Google Gemini',
+            'credential_key': 'gemini_key',
+            'models': [
+              {'id': 'gemini-2.5-flash', 'label': 'Gemini 2.5 Flash'},
+            ],
+          },
+          {
+            'id': 'codex',
+            'label': 'OpenAI (OAuth)',
+            'credential_key': '',
+            'auth_type': 'user_oauth',
+            'models': [
+              {'id': 'gpt-5.6-luna', 'label': 'GPT-5.6 Luna'},
+            ],
+          },
+        ],
+        'default_provider': 'codex',
+        'default_model': 'gpt-5.6-luna',
+        'personal': {
+          'selected': false,
+          'config': null,
+          'credentials': {
+            'anthropic': false,
+            'openai': false,
+            'gemini': false,
+            'codex': false,
+          },
+        },
+        'shared': {
+          'granted': true,
+          'configured': true,
+          'config': {'provider': 'codex', 'model': 'gpt-5.6-luna'},
+        },
+        'effective': {
+          'available': true,
+          'source': 'shared',
+          'provider': 'codex',
+          'model': 'gpt-5.6-luna',
+          'reason': '',
+        },
+      };
     } else {
       body = <Object>[];
     }

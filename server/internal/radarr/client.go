@@ -61,6 +61,33 @@ type MovieFile struct {
 	RelativePath string `json:"relativePath"`
 	Path         string `json:"path"`
 	Size         int64  `json:"size"`
+	// DateAdded is when Radarr imported this file. Pointer-typed so an absent
+	// field reads as "unknown" rather than the zero time, which a caller
+	// comparing timestamps would otherwise treat as impossibly old.
+	DateAdded *time.Time `json:"dateAdded"`
+	SceneName string     `json:"sceneName"`
+	Quality   struct {
+		Quality struct {
+			Name string `json:"name"`
+		} `json:"quality"`
+	} `json:"quality"`
+	// MediaInfo mirrors sonarr.FileMediaInfo: the arr's ffprobe-derived truth
+	// about the file on disk. Pointer-typed: older records may not carry it.
+	MediaInfo *MovieFileMediaInfo `json:"mediaInfo"`
+}
+
+// MovieFileMediaInfo is the media-property block Radarr serves on a file record.
+type MovieFileMediaInfo struct {
+	AudioChannels     float64 `json:"audioChannels"`
+	AudioCodec        string  `json:"audioCodec"`
+	AudioLanguages    string  `json:"audioLanguages"`
+	Height            int     `json:"height"`
+	Width             int     `json:"width"`
+	Resolution        string  `json:"resolution"`
+	RunTime           string  `json:"runTime"`
+	VideoCodec        string  `json:"videoCodec"`
+	VideoDynamicRange string  `json:"videoDynamicRange"`
+	Subtitles         string  `json:"subtitles"`
 }
 
 type QualityProfile struct {
@@ -206,6 +233,17 @@ func (c *Client) GetMovieFile(id int) (*MovieFile, error) {
 		return nil, fmt.Errorf("radarr movie file: %w", err)
 	}
 	return &file, nil
+}
+
+// DeleteMovieFile deletes one imported file from disk and from Radarr's
+// records. The movie itself stays monitored, so Radarr remains free to grab a
+// replacement under its own policy.
+func (c *Client) DeleteMovieFile(id int) error {
+	path := fmt.Sprintf("/api/v3/moviefile/%d", id)
+	if err := c.do(http.MethodDelete, path, nil, nil); err != nil {
+		return fmt.Errorf("radarr delete movie file: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) GetMovieByTMDB(tmdbID int) (*Movie, error) {
@@ -385,18 +423,25 @@ func (c *Client) AddMovie(addReq *AddMovieRequest) error {
 	return nil
 }
 
+// GetQueue returns the lean queue view as one complete bounded page. It used
+// to issue an unpaged read, which Radarr answers with its default page of 10
+// rows — a silently truncated queue for any instance downloading more than
+// that. includeUnknownMovieItems keeps rows Radarr could not match to a
+// library movie visible; consumers must treat MovieID 0 as unmatched.
 func (c *Client) GetQueue() ([]QueueItem, error) {
-	resp, err := c.doRequest("GET", "/api/v3/queue?includeMovie=true")
-	if err != nil {
+	var queueResp struct {
+		TotalRecords int         `json:"totalRecords"`
+		Records      []QueueItem `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeMovie=true&includeUnknownMovieItems=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	if err := c.do("GET", path, nil, &queueResp); err != nil {
 		return nil, fmt.Errorf("radarr queue: %w", err)
 	}
-	defer resp.Body.Close()
-
-	var queueResp struct {
-		Records []QueueItem `json:"records"`
+	if queueResp.TotalRecords < 0 || queueResp.TotalRecords > queueMaxRecords {
+		return nil, fmt.Errorf("radarr queue snapshot incomplete: invalid or oversized total %d (safety cap %d)", queueResp.TotalRecords, queueMaxRecords)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&queueResp); err != nil {
-		return nil, fmt.Errorf("decode queue: %w", err)
+	if len(queueResp.Records) != queueResp.TotalRecords {
+		return nil, fmt.Errorf("radarr queue snapshot incomplete: received %d of %d records in bounded page", len(queueResp.Records), queueResp.TotalRecords)
 	}
 	return queueResp.Records, nil
 }
@@ -458,7 +503,10 @@ func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
 		TotalRecords int                 `json:"totalRecords"`
 		Records      []DetailedQueueItem `json:"records"`
 	}
-	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeMovie=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	// includeUnknownMovieItems: without it Radarr silently drops queue rows it
+	// could not match to a library movie — exactly the rows most likely to be
+	// stuck — before the completeness checks below ever see them.
+	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeMovie=true&includeUnknownMovieItems=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
 	if err := c.do("GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("radarr queue: %w", err)
 	}
@@ -523,6 +571,29 @@ func (c *Client) GetHistory(pageSize int) ([]HistoryRecord, error) {
 	return resp.Records, nil
 }
 
+// GetMovieHistory returns the history Radarr still holds for one movie — every
+// grab, import and failure. Prefer it over GetHistory whenever the caller knows
+// the movie: GetHistory reads one page of the GLOBAL log, so a busy instance
+// buries a title's records within hours, while this endpoint filters
+// server-side and reaches records months old.
+//
+// /history/movie answers with a bare JSON array, not the paged envelope the
+// /history endpoint uses, so there is no records wrapper to unwrap and no
+// server-side page size to ask for. pageSize is therefore a purely client-side
+// cap on how many of the returned records (newest first, the order Radarr sends
+// them in) the caller wants back; pageSize <= 0 returns all of them.
+func (c *Client) GetMovieHistory(movieID, pageSize int) ([]HistoryRecord, error) {
+	var records []HistoryRecord
+	path := fmt.Sprintf("/api/v3/history/movie?movieId=%d&includeMovie=true", movieID)
+	if err := c.do("GET", path, nil, &records); err != nil {
+		return nil, fmt.Errorf("radarr movie history: %w", err)
+	}
+	if pageSize > 0 && len(records) > pageSize {
+		records = records[:pageSize]
+	}
+	return records, nil
+}
+
 // GetImportHistory returns a bounded server-filtered import witness for one
 // internal movie and observed download identity. Callers still revalidate every
 // returned field; filters reduce both noise and truncation risk.
@@ -540,6 +611,35 @@ func (c *Client) GetImportHistory(movieID int, downloadID string, pageSize int) 
 		return nil, fmt.Errorf("radarr import history incomplete: %d records exceeds bound %d", resp.TotalRecords, pageSize)
 	}
 	return resp.Records, nil
+}
+
+// GrabProvenance reports how the *newest* grab of this download came about —
+// the grab that put the item currently in the queue there. Radarr stamps a
+// releaseSource on every grabbed history event: "Rss" means it found the
+// release on its own because it beat what the library already had; anything
+// else ("Search", "UserInvokedSearch", "InteractiveSearch", "ReleasePush")
+// means something went looking. An empty string means unknown, which callers
+// must treat as "assume a search was involved" rather than guessing.
+//
+// One download can carry several grab records (a re-grab of the same release
+// makes another), so newest-first ordering is load-bearing.
+func (c *Client) GrabProvenance(movieID int, downloadID string) (string, error) {
+	var resp struct {
+		Records []HistoryRecord `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=10&sortKey=date&sortDirection=descending&eventType=1&movieIds=%d&downloadId=%s",
+		movieID, url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return "", fmt.Errorf("radarr grab provenance: %w", err)
+	}
+	for _, record := range resp.Records {
+		for key, value := range record.Data {
+			if strings.EqualFold(key, "releaseSource") {
+				return value, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // GetImportHistorySince returns the completed-import history records dated
@@ -568,6 +668,65 @@ func (c *Client) GetImportHistorySince(since time.Time, pageSize int) (inWindow 
 		inWindow = append(inWindow, rec)
 	}
 	return inWindow, complete, nil
+}
+
+// GetUpgradeDeleteHistorySince returns the movie-file-deleted history records
+// dated after since, newest first, from one bounded page (eventType=6 —
+// movieFileDeleted). The import-history catch-up pairs these against the same
+// window's imports: a delete with data.reason "Upgrade" is the only durable
+// proof that an import replaced a file rather than filled a gap. Callers must
+// treat an error or incomplete window as "no upgrade proof" (announce as new
+// content), never as "no upgrades happened".
+func (c *Client) GetUpgradeDeleteHistorySince(since time.Time, pageSize int) (inWindow []HistoryRecord, complete bool, err error) {
+	var resp struct {
+		TotalRecords int             `json:"totalRecords"`
+		Records      []HistoryRecord `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=6", pageSize)
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return nil, false, fmt.Errorf("radarr upgrade-delete history since: %w", err)
+	}
+	complete = resp.TotalRecords <= len(resp.Records)
+	for _, rec := range resp.Records {
+		if !rec.Date.After(since) {
+			// The page reached past the window boundary, so the window is
+			// fully enumerated even when older records exist beyond the page.
+			complete = true
+			continue
+		}
+		inWindow = append(inWindow, rec)
+	}
+	return inWindow, complete, nil
+}
+
+// MarkHistoryFailed marks one grab history record as a failed download — the
+// "Mark as Failed" button. It is Radarr's only route to blocklist a release
+// that already finished and imported: the blocklist endpoint has no add
+// operation, and the queue-side blocklist flag needs a live queue row, which a
+// download that completed two weeks ago no longer has. Marking a grab failed
+// also lets Radarr decide for itself whether to look for a replacement (see
+// GetFailedDownloadPolicy).
+func (c *Client) MarkHistoryFailed(historyID int64) error {
+	path := fmt.Sprintf("/api/v3/history/failed/%d", historyID)
+	if err := c.do(http.MethodPost, path, nil, nil); err != nil {
+		return fmt.Errorf("radarr mark history failed: %w", err)
+	}
+	return nil
+}
+
+// GetFailedDownloadPolicy reports the instance's autoRedownloadFailed setting:
+// whether Radarr searches for a replacement on its own once a download is
+// marked failed. That is the admin's decision, so a caller that blocklists a
+// release must read it rather than assume — with the policy on, adding a search
+// of our own only duplicates the grab Radarr already dispatched.
+func (c *Client) GetFailedDownloadPolicy() (autoRedownloadFailed bool, err error) {
+	var config struct {
+		AutoRedownloadFailed bool `json:"autoRedownloadFailed"`
+	}
+	if err := c.do("GET", "/api/v3/config/downloadclient", nil, &config); err != nil {
+		return false, fmt.Errorf("radarr download client config: %w", err)
+	}
+	return config.AutoRedownloadFailed, nil
 }
 
 type CalendarItem struct {
@@ -815,4 +974,26 @@ func (c *Client) ProcessMonitoredDownloads() error {
 // RescanMovie rescans the files on disk for a movie.
 func (c *Client) RescanMovie(movieID int) error {
 	return c.triggerCommand(map[string]any{"name": "RescanMovie", "movieIds": []int{movieID}})
+}
+
+// GetConfigSummary returns a bounded, secret-free summary of one settings
+// section. The raw payloads (which carry API keys and passwords in their
+// dynamic fields) are summarized HERE and never leave the client.
+func (c *Client) GetConfigSummary(section string) ([]arrcommon.ConfigEntry, error) {
+	paths := map[string]string{
+		arrcommon.ConfigIndexers:           "/api/v3/indexer",
+		arrcommon.ConfigDelayProfiles:      "/api/v3/delayprofile",
+		arrcommon.ConfigReleaseProfiles:    "/api/v3/releaseprofile",
+		arrcommon.ConfigDownloadClients:    "/api/v3/downloadclient",
+		arrcommon.ConfigRemotePathMappings: "/api/v3/remotepathmapping",
+	}
+	path, ok := paths[section]
+	if !ok {
+		return nil, fmt.Errorf("unknown config section %q", section)
+	}
+	var raws []json.RawMessage
+	if err := c.do("GET", path, nil, &raws); err != nil {
+		return nil, fmt.Errorf("read %s: %w", section, err)
+	}
+	return arrcommon.SummarizeConfigSection(section, raws), nil
 }

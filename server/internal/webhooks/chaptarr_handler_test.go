@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -99,11 +100,42 @@ func TestChaptarrImportAlertsFromLiveRecord(t *testing.T) {
 			t.Error("a book event emitted request_status_changed")
 		}
 	}
+	// A payload without isUpgrade IS the fail-open pin: no flag, no upgrade
+	// rerouting.
+	if len(f.content.upgradedBooks) != 0 {
+		t.Errorf("upgrade alerts = %v, want none without isUpgrade", f.content.upgradedBooks)
+	}
+}
+
+// TestChaptarrImportUpgradeReroutesToAdmins pins that isUpgrade:true swaps the
+// audience — the assigned-reader broadcast stays silent, the admin upgrade
+// alert carries the identical live-record identity — while cache invalidation
+// and the queue ping are unchanged.
+func TestChaptarrImportUpgradeReroutesToAdmins(t *testing.T) {
+	f, _, id, token := newBookFixture(t)
+
+	rec := f.postBook(t, id, token, `{"eventType":"Download","isUpgrade":true,"book":{"id":7}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(f.content.books) != 0 {
+		t.Errorf("broadcast alerts = %v, want none for a proven upgrade", f.content.books)
+	}
+	want := "Ahsoka (Star Wars)|29749107|" + id + "|ebook"
+	if len(f.content.upgradedBooks) != 1 || f.content.upgradedBooks[0] != want {
+		t.Errorf("upgrade alerts = %v, want exactly [%s]", f.content.upgradedBooks, want)
+	}
+	if len(f.requests.bookIDs) == 0 {
+		t.Error("book availability caches were not invalidated, so the app would show stale state")
+	}
+	if len(f.hub.events) == 0 || f.hub.events[0].Type != "arr_queue_changed" {
+		t.Errorf("broadcasts = %v, want an arr_queue_changed invalidation ping", f.hub.events)
+	}
 }
 
 // TestChaptarrImportPayloadIsOnlyATrigger pins that a forged or drifted payload
-// cannot fabricate an alert. Chaptarr is closed source, so the body is never
-// trusted for identity.
+// cannot fabricate an alert. An arr-origin body is never trusted for
+// identity, whoever wrote it.
 func TestChaptarrImportPayloadIsOnlyATrigger(t *testing.T) {
 	f, _, id, token := newBookFixture(t)
 
@@ -276,5 +308,42 @@ func TestNonChaptarrInstanceIgnoresBookPayload(t *testing.T) {
 	}
 	if len(f.requests.bookIDs) != 0 {
 		t.Error("a Radarr callback invalidated book caches")
+	}
+}
+
+// recordingParkResumer counts ResumeBookParks calls.
+type recordingParkResumer struct{ calls atomic.Int32 }
+
+func (r *recordingParkResumer) ResumeBookParks() { r.calls.Add(1) }
+
+// TestChaptarrAuthorAddedResumesBookParks pins the push-driven park exit:
+// AuthorAdded fires at the exact moment a queued author import lands, so the
+// receiver resumes the park sweep immediately. Every other event leaves the
+// maintenance cadence alone — an import or delete says nothing about an
+// author-import park.
+func TestChaptarrAuthorAddedResumesBookParks(t *testing.T) {
+	f, _, id, token := newBookFixture(t)
+	resumer := &recordingParkResumer{}
+	f.handler.SetBookParkResumer(resumer)
+
+	rec := f.postBook(t, id, token, `{"eventType":"AuthorAdded"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := resumer.calls.Load(); got != 1 {
+		t.Fatalf("ResumeBookParks calls = %d, want exactly one", got)
+	}
+
+	for _, body := range []string{
+		`{"eventType":"Download","book":{"id":7}}`,
+		`{"eventType":"BookDelete","book":{"id":7}}`,
+		`{"eventType":"Test"}`,
+	} {
+		if rec := f.postBook(t, id, token, body); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d for %s, want 200", rec.Code, body)
+		}
+	}
+	if got := resumer.calls.Load(); got != 1 {
+		t.Fatalf("ResumeBookParks calls = %d after non-author events, want still one", got)
 	}
 }

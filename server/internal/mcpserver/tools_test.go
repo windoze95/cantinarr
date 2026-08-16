@@ -13,19 +13,25 @@ import (
 
 func TestExternalMCPToolListHidesInAppChatOnlyTools(t *testing.T) {
 	toolServer := internalmcp.NewToolServer(nil, nil, nil, nil)
-	wantHidden := map[string]bool{
-		"preview_profile_change": false,
-		"apply_profile_change":   false,
+	// preview_profile_change is deliberately DISCOVERABLE externally: from an
+	// external client it parks an admin-approval proposal instead of arming
+	// the same-turn apply. apply_profile_change stays in-app-only — no
+	// external path may complete the write itself.
+	flags := map[string]*bool{
+		"preview_profile_change": nil,
+		"apply_profile_change":   nil,
 	}
 	for _, tool := range toolServer.AllTools() {
-		if _, tracked := wantHidden[tool.Name]; tracked {
-			wantHidden[tool.Name] = tool.InAppChatOnly
+		if _, tracked := flags[tool.Name]; tracked {
+			inAppOnly := tool.InAppChatOnly
+			flags[tool.Name] = &inAppOnly
 		}
 	}
-	for name, declaredInAppOnly := range wantHidden {
-		if !declaredInAppOnly {
-			t.Fatalf("tool %q is missing or is not marked InAppChatOnly", name)
-		}
+	if flags["preview_profile_change"] == nil || *flags["preview_profile_change"] {
+		t.Fatalf("preview_profile_change is missing or hidden from external MCP; it must be listed (it parks proposals externally)")
+	}
+	if flags["apply_profile_change"] == nil || !*flags["apply_profile_change"] {
+		t.Fatalf("apply_profile_change is missing or is not marked InAppChatOnly")
 	}
 
 	ctx := context.WithValue(context.Background(), roleKey, auth.RoleAdmin)
@@ -35,18 +41,16 @@ func TestExternalMCPToolListHidesInAppChatOnlyTools(t *testing.T) {
 		mcplib.NewTool("apply_profile_change"),
 	}
 	filtered := ToolListFilter(toolServer)(ctx, listed)
-	if len(filtered) != 1 || filtered[0].Name != "get_queue" {
-		t.Fatalf("external MCP tool list = %#v, want only get_queue", toolNames(filtered))
+	if len(filtered) != 2 || filtered[0].Name != "get_queue" || filtered[1].Name != "preview_profile_change" {
+		t.Fatalf("external MCP tool list = %#v, want get_queue and preview_profile_change", toolNames(filtered))
 	}
 
 	guide := agentGuideText(toolServer, auth.RoleAdmin)
-	if !strings.Contains(guide, "get_queue") {
+	if !strings.Contains(guide, "get_queue") || !strings.Contains(guide, "preview_profile_change") {
 		t.Fatalf("external MCP guide omitted an available tool:\n%s", guide)
 	}
-	for name := range wantHidden {
-		if strings.Contains(guide, name) {
-			t.Fatalf("external MCP guide advertised in-app-only tool %q:\n%s", name, guide)
-		}
+	if strings.Contains(guide, "apply_profile_change") {
+		t.Fatalf("external MCP guide advertised in-app-only tool apply_profile_change:\n%s", guide)
 	}
 }
 

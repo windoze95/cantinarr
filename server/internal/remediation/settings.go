@@ -233,9 +233,18 @@ func (s *Service) Settings() Settings {
 	return g
 }
 
+// SettingsDecided reports whether an admin has ever SAVED remediation
+// settings — the setup checklist grades "did you decide", never which answer.
+func (s *Service) SettingsDecided() bool {
+	var one int
+	err := s.db.QueryRow("SELECT 1 FROM settings WHERE key = ?", remediationSettingsKey).Scan(&one)
+	return err == nil
+}
+
 // SetSettings persists the global remediation settings (written exactly like
 // request.SetGlobalSettings) and returns the normalized value that was stored.
 func (s *Service) SetSettings(g Settings) (Settings, error) {
+	wasOff := !s.Settings().AutoDispatch
 	g.normalize()
 	data, err := json.Marshal(g)
 	if err != nil {
@@ -243,6 +252,11 @@ func (s *Service) SetSettings(g Settings) (Settings, error) {
 	}
 	if _, err := s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", remediationSettingsKey, string(data)); err != nil {
 		return Settings{}, fmt.Errorf("save remediation settings: %w", err)
+	}
+	// Re-enabling auto-dispatch is what closes the breaker's durable notice —
+	// the admin acted on exactly what it asked for.
+	if wasOff && g.AutoDispatch {
+		_ = s.RecordAutoDispatchBreaker(false, 0, 0)
 	}
 	return g, nil
 }

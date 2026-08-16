@@ -22,6 +22,7 @@ enum AgentActionKind {
   manualImport('manual_import'),
   triggerSearch('trigger_search'),
   rescan('rescan'),
+  deleteMediaFiles('delete_media_files'),
   unknown('');
 
   const AgentActionKind(this.value);
@@ -117,6 +118,31 @@ class AutoApprovalOffer {
 /// `GET /api/admin/agent-actions`. The reified [params] are parsed into a
 /// small read-only [AgentActionParams] view for plain-language rendering; the
 /// raw map is retained so an unknown kind still shows its data.
+/// One executed, download-attributed fix on the same issue — the server's own
+/// remediation memory, rendered for the approving human so they never decide
+/// with less evidence than the model. [recurred] means the arr re-added the
+/// SAME download after the fix ran: the fix did not hold.
+class PriorAttempt {
+  final String kind;
+  final String facet;
+  final DateTime? executedAt;
+  final bool recurred;
+
+  const PriorAttempt({
+    required this.kind,
+    this.facet = '',
+    this.executedAt,
+    this.recurred = false,
+  });
+
+  factory PriorAttempt.fromJson(Map<String, dynamic> json) => PriorAttempt(
+        kind: json['kind'] as String? ?? '',
+        facet: json['facet'] as String? ?? '',
+        executedAt: DateTime.tryParse(json['executed_at'] as String? ?? ''),
+        recurred: json['recurred'] as bool? ?? false,
+      );
+}
+
 class AgentAction {
   final int id;
   final int issueId;
@@ -169,6 +195,11 @@ class AgentAction {
   // Joined from the issue for the queue list view.
   final String issueTitle;
   final String issueMediaType;
+  final int issueTmdbId;
+  final int issueSeason;
+  final int issueEpisode;
+  final int issueOccurrences;
+  final List<PriorAttempt> priorAttempts;
   final String? issueCategory;
   final IssueStatus issueStatus;
   final DateTime? issueClosedAt;
@@ -218,6 +249,11 @@ class AgentAction {
     required this.createdAt,
     required this.issueTitle,
     required this.issueMediaType,
+    this.issueTmdbId = 0,
+    this.issueSeason = 0,
+    this.issueEpisode = 0,
+    this.issueOccurrences = 0,
+    this.priorAttempts = const [],
     required this.issueCategory,
     required this.issueStatus,
     required this.issueClosedAt,
@@ -264,6 +300,14 @@ class AgentAction {
           DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
       issueTitle: json['issue_title'] as String? ?? '',
       issueMediaType: json['issue_media_type'] as String? ?? '',
+      issueTmdbId: (json['issue_tmdb_id'] as num?)?.toInt() ?? 0,
+      issueSeason: (json['issue_season'] as num?)?.toInt() ?? 0,
+      issueEpisode: (json['issue_episode'] as num?)?.toInt() ?? 0,
+      issueOccurrences: (json['issue_occurrences'] as num?)?.toInt() ?? 0,
+      priorAttempts: ((json['prior_attempts'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(PriorAttempt.fromJson)
+          .toList(),
       issueCategory: json['issue_category'] as String?,
       issueStatus: IssueStatus.fromValue(json['issue_status'] as String?),
       issueClosedAt: DateTime.tryParse(json['issue_closed_at'] as String? ?? '')
@@ -380,6 +424,12 @@ class _ParsedParams {
   const _ParsedParams(this.map, this.wellFormed);
 }
 
+/// The most episodes one delete_media_files proposal may cover. Mirrors
+/// `maxDeleteEpisodes` in `server/internal/remediation/actions.go`: a wrong-file
+/// report is one season-shaped incident, and past this the approval card stops
+/// being something an admin can actually read before authorising a deletion.
+const int _maxDeleteEpisodes = 60;
+
 /// A small read-only view over a proposal's `params` JSON object. Every getter
 /// returns UNTRUSTED data that callers render quoted and non-editable; the view
 /// never interprets a value as a command. Unknown keys are simply absent.
@@ -416,6 +466,17 @@ class AgentActionParams {
     return value is num && value.isFinite && value == value.toInt();
   }
 
+  /// True when [key] holds a JSON array whose every member is a whole number.
+  /// A numeric-looking string is rejected, matching the server's strict decode:
+  /// an episode list is the target of an irreversible deletion, so it is never
+  /// coerced.
+  bool _isIntList(String key, {bool optional = false}) {
+    if (!_raw.containsKey(key)) return optional;
+    final value = _raw[key];
+    if (value is! List) return false;
+    return value.every((v) => v is num && v.isFinite && v == v.toInt());
+  }
+
   String? get mediaType => _str('media_type');
 
   /// grab_release: the server-issued one-way release reference.
@@ -441,7 +502,7 @@ class AgentActionParams {
   /// remediate_queue / manual_import: the target queue item id.
   int? get queueId => _int('queue_id');
 
-  /// remediate_queue: remove | blocklist_search | change_category.
+  /// remediate_queue: remove | blocklist_search | blocklist_only | change_category.
   String? get queueAction => _str('action');
 
   /// manual_import: whether to force past arr's safety checks.
@@ -461,6 +522,24 @@ class AgentActionParams {
     final v = _int('episode');
     return (v != null && v > 0) ? v : null;
   }
+
+  /// delete_media_files: the exact episode numbers whose already-imported files
+  /// would be deleted. Only whole numbers survive parsing; [validationProblem]
+  /// refuses the whole proposal when the list holds anything else, so a
+  /// partially parsed list can never become the target of a deletion.
+  List<int> get episodes {
+    final value = _raw['episodes'];
+    if (value is! List) return const [];
+    return value
+        .whereType<num>()
+        .where((n) => n.isFinite && n == n.toInt())
+        .map((n) => n.toInt())
+        .toList(growable: false);
+  }
+
+  /// delete_media_files: whether the releases that delivered the deleted files
+  /// are also blocked, so the same ones are not downloaded again.
+  bool get blocklist => _bool('blocklist');
 
   int? get authorId => _int('author_id');
   int? get bookId => _int('book_id');
@@ -493,6 +572,9 @@ class AgentActionParams {
           'queue_id',
           'force',
         },
+      // No aired-only variant: replacing what a bad import destroyed is part of
+      // delete_media_files, not a search of its own. A proposal still carrying
+      // `aired_only` is therefore an unrecognized field, and falls out below.
       AgentActionKind.triggerSearch => const {
           'media_type',
           'tmdb_id',
@@ -505,6 +587,13 @@ class AgentActionParams {
           'media_type',
           'tmdb_id',
           'author_id',
+        },
+      AgentActionKind.deleteMediaFiles => const {
+          'media_type',
+          'tmdb_id',
+          'season',
+          'episodes',
+          'blocklist',
         },
       AgentActionKind.unknown => const <String>{},
     };
@@ -554,6 +643,7 @@ class AgentActionParams {
             !const {
               'remove',
               'blocklist_search',
+              'blocklist_only',
               'change_category',
             }.contains(queueAction)) {
           return 'The proposed queue change is not recognized.';
@@ -609,6 +699,41 @@ class AgentActionParams {
           }
         } else if ((tmdbId ?? 0) <= 0) {
           return 'The title needed for this rescan is missing.';
+        }
+      case AgentActionKind.deleteMediaFiles:
+        // Deleting is irreversible, so every part of the target is required and
+        // strictly typed here — an under-specified proposal stays readable as
+        // history but must never reach an Approve button.
+        if (media == 'book') {
+          return 'Deleting library files is not supported for books.';
+        }
+        if (!_isInt('tmdb_id') || (tmdbId ?? 0) <= 0) {
+          return 'The title whose files would be deleted is missing.';
+        }
+        if (_raw.containsKey('blocklist') && _raw['blocklist'] is! bool) {
+          return 'The proposed deletion options are malformed.';
+        }
+        if (media == 'movie') {
+          if (_raw.containsKey('season') || _raw.containsKey('episodes')) {
+            return 'The proposed movie deletion contains TV episode details.';
+          }
+        } else {
+          if (!_isInt('season') || season == null) {
+            return 'The proposed TV season is invalid.';
+          }
+          if (!_isIntList('episodes', optional: true)) {
+            return 'The list of episodes to delete is malformed.';
+          }
+          final numbers = episodes;
+          if (numbers.isEmpty) {
+            return 'The episodes whose files would be deleted are missing.';
+          }
+          if (numbers.any((n) => n <= 0)) {
+            return 'The proposed episode numbers are invalid.';
+          }
+          if (numbers.length > _maxDeleteEpisodes) {
+            return 'The proposed deletion covers too many episodes to review.';
+          }
         }
       case AgentActionKind.unknown:
         return 'This app does not recognize the proposed fix type.';

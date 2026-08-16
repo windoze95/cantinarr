@@ -34,9 +34,12 @@ func (f *fakeInvalidator) InvalidateBookDigests(id string) {
 }
 
 type fakeContent struct {
-	movies   []string
-	episodes []string
-	books    []string
+	movies           []string
+	episodes         []string
+	books            []string
+	upgradedMovies   []string
+	upgradedEpisodes []string
+	upgradedBooks    []string
 }
 
 func (f *fakeContent) NotifyNewMovie(title string, tmdbID int) { f.movies = append(f.movies, title) }
@@ -49,6 +52,16 @@ func (f *fakeContent) NotifyNewEpisode(seriesTitle string, tmdbID int) {
 // correct alert from one that would double-push against the queue witness.
 func (f *fakeContent) NotifyNewBook(title, foreignID, instanceID, format string) {
 	f.books = append(f.books, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
+}
+
+func (f *fakeContent) NotifyUpgradedMovie(title string, tmdbID int) {
+	f.upgradedMovies = append(f.upgradedMovies, title)
+}
+func (f *fakeContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int) {
+	f.upgradedEpisodes = append(f.upgradedEpisodes, seriesTitle)
+}
+func (f *fakeContent) NotifyUpgradedBook(title, foreignID, instanceID, format string) {
+	f.upgradedBooks = append(f.upgradedBooks, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
 }
 
 type fixture struct {
@@ -230,6 +243,81 @@ func TestWebhookMovieDownload(t *testing.T) {
 	}
 	if len(f.content.movies) != 1 || f.content.movies[0] != "Manually Imported" {
 		t.Errorf("movie pushes = %v, want [Manually Imported]", f.content.movies)
+	}
+	// A payload without isUpgrade IS the fail-open pin: suppressing the
+	// broadcast requires positive proof, so no flag means new content.
+	if len(f.content.upgradedMovies) != 0 {
+		t.Errorf("upgrade pushes = %v, want none without isUpgrade", f.content.upgradedMovies)
+	}
+}
+
+// TestWebhookMovieDownloadUpgrade pins that a Download with isUpgrade:true is
+// rerouted to the admin content_upgraded alert: availability still refreshes
+// (digest invalidation, request_status_changed), only the audience changes —
+// the household broadcast stays silent.
+func TestWebhookMovieDownloadUpgrade(t *testing.T) {
+	radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/movie/7" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":7,"title":"Better Copy","tmdbId":600,"hasFile":true,"monitored":true}`))
+	}))
+	defer radarrSrv.Close()
+
+	f := newFixture(t, radarrSrv.URL, "http://unused")
+	rec := f.post(t, "/api/webhooks/arr/"+f.radarrID,
+		`{"eventType":"Download","isUpgrade":true,"movie":{"id":7,"title":"Better Copy","tmdbId":600}}`, basicWebhookAuth(f.radarrTok))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(f.requests.instanceIDs) != 1 {
+		t.Errorf("digests invalidated = %v, want one invalidation (upgrades still refresh state)", f.requests.instanceIDs)
+	}
+	if len(f.hub.events) != 1 || f.hub.events[0].Type != "request_status_changed" {
+		t.Fatalf("events = %v, want one request_status_changed (availability truth is audience-independent)", f.eventTypes())
+	}
+	if len(f.content.movies) != 0 {
+		t.Errorf("broadcast pushes = %v, want none for a proven upgrade", f.content.movies)
+	}
+	if len(f.content.upgradedMovies) != 1 || f.content.upgradedMovies[0] != "Better Copy" {
+		t.Errorf("upgrade pushes = %v, want [Better Copy]", f.content.upgradedMovies)
+	}
+}
+
+// TestWebhookSeriesDownloadUpgrade is the Sonarr twin of the movie upgrade
+// pin.
+func TestWebhookSeriesDownloadUpgrade(t *testing.T) {
+	sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v3/series/9":
+			_, _ = w.Write([]byte(`{"id":9,"title":"Gappy Show","tvdbId":500,"tmdbId":700,"monitored":true}`))
+		case "/api/v3/episode":
+			_, _ = w.Write([]byte(`[
+				{"id":1,"seriesId":9,"seasonNumber":1,"episodeNumber":1,"hasFile":true,"monitored":true}
+			]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer sonarrSrv.Close()
+
+	f := newFixture(t, "http://unused", sonarrSrv.URL)
+	rec := f.post(t, "/api/webhooks/arr/"+f.sonarrID,
+		`{"eventType":"Download","isUpgrade":true,"series":{"id":9,"title":"Gappy Show","tvdbId":500}}`, basicWebhookAuth(f.sonarrTok))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(f.hub.events) != 1 || f.hub.events[0].Type != "request_status_changed" {
+		t.Fatalf("events = %v, want one request_status_changed", f.eventTypes())
+	}
+	if len(f.content.episodes) != 0 {
+		t.Errorf("broadcast pushes = %v, want none for a proven upgrade", f.content.episodes)
+	}
+	if len(f.content.upgradedEpisodes) != 1 || f.content.upgradedEpisodes[0] != "Gappy Show" {
+		t.Errorf("upgrade pushes = %v, want [Gappy Show]", f.content.upgradedEpisodes)
 	}
 }
 

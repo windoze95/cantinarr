@@ -9,3 +9,15 @@ HttpClientAdapter createBackendHttpClientAdapter() =>
       fallbackAdapter: BrowserHttpClientAdapter(),
       streamingClient: BrowserClient(),
     );
+
+/// The transport for auth calls (login, refresh, session validation) on web:
+/// everything rides Fetch. The default browser adapter was observed stalling
+/// these session-critical requests for the full receive timeout while Fetch
+/// requests from the same page completed instantly; a session must never
+/// depend on the flakier transport.
+HttpClientAdapter createAuthHttpClientAdapter() =>
+    AiChatStreamingHttpClientAdapter(
+      fallbackAdapter: BrowserHttpClientAdapter(),
+      streamingClient: BrowserClient(),
+      routeAllThroughFetch: true,
+    );

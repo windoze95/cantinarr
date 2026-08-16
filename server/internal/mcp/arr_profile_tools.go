@@ -29,10 +29,9 @@ var (
 
 var arrProfileToolDefinitions = []Tool{
 	{
-		Name:          "preview_profile_change",
-		Permission:    auth.PermissionInstancesManage,
-		InAppChatOnly: true,
-		Description:   "Prepare and show a narrow full-object quality-profile update for one Radarr/Sonarr/Chaptarr instance. Returns a one-use reference that apply_profile_change may consume only in this same authenticated chat turn; it never writes. Use only after an explicit admin request. In-app chat only, admin only",
+		Name:        "preview_profile_change",
+		Permission:  auth.PermissionInstancesManage,
+		Description: "Prepare and show a narrow full-object quality-profile update for one Radarr/Sonarr/Chaptarr instance; it never writes. In Cantinarr's in-app chat it returns a one-use reference apply_profile_change may consume in this same authenticated turn, after an explicit admin request. From an external MCP client it instead parks the change for admin approval in the Cantinarr app and notifies the admins; the write happens only if an admin approves it there. Admin only",
 		InputSchema: map[string]interface{}{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -129,8 +128,19 @@ func (s *ToolServer) previewProfileChange(ctx context.Context, input json.RawMes
 	if err := decodeStrictToolInput(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	if callCtx.Origin != OriginInteractiveChat || callCtx.InteractiveTurnID == "" || strings.TrimSpace(callCtx.TrustedUserText) == "" {
+	// Two consent models, decided by server-authored provenance. In-app chat
+	// proves same-turn admin intent, so the preview arms the one-use apply
+	// handoff. An authenticated external MCP session has no server-witnessed
+	// turn, so its preview parks a durable proposal an admin approves in the
+	// app instead — the write can never happen on the model's word alone.
+	// Anything else (a zero CallContext, a provenance-free internal run) is
+	// refused outright.
+	external := callCtx.Origin == OriginExternalMCP && callCtx.UserID > 0 && callCtx.DeviceID != ""
+	if !external && (callCtx.Origin != OriginInteractiveChat || callCtx.InteractiveTurnID == "" || strings.TrimSpace(callCtx.TrustedUserText) == "") {
 		return &ToolResult{Text: "Quality-profile changes are available only in Cantinarr's authenticated in-app AI chat."}, nil
+	}
+	if external && s.profileProposals == nil {
+		return &ToolResult{Text: "Profile change proposals are unavailable on this server."}, nil
 	}
 	if params.ProfileID <= 0 {
 		return nil, fmt.Errorf("profile_id must be positive")
@@ -217,6 +227,32 @@ func (s *ToolServer) previewProfileChange(ctx context.Context, input json.RawMes
 	}
 	if profilePreviewDiffSize(diff) > maxProfilePreviewDiffBytes {
 		return nil, fmt.Errorf("the complete preview is too large; split this change into smaller previews")
+	}
+	if external {
+		instanceName := s.arrInstanceName(params.Service, resolvedID)
+		parked, err := s.profileProposals.park(newProfileProposal{
+			ProposedBy:       callCtx.UserID,
+			ProposerDeviceID: callCtx.DeviceID,
+			SourceClient:     s.profileProposals.sourceClientName(callCtx.DeviceID),
+			Service:          params.Service,
+			InstanceID:       resolvedID,
+			InstanceName:     instanceName,
+			ProfileID:        params.ProfileID,
+			ProfileName:      profileName,
+			Plan:             plan,
+			Diff:             diff,
+			ProfileHash:      snapshot.ProfileHash,
+			DesiredHash:      desiredHash,
+			CustomFormatHash: snapshot.CustomFormatHash,
+			LanguageHash:     snapshot.LanguageHash,
+			HasLanguageHash:  needLanguages,
+			InstanceBinding:  binding,
+		})
+		if err != nil {
+			return nil, err
+		}
+		s.notifyProfileProposalParked(parked)
+		return &ToolResult{Text: renderProfileProposalParked(parked, label)}, nil
 	}
 	if s.profileChanges == nil {
 		return nil, fmt.Errorf("profile change gate is unavailable")
@@ -576,6 +612,65 @@ func renderProfileChangePreview(proposal profileChangeProposal, label string) st
 	}
 	fmt.Fprintf(&out, "\nThis preview did not write anything. If and only if the admin explicitly requested this configuration change in the current message, call apply_profile_change now with the change reference. Do not ask the admin to copy or type the reference. Cantinarr will reauthorize, refuse observed profile/dependency/instance drift, verify the full stored object, and record durable before/after history. The final check is optimistic because the arr API cannot atomically compare-and-swap the following full-object PUT.")
 	return out.String()
+}
+
+// renderProfileProposalParked is the external-MCP sibling of
+// renderProfileChangePreview: same target/diff shape, but the next step
+// belongs to a human in the app, not to the model.
+func renderProfileProposalParked(p storedProfileProposal, label string) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "Proposal #%d parked for admin approval.\nExpires: %s\nTarget: %s quality profile %d (%q)\n\nProposed changes:\n", p.ID, p.ExpiresAt, label, p.ProfileID, p.ProfileName)
+	for _, line := range p.Diff {
+		fmt.Fprintf(&out, "- %s\n", line)
+	}
+	out.WriteString("\nNothing was written. Cantinarr notified the admins; this change applies only if an admin approves it in the Cantinarr app (Settings > Profile Change Approvals). Parking replaced any older pending proposal for this profile. Approval re-validates the live settings first — if the profile or its dependencies drift meanwhile, the proposal is refused and must be proposed again from current settings. There is no way to apply it from this session; to see whether it was applied, re-read the profile later.")
+	return out.String()
+}
+
+// profileChangePendingEvent is the NotifyAdmins event type for a parked
+// proposal. It must match push.CategoryProfileChangePending; declared here so
+// mcp stays decoupled from the push package.
+const profileChangePendingEvent = "profile_change_pending"
+
+// notifyProfileProposalParked pages admins about a parked proposal. The
+// collapse key is the proposal's target, so a superseding proposal replaces
+// the stale notification on-device instead of stacking under it. The
+// authoritative pending_count rides along so the app's attention badge can
+// apply it without a refetch (the agent_action_pending shape).
+func (s *ToolServer) notifyProfileProposalParked(p storedProfileProposal) {
+	if s.adminNotifier == nil {
+		return
+	}
+	data := map[string]interface{}{
+		"proposal_id":  p.ID,
+		"service":      p.Service,
+		"instance_id":  p.InstanceID,
+		"profile_id":   p.ProfileID,
+		"profile_name": p.ProfileName,
+	}
+	if count, err := s.profileProposals.pendingCount(); err == nil {
+		data["pending_count"] = count
+	}
+	s.adminNotifier.NotifyAdmins(profileChangePendingEvent, data)
+}
+
+// profileChangeDecidedEvent tells the other admins' badges to drain after a
+// decision (or a supersession/expiry observed by the deciding read). It is
+// WS-only by design: the push notifier has no case for it, exactly like
+// agent_action_decided — nobody needs a lock-screen alert that work
+// disappeared.
+const profileChangeDecidedEvent = "profile_change_decided"
+
+// notifyProfileProposalDecided broadcasts the post-decision pending count.
+func (s *ToolServer) notifyProfileProposalDecided(proposalID int64) {
+	if s.adminNotifier == nil {
+		return
+	}
+	data := map[string]interface{}{"proposal_id": proposalID}
+	if count, err := s.profileProposals.pendingCount(); err == nil {
+		data["pending_count"] = count
+	}
+	s.adminNotifier.NotifyAdmins(profileChangeDecidedEvent, data)
 }
 
 func staleProfileChangeResult() *ToolResult {

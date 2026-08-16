@@ -34,9 +34,9 @@ class _FakeIssuesService extends IssuesService {
   int listCalls = 0;
 
   @override
-  Future<List<Issue>> listIssues({String? status}) async {
+  Future<IssuePage> listIssues({String? status}) async {
     listCalls++;
-    return issues;
+    return IssuePage(issues: issues, closedTotal: issues.length);
   }
 }
 

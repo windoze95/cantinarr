@@ -195,6 +195,28 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
     );
   }
 
+  /// Flips one episode's monitored flag from the long-press menu. The result
+  /// is patched into the list in place rather than refetching the season, so
+  /// the menu tells the truth the next time it opens.
+  Future<void> _toggleEpisodeMonitored(SonarrEpisode episode) async {
+    final target = !episode.monitored;
+    try {
+      await _service.setEpisodesMonitored([episode.id], monitored: target);
+      if (!mounted) return;
+      setState(() {
+        _episodes = [
+          for (final e in _episodes)
+            e.id == episode.id ? e.withMonitored(target) : e,
+        ];
+      });
+      _toast(target
+          ? 'Monitoring ${episode.seasonEpisodeLabel}'
+          : 'Unmonitored ${episode.seasonEpisodeLabel}');
+    } catch (e) {
+      _toast('Could not change monitoring: $e');
+    }
+  }
+
   /// Long-press menu for one episode.
   Future<void> _showEpisodeMenu(SonarrEpisode episode) async {
     final title = episode.title != null && episode.title!.isNotEmpty
@@ -226,16 +248,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       case 'select':
         _startSelecting(preselect: [episode.id]);
       case 'monitor':
-        try {
-          await _service.setEpisodesMonitored([episode.id],
-              monitored: !episode.monitored);
-          _toast(episode.monitored
-              ? 'Unmonitored ${episode.seasonEpisodeLabel}'
-              : 'Monitoring ${episode.seasonEpisodeLabel}');
-          _load();
-        } catch (e) {
-          _toast('Could not change monitoring: $e');
-        }
+        _toggleEpisodeMonitored(episode);
       case 'delete':
         _confirmDeleteFiles([episode]);
     }
@@ -515,6 +528,13 @@ class _EpisodeTile extends StatelessWidget {
     required this.onSearch,
   });
 
+  /// An unmonitored episode is faded rather than recoloured: Sonarr isn't
+  /// looking for it, so it reads as background without costing the status line
+  /// its own meaning (a faint red "Missing" is still missing, just not
+  /// something anyone is working on). The checkbox and the magnifier stay at
+  /// full strength — they still work.
+  double get _contentOpacity => episode.monitored ? 1 : 0.5;
+
   @override
   Widget build(BuildContext context) {
     final status = episodeStatusLine(episode, queueItem);
@@ -544,43 +564,49 @@ class _EpisodeTile extends StatelessWidget {
             ],
             SizedBox(
               width: 28,
-              child: Text(
-                episode.episodeNumber.toString(),
-                style: const TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500),
+              child: Opacity(
+                opacity: _contentOpacity,
+                child: Text(
+                  episode.episodeNumber.toString(),
+                  style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500),
+                ),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    episode.title ?? 'Episode ${episode.episodeNumber}',
-                    style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(formatEpisodeAirDate(episode),
+              child: Opacity(
+                opacity: _contentOpacity,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      episode.title ?? 'Episode ${episode.episodeNumber}',
                       style: const TextStyle(
-                          color: AppTheme.textSecondary, fontSize: 12)),
-                  const SizedBox(height: 4),
-                  Text(
-                    status.text,
-                    style: TextStyle(
-                        color: status.color,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+                          color: AppTheme.textPrimary,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(formatEpisodeAirDate(episode),
+                        style: const TextStyle(
+                            color: AppTheme.textSecondary, fontSize: 12)),
+                    const SizedBox(height: 4),
+                    Text(
+                      status.text,
+                      style: TextStyle(
+                          color: status.color,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
               ),
             ),
             if (!selecting)

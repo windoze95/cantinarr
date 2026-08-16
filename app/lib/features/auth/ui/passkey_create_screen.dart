@@ -40,8 +40,10 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
     final conn = ref.read(authProvider).valueOrNull?.connection;
     if (conn != null) {
       try {
-        final status =
-            await ref.read(authProvider.notifier).checkServer(conn.serverUrl);
+        final status = (await ref
+                .read(authProvider.notifier)
+                .checkServer(conn.serverUrl))
+            .status;
         serverNativeReady =
             status.supportsPasskeyPlatform(PasskeyService.platformKind());
         browserFallbackAvailable = status.webAuthnAvailable;

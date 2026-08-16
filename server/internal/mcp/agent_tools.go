@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -39,20 +41,34 @@ const (
 // in the IssueStore (remediation.Service.ProposeAction); the tool only checks the
 // kind is one of these and that params is a JSON object.
 const (
-	ActionKindGrabRelease    = "grab_release"
-	ActionKindRemediateQueue = "remediate_queue"
-	ActionKindManualImport   = "manual_import"
-	ActionKindTriggerSearch  = "trigger_search"
-	ActionKindRescan         = "rescan"
+	ActionKindGrabRelease      = "grab_release"
+	ActionKindRemediateQueue   = "remediate_queue"
+	ActionKindManualImport     = "manual_import"
+	ActionKindTriggerSearch    = "trigger_search"
+	ActionKindRescan           = "rescan"
+	ActionKindDeleteMediaFiles = "delete_media_files"
 )
+
+// ProposableActionKinds returns the wire vocabulary for propose_action, in the
+// order the kinds are described to the model. The schema enum, isProposableKind,
+// and the unknown-kind correction text all derive from this one list, and
+// remediation's vocabulary-parity test pins it equal to
+// remediation.ProposableActionKinds — one list per package, provably in sync,
+// so a kind added on either side cannot be silently unproposable.
+func ProposableActionKinds() []string {
+	return []string{ActionKindGrabRelease, ActionKindRemediateQueue, ActionKindManualImport,
+		ActionKindTriggerSearch, ActionKindRescan, ActionKindDeleteMediaFiles}
+}
 
 // isProposableKind reports whether k is one of the known action kinds.
 func isProposableKind(k string) bool {
-	switch k {
-	case ActionKindGrabRelease, ActionKindRemediateQueue, ActionKindManualImport, ActionKindTriggerSearch, ActionKindRescan:
-		return true
-	}
-	return false
+	return slices.Contains(ProposableActionKinds(), k)
+}
+
+// proposableKindsSentence is the correction a model reads after proposing an
+// unknown kind; derived so it can never drift behind the vocabulary again.
+func proposableKindsSentence() string {
+	return "Unknown action kind. Valid kinds: " + strings.Join(ProposableActionKinds(), ", ") + "."
 }
 
 // Conclusion statuses accepted by conclude_issue (terminal issue states the
@@ -131,11 +147,16 @@ var AgentToolProposeAction = Tool{
 		"- grab_release: download a specific release. params: {media_type, guid, indexer_id, queue_id_to_replace?} " +
 		"(guid + indexer_id come from search_releases; set queue_id_to_replace to swap out a current queue item).\n" +
 		"- remediate_queue: act on a stuck queue item. params: {media_type, queue_id, action} where action is " +
-		"\"remove\", \"blocklist_search\" (remove + blocklist + re-search), or \"change_category\".\n" +
+		"\"remove\", \"blocklist_search\" (remove + blocklist; the service's own failed-download settings decide whether it looks for a replacement), \"blocklist_only\" (remove + blocklist AND suppress that replacement search — correct only when the library already has a copy and nobody asked for this download, i.e. the service picked it up on its own), or \"change_category\".\n" +
 		"- manual_import: import a download's files. params: {media_type, queue_id, force} (force imports despite " +
 		"permanent rejections — only when a rejection is known-safe/temporary).\n" +
 		"- trigger_search: start an automatic search. params: {media_type, tmdb_id, season?, episode?}; for an episode-scoped TV issue include both authoritative values. " +
-			"Book issues have no tmdb_id: pass {media_type: \"book\", book_id} (or author_id to search all of the author's monitored books) using the issue's authoritative ids.\n" +
+		"Book issues have no tmdb_id: pass {media_type: \"book\", book_id} (or author_id to search all of the author's monitored books) using the issue's authoritative ids.\n" +
+		"- delete_media_files: delete files the service ALREADY IMPORTED, for content that is wrong rather than stuck — there is no queue item left to act on. params: {media_type, tmdb_id, season, episodes: [numbers], blocklist?} for TV, or {media_type, tmdb_id, blocklist?} for a movie. " +
+		"Set blocklist to also stand the releases that delivered those files down so they cannot come back. " +
+		"This is the WHOLE repair in one approval: the server deletes the files, blocklists the releases, and then searches for replacements — for TV, only the episodes that have already aired, leaving the rest of the season for the service to grab as it comes out. " +
+		"Do NOT follow it with a trigger_search for the same media: that asks the admin to approve one decision twice. " +
+		"For a WRONG BOOK, pass {media_type: \"book\", book_id, blocklist?} using the issue's authoritative book id: the server deletes the record's file(s), stands the delivering grabs down, and leaves the replacement to Chaptarr's own failed-download handling when that is on. This destroys files on disk — propose it only with evidence a reader can check, such as get_book_timeline showing which release delivered the record's current file and when it imported.\n" +
 		"- rescan: rescan the media on disk and run the import pass. params: {media_type, tmdb_id}; for a book issue pass {media_type: \"book\", author_id} instead.\n" +
 		"Always include a clear 'rationale' explaining why this fix is correct (the admin reads it).",
 	InputSchema: map[string]interface{}{
@@ -147,7 +168,7 @@ var AgentToolProposeAction = Tool{
 			},
 			"kind": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{ActionKindGrabRelease, ActionKindRemediateQueue, ActionKindManualImport, ActionKindTriggerSearch, ActionKindRescan},
+				"enum":        ProposableActionKinds(),
 				"description": "Which kind of fix to propose.",
 			},
 			"params": map[string]interface{}{
@@ -315,7 +336,7 @@ func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input js
 		if !isProposableKind(args.Kind) {
 			// A benign, non-error result so the model can correct itself within its
 			// remaining budget rather than the run failing on a typo.
-			return &AgentToolResult{Text: "Unknown action kind. Valid kinds: grab_release, remediate_queue, manual_import, trigger_search, rescan."}, nil
+			return &AgentToolResult{Text: proposableKindsSentence()}, nil
 		}
 		if len(args.Params) == 0 || string(args.Params) == "null" {
 			return &AgentToolResult{Text: "params is required for propose_action and must be a JSON object for the chosen kind."}, nil

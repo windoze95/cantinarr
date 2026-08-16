@@ -114,10 +114,11 @@ Workflow:
 Workflow:
 1. Use get_queue for current downloads, get_history for recent activity, get_calendar for upcoming releases, and get_library for library state.
 2. For stuck, failed, or stuck-importing downloads, run diagnose_queue first (the Import Doctor). It explains each problem and prints the exact next tool call to run on each item's "→ next:" line: get_manual_import_candidates then execute_manual_import (force a correct file in), remediate_queue_item (remove / blocklist_search / change_category), or rescan_media (after fixing disk/path/permissions). When diagnose_queue shows path, permission, or download-client errors, call get_arr_health to confirm the config-level root cause (download client unreachable, remote path mapping, indexers down).
-3. For missing media or failed downloads, trigger_search can start an automatic search.
-4. Use search_releases before grab_release when the user wants a particular quality, release group, or manual selection.
-5. Only call destructive tools such as grab_release, remove_queue_item, execute_manual_import, or remediate_queue_item when the user explicitly asks for that action. Summarize consequences before or after the call.
-6. If a tool says it is disabled or not permitted for this role, say so plainly and do not retry the same action.`, issue)
+3. For a complaint about the CONTENT of a TV show — wrong episode, wrong season, not what was asked for — the queue is expected to be empty, because the download already finished and imported. Use get_episode_timeline: it lays the season out episode by episode and flags files the service imported before that episode aired, which cannot be that episode. For the same complaint about a BOOK — wrong book, bad copy — use get_book_timeline: it joins the record's files on disk to the grab/import history that delivered them.
+4. For missing media or failed downloads, trigger_search can start an automatic search; on a season still airing week to week, aired_only searches just the episodes that have actually come out.
+5. Use search_releases before grab_release when the user wants a particular quality, release group, or manual selection.
+6. Only call destructive tools such as grab_release, remove_queue_item, execute_manual_import, or remediate_queue_item when the user explicitly asks for that action. Summarize consequences before or after the call.
+7. If a tool says it is disabled or not permitted for this role, say so plainly and do not retry the same action.`, issue)
 			return promptResult("Admin download triage", text), nil
 		},
 	)
@@ -206,7 +207,9 @@ Tools may be hidden or disabled by RBAC and administrator settings. If a tool re
 - Use get_calendar for upcoming releases.
 - Use get_library for library state, missing, or unmonitored items.
 - Use get_history for recent grabs, imports, and failures.
-- If a library item is missing or a download failed, trigger_search can start a new automatic search.
+- If a library item is missing or a download failed, trigger_search can start a new automatic search; for a TV season still airing, aired_only narrows it to the episodes that have actually come out.
+- When someone says a TV episode or season is the wrong content, use get_episode_timeline rather than the queue: the download finished long ago, and the timeline shows each episode's air date against the file the library holds for it.
+- When someone says a book is the wrong content or a bad copy, use get_book_timeline rather than the queue: it shows the record's files on disk joined to the grabs and imports that delivered them.
 - For downloads that are stuck, failed, or stuck importing, run diagnose_queue (the Import Doctor). It explains each problem and prints the exact next tool call to run on each item's "→ next:" line, then use get_manual_import_candidates / execute_manual_import to force a correct file in, remediate_queue_item to remove / blocklist+search / change category, or rescan_media after fixing a disk, path, or permissions issue.
 - When diagnose_queue reports a path, permission, or download-client problem, call get_arr_health to confirm the config-level root cause (download client unreachable, remote path mapping wrong, indexers down, no root folder) that per-item diagnosis can only guess at.
 - For manual control, call search_releases before grab_release so the user can choose quality, release group, or a specific release.

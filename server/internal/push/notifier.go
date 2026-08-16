@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -115,6 +116,35 @@ func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]in
 		n.send(client, []int64{userID}, "Plex invite sent",
 			"Your Plex invite is on its way — check your email",
 			map[string]any{"type": CategoryPlexInviteSent})
+	case EventIssueQuestion, EventIssueFixConfirm, EventIssueClosed:
+		// Reporter-loop beats about the user's OWN report. One shared
+		// preference gates all three; the bodies are FIXED server-authored
+		// copy (M5) — the title, question, and resolution text live in the
+		// thread the tap opens, never in the notification.
+		if !n.prefs.optedIn(userID, CategoryIssueReportUpdate) {
+			return
+		}
+		title, body := issueReportMessage(eventType)
+		n.send(client, []int64{userID}, title, body, passthrough(eventType, data))
+	}
+}
+
+// Reporter-loop event types. All three ride the issue_report_update
+// preference; the client deep-links each to the report's own thread.
+const (
+	EventIssueQuestion   = "issue_question"
+	EventIssueFixConfirm = "issue_fix_confirm"
+	EventIssueClosed     = "issue_closed"
+)
+
+func issueReportMessage(eventType string) (title, body string) {
+	switch eventType {
+	case EventIssueQuestion:
+		return "Question about your report", "The assistant needs one answer from you to keep working on it"
+	case EventIssueFixConfirm:
+		return "A fix was applied", "Open your report and tell us whether it's right now"
+	default:
+		return "Your report was closed", "Open it to see how it ended"
 	}
 }
 
@@ -141,10 +171,91 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		n.notifyAgentActionPending(client, data)
 	case CategoryAgentAutoApprovalPaused:
 		n.notifyAgentAutoApprovalPaused(client, data)
+	case CategoryProfileChangePending:
+		n.notifyProfileChangePending(client, data)
+	case EventAutoDispatchDisabled:
+		// Autonomy standing down is exactly the "agent pipeline needs your
+		// decision" class, so it shares that preference column — and unlike
+		// the in-app snackbar, this one reaches an admin who was away.
+		users, err := n.prefs.usersOptedInto(CategoryAgentActionPending)
+		if err != nil || len(users) == 0 {
+			return
+		}
+		n.send(client, users, "Automatic problem detection switched off",
+			"Repeated unfinished investigations tripped the safety breaker — open Settings to review and re-enable",
+			passthrough(EventAutoDispatchDisabled, data))
 	case CategoryPlexAccessRequest:
 		n.notifyPlexAccessRequested(client, data)
+	case CategoryAgentDigest:
+		// The one push that reports success. Counts are server-computed
+		// integers; no free text ever reaches the lock screen (M5).
+		//
+		// "Resolved" is OUTCOME vocabulary — every problem that ended well,
+		// including the ones that cleared on their own — with attribution glued
+		// to the number so automation claims only its own work (the card renders
+		// the same two-ledger split; see remediation.AgentDigest).
+		users, err := n.prefs.usersOptedInto(CategoryAgentDigest)
+		if err != nil || len(users) == 0 {
+			return
+		}
+		resolved := intField(data, "issues_resolved") + intField(data, "self_cleared")
+		byAgent := intField(data, "resolved_by_agent")
+		byRules := intField(data, "rule_approved")
+		byAdmin := intField(data, "resolved_by_admin")
+		onOwn := resolved - byAgent - byRules - byAdmin
+		var lanes []string
+		if byAgent > 0 {
+			lanes = append(lanes, fmt.Sprintf("%d by the agent", byAgent))
+		}
+		if byRules > 0 {
+			lanes = append(lanes, fmt.Sprintf("%d by your rules", byRules))
+		}
+		if byAdmin > 0 {
+			lanes = append(lanes, fmt.Sprintf("%d by you", byAdmin))
+		}
+		if onOwn > 0 {
+			switch {
+			case len(lanes) > 0:
+				lanes = append(lanes, fmt.Sprintf("%d on their own", onOwn))
+			case onOwn == 1:
+				lanes = append(lanes, "on its own")
+			default:
+				lanes = append(lanes, "all on their own")
+			}
+		}
+		body := fmt.Sprintf("Last 7 days: %d resolved", resolved)
+		if len(lanes) > 0 {
+			body += " — " + strings.Join(lanes, " · ")
+		}
+		// Open work is state right now, not something the week did, so it gets
+		// its own clause instead of riding the window's separator list.
+		if needs := intField(data, "needs_admin_open") + intField(data, "pending_proposals"); needs > 0 {
+			verb := "need"
+			if needs == 1 {
+				verb = "needs"
+			}
+			body += fmt.Sprintf(". Right now: %d %s you", needs, verb)
+		}
+		n.send(client, users, "Your media assistant, this week", body, passthrough(CategoryAgentDigest, data))
 	}
 }
+
+func intField(data map[string]interface{}, key string) int {
+	switch v := data[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
+}
+
+// EventAutoDispatchDisabled is the circuit-breaker stand-down. It rides the
+// agent_action_pending preference; the durable record is the breaker's own
+// system issue.
+const EventAutoDispatchDisabled = "remediation_autodispatch_disabled"
 
 // notifyRequestPending pushes a new pending request to opted-in admins, badging
 // the home-screen icon with the live queue depth.
@@ -217,9 +328,21 @@ func issueAlertText(source string, count int) (title, body string) {
 		return "Problem needs attention",
 			"Cantinarr found a media problem that did not recover automatically"
 	case "system":
-		// Shared-AI health is a single server-wide condition; it never batches.
-		return "Shared AI needs attention",
-			"Cantinarr's shared AI model failed its daily response test"
+		// A system issue is a condition on the SERVER rather than on a piece of
+		// media, and there are several distinct ones: the shared AI model, push
+		// delivery, a stalled book-metadata import. This copy was written when
+		// shared-AI health was the only one and named it outright, which has been
+		// wrong on the lock screen for every other kind ever since — and there is
+		// nothing safe to say more specifically, because the only fields that
+		// would distinguish them are the issue's own untrusted title and detail.
+		// So it stays deliberately generic, and counted like the auto branch: two
+		// server conditions clearing the hold-down together really do coalesce.
+		if count > 1 {
+			return "Cantinarr needs attention",
+				fmt.Sprintf("%d server conditions need an administrator", count)
+		}
+		return "Cantinarr needs attention",
+			"Something on the server needs an administrator"
 	default:
 		if count > 1 {
 			return "New problems reported",
@@ -297,6 +420,37 @@ func (n *Notifier) notifyAgentAutoApprovalPaused(client *Client, data map[string
 	n.sendWithOptions(client, recipients, title, body, out, opts)
 }
 
+// notifyProfileChangePending pushes "an external agent parked a
+// quality-profile change" to opted-in admins (it shares the
+// agent_action_pending preference — same "the agent pipeline needs your
+// decision" class). The body is a FIXED template: the profile and instance
+// names are arr-derived text, so like every other admin surface they ride
+// only as structured passthrough fields for the app, never on the lock
+// screen. Collapsing per target (service/instance/profile) means a
+// superseding proposal replaces the stale alert instead of stacking under
+// it; proposal_id rides along for tap deep-linking.
+func (n *Notifier) notifyProfileChangePending(client *Client, data map[string]interface{}) {
+	recipients, err := n.prefs.usersOptedInto(CategoryProfileChangePending)
+	if err != nil {
+		n.logger.Error("push: resolve profile_change_pending recipients", "err", err)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	out := map[string]any{"type": CategoryProfileChangePending}
+	if v, ok := data["proposal_id"]; ok {
+		out["proposal_id"] = v
+	}
+	title := "A settings change needs your approval"
+	body := "An external assistant proposed a quality-profile change and needs you to approve it"
+	var opts SendOptions
+	if profileID, ok := intval(data["profile_id"]); ok {
+		opts.CollapseID = fmt.Sprintf("%s:%s:%s:%d", CategoryProfileChangePending, str(data["service"]), str(data["instance_id"]), profileID)
+	}
+	n.sendWithOptions(client, recipients, title, body, out, opts)
+}
+
 // notifyPlexAccessRequested pushes "a user shared their Plex email" to
 // opted-in admins. The body is one of three FIXED templates picked by the
 // invite_state enum ("" needs a manual invite, "sent" auto-invite went out,
@@ -338,10 +492,15 @@ func (n *Notifier) NotifyNewMovie(title string, tmdbID int) {
 	n.notifyNewContent(CategoryNewMovie, "movie", "New movie available", title+" is ready to watch", title, tmdbID)
 }
 
-// NotifyNewEpisode pushes a "new episode available" alert to every user opted
-// into the new_episode category (on by default).
+// NotifyNewEpisode pushes a "new episodes available" alert to every user opted
+// into the new_episode category (on by default). The copy is plural with no
+// count on purpose: the alert sends on the first import of a wave and
+// claimContentAlert absorbs the rest of a season pack behind it, so at send
+// time the server cannot know whether one episode or ten are landing — an
+// honest count would mean holding the push, and a singular title undersells a
+// pack. The body stays count-free so the pair reads naturally either way.
 func (n *Notifier) NotifyNewEpisode(seriesTitle string, tmdbID int) {
-	n.notifyNewContent(CategoryNewEpisode, "tv", "New episode available", "New on "+seriesTitle, seriesTitle, tmdbID)
+	n.notifyNewContent(CategoryNewEpisode, "tv", "New episodes available", "New on "+seriesTitle, seriesTitle, tmdbID)
 }
 
 // NotifyNewBook pushes a "book became available" alert for a completed
@@ -399,6 +558,113 @@ func bookReadyBody(title, format string) string {
 	}
 }
 
+// NotifyUpgradedMovie pushes a "movie file was upgraded" alert to admins opted
+// into the content_upgraded category (off by default). See
+// notifyUpgradedContent for why the broadcast key is claimed first.
+func (n *Notifier) NotifyUpgradedMovie(title string, tmdbID int) {
+	n.notifyUpgradedContent(CategoryNewMovie, "movie", "Movie upgraded", title+" was replaced with a better version", title, tmdbID)
+}
+
+// NotifyUpgradedEpisode pushes an "episode file was upgraded" alert to admins
+// opted into the content_upgraded category (off by default).
+func (n *Notifier) NotifyUpgradedEpisode(seriesTitle string, tmdbID int) {
+	n.notifyUpgradedContent(CategoryNewEpisode, "tv", "Episode upgraded", "An episode of "+seriesTitle+" was replaced with a better version", seriesTitle, tmdbID)
+}
+
+// NotifyUpgradedBook pushes a "book file was upgraded" alert to admins opted
+// into the content_upgraded category (off by default). Unlike NotifyNewBook
+// the audience is NOT narrowed to the instance's assigned readers: an upgrade
+// is operational oversight (the issue_created class), not a "ready to read"
+// call to action, so it takes the standard admin-scoped path. The payload
+// still carries the same deep-link identity as new_book so the app's existing
+// book tap routing applies unchanged.
+func (n *Notifier) NotifyUpgradedBook(title, foreignID, instanceID, format string) {
+	if title == "" {
+		return
+	}
+	// Absorb the poller before anything else can bail: the silent claim must
+	// land even when the gateway is unenrolled or the admin alert is deduped.
+	n.claimContentAlertSilently(CategoryNewBook, "book", foreignID+"|"+format, title)
+	client := n.client()
+	if client == nil {
+		return
+	}
+	if !n.claimContentAlertScoped(CategoryContentUpgraded, "book", foreignID+"|"+format, title, stormScopeUpgrade) {
+		return
+	}
+	recipients, err := n.prefs.usersOptedInto(CategoryContentUpgraded)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryContentUpgraded)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	data := map[string]any{
+		"type":        CategoryContentUpgraded,
+		"media_type":  "book",
+		"foreign_id":  foreignID,
+		"instance_id": instanceID,
+		"title":       title,
+	}
+	if format != "" {
+		data["book_format"] = format
+	}
+	n.sendWithOptions(client, recipients, "Book upgraded", bookUpgradedBody(title, format), data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%s:%s", CategoryContentUpgraded, foreignID, format),
+	})
+}
+
+// bookUpgradedBody is bookReadyBody's upgrade twin, keeping the same
+// eBook/Audiobook nomenclature.
+func bookUpgradedBody(title, format string) string {
+	switch format {
+	case "ebook":
+		return title + " eBook was upgraded"
+	case "audiobook":
+		return title + " Audiobook was upgraded"
+	default:
+		return title + " was upgraded"
+	}
+}
+
+// notifyUpgradedContent is the shared body for the movie/TV upgrade alerts.
+// The broadcast category's dedupe key (byte-identical to the one
+// notifyNewContent claims) is claimed silently FIRST: the queue poller
+// re-witnesses the same import as a plain departure and would otherwise page
+// the household with a false "New movie available" — the ledger claim is what
+// keeps it quiet. Only then does the admin content_upgraded alert claim its
+// own key and send under its own storm budget.
+func (n *Notifier) notifyUpgradedContent(broadcastCategory, mediaType, title, body, mediaTitle string, tmdbID int) {
+	if mediaTitle == "" {
+		return
+	}
+	n.claimContentAlertSilently(broadcastCategory, mediaType, strconv.Itoa(tmdbID), mediaTitle)
+	client := n.client()
+	if client == nil {
+		return
+	}
+	if !n.claimContentAlertScoped(CategoryContentUpgraded, mediaType, strconv.Itoa(tmdbID), mediaTitle, stormScopeUpgrade) {
+		return
+	}
+	recipients, err := n.prefs.usersOptedInto(CategoryContentUpgraded)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryContentUpgraded)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	data := map[string]any{
+		"type":       CategoryContentUpgraded,
+		"tmdb_id":    tmdbID,
+		"media_type": mediaType,
+	}
+	n.sendWithOptions(client, recipients, title, body, data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%d", CategoryContentUpgraded, tmdbID),
+	})
+}
+
 // notifyNewContent is the shared body for the new-content notifications: it
 // resolves the opted-in audience for the category and dispatches one collapsed
 // push carrying the media identity for tap routing.
@@ -450,6 +716,15 @@ const contentAlertRetention = 24 * time.Hour
 // concurrent organic alert; suppressed alerts are logged, never silent.
 const contentAlertStormCap = 12
 
+// Storm scopes partition content_alert_claims so each alert class is bounded
+// by its own cap and a silent claim is bounded by none: a mass cutoff-upgrade
+// sweep must never spend the broadcast budget of genuine new-content alerts.
+const (
+	stormScopeBroadcast = "broadcast"
+	stormScopeUpgrade   = "upgrade"
+	stormScopeNone      = "none"
+)
+
 // claimContentAlert reports whether this content alert should send, recording it
 // so duplicates within contentAlertWindow are dropped. id is the content's
 // stable identity — the tmdb id for movies/TV, foreignBookId plus format for
@@ -462,6 +737,22 @@ const contentAlertStormCap = 12
 // Durable is not permanent — the window is still a window, so a claim whose send
 // failed is re-claimable once it lapses.
 func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool {
+	return n.claimContentAlertScoped(category, mediaType, id, title, stormScopeBroadcast)
+}
+
+// claimContentAlertSilently records a claim for an alert that deliberately will
+// NOT send: a proven upgrade claims the broadcast key so the queue poller's
+// re-witness of the same import finds the ledger already holding the claim and
+// stays quiet. Scope 'none' keeps the silent claim out of every storm count.
+// It runs even while the push gateway is unenrolled — the suppression must be
+// recorded regardless, or a boot-resumption hold could later broadcast an
+// upgrade the webhook already proved. A database error here is only logged:
+// losing the silent claim errs toward alerting, never toward silence.
+func (n *Notifier) claimContentAlertSilently(category, mediaType, id, title string) {
+	n.claimContentAlertScoped(category, mediaType, id, title, stormScopeNone)
+}
+
+func (n *Notifier) claimContentAlertScoped(category, mediaType, id, title, scope string) bool {
 	key := fmt.Sprintf("%s|%s|%s|%s", category, mediaType, id, title)
 	if n.db == nil {
 		// No ledger must never silence an alert.
@@ -470,12 +761,13 @@ func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool
 	// One statement: the conditional upsert grants the claim only when there is
 	// no row or the existing one has lapsed, and the affected-row count is the
 	// verdict. A SELECT-then-INSERT would race on the shared single-connection
-	// pool without adding anything.
+	// pool without adding anything. A lapsed-window re-claim adopts the new
+	// claim's scope.
 	res, err := n.db.Exec(`
-        INSERT INTO content_alert_claims (alert_key) VALUES (?)
-        ON CONFLICT(alert_key) DO UPDATE SET claimed_at = CURRENT_TIMESTAMP
+        INSERT INTO content_alert_claims (alert_key, storm_scope) VALUES (?, ?)
+        ON CONFLICT(alert_key) DO UPDATE SET claimed_at = CURRENT_TIMESTAMP, storm_scope = excluded.storm_scope
         WHERE content_alert_claims.claimed_at <= datetime('now', ?)`,
-		key, sqliteOffset(-contentAlertWindow))
+		key, scope, sqliteOffset(-contentAlertWindow))
 	if err != nil {
 		// Fail open: a duplicate alert beats silencing the whole content surface
 		// on a transient database error.
@@ -494,14 +786,19 @@ func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool
 		sqliteOffset(-contentAlertRetention)); err != nil {
 		n.logger.Error("push: sweep content alert claims", "err", err)
 	}
+	if scope == stormScopeNone {
+		// Nothing sends, so there is nothing to cap.
+		return true
+	}
 	// Storm breaker: the claim above stays recorded (so the other witness of
 	// the same import cannot re-try it), but past the burst cap the alert
 	// itself is suppressed. Counting granted claims counts distinct content,
 	// not devices, and the count includes this claim — the first cap-many in a
-	// window deliver, the rest of the burst is dropped and logged.
+	// window deliver, the rest of the burst is dropped and logged. Each scope
+	// spends only its own budget.
 	var inWindow int
-	if err := n.db.QueryRow(`SELECT COUNT(*) FROM content_alert_claims WHERE claimed_at > datetime('now', ?)`,
-		sqliteOffset(-contentAlertWindow)).Scan(&inWindow); err != nil {
+	if err := n.db.QueryRow(`SELECT COUNT(*) FROM content_alert_claims WHERE claimed_at > datetime('now', ?) AND storm_scope = ?`,
+		sqliteOffset(-contentAlertWindow), scope).Scan(&inWindow); err != nil {
 		// Fail open, same as the claim itself: a burst slipping through beats
 		// silencing the surface on a transient database error.
 		n.logger.Error("push: count content alert window", "err", err, "category", category)

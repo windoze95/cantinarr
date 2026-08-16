@@ -1,3 +1,4 @@
+import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../../settings/data/credentials_service.dart';
+import '../../settings/settings_anchors.dart';
 import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
 
@@ -13,7 +16,10 @@ import '../logic/issues_provider.dart';
 /// `RequestSettingsScreen`'s load → edit → Save shape: a master Enabled
 /// switch, sub-toggles, a remediation-mode dropdown, and numeric bound fields.
 class AiRemediationSettingsScreen extends ConsumerStatefulWidget {
-  const AiRemediationSettingsScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const AiRemediationSettingsScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<AiRemediationSettingsScreen> createState() =>
@@ -186,8 +192,18 @@ class _AiRemediationSettingsScreenState
     );
   }
 
+  /// Wraps [child] with the settings-search highlight for [anchorId].
+  Widget _anchor(String anchorId, Widget child) => SettingsHighlight(
+        anchorId: anchorId,
+        highlightId: widget.highlightId,
+        child: child,
+      );
+
   Widget _buildBody(RemediationSettings s) {
     return ListView(
+      // Build every child while a settings-search highlight needs to find
+      // its anchor (see SettingsHighlight).
+      cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         const Padding(
@@ -202,94 +218,140 @@ class _AiRemediationSettingsScreenState
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
+        // The pipeline's other two surfaces, one tap away — the queue, its
+        // governing rules, and this config are one system, not three
+        // destinations an admin must already know about.
+        _anchor(
+          SettingsAnchors.remediationRules,
+          ListTile(
+            leading:
+                const Icon(Icons.rule_folder_outlined, color: AppTheme.accent),
+            title: const Text('Standing auto-approvals',
+                style: TextStyle(color: AppTheme.textPrimary)),
+            subtitle: const Text('The fixes approved without paging you',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+            trailing: const Icon(Icons.chevron_right,
+                color: AppTheme.textSecondary, size: 18),
+            onTap: () => context.push('/settings/agent-approval-rules'),
+          ),
+        ),
+        _anchor(
+          SettingsAnchors.remediationFixes,
+          ListTile(
+            leading: const Icon(Icons.build_circle_outlined,
+                color: AppTheme.accent),
+            title: const Text('Agent fixes',
+                style: TextStyle(color: AppTheme.textPrimary)),
+            subtitle: const Text('Awaiting review, and everything already done',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+            trailing: const Icon(Icons.chevron_right,
+                color: AppTheme.textSecondary, size: 18),
+            onTap: () => context.push('/agent-actions'),
+          ),
+        ),
         const _SectionLabel('General'),
-        SwitchListTile(
-          value: s.enabled,
-          activeThumbColor: AppTheme.accent,
-          onChanged: (v) => setState(() => _edited = s.copyWith(enabled: v)),
-          title: const Text(
-            'Enabled',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          subtitle: const Text(
-            'Master switch for the remediation assistant.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-          ),
-        ),
-        SwitchListTile(
-          value: s.autoDispatch,
-          activeThumbColor: AppTheme.accent,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(autoDispatch: v)),
-          title: const Text(
-            'Auto-dispatch on detected problems',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          subtitle: const Text(
-            'Track detected problems quietly while Radarr or Sonarr retries, '
-            'then investigate only after the observation window.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        _anchor(
+          SettingsAnchors.remediationEnabled,
+          SwitchListTile(
+            value: s.enabled,
+            activeThumbColor: AppTheme.accent,
+            onChanged: (v) => setState(() => _edited = s.copyWith(enabled: v)),
+            title: const Text(
+              'Enabled',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'Master switch for the remediation assistant.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
           ),
         ),
-        SwitchListTile(
-          value: s.allowReporting,
-          activeThumbColor: AppTheme.accent,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(allowReporting: v)),
-          title: const Text(
-            'Allow problem reporting',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          subtitle: const Text(
-            'Show a "Report a problem" button to users on media screens.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-          ),
-        ),
-        SwitchListTile(
-          value: s.markResolvedAsRead,
-          activeThumbColor: AppTheme.accent,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(markResolvedAsRead: v)),
-          title: const Text(
-            'Mark resolved issues as read',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          subtitle: const Text(
-            'Clear the unread dot when an issue resolves, instead of re-flagging '
-            'it for another look.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        _anchor(
+          SettingsAnchors.remediationAutoDispatch,
+          SwitchListTile(
+            value: s.autoDispatch,
+            activeThumbColor: AppTheme.accent,
+            onChanged: (v) =>
+                setState(() => _edited = s.copyWith(autoDispatch: v)),
+            title: const Text(
+              'Auto-dispatch on detected problems',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'Track detected problems quietly while Radarr or Sonarr retries, '
+              'then investigate only after the observation window.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
           ),
         ),
-        ListTile(
-          title: const Text(
-            'Mode',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+        _anchor(
+          SettingsAnchors.remediationAllowReporting,
+          SwitchListTile(
+            value: s.allowReporting,
+            activeThumbColor: AppTheme.accent,
+            onChanged: (v) =>
+                setState(() => _edited = s.copyWith(allowReporting: v)),
+            title: const Text(
+              'Allow problem reporting',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'Show a "Report a problem" button to users on media screens.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
           ),
-          subtitle: const Text(
-            'Whether the assistant may prepare a fix for an admin to review.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        ),
+        _anchor(
+          SettingsAnchors.remediationMarkResolvedRead,
+          SwitchListTile(
+            value: s.markResolvedAsRead,
+            activeThumbColor: AppTheme.accent,
+            onChanged: (v) =>
+                setState(() => _edited = s.copyWith(markResolvedAsRead: v)),
+            title: const Text(
+              'Mark resolved issues as read',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'Clear the unread dot when an issue resolves, instead of re-flagging '
+              'it for another look.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
           ),
-          trailing: DropdownButton<RemediationMode>(
-            value: s.mode,
-            dropdownColor: AppTheme.surface,
-            underline: const SizedBox.shrink(),
-            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-            items: [
-              for (final a in RemediationMode.values)
-                DropdownMenuItem<RemediationMode>(
-                  value: a,
-                  child: Text(a.label),
-                ),
-            ],
-            onChanged: (v) {
-              if (v == null) return;
-              setState(() => _edited = s.copyWith(mode: v));
-            },
+        ),
+        _anchor(
+          SettingsAnchors.remediationMode,
+          ListTile(
+            title: const Text(
+              'Mode',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'Whether the assistant may prepare a fix for an admin to review.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
+            trailing: DropdownButton<RemediationMode>(
+              value: s.mode,
+              dropdownColor: AppTheme.surface,
+              underline: const SizedBox.shrink(),
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+              items: [
+                for (final a in RemediationMode.values)
+                  DropdownMenuItem<RemediationMode>(
+                    value: a,
+                    child: Text(a.label),
+                  ),
+              ],
+              onChanged: (v) {
+                if (v == null) return;
+                setState(() => _edited = s.copyWith(mode: v));
+              },
+            ),
           ),
         ),
         const _SectionLabel('Automatic recovery'),
@@ -306,148 +368,212 @@ class _AiRemediationSettingsScreenState
             ),
           ),
         ),
-        _NumberTile(
-          label: 'Minimum watch time (minutes)',
-          help: 'Wait at least this long before any agent work, proposal, or '
-              'admin alert can begin.',
-          value: s.observationMinMinutes,
-          onChanged: (v) => setState(
-            () => _edited = s.copyWith(observationMinMinutes: v),
+        _anchor(
+          SettingsAnchors.remediationWatchTime,
+          _NumberTile(
+            label: 'Minimum watch time (minutes)',
+            help: 'Wait at least this long before any agent work, proposal, or '
+                'admin alert can begin.',
+            value: s.observationMinMinutes,
+            onChanged: (v) => setState(
+              () => _edited = s.copyWith(observationMinMinutes: v),
+            ),
           ),
         ),
-        _NumberTile(
-          label: 'Quiet time after arr activity (minutes)',
-          help: 'Keep waiting while Radarr or Sonarr is retrying. Escalation '
-              'starts only after no new recovery activity for this long.',
-          value: s.observationQuietMinutes,
-          onChanged: (v) => setState(
-            () => _edited = s.copyWith(observationQuietMinutes: v),
+        _anchor(
+          SettingsAnchors.remediationQuietTime,
+          _NumberTile(
+            label: 'Quiet time after arr activity (minutes)',
+            help: 'Keep waiting while Radarr or Sonarr is retrying. Escalation '
+                'starts only after no new recovery activity for this long.',
+            value: s.observationQuietMinutes,
+            onChanged: (v) => setState(
+              () => _edited = s.copyWith(observationQuietMinutes: v),
+            ),
           ),
         ),
-        _NumberTile(
-          label: 'Recovery settle time (minutes)',
-          help: 'When the failed queue item clears, allow imports and library '
-              'state this long to settle before deciding the outcome.',
-          value: s.observationSettleMinutes,
-          onChanged: (v) => setState(
-            () => _edited = s.copyWith(observationSettleMinutes: v),
+        _anchor(
+          SettingsAnchors.remediationSettleTime,
+          _NumberTile(
+            label: 'Recovery settle time (minutes)',
+            help: 'When the failed queue item clears, allow imports and library '
+                'state this long to settle before deciding the outcome.',
+            value: s.observationSettleMinutes,
+            onChanged: (v) => setState(
+              () => _edited = s.copyWith(observationSettleMinutes: v),
+            ),
           ),
         ),
         const _SectionLabel('Shared AI'),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: Text(
-            'Uses the shared ${_providerOption(_credentials!)?.label ?? _credentials!.ai.provider} '
-            'provider and credential from Admin > Providers & Credentials. '
-            'The assistant model there is ${_credentials!.ai.model}. You can '
-            'choose a different model below for remediation only.',
-            style: const TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 13,
-              height: 1.35,
+        // The server synthesizes a default provider and model even when
+        // nothing is set up, so only the live configured flag may claim a
+        // provider exists.
+        if (!_credentials!.ai.sharedConfigured) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: Text(
+              'No shared AI provider is set up yet. Remediation always runs '
+              'on the shared provider, so detected problems will wait instead '
+              'of being investigated until one is configured.',
+              style: TextStyle(
+                color: AppTheme.warning,
+                fontSize: 13,
+                height: 1.35,
+              ),
             ),
           ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: DropdownButtonFormField<String>(
-            key: ValueKey(
-              'remediation-model-${_credentials!.ai.provider}-$_modelSelection',
+          _anchor(
+            SettingsAnchors.remediationModel,
+            ListTile(
+              leading: const Icon(Icons.vpn_key_outlined,
+                  color: AppTheme.accent),
+              title: const Text('Set up the shared provider',
+                  style: TextStyle(color: AppTheme.textPrimary)),
+              subtitle: const Text('Admin > Providers & Credentials',
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+              trailing: const Icon(Icons.chevron_right,
+                  color: AppTheme.textSecondary, size: 18),
+              onTap: () => context.push('/settings/credentials'),
             ),
-            initialValue: _modelSelection,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'Remediation model',
-              isDense: true,
-            ),
-            items: [
-              DropdownMenuItem(
-                value: _sharedModel,
-                child: Text('Use shared model (${_credentials!.ai.model})'),
-              ),
-              ...?_providerOption(_credentials!)?.models.map(
-                    (model) => DropdownMenuItem(
-                      value: model.id,
-                      child: Text(model.label),
-                    ),
-                  ),
-              const DropdownMenuItem(
-                value: _customModel,
-                child: Text('Custom model ID'),
-              ),
-            ],
-            onChanged: (value) {
-              if (value != null) {
-                setState(() => _modelSelection = value);
-              }
-            },
           ),
-        ),
-        if (_modelSelection == _customModel)
+        ] else ...[
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: TextField(
-              controller: _customModelController,
-              decoration: const InputDecoration(
-                labelText: 'Custom model ID',
-                helperText:
-                    'Saving runs a small response test before activation.',
-                isDense: true,
+            child: Text(
+              'Uses the shared ${_providerOption(_credentials!)?.label ?? _credentials!.ai.provider} '
+              'provider and credential from Admin > Providers & Credentials. '
+              'The assistant model there is ${_credentials!.ai.model}. You can '
+              'choose a different model below for remediation only.',
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+                height: 1.35,
               ),
             ),
           ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Text(
-            'If the shared provider changes later, Cantinarr falls back to its '
-            'shared model until a remediation override is tested for the new provider.',
-            style: TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 12,
-              height: 1.35,
+          _anchor(
+            SettingsAnchors.remediationModel,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: DropdownButtonFormField<String>(
+                key: ValueKey(
+                  'remediation-model-${_credentials!.ai.provider}-$_modelSelection',
+                ),
+                initialValue: _modelSelection,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Remediation model',
+                  isDense: true,
+                ),
+                items: [
+                  DropdownMenuItem(
+                    value: _sharedModel,
+                    child: Text('Use shared model (${_credentials!.ai.model})'),
+                  ),
+                  ...?_providerOption(_credentials!)?.models.map(
+                        (model) => DropdownMenuItem(
+                          value: model.id,
+                          child: Text(model.label),
+                        ),
+                      ),
+                  const DropdownMenuItem(
+                    value: _customModel,
+                    child: Text('Custom model ID'),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => _modelSelection = value);
+                  }
+                },
+              ),
             ),
           ),
-        ),
+          if (_modelSelection == _customModel)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: TextField(
+                controller: _customModelController,
+                decoration: const InputDecoration(
+                  labelText: 'Custom model ID',
+                  helperText:
+                      'Saving runs a small response test before activation.',
+                  isDense: true,
+                ),
+              ),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              'If the shared provider changes later, Cantinarr falls back to its '
+              'shared model until a remediation override is tested for the new provider.',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
         const _SectionLabel('Limits'),
-        _NumberTile(
-          label: 'Max steps per run',
-          value: s.maxSteps,
-          onChanged: (v) => setState(() => _edited = s.copyWith(maxSteps: v)),
+        _anchor(
+          SettingsAnchors.remediationMaxSteps,
+          _NumberTile(
+            label: 'Max steps per run',
+            value: s.maxSteps,
+            onChanged: (v) => setState(() => _edited = s.copyWith(maxSteps: v)),
+          ),
         ),
-        _NumberTile(
-          label: 'Max output tokens per turn',
-          help: 'API-key providers receive this as a request cap. For shared '
-              'OpenAI OAuth, Cantinarr watches Codex usage reports and interrupts '
-              'the turn when reported output reaches the limit. Reports are '
-              'best-effort rather than a request-side hard cap and can arrive '
-              'after the model has already exceeded the boundary.',
-          value: s.maxTurnTokens,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(maxTurnTokens: v)),
+        _anchor(
+          SettingsAnchors.remediationMaxTurnTokens,
+          _NumberTile(
+            label: 'Max output tokens per turn',
+            help: 'API-key providers receive this as a request cap. For shared '
+                'OpenAI OAuth, Cantinarr watches Codex usage reports and interrupts '
+                'the turn when reported output reaches the limit. Reports are '
+                'best-effort rather than a request-side hard cap and can arrive '
+                'after the model has already exceeded the boundary.',
+            value: s.maxTurnTokens,
+            onChanged: (v) =>
+                setState(() => _edited = s.copyWith(maxTurnTokens: v)),
+          ),
         ),
-        _NumberTile(
-          label: 'Max wall-clock (seconds)',
-          value: s.maxWallClockSecs,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(maxWallClockSecs: v)),
+        _anchor(
+          SettingsAnchors.remediationMaxWallClock,
+          _NumberTile(
+            label: 'Max wall-clock (seconds)',
+            value: s.maxWallClockSecs,
+            onChanged: (v) =>
+                setState(() => _edited = s.copyWith(maxWallClockSecs: v)),
+          ),
         ),
-        _NumberTile(
-          label: 'Daily run cap',
-          value: s.dailyRunCap,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(dailyRunCap: v)),
+        _anchor(
+          SettingsAnchors.remediationDailyCap,
+          _NumberTile(
+            label: 'Daily run cap',
+            value: s.dailyRunCap,
+            onChanged: (v) =>
+                setState(() => _edited = s.copyWith(dailyRunCap: v)),
+          ),
         ),
-        _NumberTile(
-          label: 'Wait for a user reply (hours)',
-          value: s.maxUserWaitHours,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(maxUserWaitHours: v)),
+        _anchor(
+          SettingsAnchors.remediationUserWait,
+          _NumberTile(
+            label: 'Wait for a user reply (hours)',
+            value: s.maxUserWaitHours,
+            onChanged: (v) =>
+                setState(() => _edited = s.copyWith(maxUserWaitHours: v)),
+          ),
         ),
-        _NumberTile(
-          label: 'Failed auto investigations before pausing',
-          value: s.circuitBreakerGiveups,
-          onChanged: (v) =>
-              setState(() => _edited = s.copyWith(circuitBreakerGiveups: v)),
+        _anchor(
+          SettingsAnchors.remediationBreakerGiveups,
+          _NumberTile(
+            label: 'Failed auto investigations before pausing',
+            value: s.circuitBreakerGiveups,
+            onChanged: (v) =>
+                setState(() => _edited = s.copyWith(circuitBreakerGiveups: v)),
+          ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),

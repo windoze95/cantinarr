@@ -16,17 +16,22 @@ import (
 
 // videoBackend is a minimal Radarr/Sonarr API double for the catch-up tests:
 // a mutable queue and history, fixed movie/series tables, and counters for the
-// endpoints whose cost the tests pin.
+// endpoints whose cost the tests pin. The delete-for-upgrade pairing read asks
+// /history with the file-deleted eventType (Radarr 6, Sonarr 5), so those
+// queries serve the separate deleteHistory table — an unset one is an empty,
+// provably complete page, i.e. "no upgrade proof".
 type videoBackend struct {
-	mu           sync.Mutex
-	apiPrefix    string // "/api/v3"
-	queue        string // JSON records array
-	history      string // JSON records array; "" serves an empty complete page
-	historyTotal int    // overrides totalRecords when > 0 (overflow simulation)
-	movies       map[int]string
-	series       map[int]string
-	historyHits  int
-	mediaHits    int
+	mu                 sync.Mutex
+	apiPrefix          string // "/api/v3"
+	queue              string // JSON records array
+	history            string // JSON records array; "" serves an empty complete page
+	historyTotal       int    // overrides totalRecords when > 0 (overflow simulation)
+	deleteHistory      string // JSON records array for the file-deleted eventType query
+	deleteHistoryTotal int    // overrides the delete page's totalRecords when > 0
+	movies             map[int]string
+	series             map[int]string
+	historyHits        int
+	mediaHits          int
 }
 
 func (b *videoBackend) handler() http.HandlerFunc {
@@ -36,16 +41,21 @@ func (b *videoBackend) handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == b.apiPrefix+"/queue":
-			fmt.Fprintf(w, `{"records":%s}`, b.queue)
+			fmt.Fprint(w, queueEnvelope(b.queue))
 		case r.URL.Path == b.apiPrefix+"/history":
 			b.historyHits++
 			records := b.history
+			totalOverride := b.historyTotal
+			if et := r.URL.Query().Get("eventType"); et == "5" || et == "6" {
+				records = b.deleteHistory
+				totalOverride = b.deleteHistoryTotal
+			}
 			if records == "" {
 				records = "[]"
 			}
 			total := strings.Count(records, `"eventType"`)
-			if b.historyTotal > 0 {
-				total = b.historyTotal
+			if totalOverride > 0 {
+				total = totalOverride
 			}
 			fmt.Fprintf(w, `{"page":1,"pageSize":200,"totalRecords":%d,"records":%s}`, total, records)
 		case r.URL.Path == b.apiPrefix+"/episode":
@@ -485,5 +495,287 @@ func TestChaptarrCatchUpAppliesImportGuards(t *testing.T) {
 		if id == 9 || id == 10 {
 			t.Errorf("excluded history record %d was looked up", id)
 		}
+	}
+}
+
+// TestRadarrCatchUpReroutesProvenUpgrades pins the upgrade split across both
+// resumption sources at once: a witnessed departure whose import history pairs
+// with a delete-for-upgrade record goes to the admin upgrade alert (the proof
+// travels onto the departure), while an unpaired catch-up import broadcasts as
+// new content.
+func TestRadarrCatchUpReroutesProvenUpgrades(t *testing.T) {
+	database := witnessDB(t)
+	backend := &videoBackend{apiPrefix: "/api/v3", movies: map[int]string{
+		42: `{"id":42,"title":"The Matrix","tmdbId":603,"hasFile":true,"monitored":true}`,
+		77: `{"id":77,"title":"Heat","tmdbId":949,"hasFile":true,"monitored":true}`,
+	}}
+	srv := httptest.NewServer(backend.handler())
+	t.Cleanup(srv.Close)
+	client := radarr.NewClient(srv.URL, "test-key")
+
+	// Movie 42 (an upgrade grab) is in flight when the process goes down.
+	backend.set(&backend.queue, `[{"id":1,"movieId":42,"status":"downloading","size":100,"sizeleft":50}]`)
+	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	hubA.pollRadarrInstance("movies-a", client)
+
+	if _, err := database.Exec(
+		`UPDATE arr_queue_witness SET observed_at = ? WHERE instance_id = 'movies-a'`,
+		time.Now().Add(-30*time.Minute).UTC(),
+	); err != nil {
+		t.Fatalf("backdate witness: %v", err)
+	}
+	// While unwatched: 42 imported REPLACING its old file (paired delete with
+	// reason Upgrade); 77 imported fresh.
+	backend.set(&backend.queue, `[]`)
+	backend.set(&backend.history, fmt.Sprintf(
+		`[{"id":901,"movieId":77,"eventType":"downloadFolderImported","date":"%s"},
+		  {"id":900,"movieId":42,"eventType":"downloadFolderImported","date":"%s"}]`,
+		historyDate(5*time.Minute), historyDate(10*time.Minute)))
+	backend.set(&backend.deleteHistory, fmt.Sprintf(
+		`[{"id":899,"movieId":42,"eventType":"movieFileDeleted","date":"%s","data":{"reason":"Upgrade"}}]`,
+		historyDate(10*time.Minute)))
+
+	after := &recordingContent{}
+	hubB := NewHub(nil, nil, nil, database, after, nil)
+	hubB.restoreQueueWitness()
+	hubB.pollRadarrInstance("movies-a", client)
+
+	if got := after.movieCalls(); len(got) != 1 || got[0] != "Heat|949" {
+		t.Errorf("broadcast alerts = %v, want exactly Heat|949", got)
+	}
+	if got := after.upgradedMovieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
+		t.Errorf("upgrade alerts = %v, want exactly The Matrix|603", got)
+	}
+}
+
+// TestCatchUpUpgradeProofRequiresNameAndReason pins the positive-proof rule
+// record by record: a delete with the wrong reason (MissingFromDisk) and a
+// delete under a drifted event name both prove nothing, so their movies
+// broadcast as new content.
+func TestCatchUpUpgradeProofRequiresNameAndReason(t *testing.T) {
+	database := witnessDB(t)
+	backend := &videoBackend{apiPrefix: "/api/v3", movies: map[int]string{
+		42: `{"id":42,"title":"The Matrix","tmdbId":603,"hasFile":true,"monitored":true}`,
+		77: `{"id":77,"title":"Heat","tmdbId":949,"hasFile":true,"monitored":true}`,
+	}}
+	srv := httptest.NewServer(backend.handler())
+	t.Cleanup(srv.Close)
+	client := radarr.NewClient(srv.URL, "test-key")
+
+	backend.set(&backend.queue, `[]`)
+	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	hubA.pollRadarrInstance("movies-a", client)
+
+	if _, err := database.Exec(
+		`UPDATE arr_queue_witness SET observed_at = ? WHERE instance_id = 'movies-a'`,
+		time.Now().Add(-30*time.Minute).UTC(),
+	); err != nil {
+		t.Fatalf("backdate witness: %v", err)
+	}
+	backend.set(&backend.history, fmt.Sprintf(
+		`[{"id":901,"movieId":77,"eventType":"downloadFolderImported","date":"%s"},
+		  {"id":900,"movieId":42,"eventType":"downloadFolderImported","date":"%s"}]`,
+		historyDate(5*time.Minute), historyDate(10*time.Minute)))
+	backend.set(&backend.deleteHistory, fmt.Sprintf(
+		`[{"id":899,"movieId":42,"eventType":"movieFileDeleted","date":"%s","data":{"reason":"MissingFromDisk"}},
+		  {"id":898,"movieId":77,"eventType":"somethingElseEntirely","date":"%s","data":{"reason":"Upgrade"}}]`,
+		historyDate(10*time.Minute), historyDate(5*time.Minute)))
+
+	after := &recordingContent{}
+	hubB := NewHub(nil, nil, nil, database, after, nil)
+	hubB.restoreQueueWitness()
+	hubB.pollRadarrInstance("movies-a", client)
+
+	if got := after.movieCalls(); len(got) != 2 {
+		t.Errorf("broadcast alerts = %v, want both movies (no valid proof for either)", got)
+	}
+	if got := after.upgradedMovieCalls(); len(got) != 0 {
+		t.Errorf("upgrade alerts = %v, want none", got)
+	}
+}
+
+// TestCatchUpUpgradeDeletePageFailureAnnouncesAllAsNew pins the fail-open
+// direction of the proof read itself: when the delete page cannot prove it
+// covered the window, no import is suppressed — everything broadcasts.
+func TestCatchUpUpgradeDeletePageFailureAnnouncesAllAsNew(t *testing.T) {
+	database := witnessDB(t)
+	backend := &videoBackend{apiPrefix: "/api/v3", movies: map[int]string{
+		42: `{"id":42,"title":"The Matrix","tmdbId":603,"hasFile":true,"monitored":true}`,
+	}}
+	srv := httptest.NewServer(backend.handler())
+	t.Cleanup(srv.Close)
+	client := radarr.NewClient(srv.URL, "test-key")
+
+	backend.set(&backend.queue, `[]`)
+	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	hubA.pollRadarrInstance("movies-a", client)
+
+	if _, err := database.Exec(
+		`UPDATE arr_queue_witness SET observed_at = ? WHERE instance_id = 'movies-a'`,
+		time.Now().Add(-30*time.Minute).UTC(),
+	); err != nil {
+		t.Fatalf("backdate witness: %v", err)
+	}
+	// The import IS a proven upgrade in truth, but the delete page overflows —
+	// the proof is unreadable, so the movie must broadcast.
+	backend.set(&backend.history, fmt.Sprintf(
+		`[{"id":900,"movieId":42,"eventType":"downloadFolderImported","date":"%s"}]`,
+		historyDate(10*time.Minute)))
+	backend.set(&backend.deleteHistory, fmt.Sprintf(
+		`[{"id":899,"movieId":42,"eventType":"movieFileDeleted","date":"%s","data":{"reason":"Upgrade"}}]`,
+		historyDate(10*time.Minute)))
+	backend.mu.Lock()
+	backend.deleteHistoryTotal = catchUpHistoryPageSize + 50
+	backend.mu.Unlock()
+
+	after := &recordingContent{}
+	hubB := NewHub(nil, nil, nil, database, after, nil)
+	hubB.restoreQueueWitness()
+	hubB.pollRadarrInstance("movies-a", client)
+
+	if got := after.movieCalls(); len(got) != 1 || got[0] != "The Matrix|603" {
+		t.Errorf("broadcast alerts = %v, want The Matrix announced as new (proof unreadable)", got)
+	}
+	if got := after.upgradedMovieCalls(); len(got) != 0 {
+		t.Errorf("upgrade alerts = %v, want none when the proof page is unproven", got)
+	}
+}
+
+// TestCatchUpUpgradesFilteredBeforeCap pins the cap ordering: upgrades leave
+// the batch before restoredAlertCap is judged, so a resumption holding a mass
+// upgrade sweep plus a handful of genuinely new imports announces the new ones
+// instead of dropping the whole merged batch.
+func TestCatchUpUpgradesFilteredBeforeCap(t *testing.T) {
+	database := witnessDB(t)
+	backend := &videoBackend{apiPrefix: "/api/v3", movies: map[int]string{}}
+	var imports, deletes []string
+	// restoredAlertCap+2 total imports: 4 fresh, the rest proven upgrades.
+	for i := 1; i <= restoredAlertCap+2; i++ {
+		backend.movies[i] = fmt.Sprintf(`{"id":%d,"title":"Movie %d","tmdbId":%d,"hasFile":true,"monitored":true}`, i, i, 1000+i)
+		imports = append(imports, fmt.Sprintf(
+			`{"id":%d,"movieId":%d,"eventType":"downloadFolderImported","date":"%s"}`,
+			900+i, i, historyDate(10*time.Minute)))
+		if i > 4 {
+			deletes = append(deletes, fmt.Sprintf(
+				`{"id":%d,"movieId":%d,"eventType":"movieFileDeleted","date":"%s","data":{"reason":"Upgrade"}}`,
+				800+i, i, historyDate(10*time.Minute)))
+		}
+	}
+	srv := httptest.NewServer(backend.handler())
+	t.Cleanup(srv.Close)
+	client := radarr.NewClient(srv.URL, "test-key")
+
+	backend.set(&backend.queue, `[]`)
+	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	hubA.pollRadarrInstance("movies-a", client)
+
+	if _, err := database.Exec(
+		`UPDATE arr_queue_witness SET observed_at = ? WHERE instance_id = 'movies-a'`,
+		time.Now().Add(-30*time.Minute).UTC(),
+	); err != nil {
+		t.Fatalf("backdate witness: %v", err)
+	}
+	backend.set(&backend.history, "["+strings.Join(imports, ",")+"]")
+	backend.set(&backend.deleteHistory, "["+strings.Join(deletes, ",")+"]")
+
+	after := &recordingContent{}
+	hubB := NewHub(nil, nil, nil, database, after, nil)
+	hubB.restoreQueueWitness()
+	hubB.pollRadarrInstance("movies-a", client)
+
+	if got := after.movieCalls(); len(got) != 4 {
+		t.Errorf("broadcast alerts = %v (len %d), want the 4 fresh imports — upgrades must not spend the cap", got, len(got))
+	}
+	if got := after.upgradedMovieCalls(); len(got) != restoredAlertCap-2 {
+		t.Errorf("upgrade alerts = %d, want %d", len(got), restoredAlertCap-2)
+	}
+}
+
+// TestSonarrCatchUpMixedSeriesBroadcasts pins the per-episode pairing: a
+// series whose window holds one upgraded episode AND one new episode is news
+// and broadcasts, while a series whose every import is a proven upgrade goes
+// to admins only.
+func TestSonarrCatchUpMixedSeriesBroadcasts(t *testing.T) {
+	database := witnessDB(t)
+	backend := &videoBackend{apiPrefix: "/api/v3", series: map[int]string{
+		6: `{"id":6,"title":"Andor","tmdbId":83867,"statistics":{"episodeFileCount":24,"episodeCount":24}}`,
+		9: `{"id":9,"title":"Severance","tmdbId":95396,"statistics":{"episodeFileCount":19,"episodeCount":19}}`,
+	}}
+	srv := httptest.NewServer(backend.handler())
+	t.Cleanup(srv.Close)
+	client := sonarr.NewClient(srv.URL, "test-key")
+
+	backend.set(&backend.queue, `[]`)
+	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	hubA.pollSonarrInstance("tv-a", client)
+
+	if _, err := database.Exec(
+		`UPDATE arr_queue_witness SET observed_at = ? WHERE instance_id = 'tv-a'`,
+		time.Now().Add(-30*time.Minute).UTC(),
+	); err != nil {
+		t.Fatalf("backdate witness: %v", err)
+	}
+	// Andor(6): episode 31 upgraded, episode 32 genuinely new -> broadcast.
+	// Severance(9): its only import (episode 40) is a proven upgrade -> admins.
+	backend.set(&backend.history, fmt.Sprintf(
+		`[{"id":903,"episodeId":31,"seriesId":6,"eventType":"downloadFolderImported","date":"%s"},
+		  {"id":902,"episodeId":32,"seriesId":6,"eventType":"downloadFolderImported","date":"%s"},
+		  {"id":901,"episodeId":40,"seriesId":9,"eventType":"downloadFolderImported","date":"%s"}]`,
+		historyDate(5*time.Minute), historyDate(6*time.Minute), historyDate(7*time.Minute)))
+	backend.set(&backend.deleteHistory, fmt.Sprintf(
+		`[{"id":899,"episodeId":31,"seriesId":6,"eventType":"episodeFileDeleted","date":"%s","data":{"reason":"Upgrade"}},
+		  {"id":898,"episodeId":40,"seriesId":9,"eventType":"episodeFileDeleted","date":"%s","data":{"reason":"Upgrade"}}]`,
+		historyDate(5*time.Minute), historyDate(7*time.Minute)))
+
+	after := &recordingContent{}
+	hubB := NewHub(nil, nil, nil, database, after, nil)
+	hubB.restoreQueueWitness()
+	hubB.pollSonarrInstance("tv-a", client)
+
+	if got := after.episodeCalls(); len(got) != 1 || got[0] != "Andor|83867" {
+		t.Errorf("broadcast alerts = %v, want exactly the mixed series Andor|83867", got)
+	}
+	if got := after.upgradedEpisodeCalls(); len(got) != 1 || got[0] != "Severance|95396" {
+		t.Errorf("upgrade alerts = %v, want exactly Severance|95396", got)
+	}
+}
+
+// TestChaptarrCatchUpReroutesProvenUpgrades is the book shape of the split:
+// an import paired with a bookFileDeleted reason-Upgrade record alerts admins
+// with the same live-record identity the broadcast would have carried.
+func TestChaptarrCatchUpReroutesProvenUpgrades(t *testing.T) {
+	database := witnessDB(t)
+	backend := newBookBackend()
+	srv := httptest.NewServer(backend.handler())
+	t.Cleanup(srv.Close)
+	client := chaptarr.NewClient(srv.URL, "test-key")
+
+	backend.setQueue(`[]`)
+	hubA := NewHub(nil, nil, nil, database, &recordingContent{}, nil)
+	hubA.pollChaptarrInstance("books-a", client)
+
+	if _, err := database.Exec(
+		`UPDATE arr_queue_witness SET observed_at = ? WHERE instance_id = 'books-a'`,
+		time.Now().Add(-30*time.Minute).UTC(),
+	); err != nil {
+		t.Fatalf("backdate witness: %v", err)
+	}
+	backend.setHistory(fmt.Sprintf(
+		`[{"id":903,"bookId":7,"eventType":"bookFileImported","date":"%s"}]`,
+		historyDate(5*time.Minute)))
+	backend.setDeleteHistory(fmt.Sprintf(
+		`[{"id":902,"bookId":7,"eventType":"bookFileDeleted","date":"%s","data":{"reason":"Upgrade"}}]`,
+		historyDate(5*time.Minute)))
+
+	after := &recordingContent{}
+	hubB := NewHub(nil, nil, nil, database, after, nil)
+	hubB.restoreQueueWitness()
+	hubB.pollChaptarrInstance("books-a", client)
+
+	if got := after.calls(); len(got) != 0 {
+		t.Errorf("broadcast alerts = %v, want none for a proven upgrade", got)
+	}
+	if got := after.upgradedBookCalls(); len(got) != 1 || got[0] != "Ahsoka (Star Wars)|29749107|books-a|ebook" {
+		t.Errorf("upgrade alerts = %v, want exactly the upgraded ebook", got)
 	}
 }

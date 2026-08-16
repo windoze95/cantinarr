@@ -47,6 +47,36 @@ void main() {
     expect(find.text('Remediation model'), findsOneWidget);
   });
 
+  testWidgets('an unconfigured shared provider is named as absent, not defaulted',
+      (tester) async {
+    final adapter = _RemediationSettingsAdapter(sharedConfigured: false);
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [backendClientProvider.overrideWithValue(dio)],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const AiRemediationSettingsScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _scrollUntilBuilt(tester, find.text('SHARED AI'));
+    await _scrollUntilBuilt(tester, find.text('Set up the shared provider'));
+    expect(
+      find.textContaining('No shared AI provider is set up yet'),
+      findsOneWidget,
+    );
+    expect(find.text('Set up the shared provider'), findsOneWidget);
+    // The server-synthesized defaults must not leak through as a provider.
+    expect(find.textContaining('Uses the shared'), findsNothing);
+    expect(find.text('Remediation model'), findsNothing);
+    expect(find.textContaining('Use shared model'), findsNothing);
+  });
+
   testWidgets('clears legacy provider and model fields when settings are saved',
       (tester) async {
     final adapter = _RemediationSettingsAdapter(
@@ -123,10 +153,17 @@ Future<void> _scrollUntilBuilt(WidgetTester tester, Finder finder) async {
 }
 
 class _RemediationSettingsAdapter implements HttpClientAdapter {
-  _RemediationSettingsAdapter({this.provider = '', this.model = ''});
+  _RemediationSettingsAdapter({
+    this.provider = '',
+    this.model = '',
+    this.sharedConfigured,
+  });
 
   final String provider;
   final String model;
+
+  /// null omits the `shared` block, exercising the older-server default.
+  final bool? sharedConfigured;
   Map<String, dynamic>? saved;
 
   Map<String, dynamic> get _settings => {
@@ -191,6 +228,8 @@ class _RemediationSettingsAdapter implements HttpClientAdapter {
             },
           ],
           'health_check': {'enabled': true, 'interval_hours': 24},
+          if (sharedConfigured != null)
+            'shared': {'configured': sharedConfigured},
         },
       };
 }

@@ -55,6 +55,10 @@ type Service struct {
 	// after a newer one.
 	observationMu sync.Mutex
 
+	// preAirSweep remembers how far the fallback pre-air pass has read each
+	// instance's history, so a quiet instance costs one arr call per pass.
+	preAirSweep preAirSweepState
+
 	// jobs is the buffered queue of investigation/resume jobs. The Runner drains
 	// it via StartWorkers; Enqueue/EnqueueResume push onto it. Buffered so the
 	// request and approval paths never block on the agent.
@@ -65,8 +69,13 @@ type Service struct {
 // action against the arr. *Executor satisfies it in production; a fake satisfies
 // it in tests so the approve→execute→resume cycle can be asserted without a
 // network or a live arr.
+//
+// proposedAt is when the agent recorded the proposal, and stands for the moment
+// the arr state this fix was reasoned about was last read. A proposal can wait
+// on a human indefinitely, so a fix that destroys something needs a way to tell
+// the thing it diagnosed apart from whatever happens to be in its place now.
 type actionExecutor interface {
-	Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage) (string, error)
+	Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time) (string, error)
 }
 
 // NewService constructs the remediation service, mirroring request.NewService.
@@ -542,7 +551,8 @@ func (s *Service) GetIssue(issueID int64) (*Issue, error) {
 		        i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,
 		        i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
 		        i.created_at, i.updated_at, i.closed_at,
-		        i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id
+		        i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id,
+		        COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%'
 		 FROM issues i LEFT JOIN users u ON u.id = i.reporter_id
 		 WHERE i.id = ?`,
 		issueID,
@@ -763,8 +773,7 @@ func (s *Service) saveUnresumableApprovalReply(issueID int64, authorKind string,
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		if _, err := tx.Exec(
-			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript',
-			 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 			 WHERE issue_id = ? AND status IN (?, ?)`,
 			issueID, runStatusWaitingApproval, runStatusResumePending,
 		); err != nil {
@@ -820,8 +829,7 @@ func (s *Service) saveUnresumableReply(issueID int64, authorKind string, authorI
 	}
 	if escalated > 0 {
 		if _, err := tx.Exec(
-			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript',
-			 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 			 WHERE issue_id = ? AND status IN (?, ?)`,
 			issueID, runStatusWaitingUser, runStatusResumePending,
 		); err != nil {
@@ -902,38 +910,185 @@ func (s *Service) SweepStaleAwaitingUser(ctx context.Context, maxWaitHours int) 
 	return closed, nil
 }
 
+// SweepAwaitingConfirmation walks the confirm-wait timeline for user reports
+// whose fix executed but whose reporter has not answered. Day 3: ONE gentle
+// re-ask (the confirm_nudged_at stamp is what makes it exactly one). Day 7:
+// the wait is handed to an admin as needs_admin — an unanswered subjective
+// verdict is never fabricated, but it may not hold an issue open forever
+// either; the admin's /resolve is the honest fallback. Returns (nudged,
+// escalated).
+func (s *Service) SweepAwaitingConfirmation(ctx context.Context) (int, int, error) {
+	nudged := 0
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id FROM issues
+		 WHERE status = ? AND closed_at IS NULL AND confirm_nudged_at IS NULL
+		   AND updated_at <= datetime('now', '-72 hours')`,
+		IssueAwaitingConfirmation,
+	)
+	if err != nil {
+		return 0, 0, fmt.Errorf("query confirm-wait nudges: %w", err)
+	}
+	var toNudge []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, 0, fmt.Errorf("scan confirm-wait nudge: %w", err)
+		}
+		toNudge = append(toNudge, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+	for _, id := range toNudge {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE issues SET confirm_nudged_at = CURRENT_TIMESTAMP
+			 WHERE id = ? AND status = ? AND closed_at IS NULL AND confirm_nudged_at IS NULL`,
+			id, IssueAwaitingConfirmation,
+		)
+		if err != nil {
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			// The stamp deliberately does not touch updated_at: the 7-day clock
+			// keeps running from the fix, not from the reminder.
+			s.notifyReporter(id, "issue_fix_confirm")
+			nudged++
+		}
+	}
+
+	escalated := 0
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE issues SET status = ?, read = 0,
+		 resolution = 'The applied fix was never confirmed by the reporter; an administrator should verify and close this.',
+		 updated_at = CURRENT_TIMESTAMP
+		 WHERE status = ? AND closed_at IS NULL
+		   AND updated_at <= datetime('now', '-168 hours')`,
+		IssueNeedsAdmin, IssueAwaitingConfirmation,
+	)
+	if err != nil {
+		return nudged, 0, fmt.Errorf("escalate unanswered confirm-waits: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		escalated = int(n)
+	}
+	return nudged, escalated, nil
+}
+
 // ListIssues returns issues for the admin queue (newest first), optionally
 // filtered by status. An empty/blank status returns all issues.
-func (s *Service) ListIssues(status string) ([]Issue, error) {
-	query := `SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
+// ListIssuesForReporter returns one user's OWN reports, newest first — the
+// reporter inbox. Same row shape as the admin list; the handler applies the
+// requester-copy boundary before it leaves the server.
+func (s *Service) ListIssuesForReporter(reporterID int64) ([]Issue, error) {
+	rows, err := s.db.Query(`SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
 	                 i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,
 	                 i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
 	                 i.created_at, i.updated_at, i.closed_at,
-	                 i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id
-	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id`
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if status != "" {
-		rows, err = s.db.Query(query+" WHERE i.status = ? ORDER BY i.updated_at DESC, i.id DESC", status)
-	} else {
-		rows, err = s.db.Query(query + " ORDER BY i.updated_at DESC, i.id DESC")
-	}
+	                 i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id,
+	                 COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%'
+	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id
+	          WHERE i.reporter_id = ? ORDER BY i.updated_at DESC, i.id DESC`, reporterID)
 	if err != nil {
-		return nil, fmt.Errorf("query issues: %w", err)
+		return nil, fmt.Errorf("query reporter issues: %w", err)
 	}
 	defer rows.Close()
-
 	out := []Issue{}
 	for rows.Next() {
 		iss, err := scanIssue(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan issue: %w", err)
+			return nil, fmt.Errorf("scan reporter issue: %w", err)
 		}
 		out = append(out, *iss)
 	}
 	return out, rows.Err()
+}
+
+// Closed history is the only part of the issue list that grows without bound.
+// Open issues are self-limiting — they get resolved — but closed ones only
+// accumulate, and the observation pipeline closes incidents that never needed a
+// human at all (a live instance closes hundreds a week that way). So the list
+// read caps HISTORY and never the actionable population: whatever filter a
+// client applies to open issues, it is filtering a complete set.
+const (
+	defaultClosedIssueHistory = 200
+	maxClosedIssueHistory     = 1000
+)
+
+// closedIssueStatus reports whether a status is one an issue only reaches with
+// closed_at set. Every writer of closed_at pairs it with one of these, so
+// "closed" and "terminal" name the same rows from either direction.
+func closedIssueStatus(status string) bool {
+	return status == IssueResolved || status == IssueWontFix ||
+		status == IssueDismissed
+}
+
+// ListIssues returns the admin issue list: every open issue, plus the most
+// recent closedLimit closed ones, newest-updated first within each group. The
+// second return value is the total number of closed issues, so a caller can say
+// how much history it is NOT showing rather than implying it has all of it.
+// closedLimit <= 0 takes the default; it is clamped to maxClosedIssueHistory.
+func (s *Service) ListIssues(status string, closedLimit int) ([]Issue, int64, error) {
+	if closedLimit <= 0 {
+		closedLimit = defaultClosedIssueHistory
+	}
+	if closedLimit > maxClosedIssueHistory {
+		closedLimit = maxClosedIssueHistory
+	}
+	query := `SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
+	                 i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,
+	                 i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
+	                 i.created_at, i.updated_at, i.closed_at,
+	                 i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id,
+	                 COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%'
+	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id`
+	const order = " ORDER BY i.updated_at DESC, i.id DESC"
+
+	collect := func(into []Issue, where string, args ...any) ([]Issue, error) {
+		rows, err := s.db.Query(query+where, args...)
+		if err != nil {
+			return nil, fmt.Errorf("query issues: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			iss, err := scanIssue(rows)
+			if err != nil {
+				return nil, fmt.Errorf("scan issue: %w", err)
+			}
+			into = append(into, *iss)
+		}
+		return into, rows.Err()
+	}
+
+	var closedTotal int64
+	if err := s.db.QueryRow("SELECT COUNT(1) FROM issues WHERE closed_at IS NOT NULL").Scan(&closedTotal); err != nil {
+		return nil, 0, fmt.Errorf("count closed issues: %w", err)
+	}
+
+	out := []Issue{}
+	if status != "" {
+		// An explicit status read caps only when that status is a closed one;
+		// asking for open work must never come back quietly short.
+		where := " WHERE i.status = ?" + order
+		args := []any{status}
+		if closedIssueStatus(status) {
+			where += " LIMIT ?"
+			args = append(args, closedLimit)
+		}
+		out, err := collect(out, where, args...)
+		return out, closedTotal, err
+	}
+
+	out, err := collect(out, " WHERE i.closed_at IS NULL"+order)
+	if err != nil {
+		return nil, 0, err
+	}
+	out, err = collect(out, " WHERE i.closed_at IS NOT NULL"+order+" LIMIT ?", closedLimit)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, closedTotal, nil
 }
 
 // DismissIssue marks an open (non-terminal) issue dismissed and closes it. The
@@ -1000,6 +1155,7 @@ func scanIssue(row rowScanner) (*Issue, error) {
 		&iss.TmdbID, &tvdbID, &iss.MediaType, &iss.Title, &iss.SeasonNumber, &iss.EpisodeNumber,
 		&iss.Detail, &iss.Occurrences, &iss.Read, &resolution, &resolutionKind,
 		&iss.CreatedAt, &iss.UpdatedAt, &closedAt, &instanceID, &downloadID, &arrQueueID, &authorID, &bookID,
+		&iss.IsPrevention,
 	); err != nil {
 		return nil, err
 	}

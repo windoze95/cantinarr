@@ -157,9 +157,9 @@ class _FakeIssuesService extends IssuesService {
   }
 
   @override
-  Future<List<Issue>> listIssues({String? status}) async {
+  Future<IssuePage> listIssues({String? status}) async {
     if (failIssues) throw StateError('issues unavailable');
-    return issues;
+    return IssuePage(issues: issues, closedTotal: issues.length);
   }
 
   @override
@@ -489,9 +489,15 @@ void main() {
       'title': 'Retry In Flight',
       'read': false,
     });
+    final waiting = Issue.fromJson({
+      ..._issueJson(status: 'waiting'),
+      'id': 8,
+      'title': 'Waiting On Import',
+      'read': false,
+    });
     final service = _FakeIssuesService(
       thread: IssueThread(issue: attention, messages: const []),
-      issues: [attention, observing, recovering],
+      issues: [attention, observing, recovering, waiting],
     );
 
     await _pumpScreen(
@@ -503,6 +509,7 @@ void main() {
     expect(find.text('Needs Review'), findsOneWidget);
     expect(find.text('Quiet Watch'), findsNothing);
     expect(find.text('Retry In Flight'), findsNothing);
+    expect(find.text('Waiting On Import'), findsNothing);
 
     await tester.tap(find.text('Tracking'));
     await tester.pumpAndSettle();
@@ -510,6 +517,7 @@ void main() {
     expect(find.text('Needs Review'), findsNothing);
     expect(find.text('Quiet Watch'), findsOneWidget);
     expect(find.text('Retry In Flight'), findsOneWidget);
+    expect(find.text('Waiting On Import'), findsOneWidget);
     final mutedTitle = tester.widget<Text>(find.text('Quiet Watch'));
     expect(mutedTitle.style?.color, AppTheme.textSecondary);
     expect(mutedTitle.style?.fontWeight, FontWeight.w600);
@@ -523,7 +531,7 @@ void main() {
             widget.constraints?.maxHeight == 8 &&
             (widget.decoration as BoxDecoration?)?.color == Colors.transparent,
       ),
-      findsNWidgets(2),
+      findsNWidgets(3),
     );
   });
 
@@ -547,13 +555,13 @@ void main() {
       const ValueKey('issues-conditional-menu-visibility'),
     );
     expect(toggle, findsOneWidget);
-    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(tester.widget<Switch>(toggle).value, isFalse);
 
     await tester.tap(toggle);
     await tester.pumpAndSettle();
 
     expect(container.read(issuesMenuOnlyWhenActiveProvider), isTrue);
-    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    expect(tester.widget<Switch>(toggle).value, isTrue);
   });
 
   testWidgets('tracking thread is passive while arr recovery is in flight',
@@ -591,6 +599,48 @@ void main() {
     ]) {
       expect(find.textContaining(implementationTerm), findsNothing);
     }
+  });
+
+  testWidgets('waiting thread is passive and keeps its pointer calm',
+      (tester) async {
+    // The book-import stall shape: a server-owned wait that retries and
+    // resolves itself. There is no honest outcome for a human to record, so
+    // the thread must never demand a completion verdict — only say where an
+    // admin could check on the wait if curious.
+    final service = _FakeIssuesService(
+      thread: IssueThread.fromJson({
+        'issue': {
+          ..._issueJson(
+            status: 'waiting',
+            resolution: 'Check the metadata service for queued imports.',
+          ),
+          'source': 'system',
+          'media_type': 'system',
+        },
+        'thread': const [],
+      }),
+    );
+
+    await _pumpScreen(
+      tester,
+      service: service,
+      screen: const IssueThreadScreen(issueId: 5),
+    );
+    await _resumeApp(tester);
+
+    expect(find.text('Waiting and retrying'), findsWidgets);
+    expect(find.textContaining('tracking this quietly'), findsOneWidget);
+    expect(find.text('Where to look'), findsOneWidget);
+    expect(
+      find.text('Check the metadata service for queued imports.'),
+      findsOneWidget,
+    );
+    expect(find.text('Needs a closer look'), findsNothing);
+    expect(find.text('Complete this issue'), findsNothing);
+    expect(find.text('Complete after admin review'), findsNothing);
+    expect(find.text('Mark resolved'), findsNothing);
+    expect(find.text('Close without fix'), findsNothing);
+    expect(find.text('Add a reply…'), findsNothing);
   });
 
   testWidgets('agent fixes keeps cards and warns when resume refresh fails',
@@ -653,7 +703,7 @@ void main() {
       const ValueKey('agentFixes-conditional-menu-visibility'),
     );
     expect(toggle, findsOneWidget);
-    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(tester.widget<Switch>(toggle).value, isFalse);
 
     await tester.tap(toggle);
     await tester.pumpAndSettle();
@@ -662,7 +712,7 @@ void main() {
       container.read(agentFixesMenuOnlyWhenAwaitingReviewProvider),
       isTrue,
     );
-    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    expect(tester.widget<Switch>(toggle).value, isTrue);
   });
 
   testWidgets('live agent activity polls and labels a retained stale snapshot',

@@ -29,6 +29,15 @@ class PendingRequestsScreen extends ConsumerStatefulWidget {
 class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   late final RequestSettingsService _service;
   List<PendingRequestItem>? _pending;
+
+  /// Requests the server is retrying on its own. Kept apart from [_pending]
+  /// everywhere — including the badge below — because they need no decision.
+  List<PendingRequestItem> _waiting = const [];
+
+  /// This load could not read the waiting list, though the server has one. It
+  /// is tracked separately from an empty list so the section can say "couldn't
+  /// check" instead of showing the silence that started all this.
+  bool _waitingBlind = false;
   AdminRequestSettings? _admin;
   bool _isLoading = true;
   String? _error;
@@ -70,6 +79,13 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         lower.contains('metadata profile') ||
         lower.contains('book configuration')) {
       return 'Check this book library’s paths and profiles, then try again.';
+    }
+    // Approving replayed an add that had already failed the same way. The old
+    // "Something went wrong. Try again." read as a transient glitch and invited
+    // another Approve, which cannot work until the library has the record.
+    if (lower.contains('add this book in the library first')) {
+      return 'The library still can’t find this book. Add it in the library '
+          'first, then approve — retrying here won’t help.';
     }
     return 'Something went wrong. Try again.';
   }
@@ -119,14 +135,30 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     try {
       final pending = await _service.listPending();
       final admin = await _service.getAdminSettings();
+      // Best-effort, and deliberately after the two loads this screen exists
+      // for: the informational half must never be able to take down the
+      // actionable half. An admin who cannot approve anything because a list
+      // with no buttons failed is worse off than one who never had the list.
+      var waiting = const <PendingRequestItem>[];
+      var waitingBlind = false;
+      try {
+        waiting = await _service.listWaiting() ?? const [];
+      } catch (_) {
+        waitingBlind = true;
+      }
       if (!mounted) return;
       setState(() {
         _pending = pending;
+        _waiting = waiting;
+        _waitingBlind = waitingBlind;
         _admin = admin;
         _isLoading = false;
       });
       // Keep the drawer + app-icon badges in sync with the queue we just loaded
       // (covers opening the screen and the reload after an approve/deny).
+      // Deliberately pending.length alone: a badge is a claim that someone must
+      // act, and nobody has to act on a wait. Adding them would page an admin
+      // to a screen whose only new row has no buttons.
       ref.read(pendingApprovalsProvider.notifier).setCount(pending.length);
     } catch (e) {
       if (!mounted) return;
@@ -323,6 +355,29 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     }
   }
 
+  /// "Try again" on a row whose author-import wait ended: the server replays
+  /// the add and either completes the request or resumes the automatic watch.
+  Future<void> _wait(PendingRequestItem item) async {
+    try {
+      final message = await _service.wait(item.id);
+      if (!mounted) return;
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message.isNotEmpty
+              ? message
+              : 'The library has this author now — ${item.title} went through.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_friendlyError(e))),
+      );
+    }
+  }
+
   Future<void> _deny(PendingRequestItem item) async {
     final controller = TextEditingController();
     final confirmed = await showDialog<bool>(
@@ -382,6 +437,73 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     }
   }
 
+  /// The screen's body: what needs a person, then what needs nothing.
+  ///
+  /// The two are separate sections rather than one merged list because they are
+  /// different kinds of fact. Merging them would put Approve next to a row the
+  /// server refuses to approve early, and hiding the second — which is what
+  /// this screen did before — left an admin with no way to see a request the
+  /// server had been retrying for hours.
+  List<Widget> _sections() {
+    final pending = _pending ?? const <PendingRequestItem>[];
+    final children = <Widget>[];
+
+    if (pending.isEmpty && _waiting.isEmpty && !_waitingBlind) {
+      return const [
+        SizedBox(height: 120),
+        Center(
+          child: Text(
+            'No pending requests.',
+            style: TextStyle(color: AppTheme.textSecondary),
+          ),
+        ),
+      ];
+    }
+
+    if (pending.isNotEmpty) {
+      children.add(const _SectionHeader(
+        title: 'Needs approval',
+        caption: null,
+      ));
+      for (var i = 0; i < pending.length; i++) {
+        if (i > 0) {
+          children.add(const Divider(color: AppTheme.border, height: 1));
+        }
+        final item = pending[i];
+        children.add(_PendingTile(
+          item: item,
+          onApprove: () => _approve(item),
+          onDeny: () => _deny(item),
+          onWait: () => _wait(item),
+        ));
+      }
+    }
+
+    if (_waiting.isNotEmpty || _waitingBlind) {
+      children.add(const _SectionHeader(
+        title: 'Waiting for library',
+        caption: 'Being retried automatically. Nothing to approve.',
+      ));
+      if (_waitingBlind) {
+        children.add(const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 12),
+          child: Text(
+            'Couldn’t check what the server is retrying. Pull to refresh.',
+            style: TextStyle(color: AppTheme.error, fontSize: 12),
+          ),
+        ));
+      }
+      for (var i = 0; i < _waiting.length; i++) {
+        if (i > 0) {
+          children.add(const Divider(color: AppTheme.border, height: 1));
+        }
+        children.add(_WaitingTile(item: _waiting[i]));
+      }
+    }
+
+    return children;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -415,38 +537,15 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
                       : RefreshIndicator(
                           color: AppTheme.accent,
                           onRefresh: _load,
-                          child: (_pending?.isEmpty ?? true)
-                              ? ListView(
-                                  physics:
-                                      const AlwaysScrollableScrollPhysics(),
-                                  children: const [
-                                    SizedBox(height: 120),
-                                    Center(
-                                      child: Text(
-                                        'No pending requests.',
-                                        style: TextStyle(
-                                            color: AppTheme.textSecondary),
-                                      ),
-                                    ),
-                                  ],
-                                )
-                              : ListView.separated(
-                                  physics:
-                                      const AlwaysScrollableScrollPhysics(),
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 8),
-                                  itemCount: _pending!.length,
-                                  separatorBuilder: (_, __) => const Divider(
-                                      color: AppTheme.border, height: 1),
-                                  itemBuilder: (context, index) {
-                                    final item = _pending![index];
-                                    return _PendingTile(
-                                      item: item,
-                                      onApprove: () => _approve(item),
-                                      onDeny: () => _deny(item),
-                                    );
-                                  },
-                                ),
+                          // No realtime listener, on purpose. The actionable
+                          // half of this screen has never had one, and adding a
+                          // socket for the half nobody must act on would make
+                          // the informational rows the liveliest thing here.
+                          child: ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            children: _sections(),
+                          ),
                         ),
             ),
             const Divider(color: AppTheme.border, height: 1),
@@ -463,15 +562,172 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
   }
 }
 
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final String? caption;
+
+  const _SectionHeader({required this.title, required this.caption});
+
+  @override
+  Widget build(BuildContext context) {
+    final caption = this.caption;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+            ),
+          ),
+          if (caption != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              caption,
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One request the server is handling itself. It carries no Approve or Deny:
+/// the server refuses an early approval, so offering the button would promise
+/// an action that cannot be taken.
+class _WaitingTile extends StatelessWidget {
+  final PendingRequestItem item;
+
+  const _WaitingTile({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final detailRoute = item.detailRoute;
+    final waited = _relativeTime(item.requestedAt);
+    // Absent is not "never tried" — the server restarted and cannot vouch for
+    // the attempt its predecessor made. Say that, rather than leaving a blank
+    // that reads as nothing having happened.
+    final lastTried = item.lastAttemptAt == null
+        ? 'last attempt unknown'
+        : 'last tried ${_relativeTime(item.lastAttemptAt)}';
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      onTap: detailRoute == null ? null : () => context.push(detailRoute),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: SizedBox(
+          width: 45,
+          height: 67,
+          child: CachedImage(
+            url: item.posterPath.isEmpty
+                ? null
+                : AppConfig.tmdbPoster(item.posterPath, width: 185),
+            fit: BoxFit.cover,
+            icon: item.isBook ? Icons.menu_book : Icons.movie,
+          ),
+        ),
+      ),
+      title: Text(
+        item.title,
+        style: const TextStyle(
+          color: AppTheme.textPrimary,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 2),
+          Text(
+            item.requestedByLabel,
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.schedule_rounded,
+                  size: 15, color: AppTheme.requested),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  item.waitDescription ?? 'Waiting for the library',
+                  style: const TextStyle(
+                    color: AppTheme.requested,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _waitingChip(item.mediaLabel),
+              if (item.isBook && item.bookFormat.isNotEmpty)
+                _waitingChip(
+                    item.requestedBookFormat?.label ?? 'Unsupported format'),
+              if (item.isBook && item.instanceName.isNotEmpty)
+                _waitingChip('Library: ${item.instanceName}'),
+              if (waited.isNotEmpty) _waitingChip('Waiting since $waited'),
+              _waitingChip(lastTried),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Widget _waitingChip(String label) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+      color: AppTheme.surfaceVariant,
+      borderRadius: BorderRadius.circular(4),
+      border: Border.all(color: AppTheme.border),
+    ),
+    child: Text(
+      label,
+      style: const TextStyle(
+        color: AppTheme.textSecondary,
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+  );
+}
+
+String _relativeTime(DateTime? date) {
+  if (date == null) return '';
+  final diff = DateTime.now().difference(date.toLocal());
+  if (diff.inMinutes < 1) return 'just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+  if (diff.inHours < 24) return '${diff.inHours}h ago';
+  return '${diff.inDays}d ago';
+}
+
 class _PendingTile extends StatelessWidget {
   final PendingRequestItem item;
   final VoidCallback onApprove;
   final VoidCallback onDeny;
+  final VoidCallback onWait;
 
   const _PendingTile({
     required this.item,
     required this.onApprove,
     required this.onDeny,
+    required this.onWait,
   });
 
   /// What the artwork slot falls back to. A pending book has no cover to
@@ -519,6 +775,43 @@ class _PendingTile extends StatelessWidget {
             item.requestedByLabel,
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
+          // Most rows are a plain yes/no and say nothing here. A row whose add
+          // already failed is not one, and without this it looked identical —
+          // so Approve got pressed, failed, and left no idea what to do next.
+          if (item.addFailure case final failure?) ...[
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline,
+                    size: 15, color: AppTheme.requested),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        failure.reason,
+                        style: const TextStyle(
+                          color: AppTheme.requested,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        failure.action,
+                        style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 12,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,
@@ -537,16 +830,28 @@ class _PendingTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: const Icon(Icons.check_circle_outline),
-            color: AppTheme.available,
-            tooltip: item.isBook && item.requestedBookFormat == null
-                ? 'Unsupported book format'
-                : 'Approve',
-            onPressed: item.isBook && item.requestedBookFormat == null
-                ? null
-                : onApprove,
-          ),
+          // A row here because its author-import wait ended isn't a yes/no:
+          // approving just replays an add the library already refused, so the
+          // honest verb is "try again" — resume the wait, or complete on the
+          // spot if the author has landed since.
+          if (item.isImportWait)
+            IconButton(
+              icon: const Icon(Icons.replay),
+              color: AppTheme.requested,
+              tooltip: 'Try again',
+              onPressed: onWait,
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.check_circle_outline),
+              color: AppTheme.available,
+              tooltip: item.isBook && item.requestedBookFormat == null
+                  ? 'Unsupported book format'
+                  : 'Approve',
+              onPressed: item.isBook && item.requestedBookFormat == null
+                  ? null
+                  : onApprove,
+            ),
           IconButton(
             icon: const Icon(Icons.cancel_outlined),
             color: AppTheme.error,

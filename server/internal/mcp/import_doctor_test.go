@@ -1,6 +1,10 @@
 package mcp
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -140,5 +144,76 @@ func TestRenderHealthSectionAllOK(t *testing.T) {
 	out := renderHealthSection("Sonarr", sonarrChecks)
 	if !strings.Contains(out, "no warnings or errors") {
 		t.Errorf("expected clean health summary, got %q", out)
+	}
+}
+
+// diagnose_queue is the one surface the agent actually follows, so provenance
+// has to reach it there. A stalled release the service picked up on its own,
+// for a movie the library already holds, must render the abandon fix — and the
+// same release, if a search produced it, must not.
+func TestDiagnoseQueueUsesGrabProvenanceForAStuckUpgrade(t *testing.T) {
+	const queueJSON = `{"totalRecords":1,"records":[{"id":42,"movieId":7,"downloadId":"dl-1","protocol":"torrent","title":"Stuck.Release","trackedDownloadStatus":"error","errorMessage":"The download is stalled with no connections","movie":{"id":7,"title":"Scoped Movie","year":2026,"tmdbId":550,"movieFileId":622}}]}`
+
+	cases := []struct {
+		name         string
+		historyJSON  string
+		wantAction   string
+		unwantAction string
+	}{
+		{
+			name:         "picked up on its own, copy already in the library",
+			historyJSON:  `{"totalRecords":1,"records":[{"id":1,"movieId":7,"eventType":"grabbed","downloadId":"dl-1","data":{"releaseSource":"Rss"}}]}`,
+			wantAction:   "blocklist_only",
+			unwantAction: `"action": "blocklist_search"`,
+		},
+		{
+			name:         "a search produced it, so the service decides",
+			historyJSON:  `{"totalRecords":1,"records":[{"id":1,"movieId":7,"eventType":"grabbed","downloadId":"dl-1","data":{"releaseSource":"UserInvokedSearch"}}]}`,
+			wantAction:   "blocklist_search",
+			unwantAction: `"action": "blocklist_only"`,
+		},
+		{
+			name:         "provenance unknown never assumes nobody asked",
+			historyJSON:  `{"totalRecords":0,"records":[]}`,
+			wantAction:   "blocklist_search",
+			unwantAction: `"action": "blocklist_only"`,
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			arrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v3/queue":
+					_, _ = w.Write([]byte(queueJSON))
+				case "/api/v3/history":
+					if r.URL.Query().Get("eventType") != "1" {
+						t.Errorf("provenance lookup asked for eventType=%q, want the grabbed events", r.URL.Query().Get("eventType"))
+					}
+					_, _ = w.Write([]byte(tt.historyJSON))
+				default:
+					t.Errorf("unexpected radarr request %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer arrServer.Close()
+
+			server := newDefaultInstanceToolServer(t, map[string]string{"radarr": arrServer.URL})
+			result, err := server.ExecuteTool(
+				context.Background(),
+				"diagnose_queue",
+				json.RawMessage(`{"media_type":"movie"}`),
+				adminCallContext(),
+			)
+			if err != nil {
+				t.Fatalf("diagnose_queue: %v", err)
+			}
+			if !strings.Contains(result.Text, tt.wantAction) {
+				t.Fatalf("diagnosis missing %q:\n%s", tt.wantAction, result.Text)
+			}
+			if strings.Contains(result.Text, tt.unwantAction) {
+				t.Fatalf("diagnosis rendered %q:\n%s", tt.unwantAction, result.Text)
+			}
+		})
 	}
 }

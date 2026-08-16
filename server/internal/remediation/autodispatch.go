@@ -69,17 +69,26 @@ func (a *AutoDispatcher) enqueueSnapshotJob(job queueSnapshotJob) {
 	// success and latest failure only, then preserve success -> failure when the
 	// failure actually happened later. This keeps the queue small without
 	// dropping newer evidence before the durable DB watermark can inspect it.
+	//
+	// candidates is ordered oldest-arrival first, and ties resolve to the LAST
+	// one (>= rather than >). Observation timestamps are stamped with
+	// time.Now().UTC(), and .UTC() strips Go's monotonic reading, so two reads
+	// inside one wall-clock tick compare equal — on a coarse platform clock that
+	// is entirely reachable. Preferring the earlier arrival there would throw
+	// away the newer snapshot, which is the exact recovery evidence this
+	// coalescer exists to keep. With no clock difference to go on, arrival order
+	// is the only ordering left.
 	candidates := append(append([]queueSnapshotJob(nil), a.pendingSnapshots[key]...), job)
 	var latestSuccess, latestFailure queueSnapshotJob
 	hasSuccess, hasFailure := false, false
 	for _, candidate := range candidates {
 		if candidate.failure == nil {
-			if !hasSuccess || candidate.observedAt.After(latestSuccess.observedAt) {
+			if !hasSuccess || !candidate.observedAt.Before(latestSuccess.observedAt) {
 				latestSuccess, hasSuccess = candidate, true
 			}
 			continue
 		}
-		if !hasFailure || candidate.observedAt.After(latestFailure.observedAt) {
+		if !hasFailure || !candidate.observedAt.Before(latestFailure.observedAt) {
 			latestFailure, hasFailure = candidate, true
 		}
 	}
@@ -196,6 +205,11 @@ func (s *Service) tripCircuitBreaker(streak, threshold int) {
 		return
 	}
 	log.Printf("remediation: circuit breaker tripped after %d consecutive auto-dispatch give-ups (threshold %d); auto-dispatch disabled", streak, threshold)
+	// Autonomy never stands down silently: beside the transient event, the trip
+	// opens ONE durable admin issue that re-enabling auto-dispatch resolves.
+	if err := s.RecordAutoDispatchBreaker(true, streak, threshold); err != nil {
+		log.Printf("remediation: record breaker issue: %v", err)
+	}
 	if s.notifier != nil {
 		// Fixed-template event: only structured fields travel, no model text.
 		s.notifier.NotifyAdmins("remediation_autodispatch_disabled", map[string]interface{}{

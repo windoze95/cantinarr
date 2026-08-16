@@ -1,10 +1,12 @@
 package request
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"sort"
 	"strconv"
@@ -48,6 +50,138 @@ var (
 // could not be added is sitting in the approval queue instead.
 const bookParkedMessage = "This book couldn't be matched in the library, so it was saved as a request for an admin instead of being added automatically."
 
+// bookAuthorImportingMessage explains a park caused by the library's metadata
+// service still importing the book's author (chaptarr.ErrAuthorPendingImport):
+// the add works once that import lands, and the park-maintenance sweep
+// completes it without anyone's intervention, so the requester is promised
+// automatic completion rather than an approval story.
+const bookAuthorImportingMessage = "This book's author is still being added to the library. Your request will finish automatically once that completes."
+
+// bookParkReasonAuthorImport marks a pending request_log row the server itself
+// owns: it parks only on chaptarr.ErrAuthorPendingImport from an auto-approved
+// create, is hidden from the approval queue and badge, and is watched by the
+// park-maintenance sweep. Rows pending because policy requires approval keep a
+// NULL park_reason and are untouchable by the sweep — that NULL is the
+// approval-bypass guard.
+//
+// It doubles as the wire value of BookFormatWait.Reason: the reason a requester
+// is shown and the reason the sweep keys on are the same fact, and splitting
+// them would let the two drift.
+const bookParkReasonAuthorImport = "author_import"
+
+// serverOwnedParkReasons is the single answer to "is this row the server's
+// problem or a person's?", and every surface must use it.
+//
+// It exists because the two halves once disagreed: visibility treated ANY
+// non-NULL park_reason as server-owned, while the sweep only ever retried the
+// exact value 'author_import'. A row carrying any other value was therefore
+// hidden from the approval queue and the badge, advertised in "Waiting for
+// library" as being retried automatically, and never retried or demoted by
+// anything — stranded under a label claiming it was handled. That is the exact
+// failure the waiting list was built to end, so the list must not be able to
+// cause it.
+//
+// A value this build does not recognise is NOT server-owned: unknown falls back
+// to the approval queue, where a person can see and decide it. Same direction
+// the rest of the schema fails in — toward human review, never toward silence.
+var serverOwnedParkReasons = []string{bookParkReasonAuthorImport}
+
+// serverOwnedParkSQL renders serverOwnedParkReasons as an IN-list fragment plus
+// its bind arguments, so adding a reason to the slice updates every query at
+// once instead of leaving one behind.
+func serverOwnedParkSQL() (string, []interface{}) {
+	placeholders := make([]string, len(serverOwnedParkReasons))
+	args := make([]interface{}, len(serverOwnedParkReasons))
+	for i, reason := range serverOwnedParkReasons {
+		placeholders[i] = "?"
+		args[i] = reason
+	}
+	return strings.Join(placeholders, ", "), args
+}
+
+// bookImportAddFailureSQL renders bookImportAddFailures as an IN-list fragment
+// plus its bind arguments, the same shape as serverOwnedParkSQL and for the
+// same reason: adding a value updates every query at once.
+func bookImportAddFailureSQL() (string, []interface{}) {
+	placeholders := make([]string, len(bookImportAddFailures))
+	args := make([]interface{}, len(bookImportAddFailures))
+	for i, reason := range bookImportAddFailures {
+		placeholders[i] = "?"
+		args[i] = reason
+	}
+	return strings.Join(placeholders, ", "), args
+}
+
+// BookWaitReasonAuthorImport exposes that wire value to the other packages that
+// have to render a wait (the MCP tool surface). Same string, one definition.
+const BookWaitReasonAuthorImport = bookParkReasonAuthorImport
+
+// An approval-queue row can be there for two unrelated reasons, and until these
+// existed both rendered identically: a request awaiting someone's decision, and
+// a request whose automatic add already ran and failed. The second is not a
+// policy question — approving it replays the same add — so a row that says
+// nothing invites an admin to press Approve, read "Something went wrong", and
+// have no idea the real next step is in Chaptarr.
+//
+// These are descriptive only. They never move a row out of the approval queue
+// or out of the badge: a human really does have to act on both kinds. See the
+// add_failure_reason column comment for why this is not a park_reason value.
+const (
+	// bookAddFailureMetadataUnresolved: the library could not match the book, so
+	// the add never happened. Approving replays it, which works only once
+	// Chaptarr can find the record — usually because an admin added it.
+	bookAddFailureMetadataUnresolved = "metadata_unresolved"
+	// bookAddFailureImportAbandoned: the watch on a server-owned author-import
+	// park ended on an add failure — the legacy probe (builds without the
+	// pending-import API) hit something beyond the still-importing refusal, or
+	// the add failed even after the author landed. The wait itself never
+	// expires: Chaptarr's own retry loop is unbounded by design, so Cantinarr
+	// deliberately has no give-up clock of its own.
+	bookAddFailureImportAbandoned = "import_abandoned"
+	// bookAddFailureImportFailed: Chaptarr's pending import reached its
+	// declared-terminal Failed state (a typed metadata-server outcome stopped
+	// its automatic retries). Waiting longer cannot succeed on its own;
+	// keep-waiting re-parks AND asks Chaptarr to reopen the import.
+	bookAddFailureImportFailed = "import_failed"
+	// bookAddFailureImportCancelled: the pending import vanished from Chaptarr
+	// without the author landing — someone cancelled it in the arr's own UI.
+	// Keep-waiting replays the add, which re-queues it.
+	bookAddFailureImportCancelled = "import_cancelled"
+)
+
+// bookImportAddFailures are the add_failure_reason values that mean "the wait
+// on Chaptarr's author import ended without the author": the demotion lanes
+// whose approval-queue card offers keep-waiting alongside close.
+var bookImportAddFailures = []string{
+	bookAddFailureImportAbandoned, bookAddFailureImportFailed, bookAddFailureImportCancelled,
+}
+
+func isBookImportAddFailure(reason string) bool {
+	for _, candidate := range bookImportAddFailures {
+		if reason == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	// bookParkRetryInterval paces the maintenance sweep's status polls.
+	// Chaptarr processes its own queued author imports on a similar cadence,
+	// so polling faster reads the same answer twice.
+	bookParkRetryInterval = 5 * time.Minute
+	// bookParkStallAfter is when a still-parked request stops being a routine
+	// wait and becomes a system-health fact worth one auto-resolving issue.
+	//
+	// There is deliberately NO give-up horizon beyond it: Chaptarr's own
+	// retry loop is unbounded (transient "author not ready" never ages into a
+	// synthetic terminal), and Cantinarr mirrors the arr's verdicts instead of
+	// inventing a clock — a park ends when the import lands, when Chaptarr
+	// declares it failed or it is cancelled, or when a human closes the
+	// request, never because a timer fired.
+	bookParkStallAfter = 24 * time.Hour
+)
+
 // Season scope choices a user (or admin) can attach to a TV request.
 const (
 	SeasonScopeAll    = "all"
@@ -88,9 +222,28 @@ type Service struct {
 	// posterLookupOverride substitutes the queue's metadata client in tests.
 	// Production leaves it nil and resolves TMDB through the bridge.
 	posterLookupOverride posterLookup
-	decisionLocks        [64]sync.Mutex
-	bookLocks            [64]sync.Mutex
-	projectionLocks      [32]sync.Mutex
+	// bookImportStallSink surfaces long-stalled author-import parks as an
+	// auto-resolving system issue; nil (tests, minimal wiring) disables it.
+	bookImportStallSink BookImportStallSink
+	decisionLocks       [64]sync.Mutex
+	bookLocks           [64]sync.Mutex
+	projectionLocks     [32]sync.Mutex
+	// startedAt bounds which retry attempts this process can vouch for. A park
+	// created before it was last retried by a predecessor process whose passes
+	// were never written down anywhere.
+	startedAt time.Time
+	// lastParkSweep is when SweepParkedBookRequests last finished a pass, and
+	// with it every parked row's last attempt: the sweep retries all of them on
+	// every pass, so one process-level timestamp is the complete answer. A
+	// per-row column would carry no information this does not, and would rewrite
+	// every parked row every five minutes against a pool that holds exactly one
+	// connection.
+	parkSweepMu   sync.RWMutex
+	lastParkSweep time.Time
+	// parkSweepRunMu serializes sweep passes: the five-minute ticker and the
+	// webhook-driven resume may fire together, and two concurrent passes would
+	// race their probes over the same parked rows.
+	parkSweepRunMu sync.Mutex
 }
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
@@ -101,7 +254,43 @@ func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, no
 		notifier:     notifier,
 		libraryCache: cache.New(),
 		posterCache:  cache.New(),
+		// Truncated to match request_log.requested_at, which SQLite stores at
+		// one-second resolution: a row created in this process must never look
+		// older than the process by a fraction of a second.
+		startedAt: time.Now().UTC().Truncate(time.Second),
 	}
+}
+
+// markParkSweep records that the maintenance sweep just attempted every parked
+// row.
+func (s *Service) markParkSweep(at time.Time) {
+	s.parkSweepMu.Lock()
+	s.lastParkSweep = at.UTC()
+	s.parkSweepMu.Unlock()
+}
+
+// bookFormatWaitFor describes a server-owned park in the terms both a requester
+// and an admin need: why it is waiting, since when, and when the retry loop
+// last actually ran for it.
+//
+// The failed add that created the park is itself an attempt, but only this
+// process can vouch for it. A park older than this process was last retried by
+// a predecessor, minutes before the restart, and reporting its request time
+// would age-stamp that attempt as days old — the "nothing is happening" reading
+// this whole change exists to remove. An absent LastAttemptAt says the attempt
+// is unknown, which is true, and the next pass is at most one interval away.
+func (s *Service) bookFormatWaitFor(reason string, requestedAt time.Time) BookFormatWait {
+	wait := BookFormatWait{Reason: reason, WaitingSince: requestedAt.UTC()}
+	s.parkSweepMu.RLock()
+	last := s.lastParkSweep
+	s.parkSweepMu.RUnlock()
+	if requested := requestedAt.UTC(); !requested.Before(s.startedAt) && requested.After(last) {
+		last = requested
+	}
+	if !last.IsZero() {
+		wait.LastAttemptAt = &last
+	}
+	return wait
 }
 
 func (s *Service) bookLock(key string) *sync.Mutex {
@@ -226,11 +415,39 @@ type CreateRequest struct {
 	Seasons []int `json:"seasons,omitempty"`
 }
 
+// BookFormatWait is the durable reason one book format is not in the library
+// yet even though Cantinarr accepted the request: the server owns it and is
+// retrying it unattended. Without this the only honest word left for that state
+// was "requested", which promises a monitored library record that does not
+// exist — a live retry loop and an app that silently did nothing render
+// identically, and the requester cannot tell which one they are looking at.
+//
+// It rides alongside book_formats rather than becoming a new value inside it:
+// clients that predate this field keep reading the status they always read,
+// where an unrecognized status word would have flipped them into an unknown
+// state and made every older app worse.
+type BookFormatWait struct {
+	// Reason is the machine-readable wait, today only bookParkReasonAuthorImport.
+	// Clients must treat an unfamiliar reason as a wait they cannot name (still
+	// covered, still not requestable) rather than as no wait at all.
+	Reason string `json:"reason"`
+	// WaitingSince is when the request was accepted — the first add attempt is
+	// what parked it, so this is both "asked at" and "waiting since".
+	WaitingSince time.Time `json:"waiting_since"`
+	// LastAttemptAt is when the retry loop last actually ran for this row.
+	// Absent means no attempt this process can vouch for (see
+	// Service.bookFormatWaitFor) — "unknown", never "never tried".
+	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
+}
+
 type CreateResponse struct {
 	Success     bool              `json:"success"`
 	Status      string            `json:"status"`
 	Title       string            `json:"title"`
 	BookFormats map[string]string `json:"book_formats,omitempty"`
+	// BookFormatWaits explains, per format, a book_formats entry that reads
+	// "requested" only because the server is finishing it unattended.
+	BookFormatWaits map[string]BookFormatWait `json:"book_format_waits,omitempty"`
 	// CanonicalForeignID is the Chaptarr record's own foreignBookId when it
 	// differs from the id the request was made with, so clients can re-address
 	// the book by the id the library will report from now on.
@@ -255,6 +472,11 @@ type StatusResponse struct {
 	// after one is requested. Only populated for book status; nil (omitted) for
 	// movies/TV. A stored "both" request covers both formats.
 	BookFormats map[string]string `json:"book_formats,omitempty"`
+	// BookFormatWaits explains, per format, a book_formats entry that reads
+	// "requested" only because the server is finishing it unattended. It is
+	// populated strictly after the live overlay, so a format the library has
+	// actually taken carries no wait.
+	BookFormatWaits map[string]BookFormatWait `json:"book_format_waits,omitempty"`
 	// CanonicalForeignID is set when a logged book request resolved its live
 	// state through the stored Chaptarr record id and that record now reports a
 	// different foreignBookId than the one queried: the id the library files
@@ -283,6 +505,11 @@ type RequestLog struct {
 	StatusKnown bool      `json:"status_known"`
 	DenyReason  string    `json:"deny_reason,omitempty"`
 	RequestedAt time.Time `json:"requested_at"`
+	// BookFormatWait explains a history row reading "requested" only because the
+	// server owns it and is retrying it. History rows are already one format
+	// each, so this is a single wait rather than the per-format map the detail
+	// status endpoint returns.
+	BookFormatWait *BookFormatWait `json:"book_format_wait,omitempty"`
 }
 
 // PendingRequest is one row of the admin approval queue.
@@ -307,6 +534,17 @@ type PendingRequest struct {
 	SeasonScope      string    `json:"season_scope"`
 	QualityProfileID int       `json:"quality_profile_id"`
 	RequestedAt      time.Time `json:"requested_at"`
+	// WaitReason and LastAttemptAt are populated only for rows served by
+	// ListWaiting — the requests the server owns and retries itself. They are
+	// absent from the approval queue, whose rows are by definition waiting on a
+	// person rather than on a library. RequestedAt doubles as "waiting since".
+	WaitReason    string     `json:"wait_reason,omitempty"`
+	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
+	// AddFailureReason marks an approval-queue row whose automatic add already
+	// ran and failed, so the queue can distinguish "decide this" from "this
+	// already broke and needs you to fix something first". Empty on an ordinary
+	// policy hold.
+	AddFailureReason string `json:"add_failure_reason,omitempty"`
 }
 
 // QualityProfile is an arr quality profile offered for selection.
@@ -383,15 +621,17 @@ type effective struct {
 
 // resolvedRequest is a request whose options have all been resolved server-side.
 type resolvedRequest struct {
-	userID           int64
-	actorID          int64 // optional execution authority; history remains userID-owned
-	tmdbID           int
-	tvdbID           int
-	foreignID        string // Chaptarr foreignBookId (book requests)
-	bookFormat       string
-	searchTerm       string // the requester's own search text (book requests)
-	instanceID       string
-	bookFormats      map[string]string
+	userID      int64
+	actorID     int64 // optional execution authority; history remains userID-owned
+	tmdbID      int
+	tvdbID      int
+	foreignID   string // Chaptarr foreignBookId (book requests)
+	bookFormat  string
+	searchTerm  string // the requester's own search text (book requests)
+	parkReason  string // why a pending row is server-owned (see bookParkReasonAuthorImport)
+	addFailure  string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
+	instanceID  string
+	bookFormats map[string]string
 	// bookRecordIDs maps each fulfilled concrete format to the Chaptarr record
 	// id that satisfies it (created, or monitored in place). The numeric id is
 	// the arr-native identity that survives foreignBookId re-keying, so it is
@@ -401,10 +641,10 @@ type resolvedRequest struct {
 	// canonicalForeignID is the created/live record's own foreignBookId when
 	// Chaptarr filed it under a different id than the request used.
 	canonicalForeignID string
-	mediaType        string
-	title            string
-	seasonScope      string
-	qualityProfileID int
+	mediaType          string
+	title              string
+	seasonScope        string
+	qualityProfileID   int
 	// seasonNumbers, when non-empty, is an explicit set of seasons to monitor
 	// (overrides seasonScope). It round-trips through the approval flow by
 	// being JSON-encoded into the season_scope column.
@@ -729,20 +969,61 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 
 	status, title, err := s.addToArr(resolved)
 	if err != nil {
-		// A book whose metadata record can't be re-found is the one add failure
-		// that must not end with the request on the floor: the requester wanted
-		// this title, nothing about it is invalid, and an admin who adds the
-		// author in Chaptarr can then approve the parked row and have it work.
-		// Every other failure (no instance, no root folder, ambiguous profiles)
-		// is a configuration answer the requester needs to see, not queue.
-		if resolved.mediaType == "book" && errors.Is(err, ErrBookMetadataUnresolved) {
-			// The lock is already held for books, so park through the unlocked path.
-			parked, parkErr := s.createPendingUnlocked(resolved)
-			if parkErr != nil {
-				return nil, err
+		// A book whose add cannot complete yet must not end with the request on
+		// the floor: the requester wanted this title and nothing about it is
+		// invalid. Two such failures park into the approval queue — a metadata
+		// record that can't be re-found (an admin who adds the author in Chaptarr
+		// can then approve the parked row and have it work), and an author the
+		// library's metadata service is still importing (the import completes on
+		// its own; approving afterwards replays the add). Every other failure (no
+		// instance, no root folder, ambiguous profiles) is a configuration answer
+		// the requester needs to see, not queue.
+		if resolved.mediaType == "book" {
+			parkMessage := ""
+			switch {
+			case errors.Is(err, ErrBookMetadataUnresolved):
+				parkMessage = bookParkedMessage
+				// This row goes to a human (park_reason stays NULL), but it is
+				// not a policy question: the add already ran and failed. Record
+				// that so the queue can say so instead of showing it as an
+				// ordinary decision.
+				resolved.addFailure = bookAddFailureMetadataUnresolved
+			case errors.Is(err, chaptarr.ErrAuthorPendingImport):
+				parkMessage = bookAuthorImportingMessage
+				// Only this create path can park for author_import, and it is by
+				// definition auto-approved (approval-required creates never reach
+				// the add). The marker makes the row server-owned: hidden from
+				// the approval surfaces and retried by the maintenance sweep.
+				resolved.parkReason = bookParkReasonAuthorImport
 			}
-			parked.Message = bookParkedMessage
-			return parked, nil
+			if parkMessage != "" {
+				// The lock is already held for books, so park through the unlocked path.
+				parked, parkErr := s.createPendingUnlocked(resolved)
+				if parkErr != nil {
+					return nil, err
+				}
+				parked.Message = parkMessage
+				if resolved.parkReason == bookParkReasonAuthorImport {
+					// Neither stored word is the truth here. Pending narrates an
+					// approval that is not happening; requested promises a
+					// monitored library record that does not exist yet. The status
+					// stays requested for clients that know no other word, and the
+					// wait alongside it carries what requested leaves out — which
+					// is the only reason a requester can tell an active retry loop
+					// from an app that quietly dropped their request.
+					wait := s.bookFormatWaitFor(resolved.parkReason, time.Now())
+					waits := map[string]BookFormatWait{}
+					for format, status := range parked.BookFormats {
+						if status == StatusPending {
+							parked.BookFormats[format] = StatusRequested
+							waits[format] = wait
+						}
+					}
+					parked.BookFormatWaits = waits
+					parked.Status = collapseBookStatuses(parked.BookFormats, StatusRequested)
+				}
+				return parked, nil
+			}
 		}
 		return nil, err
 	}
@@ -830,9 +1111,9 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 		} else {
 			insertedBookFormat = pendingFormat
 			res, err = tx.Exec(
-				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, search_term)
-				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?)`,
-				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending, sqlNullStr(r.searchTerm),
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, search_term, park_reason, add_failure_reason)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?, ?, ?)`,
+				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending, sqlNullStr(r.searchTerm), sqlNullStr(r.parkReason), sqlNullStr(r.addFailure),
 			)
 			if err == nil {
 				requestID, _ := res.LastInsertId()
@@ -891,7 +1172,9 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 	}
 
 	// Only notify admins when a new row was actually queued (not a duplicate).
-	if n, _ := res.RowsAffected(); n > 0 && s.notifier != nil {
+	// A server-owned park is not an admin work item — nothing pages until the
+	// sweep gives up and demotes it to a real approval row.
+	if n, _ := res.RowsAffected(); n > 0 && s.notifier != nil && r.parkReason == "" {
 		data := map[string]interface{}{
 			"tmdb_id":    r.tmdbID,
 			"media_type": r.mediaType,
@@ -2219,7 +2502,7 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 	if err != nil {
 		return nil, err
 	}
-	query := "SELECT COALESCE(book_format, 'both'), status, COALESCE(book_record_id, 0) FROM request_log WHERE (user_id = ? OR status = 'pending') AND foreign_id = ? AND media_type = 'book'"
+	query := "SELECT COALESCE(book_format, 'both'), status, COALESCE(book_record_id, 0), COALESCE(park_reason, ''), requested_at FROM request_log WHERE (user_id = ? OR status = 'pending') AND foreign_id = ? AND media_type = 'book'"
 	args := []interface{}{userID, foreignID}
 	if instanceID != "" {
 		if requestedInstanceID != "" {
@@ -2244,21 +2527,37 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 
 	formats := map[string]string{}
 	recordIDs := map[string]int{}
+	// Formats whose governing (latest) row is a server-owned author-import
+	// park. Its stored status stays pending so the approval machinery keeps
+	// working, but requesters read it as requested: the system finishes the
+	// request unattended, so no approval story is narrated to anyone.
+	parked := map[string]bool{}
+	// Each parked format's own requested_at: the wait a requester reads must be
+	// dated from the row that is actually waiting, not from "now".
+	parkedSince := map[string]time.Time{}
 	collapsed := ""
+	collapsedParked := false
 	for rows.Next() {
-		var format, status string
+		var format, status, parkReason string
 		var recordID int
-		if err := rows.Scan(&format, &status, &recordID); err != nil {
+		var requestedAt time.Time
+		if err := rows.Scan(&format, &status, &recordID, &parkReason, &requestedAt); err != nil {
 			return nil, fmt.Errorf("scan book request status: %w", err)
 		}
+		isImportPark := status == StatusPending && parkReason == bookParkReasonAuthorImport
 		if collapsed == "" {
 			collapsed = status // first row is the latest overall
+			collapsedParked = isImportPark
 		}
 		// Rows are newest-first, so only record a format's status the first
 		// (latest) time it appears. A "both" row fills both concrete formats.
 		for _, f := range expandBookFormat(format) {
 			if _, ok := formats[f]; !ok {
 				formats[f] = status
+				parked[f] = isImportPark
+				if isImportPark {
+					parkedSince[f] = requestedAt
+				}
 			}
 		}
 		// Likewise keep the newest persisted Chaptarr record id per concrete
@@ -2317,10 +2616,27 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 		}
 	}
 
+	// The park mapping runs after the live overlay on purpose: live truth (a
+	// completed add, a file) already outranked the stored pending above, so
+	// only a still-parked pending flips to the requester-facing "requested".
+	// The wait context is built in the same pass and therefore inherits that
+	// ordering: the moment the library really has the record, the explanation
+	// for its absence disappears with it.
+	waits := map[string]BookFormatWait{}
+	for format, status := range formats {
+		if status == StatusPending && parked[format] {
+			formats[format] = StatusRequested
+			waits[format] = s.bookFormatWaitFor(bookParkReasonAuthorImport, parkedSince[format])
+		}
+	}
+	if collapsed == StatusPending && collapsedParked {
+		collapsed = StatusRequested
+	}
+
 	if len(formats) == 0 {
 		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
-	resp := &StatusResponse{BookFormats: formats, CanonicalForeignID: canonicalForeignID}
+	resp := &StatusResponse{BookFormats: formats, BookFormatWaits: waits, CanonicalForeignID: canonicalForeignID}
 	resp.Status = collapseBookStatuses(formats, collapsed)
 	return resp, nil
 }
@@ -2777,6 +3093,7 @@ type historyRow struct {
 	foreignID  string
 	bookFormat string
 	instanceID string
+	parkReason string
 }
 
 // GetRequests returns the user's request history with each row's status
@@ -2786,7 +3103,7 @@ type historyRow struct {
 // admin deleted directly in the arr, would otherwise read wrong forever).
 func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	rows, err := s.db.Query(
-		`SELECT tmdb_id, tvdb_id, foreign_id, book_format, instance_id, media_type, title, status, deny_reason, requested_at
+		`SELECT tmdb_id, tvdb_id, foreign_id, book_format, instance_id, media_type, title, status, deny_reason, park_reason, requested_at
 		 FROM (
 		   SELECT r.tmdb_id,
 		          COALESCE(r.tvdb_id, 0) AS tvdb_id,
@@ -2795,6 +3112,7 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 		          COALESCE(r.instance_id, '') AS instance_id,
 		          r.media_type, r.title, r.status,
 		          COALESCE(r.deny_reason, '') AS deny_reason,
+		          COALESCE(r.park_reason, '') AS park_reason,
 		          r.requested_at
 		   FROM request_log r
 		   WHERE r.user_id = ?
@@ -2806,6 +3124,7 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 		          COALESCE(r.instance_id, ''),
 		          r.media_type, r.title, r.status,
 		          COALESCE(r.deny_reason, ''),
+		          COALESCE(r.park_reason, ''),
 		          r.requested_at
 		   FROM request_log r
 		   JOIN book_request_waiters bw ON bw.request_id = r.id
@@ -2825,7 +3144,7 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	var history []historyRow
 	for rows.Next() {
 		var r historyRow
-		if err := rows.Scan(&r.log.TmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.log.MediaType, &r.log.Title, &r.log.Status, &r.log.DenyReason, &r.log.RequestedAt); err != nil {
+		if err := rows.Scan(&r.log.TmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.log.MediaType, &r.log.Title, &r.log.Status, &r.log.DenyReason, &r.parkReason, &r.log.RequestedAt); err != nil {
 			return nil, fmt.Errorf("scan request: %w", err)
 		}
 		r.log.StatusKnown = true
@@ -2842,6 +3161,16 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 
 	requests := make([]RequestLog, len(history))
 	for i := range history {
+		// After the overlay (whose "pending shows as-is" protection carried the
+		// stored status through), a server-owned author-import park reads as
+		// requested — same mapping as the detail status endpoint, and it carries
+		// the same wait, so a requester scrolling their history is told why
+		// rather than being shown a request that looks finished.
+		if history[i].log.Status == StatusPending && history[i].parkReason == bookParkReasonAuthorImport {
+			history[i].log.Status = StatusRequested
+			wait := s.bookFormatWaitFor(bookParkReasonAuthorImport, history[i].log.RequestedAt)
+			history[i].log.BookFormatWait = &wait
+		}
 		requests[i] = history[i].log
 	}
 	return requests, nil
@@ -3016,8 +3345,16 @@ func bookFormatDownloaded(t LibraryTitle, format string) bool {
 // the badge on the admin approval surface (in-app drawer entry + home-screen
 // app icon).
 func (s *Service) PendingCount() (int, error) {
+	// Server-owned parks are excluded like scanPending: the badge counts
+	// decisions a human can make, and a park the sweep is retrying offers none.
+	// A park_reason this build does not recognise is counted — nothing is
+	// retrying it, so a person is the only one who can.
+	placeholders, args := serverOwnedParkSQL()
 	var n int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE status = ?", StatusPending).Scan(&n); err != nil {
+	if err := s.db.QueryRow(
+		"SELECT COUNT(*) FROM request_log WHERE status = ? AND (park_reason IS NULL OR park_reason NOT IN ("+placeholders+"))",
+		append([]interface{}{StatusPending}, args...)...,
+	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count pending requests: %w", err)
 	}
 	return n, nil
@@ -3088,8 +3425,10 @@ func concreteBookFormat(formats map[string]string) string {
 	return ""
 }
 
+// ListPending returns the admin approval queue: the pending rows that are
+// waiting on a person's decision, and only those.
 func (s *Service) ListPending() ([]PendingRequest, error) {
-	out, err := s.scanPending()
+	out, err := s.scanPending(false)
 	if err != nil {
 		return nil, err
 	}
@@ -3099,17 +3438,47 @@ func (s *Service) ListPending() ([]PendingRequest, error) {
 	return out, nil
 }
 
-func (s *Service) scanPending() ([]PendingRequest, error) {
+// ListWaiting returns the mirror image of the approval queue: the pending rows
+// the server owns and retries itself. They are deliberately kept out of
+// ListPending — that list is an actionable queue, and a client old or new would
+// offer Approve on a row whose approval the server refuses. They are equally
+// deliberately not hidden: before this list existed, a request Cantinarr was
+// actively retrying was indistinguishable from one it had silently dropped,
+// with the reason visible only in the database for the first 24 hours.
+//
+// Nothing here is actionable, so nothing here is counted: PendingCount, the
+// badge, and the request_pending push all continue to skip these rows until the
+// sweep gives up and demotes one into a real approval.
+func (s *Service) ListWaiting() ([]PendingRequest, error) {
+	out, err := s.scanPending(true)
+	if err != nil {
+		return nil, err
+	}
+	s.attachPosterPaths(out)
+	return out, nil
+}
+
+// scanPending reads one side of the pending set. parked selects the rows the
+// sweep is actually retrying (see serverOwnedParkReasons) instead of the
+// human-decision rows. The two filters are exact complements over the same
+// list, so every pending row lands in exactly one of them — a row can never be
+// hidden from both, which is how one would be stranded.
+func (s *Service) scanPending(parked bool) ([]PendingRequest, error) {
+	placeholders, parkArgs := serverOwnedParkSQL()
+	parkFilter := "(r.park_reason IS NULL OR r.park_reason NOT IN (" + placeholders + "))"
+	if parked {
+		parkFilter = "r.park_reason IN (" + placeholders + ")"
+	}
 	rows, err := s.db.Query(
 		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), COALESCE(r.foreign_id, ''), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.instance_id, ''),
 		        CASE WHEN r.media_type = 'book' THEN COALESCE(si.name, '') ELSE '' END,
 		        CASE WHEN r.media_type = 'book' THEN 1 + (SELECT COUNT(*) FROM book_request_waiters bw WHERE bw.request_id = r.id AND bw.user_id <> r.user_id) ELSE 1 END,
-		        COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at
+		        COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at, COALESCE(r.park_reason, ''), COALESCE(r.add_failure_reason, '')
 		 FROM request_log r
 		 LEFT JOIN users u ON u.id = r.user_id
 		 LEFT JOIN service_instances si ON si.id = r.instance_id
-		 WHERE r.status = ? ORDER BY r.requested_at ASC`,
-		StatusPending,
+		 WHERE r.status = ? AND `+parkFilter+` ORDER BY r.requested_at ASC`,
+		append([]interface{}{StatusPending}, parkArgs...)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query pending requests: %w", err)
@@ -3119,10 +3488,16 @@ func (s *Service) scanPending() ([]PendingRequest, error) {
 	var out []PendingRequest
 	for rows.Next() {
 		var p PendingRequest
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.ForeignID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
+		var parkReason string
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.ForeignID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt, &parkReason, &p.AddFailureReason); err != nil {
 			return nil, fmt.Errorf("scan pending request: %w", err)
 		}
 		p.BookFormat = normalizeBookFormat(p.BookFormat)
+		if parkReason != "" {
+			wait := s.bookFormatWaitFor(parkReason, p.RequestedAt)
+			p.WaitReason = wait.Reason
+			p.LastAttemptAt = wait.LastAttemptAt
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -3152,9 +3527,229 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	return &r, status, nil
 }
 
+// isAuthorImportParked reports whether the row is still a server-owned
+// author-import park — i.e. the maintenance sweep is still retrying it.
+func (s *Service) isAuthorImportParked(requestID int64) bool {
+	var reason sql.NullString
+	if err := s.db.QueryRow(
+		"SELECT park_reason FROM request_log WHERE id = ?", requestID,
+	).Scan(&reason); err != nil {
+		return false
+	}
+	return reason.Valid && reason.String == bookParkReasonAuthorImport
+}
+
 // ApproveRequest fulfills a pending request (optionally with admin overrides)
 // and marks the row approved. The arr add reuses the normal add path.
 func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOverride) (*CreateResponse, error) {
+	resp, err := s.fulfillPendingRequest(adminID, requestID, override, false)
+	if err != nil && errors.Is(err, chaptarr.ErrAuthorPendingImport) {
+		// The row is untouched either way, but who watches next depends on
+		// whether the sweep still owns it. While parked, approving early is a
+		// non-event and the plan is honest. A demoted row is no longer
+		// watched, so promising automatic completion there would narrate a
+		// watch that is not running — name the real verbs instead.
+		if s.isAuthorImportParked(requestID) {
+			return nil, fmt.Errorf("%w — the request stays queued and completes automatically once the import lands", chaptarr.ErrAuthorPendingImport)
+		}
+		return nil, fmt.Errorf("%w — the wait on this request ended; choose Try again to resume watching it, or close the request", chaptarr.ErrAuthorPendingImport)
+	}
+	if err != nil && errors.Is(err, ErrBookMetadataUnresolved) {
+		// Approving replayed an add that had already failed the same way, and
+		// retrying changes nothing until the library can find the record. The
+		// bare error read as a transient glitch and invited another Approve;
+		// name the one action that actually moves this.
+		return nil, fmt.Errorf("%w — add this book in the library first, then approve", ErrBookMetadataUnresolved)
+	}
+	return resp, err
+}
+
+// bookWaitExtendedMessage is the admin-facing confirmation that a demoted
+// author-import row went back to being watched.
+const bookWaitExtendedMessage = "Waiting resumed: the library is importing this author again, and the request completes automatically when it lands."
+
+// ExtendBookWait is the admin's "try again" on a demoted author-import row —
+// the opposite verb to closing it. It replays the add once (a human asking to
+// keep trying is the one legitimate reason to touch Chaptarr's queue): the
+// replay either completes the request on the spot because the author landed
+// since demotion, re-queues an import that was cancelled, or merges into the
+// live one — and on the still-importing refusal it re-parks the row so the
+// sweep watches it again. A wait that ended in Chaptarr's declared-terminal
+// Failed state also asks the arr to reopen the import (best-effort): Chaptarr
+// never resumes a declared terminal on its own.
+func (s *Service) ExtendBookWait(adminID, requestID int64) (*CreateResponse, error) {
+	var mediaType, status string
+	var parkReason, addFailure sql.NullString
+	err := s.db.QueryRow(
+		"SELECT media_type, status, park_reason, COALESCE(add_failure_reason, '') FROM request_log WHERE id = ?",
+		requestID,
+	).Scan(&mediaType, &status, &parkReason, &addFailure)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("request not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load request for wait extension: %w", err)
+	}
+	if mediaType != "book" || status != StatusPending {
+		return nil, fmt.Errorf("only a pending book request can keep waiting")
+	}
+	if parkReason.Valid {
+		return nil, fmt.Errorf("this request is already being watched")
+	}
+	if !isBookImportAddFailure(addFailure.String) {
+		return nil, fmt.Errorf("this request is not waiting on an author import")
+	}
+	importWasFailed := addFailure.String == bookAddFailureImportFailed
+
+	resp, err := s.fulfillPendingRequest(adminID, requestID, nil, false)
+	if err == nil {
+		// The author landed since the demotion; nothing left to wait for.
+		return resp, nil
+	}
+	if !errors.Is(err, chaptarr.ErrAuthorPendingImport) {
+		// A different failure is a real answer the admin must see; the row
+		// stays in the queue with it.
+		return nil, err
+	}
+	res, err := s.db.Exec(
+		`UPDATE request_log SET park_reason = ?, add_failure_reason = NULL
+		 WHERE id = ? AND status = ? AND park_reason IS NULL`,
+		bookParkReasonAuthorImport, requestID, StatusPending,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("re-park book request: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("request was decided concurrently")
+	}
+	if importWasFailed {
+		s.reopenFailedAuthorImport(requestID)
+	}
+	return &CreateResponse{Success: true, Status: StatusRequested, Message: bookWaitExtendedMessage}, nil
+}
+
+// reopenFailedAuthorImport best-effort asks Chaptarr to retry a pending import
+// it had declared terminally failed. The re-park stands either way: the sweep
+// re-demotes within a pass if the import really is dead, so a failed reopen
+// costs one visible round-trip through the queue rather than a silent strand.
+func (s *Service) reopenFailedAuthorImport(requestID int64) {
+	r, _, err := s.loadRequest(requestID)
+	if err != nil {
+		log.Printf("request: reopen author import for request %d: %v", requestID, err)
+		return
+	}
+	client, _, err := s.resolveChaptarr(r.userID, r.instanceID)
+	if err != nil || client == nil {
+		log.Printf("request: reopen author import for request %d: resolve chaptarr: %v", requestID, err)
+		return
+	}
+	foreignAuthorID, ok := s.lookupParkedAuthorID(client, r.foreignID)
+	if !ok || foreignAuthorID == "" {
+		return
+	}
+	importStatus, err := client.GetAuthorImportStatus(foreignAuthorID)
+	if err != nil || !importStatus.Pending {
+		return
+	}
+	if err := client.RetryPendingAuthorImport(importStatus.PendingID); err != nil {
+		log.Printf("request: reopen author import for request %d: %v", requestID, err)
+	}
+}
+
+// cancelAuthorImportForDeniedRequest best-effort removes Chaptarr's queued
+// author import behind a denied book request. The queued row carries the whole
+// add intent — the monitored book and the search flag — so leaving it armed
+// would deliver the content whenever the import finally lands, contradicting
+// the denial. One guard: another request still waiting on the same author
+// keeps the import alive, because cancelling it would strand that wait.
+// Failures only log — the denial stands either way, and a book that arrives
+// despite a failed cancel is visible (library record, new_book alert), never
+// silent.
+func (s *Service) cancelAuthorImportForDeniedRequest(requestID int64, r *resolvedRequest) {
+	client, _, err := s.resolveChaptarr(r.userID, r.instanceID)
+	if err != nil || client == nil {
+		log.Printf("request: cancel author import for denied request %d: resolve chaptarr: %v", requestID, err)
+		return
+	}
+	foreignAuthorID, ok := s.lookupParkedAuthorID(client, r.foreignID)
+	if !ok || foreignAuthorID == "" {
+		return
+	}
+	importStatus, err := client.GetAuthorImportStatus(foreignAuthorID)
+	if err != nil || !importStatus.Pending {
+		return
+	}
+	if s.otherRequestWaitsOnAuthor(client, requestID, r.instanceID, foreignAuthorID) {
+		log.Printf("request: denied request %d leaves the author import queued; another request still waits on author %s", requestID, foreignAuthorID)
+		return
+	}
+	if err := client.CancelPendingAuthorImport(importStatus.PendingID); err != nil {
+		log.Printf("request: cancel author import for denied request %d: %v", requestID, err)
+		return
+	}
+	log.Printf("request: denied request %d cancelled its queued author import (%s)", requestID, foreignAuthorID)
+}
+
+// otherRequestWaitsOnAuthor reports whether another open wait on the same
+// instance resolves to the same author: a parked row, or a demoted one still
+// holding an import add-failure. Each candidate's author comes from a live
+// id-fetch, because request_log deliberately stores no author id. Every
+// blindness answers true — a read failure must never cancel someone else's
+// wait.
+func (s *Service) otherRequestWaitsOnAuthor(client *chaptarr.Client, requestID int64, instanceID, foreignAuthorID string) bool {
+	parkSQL, parkArgs := serverOwnedParkSQL()
+	failSQL, failArgs := bookImportAddFailureSQL()
+	args := append([]interface{}{StatusPending, instanceID, requestID}, append(parkArgs, failArgs...)...)
+	rows, err := s.db.Query(
+		`SELECT DISTINCT COALESCE(foreign_id, '') FROM request_log
+		 WHERE media_type = 'book' AND status = ? AND COALESCE(instance_id, '') = ? AND id != ?
+		   AND (park_reason IN (`+parkSQL+`) OR add_failure_reason IN (`+failSQL+`))`,
+		args...,
+	)
+	if err != nil {
+		log.Printf("request: list sibling author waits: %v", err)
+		return true
+	}
+	var foreignIDs []string
+	for rows.Next() {
+		var fid string
+		if err := rows.Scan(&fid); err != nil {
+			_ = rows.Close()
+			log.Printf("request: scan sibling author wait: %v", err)
+			return true
+		}
+		if fid != "" {
+			foreignIDs = append(foreignIDs, fid)
+		}
+	}
+	closeErr := rows.Err()
+	_ = rows.Close()
+	if closeErr != nil {
+		log.Printf("request: read sibling author waits: %v", closeErr)
+		return true
+	}
+	for _, fid := range foreignIDs {
+		siblingAuthor, ok := s.lookupParkedAuthorID(client, fid)
+		if !ok {
+			return true
+		}
+		if siblingAuthor == foreignAuthorID {
+			return true
+		}
+	}
+	return false
+}
+
+// fulfillPendingRequest executes a pending request_log row and materializes the
+// outcome for every subscriber. It is the shared core of an admin approval and
+// of the park-maintenance sweep's system completion. A system completion
+// (actorID 0, system true) executes under the requester's own authority — the
+// park only ever came from their auto-approved create — records no approver,
+// and skips the owner's decision notification: the owner was promised
+// automatic completion and their status already reads requested, so there is
+// no decision to announce to them. Non-owner waiters are still notified; their
+// visible state changes.
+func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *DecisionOverride, system bool) (*CreateResponse, error) {
 	decisionLock := s.decisionLock(requestID)
 	decisionLock.Lock()
 	defer decisionLock.Unlock()
@@ -3180,8 +3775,13 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 		defer bookLock.Unlock()
 		// The request's instance was authorized and pinned at submission. Execute
 		// approval under the approving admin so a later requester-grant change
-		// cannot reroute or strand it; history remains owned by r.userID.
-		r.actorID = adminID
+		// cannot reroute or strand it; history remains owned by r.userID. A
+		// system completion executes under the requester themselves instead.
+		if system {
+			r.actorID = r.userID
+		} else {
+			r.actorID = actorID
+		}
 	}
 	if override != nil {
 		// An admin choosing a coarse scope replaces any explicit season list the
@@ -3219,9 +3819,14 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 		return nil, fmt.Errorf("begin request approval: %w", err)
 	}
 	defer tx.Rollback()
+	// A system completion has no approver; NULL preserves "nobody decided this"
+	// for history, and the fulfilled row sheds its park marker either way.
+	approvedBy := sql.NullInt64{Int64: actorID, Valid: actorID != 0}
 	res, err := tx.Exec(
-		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, book_format = ?, book_record_id = ?, instance_id = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
-		primaryStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(primaryFormat), sqlNullInt(r.bookRecordIDs[primaryFormat]), sqlNullStr(r.instanceID), sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), adminID, requestID, StatusPending,
+		// The add just succeeded, so whatever failed before is history: the row
+		// sheds both its park marker and its failure note.
+		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, book_format = ?, book_record_id = ?, instance_id = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, park_reason = NULL, add_failure_reason = NULL, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
+		primaryStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(primaryFormat), sqlNullInt(r.bookRecordIDs[primaryFormat]), sqlNullStr(r.instanceID), sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), approvedBy, requestID, StatusPending,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update request: %w", err)
@@ -3239,7 +3844,7 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 			_, err = tx.Exec(
 				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, book_record_id, instance_id, media_type, title, status, approved_by, decided_at)
 				 VALUES (?, 0, ?, ?, ?, ?, 'book', ?, ?, ?, CURRENT_TIMESTAMP)`,
-				r.userID, r.foreignID, format, sqlNullInt(r.bookRecordIDs[format]), sqlNullStr(r.instanceID), title, formatStatus, adminID,
+				r.userID, r.foreignID, format, sqlNullInt(r.bookRecordIDs[format]), sqlNullStr(r.instanceID), title, formatStatus, approvedBy,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("store approved book format: %w", err)
@@ -3263,7 +3868,7 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 				if _, insertErr := tx.Exec(
 					`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, book_record_id, instance_id, media_type, title, status, approved_by, decided_at)
 					 VALUES (?, 0, ?, ?, ?, ?, 'book', ?, ?, ?, CURRENT_TIMESTAMP)`,
-					subscriber.UserID, r.foreignID, format, sqlNullInt(r.bookRecordIDs[format]), sqlNullStr(r.instanceID), title, formatStatus, adminID,
+					subscriber.UserID, r.foreignID, format, sqlNullInt(r.bookRecordIDs[format]), sqlNullStr(r.instanceID), title, formatStatus, approvedBy,
 				); insertErr != nil {
 					return nil, fmt.Errorf("store subscriber book format: %w", insertErr)
 				}
@@ -3325,6 +3930,20 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 	}
 	if s.notifier != nil && r.mediaType == "book" {
 		for _, subscriber := range audience {
+			// A system completion stays invisible to the owner on purpose, but
+			// NOT for the reason it used to be: "their status already read
+			// requested, so nothing changed" stopped being true the moment the
+			// park grew a durable BookFormatWait, because the owner now watches
+			// their request go from waiting to requested. The reason that
+			// survives is narrower and still holds — nobody decided anything, so
+			// a "decision" push would invent an approval that never happened, and
+			// the outcome the owner actually asked about still reaches them when
+			// the file lands. Their in-app state converges on its own: the format
+			// panel re-reads while a wait is showing, and the wait disappears
+			// with the park.
+			if system && subscriber.UserID == r.userID {
+				continue
+			}
 			succeeded := map[string]string{}
 			for _, format := range expandBookFormat(subscriber.BookFormat) {
 				if formatStatus, ok := r.bookFormats[format]; ok && formatStatus != StatusUnavailable {
@@ -3353,6 +3972,375 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 	return &CreateResponse{Success: true, Status: newStatus, Title: title, BookFormats: r.bookFormats, CanonicalForeignID: r.responseCanonicalForeignID()}, nil
 }
 
+// BookImportStallSink receives transitions of the "book requests are stuck
+// behind the library's author-metadata import" condition for one Chaptarr
+// instance, so the wiring layer can surface it as an auto-resolving system
+// issue without this package importing the issue store.
+type BookImportStallSink interface {
+	RecordBookImportStall(instanceID, instanceName string, waitingTitles []string, healthy bool) error
+}
+
+// SetBookImportStallSink wires the stall reporter (nil disables reporting).
+func (s *Service) SetBookImportStallSink(sink BookImportStallSink) {
+	s.bookImportStallSink = sink
+}
+
+// ResumeBookParks runs one park sweep off the maintenance cadence, in the
+// background. It is the webhook seam for Chaptarr's AuthorAdded callback —
+// the event that fires at the exact moment a queued author import lands — so
+// a waiting request completes in seconds instead of at the next tick. Sweep
+// passes are serialized, so a callback burst cannot race the ticker.
+func (s *Service) ResumeBookParks() {
+	go s.SweepParkedBookRequests()
+}
+
+// StartBookParkMaintenance runs SweepParkedBookRequests on a fixed cadence
+// until ctx ends.
+func (s *Service) StartBookParkMaintenance(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(bookParkRetryInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.SweepParkedBookRequests()
+			}
+		}
+	}()
+}
+
+// SweepParkedBookRequests is one maintenance pass over every server-owned
+// author-import park. Chaptarr owns the retry loop for a queued author import
+// (unbounded, on its own schedule), so each pass reads the arr's live verdict
+// per row and acts only on real exits: import landed → complete the request;
+// import declared failed or cancelled → demote to the human approval queue;
+// still importing → leave it alone. There is no time-based give-up (see
+// bookParkStallAfter). Afterwards, per-instance stall health is reported so a
+// long-running Chaptarr metadata import becomes one auto-resolving system
+// issue.
+func (s *Service) SweepParkedBookRequests() {
+	s.parkSweepRunMu.Lock()
+	defer s.parkSweepRunMu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT id, COALESCE(user_id, 0), COALESCE(foreign_id, ''), COALESCE(instance_id, ''), title
+		 FROM request_log
+		 WHERE media_type = 'book' AND status = ? AND park_reason = ?
+		 ORDER BY id ASC`,
+		StatusPending, bookParkReasonAuthorImport,
+	)
+	if err != nil {
+		log.Printf("request: query parked book requests: %v", err)
+		return
+	}
+	var parked []parkedBookRow
+	for rows.Next() {
+		var row parkedBookRow
+		if err := rows.Scan(&row.id, &row.userID, &row.foreignID, &row.instanceID, &row.title); err != nil {
+			_ = rows.Close()
+			log.Printf("request: scan parked book request: %v", err)
+			return
+		}
+		parked = append(parked, row)
+	}
+	closeErr := rows.Err()
+	_ = rows.Close()
+	if closeErr != nil {
+		log.Printf("request: read parked book requests: %v", closeErr)
+		return
+	}
+
+	for _, row := range parked {
+		s.probeParkedBookRequest(row)
+	}
+
+	// Every parked row was just probed, so one timestamp dates all of them.
+	// Stamped after the loop, not before: an early return above means no probe
+	// was made, and claiming one would be the same kind of lie this whole change
+	// is removing.
+	s.markParkSweep(time.Now())
+
+	s.reportBookImportStalls()
+}
+
+// parkedBookRow is one server-owned author-import park as the sweep sees it.
+type parkedBookRow struct {
+	id         int64
+	userID     int64
+	foreignID  string
+	instanceID string
+	title      string
+}
+
+// probeParkedBookRequest advances one author-import park by reading Chaptarr's
+// own pending-import state instead of replaying the add. Chaptarr owns the
+// retry loop: the refused add already stored the whole intent (the monitored
+// book, profiles, the search flag) on the fork's pending-import table, which
+// Chaptarr retries on its own unbounded schedule and completes itself — and a
+// duplicate add would merge into that row and force-bump its schedule. The
+// sweep therefore only watches for the exits: author landed (complete the
+// request through the normal already-tracked lane), import declared terminally
+// failed or cancelled (hand a human the row now, not at the horizon), still
+// importing (leave it alone). Builds without the read API fall back to the old
+// add-probe, whose refusal is the only signal they offer. A read failure
+// leaves the park untouched: blindness is not an answer, and the give-up
+// horizon still bounds the wait.
+func (s *Service) probeParkedBookRequest(row parkedBookRow) {
+	client, _, err := s.resolveChaptarr(row.userID, row.instanceID)
+	if err != nil || client == nil {
+		log.Printf("request: probe parked book request %d (%q): resolve chaptarr: %v", row.id, row.title, err)
+		return
+	}
+	foreignAuthorID, ok := s.lookupParkedAuthorID(client, row.foreignID)
+	if !ok {
+		return // lookup failed; blindness leaves the park untouched
+	}
+	if foreignAuthorID == "" {
+		// The id-fetch no longer names this record directly (alias resolution
+		// or a provider change). The add-probe's term ladder and error taxonomy
+		// already know how to land that shape, so use the legacy lane.
+		s.legacyProbeParkedBookRequest(row)
+		return
+	}
+	status, err := client.GetAuthorImportStatus(foreignAuthorID)
+	if errors.Is(err, chaptarr.ErrPendingImportAPIUnavailable) {
+		s.legacyProbeParkedBookRequest(row)
+		return
+	}
+	if errors.Is(err, chaptarr.ErrAuthorProviderAmbiguous) {
+		// 409: the provider id matches more than one local author. That is a
+		// structural state only a human can untangle — every future sweep
+		// would read the same answer, so holding the park would hold it
+		// forever.
+		log.Printf("request: parked book request %d (%q): chaptarr reports the author id is ambiguous (multiple local authors); handing to the approval queue", row.id, row.title)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportFailed)
+		return
+	}
+	if err != nil {
+		log.Printf("request: probe parked book request %d (%q): %v", row.id, row.title, err)
+		return
+	}
+	switch {
+	case status.Exists:
+		// The author landed — and with it Chaptarr's own completion of the
+		// stored add intent. The fulfill re-runs the normal flow and lands in
+		// its already-tracked lane rather than adding twice.
+		if _, err := s.fulfillPendingRequest(0, row.id, nil, true); err != nil {
+			if errors.Is(err, chaptarr.ErrAuthorPendingImport) {
+				return // lost a race with the import; the next pass completes it
+			}
+			log.Printf("request: parked book request %d (%q) failed after its author import landed (%v); handing to the approval queue", row.id, row.title, err)
+			s.demoteParkedBookRequest(row.id, bookAddFailureImportAbandoned)
+			return
+		}
+		log.Printf("request: parked book request %d (%q) completed after the author import landed", row.id, row.title)
+	case status.Pending && status.Status == chaptarr.AuthorImportStatusFailed:
+		// Chaptarr has no distinct cancelled status — a cancel in its UI marks
+		// the row Failed with LastError "Cancelled by user" — so the label the
+		// admin sees is decided by that field, read best-effort from the row.
+		if s.pendingImportWasCancelled(client, status.PendingID) {
+			log.Printf("request: parked book request %d (%q): the author import was cancelled in chaptarr; handing to the approval queue", row.id, row.title)
+			s.demoteParkedBookRequest(row.id, bookAddFailureImportCancelled)
+			return
+		}
+		log.Printf("request: parked book request %d (%q): chaptarr declared the author import terminally failed; handing to the approval queue", row.id, row.title)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportFailed)
+	case status.Pending && chaptarr.AuthorImportStatusConcluded(status.Status):
+		// PartialSuccess or Succeeded with the author still absent from the
+		// library: Chaptarr's scheduler re-picks only Pending/Retrying rows,
+		// so this row will never change again — waiting on it waits forever.
+		log.Printf("request: parked book request %d (%q): chaptarr concluded the author import (%s) but the author never landed; handing to the approval queue", row.id, row.title, status.Status)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportFailed)
+	case status.Pending:
+		// Chaptarr is still importing on its own schedule; nothing to do.
+	default:
+		// Both answers false: the library does not know the author and no
+		// pending row exists. Chaptarr deletes completed rows after 30 days
+		// (CleanupOldCompleted) — with a 5-minute sweep the concluded state is
+		// seen long before that, so reaching here means the row was removed
+		// out-of-band. The closest honest word the app knows is "cancelled".
+		log.Printf("request: parked book request %d (%q): the author import vanished from chaptarr without landing; handing to the approval queue", row.id, row.title)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportCancelled)
+	}
+}
+
+// lookupParkedAuthorID resolves the author foreignAuthorId behind a parked
+// book via the exact id-term fetch. Returns ok=false on a read failure (leave
+// the park alone), and an empty id with ok=true when the fetch answered but
+// did not name this record (the alias shape the legacy lane handles).
+func (s *Service) lookupParkedAuthorID(client *chaptarr.Client, foreignID string) (string, bool) {
+	results, err := client.LookupBook(foreignID)
+	if err != nil {
+		log.Printf("request: lookup parked book %q author: %v", foreignID, err)
+		return "", false
+	}
+	foreignID = strings.TrimSpace(foreignID)
+	for i := range results {
+		if strings.TrimSpace(results[i].ForeignBookID) == foreignID {
+			return strings.TrimSpace(results[i].ForeignAuthorID), true
+		}
+	}
+	return "", true
+}
+
+// pendingImportWasCancelled reads the arr's own record of why a Failed row
+// stopped. Chaptarr has no distinct cancelled status — a cancel in its UI
+// marks the row Failed with LastError "Cancelled by user" — so this is the
+// only signal separating "the import could not finish" from "someone chose to
+// stop it". Best-effort: an unreadable or missing row keeps the failed label.
+func (s *Service) pendingImportWasCancelled(client *chaptarr.Client, pendingID int) bool {
+	if pendingID <= 0 {
+		return false
+	}
+	detail, err := client.GetPendingAuthorImport(pendingID)
+	if err != nil || detail == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(detail.LastError), "cancelled by user")
+}
+
+// legacyProbeParkedBookRequest is the pre-pending-import-API probe: replay the
+// add and read the refusal. Kept for older Chaptarr builds and for rows whose
+// id-fetch no longer answers directly.
+func (s *Service) legacyProbeParkedBookRequest(row parkedBookRow) {
+	_, err := s.fulfillPendingRequest(0, row.id, nil, true)
+	switch {
+	case err == nil:
+		log.Printf("request: parked book request %d (%q) completed after the author import landed", row.id, row.title)
+	case errors.Is(err, chaptarr.ErrAuthorPendingImport):
+		// Still waiting on the library's import; the next pass retries.
+	default:
+		log.Printf("request: parked book request %d (%q) failed beyond the pending import (%v); handing to the approval queue", row.id, row.title, err)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportAbandoned)
+	}
+}
+
+// demoteParkedBookRequest turns a server-owned park back into an ordinary
+// approval-queue row and fires the request_pending notification that was
+// deliberately withheld when the park was created: this is the moment a human
+// decision first exists. reason (one of bookImportAddFailures) records which
+// exit ended the wait, so the queue card can offer the honest verbs — try
+// again, or close the request.
+func (s *Service) demoteParkedBookRequest(requestID int64, reason string) {
+	var userID int64
+	var foreignID, bookFormat, instanceID, title string
+	err := s.db.QueryRow(
+		`SELECT user_id, COALESCE(foreign_id, ''), COALESCE(book_format, 'both'), COALESCE(instance_id, ''), title
+		 FROM request_log WHERE id = ? AND status = ?`,
+		requestID, StatusPending,
+	).Scan(&userID, &foreignID, &bookFormat, &instanceID, &title)
+	if err != nil {
+		log.Printf("request: load parked book request %d for demotion: %v", requestID, err)
+		return
+	}
+	res, err := s.db.Exec(
+		// The row keeps the fact that brought it here. A request whose wait
+		// ended without the author is not a fresh decision, and the page fired
+		// below is the admin's first sight of it.
+		"UPDATE request_log SET park_reason = NULL, add_failure_reason = ? WHERE id = ? AND status = ? AND park_reason IS NOT NULL",
+		reason, requestID, StatusPending,
+	)
+	if err != nil {
+		log.Printf("request: demote parked book request %d: %v", requestID, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return // decided or demoted concurrently; nothing to announce
+	}
+	if s.notifier == nil {
+		return
+	}
+	data := map[string]interface{}{
+		"tmdb_id":     0,
+		"media_type":  "book",
+		"title":       title,
+		"foreign_id":  foreignID,
+		"book_format": bookFormat,
+		"instance_id": instanceID,
+	}
+	if count, err := s.PendingCount(); err == nil {
+		data["pending_count"] = count
+	}
+	s.notifier.NotifyAdmins("request_pending", data)
+}
+
+// reportBookImportStalls reports, per Chaptarr instance, whether any parked
+// request has waited past the stall horizon. Every configured instance gets a
+// transition each pass — stalled instances carry their waiting titles, healthy
+// ones resolve any open issue — so the sink converges regardless of how the
+// stall cleared (import landed, demotion, denial).
+func (s *Service) reportBookImportStalls() {
+	sink := s.bookImportStallSink
+	if sink == nil {
+		return
+	}
+	stalled := map[string][]string{}
+	rows, err := s.db.Query(
+		`SELECT COALESCE(instance_id, ''), title
+		 FROM request_log
+		 WHERE media_type = 'book' AND status = ? AND park_reason = ?
+		   AND requested_at <= datetime('now', ?)
+		 ORDER BY instance_id, id ASC`,
+		StatusPending, bookParkReasonAuthorImport,
+		fmt.Sprintf("-%d seconds", int64(bookParkStallAfter/time.Second)),
+	)
+	if err != nil {
+		log.Printf("request: query stalled book parks: %v", err)
+		return
+	}
+	for rows.Next() {
+		var instanceID, title string
+		if err := rows.Scan(&instanceID, &title); err != nil {
+			_ = rows.Close()
+			log.Printf("request: scan stalled book park: %v", err)
+			return
+		}
+		stalled[instanceID] = append(stalled[instanceID], title)
+	}
+	closeErr := rows.Err()
+	_ = rows.Close()
+	if closeErr != nil {
+		log.Printf("request: read stalled book parks: %v", closeErr)
+		return
+	}
+
+	// The instance list is fully drained and the cursor closed BEFORE any sink
+	// call. The pool is capped at a single connection (SQLite is single-writer),
+	// so an open *sql.Rows holds the only connection there is: reporting from
+	// inside the loop would block the sink's own transaction forever, and that
+	// deadlocked goroutine would take every later query in the process with it.
+	type chaptarrInstance struct{ id, name string }
+	var instances []chaptarrInstance
+	instanceRows, err := s.db.Query("SELECT id, name FROM service_instances WHERE service_type = 'chaptarr'")
+	if err != nil {
+		log.Printf("request: query chaptarr instances for stall report: %v", err)
+		return
+	}
+	for instanceRows.Next() {
+		var inst chaptarrInstance
+		if err := instanceRows.Scan(&inst.id, &inst.name); err != nil {
+			_ = instanceRows.Close()
+			log.Printf("request: scan chaptarr instance for stall report: %v", err)
+			return
+		}
+		instances = append(instances, inst)
+	}
+	instanceErr := instanceRows.Err()
+	_ = instanceRows.Close()
+	if instanceErr != nil {
+		log.Printf("request: read chaptarr instances for stall report: %v", instanceErr)
+		return
+	}
+
+	for _, inst := range instances {
+		titles, isStalled := stalled[inst.id]
+		if err := sink.RecordBookImportStall(inst.id, inst.name, titles, !isStalled); err != nil {
+			log.Printf("request: record book import stall for instance %s: %v", inst.id, err)
+		}
+	}
+}
+
 // DenyRequest marks a pending request denied and notifies the requester.
 func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	decisionLock := s.decisionLock(requestID)
@@ -3367,10 +4355,21 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 		return fmt.Errorf("request is not pending")
 	}
 	audience := []bookRequestSubscriber{{UserID: r.userID}}
+	wasAuthorImportWait := false
 	if r.mediaType == "book" {
 		audience, err = s.bookRequestAudience(requestID, r.userID, r.bookFormat)
 		if err != nil {
 			return err
+		}
+		// Read the wait marker before the decision overwrites the row's story:
+		// a denied author-import wait must also cancel the arr's queued import
+		// (below), or the stored add intent delivers the book anyway later.
+		var parkReason, addFailure sql.NullString
+		if err := s.db.QueryRow(
+			"SELECT park_reason, COALESCE(add_failure_reason, '') FROM request_log WHERE id = ?", requestID,
+		).Scan(&parkReason, &addFailure); err == nil {
+			wasAuthorImportWait = (parkReason.Valid && parkReason.String == bookParkReasonAuthorImport) ||
+				isBookImportAddFailure(addFailure.String)
 		}
 	}
 	tx, err := s.db.Begin()
@@ -3404,6 +4403,9 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit request denial: %w", err)
+	}
+	if wasAuthorImportWait {
+		s.cancelAuthorImportForDeniedRequest(requestID, r)
 	}
 	if s.notifier != nil && r.mediaType != "book" {
 		data := map[string]interface{}{

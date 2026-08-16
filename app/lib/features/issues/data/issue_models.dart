@@ -38,9 +38,11 @@ enum IssueStatus {
   open('open', 'Reported'),
   observing('observing', 'Watching the download'),
   recovering('recovering', 'Download recovery in progress'),
+  waiting('waiting', 'Waiting and retrying'),
   investigating('investigating', 'Checking the problem'),
   awaitingUser('awaiting_user', 'Needs your reply'),
   awaitingApproval('awaiting_approval', 'Fix ready for review'),
+  awaitingConfirmation('awaiting_confirmation', 'Did the fix work?'),
   needsAdmin('needs_admin', 'Needs a closer look'),
   resolved('resolved', 'Resolved'),
   wontFix('wont_fix', 'Closed without a fix'),
@@ -60,10 +62,13 @@ enum IssueStatus {
       this == failed ||
       this == dismissed;
 
-  /// True while Cantinarr is passively tracking the arr's own recovery work.
-  /// These issues remain open for audit/history, but must not be presented as
-  /// agent or admin work that needs attention.
-  bool get isTracking => this == observing || this == recovering;
+  /// True while Cantinarr is passively tracking work that isn't its own: the
+  /// arr's recovery of a download, or a wait the server retries and resolves
+  /// itself (waiting). These issues remain open for audit/history, but must
+  /// not be presented as agent or admin work that needs attention — there is
+  /// no verdict for a human to record on them.
+  bool get isTracking =>
+      this == observing || this == recovering || this == waiting;
 
   /// True when an open issue belongs in the admin's attention queue.
   bool get needsAttention => !isTerminal && !isTracking;
@@ -84,9 +89,18 @@ enum IssueResolutionKind {
   agentConcluded('agent_concluded', 'Review completed'),
   arrStateCleared('arr_state_cleared', 'Media became available'),
   reporterTimeout('reporter_timeout', 'Closed after no reply'),
+  reporterConfirmed('reporter_confirmed', 'Confirmed fixed'),
   adminDismissed('admin_dismissed', 'Closed after review'),
   adminCompleted('admin_completed', 'Completed after review'),
   aiHealthRestored('ai_health_restored', 'Shared AI recovered'),
+  pushDeliveryRestored('push_delivery_restored', 'Notifications recovered'),
+  bookImportCleared('book_import_cleared', 'Book imports cleared'),
+  // The dispatched fix removed and blocklisted a dead download and the
+  // replacement search came back empty: done, honestly — nothing arrived, and
+  // nobody is being waited on. The library keeps monitoring for a future
+  // release on its own.
+  removedNoReplacement(
+      'removed_no_replacement', 'Dead download removed; no copy available yet'),
   legacyUnknown('legacy_unknown', 'How it closed is unknown'),
   unknown('', 'How it closed is unknown');
 
@@ -139,6 +153,14 @@ class Issue {
   final DateTime? updatedAt;
   final DateTime? closedAt;
 
+  /// Whether THIS reader is the reporter and may close the issue with their own
+  /// "this is fixed" verdict. The server answers it per read because it depends
+  /// on live dispatch state (a fix must have been applied, and none may be
+  /// executing), and it deliberately stays false on list reads — only the
+  /// single-issue fetch that renders the control computes it.
+  final bool canConfirmFixed;
+  final bool isPrevention;
+
   const Issue({
     required this.id,
     required this.source,
@@ -160,6 +182,8 @@ class Issue {
     required this.createdAt,
     required this.updatedAt,
     required this.closedAt,
+    required this.canConfirmFixed,
+    this.isPrevention = false,
   });
 
   bool get isTv => mediaType == 'tv';
@@ -177,6 +201,7 @@ class Issue {
   /// A short scope label for list/thread subtitles:
   /// "S2·E4" / "Season 2" / "Movie".
   String get scopeLabel {
+    if (isPrevention) return 'Prevention';
     if (isTv) {
       // A positive episode disambiguates Sonarr Specials (season zero) from
       // the season=0/episode=0 whole-series sentinel.
@@ -222,6 +247,11 @@ class Issue {
             DateTime.tryParse(json['updated_at'] as String? ?? '')?.toLocal(),
         closedAt:
             DateTime.tryParse(json['closed_at'] as String? ?? '')?.toLocal(),
+        // Absent on an older server and on every list read — default false so a
+        // missing field never offers an irreversible close the server would
+        // refuse.
+        canConfirmFixed: json['can_confirm_fixed'] as bool? ?? false,
+        isPrevention: json['is_prevention'] as bool? ?? false,
       );
 }
 
@@ -477,4 +507,17 @@ class RemediationSettings {
         observationSettleMinutes:
             observationSettleMinutes ?? this.observationSettleMinutes,
       );
+}
+
+/// One page of the admin issue list.
+///
+/// Open issues always arrive complete; only closed history is bounded, because
+/// it is the half that grows forever. [closedTotal] is how many closed issues
+/// exist server-side, so a list showing fewer can say so rather than reading as
+/// the whole record.
+class IssuePage {
+  const IssuePage({required this.issues, required this.closedTotal});
+
+  final List<Issue> issues;
+  final int closedTotal;
 }

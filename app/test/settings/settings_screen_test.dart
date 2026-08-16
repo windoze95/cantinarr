@@ -37,12 +37,6 @@ void main() {
     expect(find.byType(AttentionMenuVisibilitySwitch), findsNothing);
     expect(find.text('NEEDS ATTENTION MENU'), findsNothing);
     expect(find.text('Configuration History'), findsNothing);
-    await tester.scrollUntilVisible(
-      find.text('AI Assistant'),
-      200,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('Available'), findsOneWidget);
   });
 
   testWidgets('marks a broken personal override instead of showing included',
@@ -79,12 +73,34 @@ void main() {
     );
   });
 
+  testWidgets('Profile approvals row is hidden from non-admins',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+    expect(find.text('Profile approvals'), findsNothing);
+  });
+
+  testWidgets('Profile approvals is reachable from the attention rows',
+      (tester) async {
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      isAdmin: true,
+    );
+    await _dragSettingsUntilFound(tester, find.text('Profile approvals'));
+    expect(find.text('Profile approvals'), findsOneWidget);
+    expect(
+      find.text('Only show in the menu when changes await a decision'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('admin settings can restore every conditionally hidden menu item',
       (tester) async {
     SharedPreferences.setMockInitialValues({
       'approvals_menu_only_when_pending': true,
       'issues_menu_only_when_active': true,
       'agent_fixes_menu_only_when_awaiting_review': true,
+      'profile_approvals_menu_only_when_pending': true,
     });
     final container = await _pumpSettings(
       tester,
@@ -97,12 +113,19 @@ void main() {
       find.text('NEEDS ATTENTION MENU'),
     );
     expect(find.text('NEEDS ATTENTION MENU'), findsOneWidget);
+    // The ListView builds lazily: reach the last switch so all four exist.
+    await _dragSettingsUntilFound(
+      tester,
+      find.byKey(
+        const ValueKey('profileApprovals-conditional-menu-visibility'),
+      ),
+    );
 
     final controls = find.byType(
       AttentionMenuVisibilitySwitch,
       skipOffstage: false,
     );
-    expect(controls, findsNWidgets(3));
+    expect(controls, findsNWidgets(4));
     expect(
       tester
           .widgetList<AttentionMenuVisibilitySwitch>(controls)
@@ -122,24 +145,33 @@ void main() {
       const ValueKey('agentFixes-conditional-menu-visibility'),
       skipOffstage: false,
     );
+    final profileApprovalsToggle = find.byKey(
+      const ValueKey('profileApprovals-conditional-menu-visibility'),
+      skipOffstage: false,
+    );
 
     for (final toggle in [
       approvalsToggle,
       issuesToggle,
       agentFixesToggle,
+      profileApprovalsToggle,
     ]) {
       await tester.ensureVisible(toggle);
       await tester.pumpAndSettle();
-      expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+      expect(tester.widget<Switch>(toggle).value, isTrue);
       await tester.tap(toggle);
       await tester.pumpAndSettle();
-      expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+      expect(tester.widget<Switch>(toggle).value, isFalse);
     }
 
     expect(container.read(approvalsMenuOnlyWhenPendingProvider), isFalse);
     expect(container.read(issuesMenuOnlyWhenActiveProvider), isFalse);
     expect(
       container.read(agentFixesMenuOnlyWhenAwaitingReviewProvider),
+      isFalse,
+    );
+    expect(
+      container.read(profileApprovalsMenuOnlyWhenPendingProvider),
       isFalse,
     );
   });

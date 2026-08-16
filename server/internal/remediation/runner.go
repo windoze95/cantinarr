@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
+	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -37,6 +39,28 @@ var readToolAllowList = []string{
 	"get_history",
 	"get_library",
 	"get_arr_health",
+	"get_episode_timeline",
+	"get_book_timeline",
+	// The file the library actually holds — the arr's own ffprobe truth
+	// (resolution, audio languages, subtitles). "Wrong audio" and "bad copy"
+	// are unjudgeable from a release name; this is the read that makes those
+	// reports falsifiable.
+	"get_media_file_details",
+	// Read-only settings views. Several diagnoses — "Not an upgrade", "Not a
+	// Custom Format upgrade" — are verdicts the SERVICE reached from its own
+	// configuration, and without these the agent can see the refusal but never
+	// the reason for it. Neither can change anything; the write tools
+	// (upsert_custom_format, preview_profile_change, apply_profile_change) stay
+	// off this list, and scopeReadToolInput pins both to the issue's own
+	// instance and to their bounded summary form.
+	"get_quality_profiles",
+	"get_custom_formats",
+	// The sections recurring problems trace back to — indexer min seeders,
+	// delay windows, download-client categories, remote path mappings —
+	// summarized secret-free inside the arr client. Same rationale as the two
+	// profile reads: without these the agent sees the recurrence but never
+	// the setting causing it.
+	"get_service_config",
 }
 
 // readToolAllowSet is readToolAllowList as a set, for O(1) dispatch checks.
@@ -51,10 +75,12 @@ var readToolAllowSet = func() map[string]bool {
 // isReadToolAllowed reports whether name is a permitted read-only tool.
 func isReadToolAllowed(name string) bool { return readToolAllowSet[name] }
 
-// stepKind constants for the agent_steps audit ledger.
+// stepKind constants for the agent_steps audit ledger. Tool inputs ride the
+// tool_result row (persistStep stores input and output together), so there is
+// deliberately no separate tool_call kind — 46 days of production audit rows
+// confirmed nothing ever wrote one.
 const (
 	stepAssistant  = "assistant"
-	stepToolCall   = "tool_call"
 	stepToolResult = "tool_result"
 	stepGiveup     = "giveup"
 )
@@ -164,8 +190,26 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	// A parked issue (a proposal awaiting approval, or a reporter question) is
 	// owned by the resume path, not a fresh investigation: Run must never start a
 	// second run over a pending proposal. Resume re-enters those.
-	if issue.Status == IssueAwaitingApproval || issue.Status == IssueAwaitingUser {
+	if issue.Status == IssueAwaitingApproval || issue.Status == IssueAwaitingUser ||
+		issue.Status == IssueAwaitingConfirmation {
 		return nil
+	}
+	// A staged resume_pending handoff owns this issue's next model turn even
+	// when the ISSUE status looks fresh: a suspend/re-promote cycle between an
+	// approval and its resume legitimately lands the issue back at open, and
+	// the observation sweep then enqueues it here as ordinary work. Starting
+	// fresh in that state is how issue 859's run 69 beat the recovery lane's
+	// minute tick by 30 seconds, re-litigated the incident from scratch, and
+	// left the staged decision to be reaped as superseded. Every fresh entry
+	// funnels through this method, so this one check makes them all
+	// resume-aware; Resume owns every subtlety after it (CAS claim, terminal
+	// finalization, provider probe), and losing its race just returns nil.
+	var staged int
+	if err := r.db.QueryRow(
+		`SELECT COUNT(1) FROM agent_runs WHERE issue_id = ? AND status = ?`,
+		issueID, runStatusResumePending,
+	).Scan(&staged); err == nil && staged > 0 {
+		return r.Resume(ctx, issueID)
 	}
 	if recovering, preflightErr := r.svc.preflightArrRecovery(issueID); preflightErr != nil {
 		if _, parkErr := r.svc.moveIssueToObservationNeedsAdmin(issue, observationNeedsCloserLook, time.Now().UTC()); parkErr != nil {
@@ -178,11 +222,21 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 
 	turn, model, err := r.resolveTurn(ctx, settings)
 	if err != nil {
-		// No key / provider setup failed: cannot run. Park the issue with a clear
-		// admin-facing note.
+		if errors.Is(err, ai.ErrSharedAIUnavailable) {
+			// A standing configuration gap, not a failed investigation: leave the
+			// issue exactly where it is (recoverWork re-enqueues open issues until
+			// a provider exists), say so once via the deduped system issue, and
+			// feed the circuit breaker nothing — the agent did not fail, it was
+			// never given a provider.
+			_ = r.svc.RecordRemediationProviderHealth(false)
+			return nil
+		}
+		// Resolver wired but broken (nil runner, unsupported provider): park the
+		// issue with a clear admin-facing note.
 		return r.giveUp(ctx, issueID, 0, model, stopModelError,
 			"I couldn't investigate this automatically because the AI provider isn't configured. Flagging for an admin.")
 	}
+	_ = r.svc.RecordRemediationProviderHealth(true)
 
 	// CAS-claim the issue and create the run row.
 	runID, claimed, err := r.claim(issue, model)
@@ -201,7 +255,7 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 
 	// Bound active wall-clock with a context timeout.
 	wall := time.Duration(settings.MaxWallClockSecs) * time.Second
-	activeStarted := r.beginActiveWindow(runID, settings.MaxWallClockSecs)
+	activeStarted := time.Now()
 	defer r.finishActiveWindow(runID, activeStarted)
 	runCtx, cancel := context.WithTimeout(ctx, wall)
 	defer cancel()
@@ -277,7 +331,16 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 		return fmt.Errorf("load issue %d: %w", issueID, err)
 	}
 	if isTerminalStatus(issue.Status) {
-		return nil // already closed (e.g. admin dismissed while parked).
+		// Already closed (e.g. admin dismissed while parked). The staged
+		// handoff can never be consumed now — finalize it, or recoverWork
+		// re-enqueues a resume nothing will ever claim, every minute, forever.
+		r.db.Exec(
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'issue_closed',
+			 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			 WHERE issue_id = ? AND status = ?`,
+			issueID, runStatusResumePending,
+		)
+		return nil
 	}
 	if issue.Status == IssueObserving || issue.Status == IssueRecovering {
 		return nil
@@ -288,6 +351,16 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 		}
 		return fmt.Errorf("defer issue %d resume while arr recovery cannot be verified: %w", issueID, preflightErr)
 	} else if recovering {
+		return nil
+	}
+
+	// Probe the provider BEFORE claiming the handoff: an unavailable shared
+	// provider is a standing condition, not a failure of this resume, and a
+	// claim taken first would burn the durable handoff into a give-up over a
+	// missing configuration. The staged decision stays exactly where it is;
+	// recoverWork re-enqueues it once a provider exists.
+	if _, _, err := r.resolveTurn(ctx, settings); err != nil && errors.Is(err, ai.ErrSharedAIUnavailable) {
+		_ = r.svc.RecordRemediationProviderHealth(false)
 		return nil
 	}
 
@@ -329,7 +402,7 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 			giveUpMessage(issue, true))
 	}
 	wall := time.Duration(remainingSeconds) * time.Second
-	activeStarted := r.beginActiveWindow(runID, remainingSeconds)
+	activeStarted := time.Now()
 	defer r.finishActiveWindow(runID, activeStarted)
 	runCtx, cancel := context.WithTimeout(ctx, wall)
 	defer cancel()
@@ -357,8 +430,7 @@ func (r *Runner) abortClaimForRecoveryPreflight(issueID, runID int64, cause erro
 	}
 	defer tx.Rollback()
 	runRes, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='recovery_preflight_failed',
-		 deadline_at=NULL,finished_at=CURRENT_TIMESTAMP
+		`UPDATE agent_runs SET status='aborted',stop_reason='recovery_preflight_failed',finished_at=CURRENT_TIMESTAMP
 		 WHERE id=? AND issue_id=? AND status=?`, runID, issueID, runStatusRunning)
 	if err != nil {
 		return err
@@ -433,7 +505,16 @@ type loopState struct {
 // admin approval; the loop exits and no goroutine is held during the wait). It
 // operates on st so Run and Resume share one implementation.
 func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st *loopState, model string, settings Settings) error {
-	system := buildSystemPrompt(issue)
+	// Read the issue's remediation memory at every loop entry, not once per run:
+	// the fix an admin approved dispatches DURING the park, so a resume must see
+	// its own outcome. A read failure must never block an investigation, so it
+	// degrades to "no memory" and is logged.
+	attempts, err := r.svc.priorRemediationAttempts(issue.ID)
+	if err != nil {
+		log.Printf("remediation: load prior attempts for issue %d: %v", issue.ID, err)
+		attempts = nil
+	}
+	system := buildSystemPrompt(issue, attempts)
 	tools := r.toolServer.ToolsByName(readToolAllowList)
 	for _, tool := range mcp.AgentTools() {
 		if settings.Mode == ModeInvestigateOnly && tool.Name == mcp.ToolProposeAction {
@@ -665,21 +746,65 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 		r.db.Exec("UPDATE agent_runs SET step_count = ? WHERE id = ?", st.stepCount, st.runID)
 
 		if escalated {
+			// A read failure here only costs the better wording, never the
+			// escalation itself — the issue reaches a human either way.
+			fixApplied, _ := r.svc.issueHasExecutedFix(issue.ID)
+			if issue.Source == SourceUser && fixApplied {
+				// The fix executed and only the subjective verdict remains.
+				// That verdict belongs to the reporter, not an admin
+				// adjudicating content they haven't watched: park awaiting
+				// their confirmation instead of the needs_admin dead end this
+				// used to be.
+				return r.parkConfirm(ctx, issue.ID, st.runID, stopUnverifiedClose,
+					escalatedCloseMessage(issue, true))
+			}
 			return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
-				"I couldn't verify a terminal resolution from live scoped state, so this needs an administrator to review it.")
+				escalatedCloseMessage(issue, fixApplied))
 		}
 
 		if concluded {
 			// Queue disappearance alone is not a terminal witness. Require the exact
 			// movie/episode to be present in the live arr library before accepting
 			// even a typed auto-incident conclusion.
+			resolution, resolutionKind := arrStateClearedResolution, ResolutionArrStateCleared
 			proven, known, proofErr := r.svc.exactRecoveryProven(issue)
 			if proofErr != nil || !known || !proven {
-				return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
-					"The queue target changed, but Cantinarr could not verify the exact file in the arr library. An administrator needs to review it.")
+				// The proof above was written for missing media, where recovery
+				// means a new file arrives. A deliberately abandoned upgrade
+				// recovers the opposite way — the library keeps exactly the file
+				// it already had — so an unchanged file reads as failure there.
+				// Safe to check only here: this branch has already typed-proven
+				// the exact queue target is gone.
+				abandoned, abandonErr := r.svc.upgradeAbandonProven(issue)
+				if abandonErr != nil || !abandoned {
+					// A book want can end a third way: the dispatched blocklist
+					// fix removed the only live attempt and the arr's own
+					// replacement search found nothing. The missing-media proof
+					// reads that as failure (0 files → 0 files, no receipt),
+					// but it is this fix's success shape, and closing it wrong
+					// was what claimed the one verifiably executed fix "could
+					// not be verified" (issue 859). Same queue-target-gone
+					// contract as the abandon proof above.
+					removed, removedErr := r.svc.bookRemoveWithoutReplacementProven(issue)
+					if removedErr == nil && removed {
+						resolution, resolutionKind = removedNoReplacementResolution, ResolutionRemovedNoReplacement
+					} else {
+						// All proofs above read issue_observations and call
+						// exactIssueFileState, which fails closed on a
+						// season-scoped TV issue. A season the service filled
+						// before it aired is exactly that shape and has no
+						// queue row to begin with, so it carries its own
+						// proof: nothing unaired still holds a file.
+						repaired, repairErr := r.svc.preAirRepairProven(issue)
+						if repairErr != nil || !repaired {
+							return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
+								unverifiedCloseMessage(attempts))
+						}
+					}
+				}
 			}
 			transitioned, err := r.svc.concludeIssueAggregate(ctx, issue.ID, IssueResolved,
-				arrStateClearedResolution, ResolutionArrStateCleared,
+				resolution, resolutionKind,
 				issueClosureOptions{expectedRunID: st.runID})
 			if err != nil {
 				return fmt.Errorf("conclude issue %d: %w", issue.ID, err)
@@ -920,7 +1045,7 @@ func (r *Runner) parkWith(issueID, runID int64, runStatus, stopReason, issueStat
 		return r.invalidateStalePark(issueID, runID, issueStatus, cursor, toolUseID)
 	}
 	runRes, err := tx.Exec(
-		`UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL
+		`UPDATE agent_runs SET status = ?, stop_reason = ?
 		 WHERE id = ? AND issue_id = ? AND status = ?`,
 		runStatus, stopReason, runID, issueID, runStatusRunning,
 	)
@@ -947,6 +1072,9 @@ func (r *Runner) parkWith(issueID, runID int64, runStatus, stopReason, issueStat
 		// admin decides within the hold-down needs no page at all.
 		r.svc.queueActionAlert(issueID, time.Now().UTC())
 	} else if issueStatus == IssueAwaitingUser && r.svc.notifier != nil {
+		// issue_question is the reporter's page (push + WS); issue_updated stays
+		// the silent refresh for any other open client.
+		r.svc.notifier.NotifyUser(reporterID.Int64, "issue_question", map[string]interface{}{"issue_id": issueID})
 		r.svc.notifier.NotifyUser(reporterID.Int64, "issue_updated", map[string]interface{}{"issue_id": issueID})
 	}
 	r.svc.pingIssueUpdated(issueID)
@@ -1101,9 +1229,22 @@ func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu
 			res.Text, res.ReleaseCandidates = prepareReleaseCandidatesForAgent(res.ReleaseCandidates)
 		}
 		ctrl.readEvidence = isVerificationRead(tu.Name, res)
-		if res.Verification != nil && res.Verification.Kind == mcp.VerificationQueueTarget && res.Verification.ExactScope {
-			present := res.Verification.TargetPresent
-			ctrl.targetPresent = &present
+		if res.Verification != nil && res.Verification.ExactScope {
+			// Each verification kind is proof for ITS incident class only. A
+			// season_clean witness ("no unaired episode holds a file") is the
+			// recovery proof for a pre-air fill; accepting it for a queue-shaped
+			// issue let a timeline read of any ordinary season count as typed
+			// target evidence (found during the 2026-08-10 audit — masked, not
+			// exploited, by the post-loop recovery proof).
+			acceptable := res.Verification.Kind == mcp.VerificationQueueTarget
+			if res.Verification.Kind == mcp.VerificationSeasonClean {
+				kind, kindErr := r.svc.storedProblemKind(issue.ID)
+				acceptable = kindErr == nil && kind == arr.ProblemPreAirSeasonFill
+			}
+			if acceptable {
+				present := res.Verification.TargetPresent
+				ctrl.targetPresent = &present
+			}
 		}
 		ctrl.releaseCandidates = res.ReleaseCandidates
 		return res.Text, false, ctrl
@@ -1124,7 +1265,7 @@ func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu
 // responses rather than Go errors.
 func isVerificationRead(name string, result *mcp.ToolResult) bool {
 	switch name {
-	case "get_queue", "diagnose_queue", "get_manual_import_candidates", "get_history", "get_library":
+	case "get_queue", "diagnose_queue", "get_manual_import_candidates", "get_history", "get_library", "get_episode_timeline", "get_book_timeline":
 	default:
 		return false
 	}
@@ -1219,7 +1360,9 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 	}
 	params["media_type"] = issue.MediaType
 	queueScopedTool := toolName == "get_queue" || toolName == "diagnose_queue" || toolName == "get_manual_import_candidates"
-	if toolName != "get_arr_health" {
+	// A settings read is about the INSTANCE, not about a title, so requiring a
+	// media identity for it would refuse a read that never needed one.
+	if toolName != "get_arr_health" && toolName != "get_quality_profiles" && toolName != "get_custom_formats" && toolName != "get_service_config" {
 		switch issue.MediaType {
 		case "movie":
 			if issue.TmdbID <= 0 && !(queueScopedTool && issue.ArrQueueID > 0 && issue.DownloadID != "") {
@@ -1312,6 +1455,57 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.AuthorID > 0 {
 			params["author_id"] = issue.AuthorID
 		}
+	case "get_quality_profiles", "get_custom_formats", "get_service_config":
+		// Refusing an issue with no instance is MANDATORY, not defensive. Unlike
+		// every other read tool these two are not handed callCtx.InstanceID, and
+		// their own resolver falls back to the service's DEFAULT instance when
+		// instance_id is blank — so a scoped read on an instance-less issue
+		// would silently return a different instance's configuration.
+		if issue.InstanceID == "" {
+			return nil, fmt.Errorf("issue has no authoritative instance for scoped %s", toolName)
+		}
+		// media_type is not in either schema; the rest select the header+raw-JSON
+		// forms, which are the ones the settings package warns about and are far
+		// larger than a step-budgeted agent should be reading. Deleting them
+		// leaves only the bounded summary.
+		delete(params, "media_type")
+		delete(params, "profile_id")
+		delete(params, "format_id")
+		delete(params, "include_languages")
+		delete(params, "language_name")
+		params["service"] = mediaServiceType(issue.MediaType)
+		params["instance_id"] = issue.InstanceID
+	case "get_episode_timeline":
+		// Season-shaped on purpose: episode_number is deliberately NOT injected,
+		// so an issue naming one episode still sees the whole season around it.
+		// A pre-air fill is only legible across the season — a single episode
+		// looks like an ordinary file. This never widens past the issue's own
+		// series, which is the access boundary that matters.
+		if issue.TmdbID > 0 {
+			params["tmdb_id"] = issue.TmdbID
+		}
+		if issue.TvdbID > 0 {
+			params["tvdb_id"] = issue.TvdbID
+		}
+		if issue.SeasonNumber > 0 {
+			params["season_number"] = issue.SeasonNumber
+		}
+	case "get_book_timeline":
+		// The scrub above deleted book_id like every other identity key; without
+		// this re-injection the tool was allow-listed but unreachable — every
+		// call refused with "needs the issue's book_id".
+		if issue.BookID > 0 {
+			params["book_id"] = issue.BookID
+		}
+	case "get_media_file_details":
+		// Same unreachable-when-scrubbed shape as get_book_timeline: the tool
+		// requires tmdb_id, which the scrub deleted.
+		if issue.TmdbID > 0 {
+			params["tmdb_id"] = issue.TmdbID
+		}
+		if issue.SeasonNumber > 0 {
+			params["season_number"] = issue.SeasonNumber
+		}
 	}
 	return json.Marshal(params)
 }
@@ -1344,10 +1538,16 @@ func (r *Runner) claimResume(issueID int64) (resumeState, bool, error) {
 		}
 		return resumeState{}, false, err
 	}
+	// `open` is accepted beside `investigating` on purpose: a fix's own
+	// success empties the queue, the preflight suspends the issue for the
+	// absence settle, and re-promotion lands it at open — which used to orphan
+	// this handoff and burn its transcript, closing the issue via a second
+	// fresh run instead. active_run_id is the mutual exclusion either way: a
+	// fresh Run that claims first blocks this CAS, and vice versa.
 	issueRes, err := tx.Exec(
 		`UPDATE issues SET status = ?, active_run_id = ?, updated_at = CURRENT_TIMESTAMP
-		 WHERE id = ? AND status = ? AND active_run_id IS NULL AND closed_at IS NULL`,
-		IssueInvestigating, state.runID, issueID, IssueInvestigating,
+		 WHERE id = ? AND status IN (?, ?) AND active_run_id IS NULL AND closed_at IS NULL`,
+		IssueInvestigating, state.runID, issueID, IssueInvestigating, IssueOpen,
 	)
 	if err != nil {
 		return resumeState{}, false, err
@@ -1421,25 +1621,27 @@ func (r *Runner) claim(issue *Issue, model string) (runID int64, claimed bool, e
 // finalizeRun stamps a terminal status + stop_reason + finished_at on the run.
 func (r *Runner) finalizeRun(runID int64, status, stopReason string) error {
 	_, err := r.db.Exec(
-		`UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL, finished_at = CURRENT_TIMESTAMP
+		`UPDATE agent_runs SET status = ?, stop_reason = ?, finished_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND status IN (?, ?)`,
 		status, stopReason, runID, runStatusRunning, runStatusResumePending,
 	)
 	return err
 }
 
-func (r *Runner) beginActiveWindow(runID int64, remainingSeconds int) time.Time {
-	r.db.Exec("UPDATE agent_runs SET deadline_at = datetime('now', ?) WHERE id = ?",
-		fmt.Sprintf("+%d seconds", remainingSeconds), runID)
-	return time.Now()
-}
-
+// finishActiveWindow closes one active (non-parked) work segment for the run's
+// wall-clock accounting. Its begin half used to also arm agent_runs.deadline_at
+// for a hung-run watchdog that was never built: 46 days of production runs
+// (16-71s actives, bounded by the model provider's own timeout and
+// MaxWallClockSecs) never produced the hang it guarded against, so the 2026-08
+// complexity ledger deleted the writes. The column stays in the schema for
+// rollback compatibility, permanently NULL, like the retired cost_micros
+// estimates.
 func (r *Runner) finishActiveWindow(runID int64, started time.Time) {
 	elapsed := int((time.Since(started) + time.Second - 1) / time.Second)
 	if elapsed < 1 {
 		elapsed = 1
 	}
-	r.db.Exec("UPDATE agent_runs SET active_seconds = active_seconds + ?, deadline_at = NULL WHERE id = ?", elapsed, runID)
+	r.db.Exec("UPDATE agent_runs SET active_seconds = active_seconds + ? WHERE id = ?", elapsed, runID)
 }
 
 // bumpRunUsage accumulates provider-reported token usage and the step count onto
@@ -1515,8 +1717,49 @@ func (r *Runner) giveUp(ctx context.Context, issueID, runID int64, model, stopRe
 	// The run transition, issue claim release, and human-readable message commit
 	// together. Exhaustion is not a resolution.
 	if _, err := r.svc.GiveUpIssue(ctx, issueID, runID, stopReason, message,
-		"Agent needs administrator review: "+stopReason); err != nil {
+		giveUpResolution(stopReason)); err != nil {
 		log.Printf("remediation: giveUp transition for issue %d: %v", issueID, err)
+	}
+	return nil
+}
+
+// giveUpResolution renders a give-up's issue headline in admin language
+// instead of stop-reason vocabulary: issue 856 (2026-08-12) showed an admin a
+// raw "unverified_conclusion" token while the actual story sat one tap deeper
+// in the thread. The token stays in parentheses because it is the key an
+// admin greps runs and rules by.
+func giveUpResolution(stopReason string) string {
+	var plain string
+	switch stopReason {
+	case stopUnverifiedClose:
+		plain = "The agent investigated and reported what it found in the conversation, but could not verify that a fix took effect, so this needs a human decision."
+	case stopMaxSteps:
+		plain = "The agent used its whole step budget without reaching a verified fix; its findings are in the conversation."
+	case stopTimeout:
+		plain = "The agent ran out of time before reaching a verified fix; its findings are in the conversation."
+	case stopModelError:
+		plain = "The AI provider failed during the investigation; whatever was gathered is in the conversation."
+	case stopInfrastructure:
+		plain = "The AI provider was unavailable, so the investigation could not run."
+	case stopNoDiagnosis:
+		plain = "The agent could not identify a safe fix; its reasoning is in the conversation."
+	default:
+		return "Agent needs administrator review: " + stopReason
+	}
+	return plain + " (" + stopReason + ")"
+}
+
+// parkConfirm finalizes a run whose fix executed but whose subjective verdict
+// remains with the reporter. Same audit shape as giveUp; the issue parks at
+// awaiting_confirmation instead of needs_admin.
+func (r *Runner) parkConfirm(ctx context.Context, issueID, runID int64, stopReason, message string) error {
+	if runID != 0 {
+		var nextSeq int
+		r.db.QueryRow("SELECT COALESCE(MAX(seq),0)+1 FROM agent_steps WHERE run_id = ?", runID).Scan(&nextSeq)
+		r.persistStep(runID, issueID, nextSeq, stepGiveup, "", "", "", "awaiting reporter confirmation: "+stopReason, false)
+	}
+	if _, err := r.svc.ParkAwaitingConfirmation(ctx, issueID, runID, stopReason, message); err != nil {
+		log.Printf("remediation: confirm park transition for issue %d: %v", issueID, err)
 	}
 	return nil
 }
@@ -1541,7 +1784,7 @@ func (r *Runner) dailyRunCapExceeded(cap int) (bool, error) {
 
 func isTerminalStatus(s string) bool {
 	switch s {
-	case IssueResolved, IssueWontFix, IssueFailed, IssueDismissed:
+	case IssueResolved, IssueWontFix, IssueDismissed:
 		return true
 	}
 	return false
@@ -1593,7 +1836,7 @@ func boolToInt(b bool) int {
 // textForOutput selects which audit column carries the tool output vs the
 // assistant text: tool rows put content in tool_output, assistant rows in text.
 func textForOutput(kind, text string) string {
-	if kind == stepToolResult || kind == stepToolCall {
+	if kind == stepToolResult {
 		return text
 	}
 	return ""

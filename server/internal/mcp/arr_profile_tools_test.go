@@ -402,11 +402,16 @@ func TestProfileChangeSurfacesBoundedValidationAndConsumesReference(t *testing.T
 
 func TestProfileChangeToolsAreStrictAdminOnlyAndInAppOnly(t *testing.T) {
 	server := NewToolServer(nil, nil, nil, nil)
-	for _, name := range []string{"preview_profile_change", "apply_profile_change"} {
-		definition := findToolDefinition(name)
-		if definition == nil || definition.Permission != auth.PermissionInstancesManage || !definition.InAppChatOnly {
-			t.Fatalf("%s definition = %#v", name, definition)
-		}
+	// preview is externally discoverable — from an external MCP client it
+	// parks a proposal instead of arming the same-turn apply. apply stays
+	// in-app-only: no external path may ever complete the write itself.
+	preview := findToolDefinition("preview_profile_change")
+	if preview == nil || preview.Permission != auth.PermissionInstancesManage || preview.InAppChatOnly {
+		t.Fatalf("preview_profile_change definition = %#v", preview)
+	}
+	apply := findToolDefinition("apply_profile_change")
+	if apply == nil || apply.Permission != auth.PermissionInstancesManage || !apply.InAppChatOnly {
+		t.Fatalf("apply_profile_change definition = %#v", apply)
 	}
 
 	server.SetCallAuthorizer(func(context.Context, CallContext) (string, error) { return auth.RoleUser, nil })
@@ -416,10 +421,26 @@ func TestProfileChangeToolsAreStrictAdminOnlyAndInAppOnly(t *testing.T) {
 	}
 
 	server.SetCallAuthorizer(func(context.Context, CallContext) (string, error) { return auth.RoleAdmin, nil })
+	// External preview on a server without the proposal ledger refuses
+	// rather than silently dropping the parked change.
 	external := profileToolCallContext("turn", "change it")
 	external.Origin = OriginExternalMCP
 	result, err = server.ExecuteTool(context.Background(), "preview_profile_change", json.RawMessage(`{"service":"radarr","profile_id":1,"changes":{"upgrade_allowed":false}}`), external)
+	if err != nil || !strings.Contains(result.Text, "unavailable") {
+		t.Fatalf("external preview without ledger result=%v err=%v", result, err)
+	}
+	// A provenance-free context (no turn, no trusted text, not external) is
+	// still refused outright.
+	bare := CallContext{UserID: 77, Role: auth.RoleAdmin, DeviceID: "device-77", Origin: OriginInteractiveChat}
+	result, err = server.ExecuteTool(context.Background(), "preview_profile_change", json.RawMessage(`{"service":"radarr","profile_id":1,"changes":{"upgrade_allowed":false}}`), bare)
 	if err != nil || !strings.Contains(result.Text, "only in Cantinarr") {
-		t.Fatalf("external preview result=%v err=%v", result, err)
+		t.Fatalf("provenance-free preview result=%v err=%v", result, err)
+	}
+	// apply refuses external origin no matter what.
+	externalApply := profileToolCallContext("turn", "change it")
+	externalApply.Origin = OriginExternalMCP
+	result, err = server.ExecuteTool(context.Background(), "apply_profile_change", json.RawMessage(`{"change_reference":"`+strings.Repeat("a", 15+43)+`"}`), externalApply)
+	if err != nil || !strings.Contains(result.Text, "only in Cantinarr") {
+		t.Fatalf("external apply result=%v err=%v", result, err)
 	}
 }

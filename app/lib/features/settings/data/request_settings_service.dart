@@ -163,6 +163,20 @@ class PendingRequestItem {
   final int qualityProfileId;
   final DateTime? requestedAt;
 
+  /// Set only on rows from the waiting list: why the server is holding this
+  /// request itself. Empty on every approval-queue row, which is waiting on a
+  /// person instead.
+  final String waitReason;
+
+  /// When the server last retried a waiting row. Null means it could not vouch
+  /// for an attempt (it restarted since the request was parked) — the honest
+  /// answer is "unknown", not "never".
+  final DateTime? lastAttemptAt;
+
+  /// Set when this queue row is not a policy question: the automatic add
+  /// already ran and failed. Empty on an ordinary decision.
+  final String addFailureReason;
+
   const PendingRequestItem({
     required this.id,
     required this.userId,
@@ -180,7 +194,61 @@ class PendingRequestItem {
     required this.seasonScope,
     required this.qualityProfileId,
     required this.requestedAt,
+    this.waitReason = '',
+    this.lastAttemptAt,
+    this.addFailureReason = '',
   });
+
+  /// What the server is waiting on, in admin vocabulary. Null for an actionable
+  /// row; a generic line for a reason this app version does not know, because a
+  /// wait it cannot name is still a wait it must not hide.
+  String? get waitDescription => switch (waitReason) {
+        '' => null,
+        'author_import' => 'The library is still importing this author',
+        _ => 'The library is not ready for this book yet',
+      };
+
+  /// Why this row is in the queue when it isn't a routine yes/no, and what the
+  /// admin would actually do about it. Null for an ordinary decision — most
+  /// rows — so the queue stays quiet unless there is something to say.
+  ({String reason, String action})? get addFailure => switch (addFailureReason) {
+        '' => null,
+        'metadata_unresolved' => (
+            reason: 'The library couldn’t match this book',
+            action: 'Approving retries the same add. Add it in the library '
+                'first, then approve.',
+          ),
+        'import_abandoned' => (
+            reason: 'The automatic add failed while waiting for the author '
+                'import',
+            action: 'Try again to resume waiting, or deny to close the '
+                'request.',
+          ),
+        'import_failed' => (
+            reason: 'The library gave up importing this author',
+            action: 'Its metadata service reported the import failed. Try '
+                'again to reopen it and keep waiting, or deny to close the '
+                'request.',
+          ),
+        'import_cancelled' => (
+            reason: 'The author import was cancelled in the library',
+            action: 'Try again to queue it once more and keep waiting, or '
+                'deny to close the request.',
+          ),
+        // A reason this version doesn't know is still not a routine decision.
+        _ => (
+            reason: 'The automatic add already failed',
+            action: 'Approving retries it. Check the library first.',
+          ),
+      };
+
+  /// True when this row is in the queue because a server-watched author-import
+  /// wait ended — the rows whose honest verbs are "try again" and deny, since
+  /// approving just replays an add the library already refused.
+  bool get isImportWait => switch (addFailureReason) {
+        'import_abandoned' || 'import_failed' || 'import_cancelled' => true,
+        _ => false,
+      };
 
   bool get isTv => mediaType == 'tv';
   bool get isBook => mediaType == 'book';
@@ -238,6 +306,11 @@ class PendingRequestItem {
         qualityProfileId: json['quality_profile_id'] as int? ?? 0,
         requestedAt:
             DateTime.tryParse(json['requested_at'] as String? ?? '')?.toLocal(),
+        waitReason: json['wait_reason'] as String? ?? '',
+        lastAttemptAt: DateTime.tryParse(
+                json['last_attempt_at'] as String? ?? '')
+            ?.toLocal(),
+        addFailureReason: json['add_failure_reason'] as String? ?? '',
       );
 }
 
@@ -345,6 +418,33 @@ class RequestSettingsService {
         .toList();
   }
 
+  /// The requests the server is retrying itself. Informational: these rows have
+  /// no approve/deny.
+  ///
+  /// Returns null when this server has no such endpoint — a 404, or a body that
+  /// isn't a list, both meaning "older build". That is absence of the feature,
+  /// and the caller hides the section, leaving Approvals exactly as it was
+  /// before this existed.
+  ///
+  /// Every other failure throws, so the caller can say it went blind. The one
+  /// thing neither may do is quietly render an empty waiting list: "nothing is
+  /// waiting" and "I couldn't look" are the two answers this whole change is
+  /// about telling apart.
+  Future<List<PendingRequestItem>?> listWaiting() async {
+    try {
+      final resp = await _dio.get('/api/admin/requests/waiting');
+      final rows = resp.data;
+      if (rows is! List) return null;
+      return rows
+          .whereType<Map<String, dynamic>>()
+          .map(PendingRequestItem.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
   Future<BookApprovalResult> approve(int id,
       {String? seasonScope, int? qualityProfileId}) async {
     final body = <String, dynamic>{};
@@ -360,5 +460,19 @@ class RequestSettingsService {
   Future<void> deny(int id, {String? reason}) async {
     await _dio.post('/api/admin/requests/$id/deny',
         data: {if (reason != null && reason.isNotEmpty) 'reason': reason});
+  }
+
+  /// "Try again" on a request whose author-import wait ended: the server
+  /// replays the add once and either completes the request (the author landed
+  /// since) or puts the row back under its automatic watch. Returns the
+  /// server's confirmation message — empty when the replay completed the
+  /// request outright.
+  Future<String> wait(int id) async {
+    final resp = await _dio.post('/api/admin/requests/$id/wait');
+    final data = resp.data;
+    if (data is Map<String, dynamic>) {
+      return data['message'] as String? ?? '';
+    }
+    return '';
   }
 }

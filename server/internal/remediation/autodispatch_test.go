@@ -60,7 +60,7 @@ func TestObservationStartsSilentAndPromotesExactlyOnce(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", instanceID, []arr.QueueObservation{item}, base); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 1 || issues[0].Status != IssueObserving || !issues[0].Read {
 		t.Fatalf("initial issue = %+v, want silent observing/read", issues)
 	}
@@ -109,7 +109,7 @@ func TestReplacementStaysOneSilentRecoveringIncident(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{replacement}, base.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 1 || issues[0].Status != IssueRecovering || issues[0].DownloadID != "replacement" {
 		t.Fatalf("replacement incident = %+v", issues)
 	}
@@ -140,6 +140,34 @@ func TestDispatcherCoalescesToNewestCompleteSnapshotPerInstance(t *testing.T) {
 	got := pending[0]
 	if len(got.items) != 1 || got.items[0].DownloadID != "replacement" {
 		t.Fatalf("coalesced snapshot=%+v, want newest recovery evidence", got)
+	}
+}
+
+// Two reads inside one wall-clock tick carry the SAME observedAt: snapshots are
+// stamped with time.Now().UTC(), and .UTC() strips Go's monotonic reading, so
+// the clock cannot separate them. The newer snapshot must still win — it is the
+// recovery evidence the coalescer exists to preserve. Frozen clock, because the
+// real one only produces this tie by luck.
+func TestDispatcherKeepsNewestSnapshotWhenTimestampsTie(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	dispatcher := NewAutoDispatcher(svc)
+	frozen := time.Date(2026, 8, 2, 4, 0, 0, 0, time.UTC)
+	dispatcher.now = func() time.Time { return frozen }
+
+	stale := observedProblem("old", 1, 100)
+	recovered := stale
+	recovered.DownloadID = "replacement"
+	recovered.Signal = arr.QueueSignal{Status: "downloading", TrackedDownloadStatus: "ok", Size: 100, SizeLeft: 75}
+	recovered.Diagnosis = arr.Diagnose(recovered.Signal)
+
+	dispatcher.ObserveQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{stale})
+	dispatcher.ObserveQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{recovered})
+
+	dispatcher.snapshotMu.Lock()
+	defer dispatcher.snapshotMu.Unlock()
+	pending := dispatcher.pendingSnapshots["radarr\x00"+testRadarrInstanceID]
+	if len(pending) != 1 || len(pending[0].items) != 1 || pending[0].items[0].DownloadID != "replacement" {
+		t.Fatalf("tied timestamps kept the stale snapshot: %+v", pending)
 	}
 }
 
@@ -317,4 +345,152 @@ func TestAutoIssueSchemaSanity(t *testing.T) {
 	if _, err := database.Exec("INSERT INTO issues (source,status,media_type,tmdb_id,title,instance_id,download_id,dedupe_key) VALUES ('auto','observing','movie',0,'x','i','d','k')"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Autonomy never stands down silently: the breaker trip opens ONE durable
+// admin issue and re-enabling auto-dispatch is what closes it.
+func TestBreakerTripOpensDurableIssueAndReenableResolves(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.SetSettings(Settings{Enabled: true, AutoDispatch: true, Mode: ModeSupervised}); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	svc.tripCircuitBreaker(5, 5)
+
+	var issueID int64
+	var status string
+	if err := svc.db.QueryRow(
+		"SELECT id, status FROM issues WHERE dedupe_key = ? AND closed_at IS NULL",
+		autoDispatchBreakerDedupeKey,
+	).Scan(&issueID, &status); err != nil {
+		t.Fatalf("breaker issue missing: %v", err)
+	}
+	if status != IssueNeedsAdmin {
+		t.Fatalf("breaker issue status = %q, want %q", status, IssueNeedsAdmin)
+	}
+	if svc.Settings().AutoDispatch {
+		t.Fatalf("auto-dispatch still on after trip")
+	}
+
+	cur := svc.Settings()
+	cur.AutoDispatch = true
+	if _, err := svc.SetSettings(cur); err != nil {
+		t.Fatalf("re-enable: %v", err)
+	}
+	var kind string
+	var closed bool
+	if err := svc.db.QueryRow(
+		"SELECT resolution_kind, closed_at IS NOT NULL FROM issues WHERE id = ?", issueID,
+	).Scan(&kind, &closed); err != nil {
+		t.Fatalf("read breaker issue: %v", err)
+	}
+	if !closed || kind == "" {
+		t.Fatalf("breaker issue after re-enable = closed %v kind %q, want auto-resolved", closed, kind)
+	}
+}
+
+// The boot repair's rule pause is announced exactly once at worker start —
+// the last silent stand-down.
+func TestBootPausedRulesAnnounceOnce(t *testing.T) {
+	svc, notif, _ := setupTestService(t)
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_approval_rules (problem_kind, action_kind, action_facet, status, paused_reason, paused_at, created_at, updated_at)
+		 VALUES ('Download stalled', 'remediate_queue', 'blocklist_search', 'paused',
+		         'Cantinarr restarted while an auto-approved fix was executing; verify the arr state before re-arming this rule.',
+		         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed boot-paused rule: %v", err)
+	}
+	svc.announceBootPausedRules()
+	found := 0
+	for _, event := range notif.adminEvents {
+		if event == "agent_autoapproval_paused" {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Fatalf("boot pause announcements = %d, want exactly 1", found)
+	}
+}
+
+// TestStalledIncidentWaitsOutTrackerWarmup pins the dwell that issue 859
+// (2026-08-13) lacked: a torrent flagged "stalled" 34 seconds after its grab
+// became an incident, promoted at 10 minutes, and a standing rule destroyed the
+// only release in existence before the torrent ever had a chance to find a
+// peer. "Stalled" from a torrent client means "no data moving right now" —
+// which is every torrent during tracker warmup — so a young stalled flag must
+// not be able to open the incident that starts that pipeline.
+func TestStalledIncidentWaitsOutTrackerWarmup(t *testing.T) {
+	base := time.Date(2026, 8, 13, 13, 53, 0, 0, time.UTC)
+
+	observe := func(t *testing.T, svc *Service, added *time.Time, at time.Time) {
+		t.Helper()
+		item := observedProblem("stall-dwell", 7, 100)
+		item.AddedAt = added
+		if err := svc.observeQueueSnapshot("radarr", "radarr-observe", []arr.QueueObservation{item}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	issueCount := func(t *testing.T, svc *Service) int {
+		t.Helper()
+		issues, _, err := svc.ListIssues("", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(issues)
+	}
+
+	t.Run("young stalled is not an incident yet", func(t *testing.T) {
+		svc, _, _ := setupObservationService(t, false)
+		enableAutoDispatch(t, svc, 5)
+		added := base
+		// 34 seconds after the grab — 859's exact shape.
+		observe(t, svc, &added, base.Add(34*time.Second))
+		if n := issueCount(t, svc); n != 0 {
+			t.Fatalf("issues after a 34s-old stalled flag = %d, want 0 (tracker warmup is not an incident)", n)
+		}
+		// Still stalled past the dwell: the same download now IS an incident.
+		// Nothing was lost by waiting — a stalled torrent makes no progress.
+		observe(t, svc, &added, base.Add(stalledIncidentDwell+time.Minute))
+		if n := issueCount(t, svc); n != 1 {
+			t.Fatalf("issues after outlasting the dwell = %d, want 1 (a genuinely dead torrent must still surface)", n)
+		}
+	})
+
+	t.Run("an unknown added time keeps today's behavior", func(t *testing.T) {
+		svc, _, _ := setupObservationService(t, false)
+		enableAutoDispatch(t, svc, 5)
+		// All three arrs supply `added`; nil is the degenerate case, and
+		// inventing a birth time would suppress real incidents on evidence we
+		// do not have.
+		observe(t, svc, nil, base)
+		if n := issueCount(t, svc); n != 1 {
+			t.Fatalf("issues for a stalled item with no added time = %d, want 1", n)
+		}
+	})
+
+	t.Run("a different problem in the same group still opens the incident", func(t *testing.T) {
+		svc, _, _ := setupObservationService(t, false)
+		enableAutoDispatch(t, svc, 5)
+		added := base
+		young := observedProblem("stall-dwell", 7, 100)
+		young.AddedAt = &added
+		hard := arr.QueueSignal{
+			TrackedDownloadStatus: "error",
+			ErrorMessage:          "qBittorrent is reporting an error",
+			Size:                  100, SizeLeft: 100,
+		}
+		sibling := arr.QueueObservation{
+			DownloadID: "stall-dwell",
+			AddedAt:    &added,
+			Media:      arr.QueueMediaContext{QueueID: 7, Title: "Example", TmdbID: 42},
+			Signal:     hard, Diagnosis: arr.Diagnose(hard),
+		}
+		if err := svc.observeQueueSnapshot("radarr", "radarr-observe",
+			[]arr.QueueObservation{young, sibling}, base.Add(34*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if n := issueCount(t, svc); n != 1 {
+			t.Fatalf("issues with a hard client error alongside a young stall = %d, want 1 (the dwell gates only the stalled signal)", n)
+		}
+	})
 }

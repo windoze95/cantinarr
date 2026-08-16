@@ -2,6 +2,7 @@ package request
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -56,7 +57,11 @@ func (f *fakeRadarr) handler(t *testing.T) http.Handler {
 			if records == "" {
 				records = "[]"
 			}
-			_, _ = w.Write([]byte(`{"records":` + records + `}`))
+			// The client's bounded-page read fails closed unless totalRecords
+			// matches the page, mirroring the live paged envelope.
+			var rows []json.RawMessage
+			_ = json.Unmarshal([]byte(records), &rows)
+			_, _ = fmt.Fprintf(w, `{"totalRecords":%d,"records":%s}`, len(rows), records)
 		default:
 			t.Errorf("unexpected radarr request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

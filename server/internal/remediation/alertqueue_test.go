@@ -58,7 +58,7 @@ func TestPromotionThatFallsBackToTrackingNeverPages(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", "radarr-observe", []arr.QueueObservation{problem}, base.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 1 || issues[0].Status != IssueOpen {
 		t.Fatalf("promotion did not happen: %+v", issues)
 	}
@@ -176,7 +176,7 @@ func TestPromotionWaveCoalescesIntoOneAlert(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 3 {
 		t.Fatalf("wave = %d incidents, want 3 (one per exact media scope)", len(issues))
 	}

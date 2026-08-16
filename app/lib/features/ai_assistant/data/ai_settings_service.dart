@@ -109,12 +109,19 @@ class EffectiveAiSettings {
 
 class AiSettings {
   final List<AiProviderOption> providers;
+
+  /// Server-advertised zero-config selection, preselected when the user has
+  /// chosen nothing. Older servers send neither field.
+  final String? defaultProvider;
+  final String? defaultModel;
   final PersonalAiSettings personal;
   final SharedAiSettings shared;
   final EffectiveAiSettings effective;
 
   const AiSettings({
     required this.providers,
+    this.defaultProvider,
+    this.defaultModel,
     required this.personal,
     required this.shared,
     required this.effective,
@@ -139,6 +146,8 @@ class AiSettings {
           .map(AiProviderOption.fromJson)
           .where((provider) => provider.id.isNotEmpty)
           .toList(),
+      defaultProvider: json['default_provider'] as String?,
+      defaultModel: json['default_model'] as String?,
       personal: PersonalAiSettings.fromJson(
         personal is Map<String, dynamic> ? personal : const {},
       ),

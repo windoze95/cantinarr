@@ -33,6 +33,12 @@ void main() {
       expect(IssueStatus.recovering.isTracking, isTrue);
       expect(IssueStatus.recovering.label, 'Download recovery in progress');
       expect(IssueStatus.recovering.needsAttention, isFalse);
+      // waiting is a server-owned wait (e.g. a parked book author import): it
+      // resolves itself, so it must track passively, never demand attention.
+      expect(IssueStatus.waiting.isTerminal, isFalse);
+      expect(IssueStatus.waiting.label, 'Waiting and retrying');
+      expect(IssueStatus.waiting.isTracking, isTrue);
+      expect(IssueStatus.waiting.needsAttention, isFalse);
       expect(IssueStatus.awaitingApproval.needsAttention, isTrue);
     });
 
@@ -141,6 +147,68 @@ void main() {
         'tmdb_id': 0,
       });
       expect(book.scopeLabel, 'Book');
+    });
+
+    test('carries the reporter-confirm flag only when the server sends it', () {
+      final confirmable = Issue.fromJson({
+        'id': 14,
+        'source': 'user',
+        'media_type': 'tv',
+        'status': 'open',
+        'tmdb_id': 1399,
+        'can_confirm_fixed': true,
+      });
+      expect(confirmable.canConfirmFixed, isTrue);
+
+      // Absent on every list read and on an older server: never offer an
+      // irreversible close the server would refuse.
+      final listRead = Issue.fromJson({
+        'id': 14,
+        'source': 'user',
+        'media_type': 'tv',
+        'status': 'open',
+        'tmdb_id': 1399,
+      });
+      expect(listRead.canConfirmFixed, isFalse);
+
+      final closed = Issue.fromJson({
+        'id': 14,
+        'source': 'user',
+        'media_type': 'tv',
+        'status': 'resolved',
+        'tmdb_id': 1399,
+        'resolution': 'The reporter confirmed the fix worked.',
+        'resolution_kind': 'reporter_confirmed',
+        'can_confirm_fixed': false,
+        'closed_at': '2026-07-10T12:00:00Z',
+      });
+      expect(closed.canConfirmFixed, isFalse);
+      expect(closed.resolutionKind, IssueResolutionKind.reporterConfirmed);
+      expect(closed.resolutionKind.label, 'Confirmed fixed');
+    });
+
+    test('names every closure kind the server can send', () {
+      // A kind the app cannot name renders as the "unknown" fallback, so the
+      // thread would claim it does not know how a perfectly explained issue
+      // closed.
+      for (final value in const [
+        'agent_concluded',
+        'arr_state_cleared',
+        'reporter_timeout',
+        'reporter_confirmed',
+        'admin_dismissed',
+        'admin_completed',
+        'ai_health_restored',
+        'push_delivery_restored',
+        'book_import_cleared',
+        'legacy_unknown',
+      ]) {
+        final kind = IssueResolutionKind.fromValue(value);
+        expect(kind.value, value, reason: '$value has no modeled kind');
+        if (value != 'legacy_unknown') {
+          expect(kind.label, isNot(IssueResolutionKind.unknown.label));
+        }
+      }
     });
 
     test('translates the reporter-timeout sentinel into requester copy', () {

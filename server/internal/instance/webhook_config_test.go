@@ -66,6 +66,8 @@ func webhookSchema(serviceType string) map[string]any {
 		// The Readarr lineage names the import event onReleaseImport and its
 		// settings carry no headers field.
 		resource["onReleaseImport"] = false
+		resource["onAuthorAdded"] = false
+		resource["onBookAdded"] = false
 		resource["onBookDelete"] = false
 		resource["onAuthorDelete"] = false
 		resource["onBookFileDelete"] = false
@@ -141,11 +143,17 @@ func TestConfigureWebhookRegistersChaptarrAgainstV1(t *testing.T) {
 	if got, _ := captured["onReleaseImport"].(bool); !got {
 		t.Error("onReleaseImport was not enabled, so book imports would never alert")
 	}
-	// The Readarr lineage suppresses the import notification for a book that
-	// replaces an existing file unless onUpgrade is on, so a declared flag must
-	// be enabled.
+	// The Readarr lineage sends no import callback for a book that replaces an
+	// existing file unless onUpgrade is on. The callback must still arrive —
+	// it invalidates availability caches and feeds the admin content_upgraded
+	// alert; the notifier, not this webhook, decides who is paged for it.
 	if got, _ := captured["onUpgrade"].(bool); !got {
-		t.Error("onUpgrade was not enabled, so upgraded books would never alert")
+		t.Error("onUpgrade was not enabled, so upgrade imports would never reach the server")
+	}
+	// onAuthorAdded is what lets the receiver resume author-import parks the
+	// moment the arr finishes a queued import, instead of on the next tick.
+	if got, _ := captured["onAuthorAdded"].(bool); !got {
+		t.Error("onAuthorAdded was not enabled, so parked book requests would only resume by poll")
 	}
 	if _, present := captured["onEpisodeFileDelete"]; present {
 		t.Error("a Sonarr-only event flag leaked onto a Chaptarr resource")
@@ -170,9 +178,10 @@ func TestConfigureWebhookRegistersChaptarrAgainstV1(t *testing.T) {
 }
 
 // TestConfigureWebhookFailsWhenChaptarrDeclaresNoImportEvent is the fail-loud
-// guarantee. Chaptarr is closed source, so its event vocabulary is inherited
-// rather than verified; if no import toggle exists the admin must see an error
-// at configure time instead of a silently useless webhook.
+// guarantee. The import toggle is onReleaseImport (verified against
+// Chaptarr's open source), but the schema template stays the authority at
+// configure time; if it declares no import toggle the admin must see an
+// error instead of a silently useless webhook.
 func TestConfigureWebhookFailsWhenChaptarrDeclaresNoImportEvent(t *testing.T) {
 	schema := webhookSchema("chaptarr")
 	delete(schema, "onReleaseImport")
@@ -198,8 +207,7 @@ func TestConfigureWebhookFailsWhenChaptarrDeclaresNoImportEvent(t *testing.T) {
 // treated as permission rather than refusal.
 func TestConfigureWebhookHonorsUnsupportedEventFlags(t *testing.T) {
 	schema := webhookSchema("chaptarr")
-	schema["onDownload"] = false
-	schema["supportsOnDownload"] = false
+	schema["supportsOnBookDelete"] = false
 
 	var captured map[string]any
 	arr := arrWebhookStub(t, "v1", schema, &captured)
@@ -210,7 +218,7 @@ func TestConfigureWebhookHonorsUnsupportedEventFlags(t *testing.T) {
 	if rec := postWebhook(t, NewHandler(store, nil), inst.ID); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if got, _ := captured["onDownload"].(bool); got {
+	if got, _ := captured["onBookDelete"].(bool); got {
 		t.Error("an event the schema reports unsupported was enabled anyway")
 	}
 	if got, _ := captured["onReleaseImport"].(bool); !got {
@@ -691,6 +699,177 @@ func TestConfigureWebhookErrorOmitsUnrecognizedBody(t *testing.T) {
 	}
 	if !strings.Contains(body, "the arr tests the webhook during configuration") {
 		t.Errorf("400 without extractable detail lost the reachability hint: %s", body)
+	}
+}
+
+// getWebhookStatus mirrors postWebhook: the expected callback must derive from
+// the trusted request origin, never from client-controlled forwarded headers.
+func getWebhookStatus(t *testing.T, handler *Handler, instanceID string) *httptest.ResponseRecorder {
+	t.Helper()
+	router := chi.NewRouter()
+	router.Get("/instances/{instanceID}/webhook", handler.WebhookStatus)
+	req := httptest.NewRequest(http.MethodGet, "https://cantinarr.example:8443/instances/"+instanceID+"/webhook", nil)
+	req.Header.Set("X-Forwarded-Proto", "javascript")
+	req.Header.Set("X-Forwarded-Host", "attacker.example")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func decodeWebhookStatus(t *testing.T, rec *httptest.ResponseRecorder) (supported, configured bool, state string) {
+	t.Helper()
+	var body struct {
+		Supported  bool   `json:"supported"`
+		Configured bool   `json:"configured"`
+		State      string `json:"state"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode status: %v — %s", err, rec.Body.String())
+	}
+	return body.Supported, body.Configured, body.State
+}
+
+// notificationListStub serves only the notification list; the status read must
+// never write to the arr, so everything else 404s loudly.
+func notificationListStub(t *testing.T, apiVersion string, records func() []any) *httptest.Server {
+	t.Helper()
+	base := "/api/" + apiVersion + "/notification"
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == base {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(records())
+			return
+		}
+		t.Errorf("status read sent %s %s to the arr", r.Method, r.URL.Path)
+		http.NotFound(w, r)
+	}))
+}
+
+func managedWebhookRecord(name, url string) map[string]any {
+	return map[string]any{
+		"id": 7, "name": name, "implementation": "Webhook", "configContract": "WebhookSettings",
+		"fields": []any{map[string]any{"name": "url", "value": url}},
+	}
+}
+
+// TestWebhookStatusReportsLiveArrState pins that the answer comes from the
+// arr's Connect list at read time: the same store reads "ok", "missing", or
+// "stale" purely by what the arr reports right now — a stored flag would keep
+// claiming configured after an admin deleted the record or the public URL
+// moved.
+func TestWebhookStatusReportsLiveArrState(t *testing.T) {
+	var records []any
+	arr := notificationListStub(t, "v3", func() []any { return records })
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "sonarr", arr.URL)
+	if _, err := store.WebhookToken(inst.ID); err != nil {
+		t.Fatalf("seed webhook credential: %v", err)
+	}
+	handler := NewHandler(store, nil)
+	callback := "https://cantinarr.example:8443/api/webhooks/arr/" + inst.ID
+
+	cases := []struct {
+		name           string
+		records        []any
+		wantConfigured bool
+		wantState      string
+	}{
+		{"managed record targets the expected callback",
+			[]any{managedWebhookRecord(managedWebhookName, callback)}, true, webhookStateOK},
+		{"no webhook installed", []any{}, false, webhookStateMissing},
+		{"record targets another Cantinarr address",
+			[]any{managedWebhookRecord(managedWebhookName, "http://old-host/api/webhooks/arr/" + inst.ID)}, false, webhookStateStale},
+		{"adopted legacy record still carries its query credential",
+			[]any{managedWebhookRecord("Old manual hook", callback+"?token=legacy")}, false, webhookStateStale},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			records = tc.records
+			rec := getWebhookStatus(t, handler, inst.ID)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+			}
+			supported, configured, state := decodeWebhookStatus(t, rec)
+			if !supported || configured != tc.wantConfigured || state != tc.wantState {
+				t.Fatalf("got supported=%v configured=%v state=%q, want supported=true configured=%v state=%q",
+					supported, configured, state, tc.wantConfigured, tc.wantState)
+			}
+		})
+	}
+}
+
+// TestWebhookStatusReportsMissingServerCredential pins the restored-database
+// shape: an arr record that looks right while this server holds no accepted
+// credential must not read as configured — every delivery would be rejected.
+// Chaptarr here also exercises the v1 lineage path.
+func TestWebhookStatusReportsMissingServerCredential(t *testing.T) {
+	var records []any
+	arr := notificationListStub(t, "v1", func() []any { return records })
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "chaptarr", arr.URL)
+	records = []any{managedWebhookRecord(managedWebhookName,
+		"https://cantinarr.example:8443/api/webhooks/arr/"+inst.ID)}
+	rec := getWebhookStatus(t, NewHandler(store, nil), inst.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if _, configured, state := decodeWebhookStatus(t, rec); configured || state != webhookStateCredentialMissing {
+		t.Fatalf("configured=%v state=%q, want false/%s", configured, state, webhookStateCredentialMissing)
+	}
+}
+
+// TestWebhookStatusDistinguishesBlindnessFromAbsence: an unreadable arr is a
+// 502, never "missing" — rendered the same, the two would stop an admin from
+// looking further.
+func TestWebhookStatusDistinguishesBlindnessFromAbsence(t *testing.T) {
+	arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "radarr", arr.URL)
+	rec := getWebhookStatus(t, NewHandler(store, nil), inst.ID)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"state"`) {
+		t.Fatalf("blindness rendered as a status verdict: %s", rec.Body.String())
+	}
+}
+
+func TestWebhookStatusUnsupportedAndUnknownInstances(t *testing.T) {
+	store := newTestStore(t)
+	downloadID := mkInstance(t, store, "sabnzbd", "Downloads")
+	handler := NewHandler(store, nil)
+	rec := getWebhookStatus(t, handler, downloadID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sabnzbd status = %d, want 200", rec.Code)
+	}
+	if supported, configured, state := decodeWebhookStatus(t, rec); supported || configured || state != webhookStateUnsupported {
+		t.Fatalf("sabnzbd = %v/%v/%q, want unsupported", supported, configured, state)
+	}
+	if rec := getWebhookStatus(t, handler, "missing-instance"); rec.Code != http.StatusNotFound {
+		t.Errorf("missing status = %d, want 404", rec.Code)
+	}
+}
+
+// TestWebhookStatusReportsUnusablePublicURL: with a public URL that can never
+// carry a callback, the status is an answer (configure would fail the same
+// way), not an error.
+func TestWebhookStatusReportsUnusablePublicURL(t *testing.T) {
+	store := newTestStore(t)
+	id := mkInstance(t, store, "radarr", "Movies")
+	rec := getWebhookStatus(t, NewHandler(store, nil, "javascript://attacker.example"), id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if _, configured, state := decodeWebhookStatus(t, rec); configured || state != webhookStateNoPublicURL {
+		t.Fatalf("configured=%v state=%q, want false/%s", configured, state, webhookStateNoPublicURL)
 	}
 }
 

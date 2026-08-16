@@ -50,15 +50,29 @@ func (s *Service) queueIssueAlert(issueID int64, now time.Time) {
 	}
 }
 
+// issuePageBudget is the per-issue re-page budget: once the queue has paged an
+// admin about an issue, re-promotions of that same issue inside this window
+// are already-announced work — the issue is still open and visible in the app,
+// and issue 813 (2026-08-01) proved the promotion edge alone will happily buzz
+// a phone three times in one night about one download.
+const issuePageBudget = 24 * time.Hour
+
 // flushIssueAlerts advances every owed alert by one tick: closed issues are
-// dropped unannounced, issues back in tracking restart their hold-down, and
-// whatever has stayed out of tracking for the full window is announced — one
-// push per source, carrying a count rather than one push per incident.
+// dropped unannounced, issues back in tracking restart their hold-down,
+// issues paged within the last 24h are considered already announced, and once
+// the deliverable wave has stayed quiet for the hold-down (or its oldest row
+// hits the delivery ceiling) everything owed is announced together — one push
+// per source, carrying a count rather than one push per incident. Delivering
+// per-tick instead of per-quiesce is what turned the 2026-08-10 season-pack
+// wave into six pushes in twenty minutes: promotions arriving ~90s apart each
+// caught their own decision tick, and same-tick batching never engaged.
 //
 // The queue row, not issue_observations.promoted_at, is the once-per-issue
 // ledger. An incident that flaps out of tracking and back keeps its pending row
 // with a restarted clock, so a problem that eventually sticks still pages even
-// though its first promotion was cancelled.
+// though its first promotion was cancelled. issues.last_paged_at is the
+// durable record that a page actually left the building — both the budget's
+// input and the per-issue send log the 2026-08-10 audit found missing.
 func (s *Service) flushIssueAlerts(now time.Time) {
 	if s.notifier == nil {
 		return
@@ -94,12 +108,42 @@ func (s *Service) flushIssueAlerts(now time.Time) {
 		return
 	}
 
-	cutoff := now.Add(-issueAlertHoldDown)
+	// An issue the queue already paged inside the budget is announced work:
+	// drop the fresh debt unannounced. The issue itself stays open and visible.
+	if _, err := s.db.Exec(
+		`DELETE FROM issue_alert_queue WHERE issue_id IN (
+		   SELECT q.issue_id FROM issue_alert_queue q JOIN issues i ON i.id = q.issue_id
+		   WHERE i.last_paged_at IS NOT NULL AND i.last_paged_at > ?)`,
+		now.Add(-issuePageBudget),
+	); err != nil {
+		log.Printf("remediation: drop budgeted issue alerts: %v", err)
+		return
+	}
+
+	// Wave gating over the DELIVERABLE rows only. Rows for issues back in
+	// tracking were just re-armed to queued_at=now above; counting them here
+	// would hold every real page hostage to any flapping incident.
+	var forming, ceiling bool
+	if err := s.db.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM issue_alert_queue q JOIN issues i ON i.id = q.issue_id
+		        WHERE i.status NOT IN (?, ?) AND q.queued_at > ?),
+		        EXISTS(SELECT 1 FROM issue_alert_queue q JOIN issues i ON i.id = q.issue_id
+		        WHERE i.status NOT IN (?, ?) AND q.queued_at <= ?)`,
+		IssueObserving, IssueRecovering, now.Add(-issueAlertHoldDown),
+		IssueObserving, IssueRecovering, now.Add(-alertWaveMaxDelay),
+	).Scan(&forming, &ceiling); err != nil {
+		log.Printf("remediation: read issue alert window: %v", err)
+		return
+	}
+	if forming && !ceiling {
+		return // The wave is still forming; deliver it whole once it goes quiet.
+	}
+
 	rows, err := s.db.Query(
 		`SELECT q.issue_id, i.source, i.title FROM issue_alert_queue q
 		 JOIN issues i ON i.id = q.issue_id
-		 WHERE q.queued_at <= ? ORDER BY q.issue_id`,
-		cutoff,
+		 WHERE i.status NOT IN (?, ?) ORDER BY q.issue_id`,
+		IssueObserving, IssueRecovering,
 	)
 	if err != nil {
 		log.Printf("remediation: read due issue alerts: %v", err)
@@ -124,14 +168,27 @@ func (s *Service) flushIssueAlerts(now time.Time) {
 		return
 	}
 
-	// Clear the whole batch in one statement before sending. Sends are
-	// fire-and-forget, so a failure after this point costs one alert; leaving
-	// the rows would instead re-page every tick. Deleting by the hold-down
-	// cutoff (rather than per id) keeps the clear atomic with what was read: a
-	// row queued after the SELECT is newer than the cutoff and survives.
-	if _, err := s.db.Exec(`DELETE FROM issue_alert_queue WHERE queued_at <= ?`, cutoff); err != nil {
+	// Clear the batch and stamp the per-issue send record before sending.
+	// Sends are fire-and-forget, so a failure after this point costs one
+	// alert; leaving the rows would instead re-page every tick. Deleting by
+	// the exact ids read keeps the clear atomic with what was read: a row
+	// queued after the SELECT is untouched and starts its own wave.
+	ids := make([]any, len(due))
+	placeholders := strings.Repeat("?,", len(due))
+	for i, alert := range due {
+		ids[i] = alert.id
+	}
+	if _, err := s.db.Exec(
+		`DELETE FROM issue_alert_queue WHERE issue_id IN (`+placeholders[:len(placeholders)-1]+`)`, ids...,
+	); err != nil {
 		log.Printf("remediation: clear delivered issue alerts: %v", err)
 		return
+	}
+	stampArgs := append([]any{now}, ids...)
+	if _, err := s.db.Exec(
+		`UPDATE issues SET last_paged_at = ? WHERE id IN (`+placeholders[:len(placeholders)-1]+`)`, stampArgs...,
+	); err != nil {
+		log.Printf("remediation: stamp paged issues: %v", err)
 	}
 
 	bySource := make(map[string][]queuedIssueAlert)
@@ -169,12 +226,15 @@ func (s *Service) queueActionAlert(issueID int64, now time.Time) {
 	}
 }
 
-// actionAlertMaxDelay bounds how long the approval queue may keep waiting for
-// a wave to stop growing. A batch cause parks its proposals in a trickle (a
-// dozen runs across two workers spread over several minutes), so delivery
-// waits for a full hold-down with no new arrival — but a continuous trickle
-// must not defer the page forever, so the oldest owed alert caps the wait.
-const actionAlertMaxDelay = 15 * time.Minute
+// alertWaveMaxDelay bounds how long either alert queue may keep waiting for a
+// wave to stop growing. A batch cause arrives in a trickle (a season pack's
+// per-episode promotions land ~90s apart; a dozen runs across two workers park
+// proposals over several minutes), so delivery waits for a full hold-down with
+// no new arrival — but a continuous trickle must not defer the page forever,
+// so the oldest owed alert caps the wait. Together with the quiescence rule
+// this is the stagger policy: at most one push per queue per source inside any
+// window of this length.
+const alertWaveMaxDelay = 15 * time.Minute
 
 // flushActionAlerts advances every owed approval push by one tick: rows whose
 // proposal was decided, superseded, or whose issue closed are dropped
@@ -212,7 +272,7 @@ func (s *Service) flushActionAlerts(now time.Time) {
 	if err := s.db.QueryRow(
 		`SELECT EXISTS(SELECT 1 FROM agent_action_alert_queue WHERE queued_at > ?),
 		        EXISTS(SELECT 1 FROM agent_action_alert_queue WHERE queued_at <= ?)`,
-		now.Add(-issueAlertHoldDown), now.Add(-actionAlertMaxDelay),
+		now.Add(-issueAlertHoldDown), now.Add(-alertWaveMaxDelay),
 	).Scan(&forming, &ceiling); err != nil {
 		log.Printf("remediation: read action alert window: %v", err)
 		return

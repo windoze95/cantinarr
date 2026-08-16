@@ -1,0 +1,10 @@
+# Build the image from this checkout instead of pulling the published one:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Deliberately not named docker-compose.override.yml — compose auto-loads that
+# name, which would silently switch everyone back to source builds.
+services:
+  cantinarr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cantinarr-local

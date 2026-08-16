@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
+	"github.com/windoze95/cantinarr-server/internal/version"
 )
 
 func TestAppleAppSiteAssociationHandler(t *testing.T) {
@@ -265,6 +267,35 @@ func TestConfigHandlerReportsMediaDownloadCapabilityWithoutExposingRoots(t *test
 	}
 }
 
+// TestConfigHandlerAdvertisesVersionFloor pins the warn-only skew contract:
+// min_app_version is always present and always a bare semver triple, so a
+// malformed floor can never ship and silently break the app-side comparison.
+func TestConfigHandlerAdvertisesVersionFloor(t *testing.T) {
+	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{
+		UserID: userID,
+		Role:   auth.RoleUser,
+	}))
+	rec := httptest.NewRecorder()
+
+	configHandler(&config.Config{}, store, creds, nil, remediationSvc)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response configHandlerResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	if response.MinAppVersion != version.MinAppVersion {
+		t.Fatalf("min_app_version = %q, want %q", response.MinAppVersion, version.MinAppVersion)
+	}
+	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(response.MinAppVersion) {
+		t.Fatalf("min_app_version = %q, want a bare MAJOR.MINOR.PATCH triple", response.MinAppVersion)
+	}
+}
+
 // SEC-018: requester and admin config responses expose only effective, non-secret configuration.
 func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
@@ -334,6 +365,11 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			t.Fatalf("seed credential %s: %v", key, err)
 		}
 		secretSentinels = append(secretSentinels, value)
+	}
+	// A stored key alone is not a selection; pick the API-key provider
+	// explicitly so services.ai reflects a configured install.
+	if err := creds.SetAIConfig(credentials.AIProviderAnthropic, credentials.DefaultAIModel(credentials.AIProviderAnthropic)); err != nil {
+		t.Fatalf("select AI provider: %v", err)
 	}
 
 	cfg := &config.Config{
@@ -414,7 +450,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 				t.Fatalf("decode config response: %v", err)
 			}
 			assertExactMapKeys(t, payload,
-				"server_name", "version", "services", "instances", "issues_enabled", "allow_reporting",
+				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
 			)
 
 			var services map[string]bool
@@ -474,8 +510,9 @@ func assertExactMapKeys[V any](t *testing.T, got map[string]V, want ...string) {
 }
 
 type configHandlerResponse struct {
-	Services  map[string]bool `json:"services"`
-	Instances []struct {
+	MinAppVersion string          `json:"min_app_version"`
+	Services      map[string]bool `json:"services"`
+	Instances     []struct {
 		ID             string `json:"id"`
 		ServiceType    string `json:"service_type"`
 		Name           string `json:"name"`

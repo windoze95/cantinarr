@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
@@ -43,13 +44,29 @@ type AvailabilityInvalidator interface {
 	InvalidateBookDigests(instanceID string)
 }
 
+// PreAirImportWitness is told when an import lands on an episode that has not
+// aired yet. *remediation.Service satisfies it.
+//
+// The witness, not this handler, decides whether that is a problem: one early
+// file is an everyday air-date slip, and the threshold that separates a slip
+// from a season of content that does not exist lives with the detector.
+type PreAirImportWitness interface {
+	RecordPreAirImport(instanceID string, tvdbID, tmdbID, seasonNumber int, title string)
+	// RecordSuspectImport is told about every completed Sonarr import so the
+	// truncated-file sentinel can judge it against the arr's own analysis.
+	// Advisory-only in this wave: the witness opens admin notices, never runs.
+	RecordSuspectImport(instanceID string, tvdbID, tmdbID, seasonNumber, episodeNumber int, title string)
+}
+
 // Handler terminates the arr webhook callbacks.
 type Handler struct {
-	store    *instance.Store
-	registry *instance.Registry
-	hub      Broadcaster
-	requests AvailabilityInvalidator
-	content  ws.ContentNotifier
+	store       *instance.Store
+	registry    *instance.Registry
+	hub         Broadcaster
+	requests    AvailabilityInvalidator
+	content     ws.ContentNotifier
+	preAir      PreAirImportWitness
+	parkResumer BookParkResumer
 }
 
 // NewHandler builds the webhook handler. content may be nil (push disabled).
@@ -57,11 +74,34 @@ func NewHandler(store *instance.Store, registry *instance.Registry, hub Broadcas
 	return &Handler{store: store, registry: registry, hub: hub, requests: requests, content: content}
 }
 
+// SetPreAirImportWitness wires the pre-air detector after construction, matching
+// how the other optional dependencies are attached in main.
+func (h *Handler) SetPreAirImportWitness(w PreAirImportWitness) { h.preAir = w }
+
+// BookParkResumer resumes the server-owned author-import parks out of cadence;
+// *request.Service satisfies it. Chaptarr's AuthorAdded callback fires at the
+// exact moment a queued author import lands — the one event every park is
+// waiting for — so the sweep runs now instead of at the next five-minute tick.
+type BookParkResumer interface {
+	ResumeBookParks()
+}
+
+// SetBookParkResumer wires the park resumer after construction; nil leaves the
+// parks on the maintenance cadence alone.
+func (h *Handler) SetBookParkResumer(r BookParkResumer) { h.parkResumer = r }
+
 // arrPayload is the superset of the Sonarr and Radarr webhook fields this
 // handler acts on. Both apps send eventType plus a movie or series object;
 // everything else is ignored.
 type arrPayload struct {
 	EventType string `json:"eventType"`
+	// IsUpgrade marks a Download event whose import replaced an existing file.
+	// It gates WHO is paged, never whether state refreshes: a proven upgrade
+	// goes to the admin content_upgraded category instead of the household
+	// broadcast. Absent decodes false, so an arr that doesn't send it (or a
+	// drifted payload) broadcasts as new content — suppression requires
+	// positive proof, never the other way around.
+	IsUpgrade bool `json:"isUpgrade"`
 	Movie     *struct {
 		ID     int    `json:"id"`
 		Title  string `json:"title"`
@@ -73,6 +113,16 @@ type arrPayload struct {
 		TvdbID int    `json:"tvdbId"`
 		TmdbID int    `json:"tmdbId"`
 	} `json:"series"`
+	// Episodes is what Sonarr already sends on every Download and Grab, and
+	// what Cantinarr threw away until the pre-air detector needed it: an
+	// episode's own air date is the only thing that can say a file claiming to
+	// be it cannot possibly be it.
+	Episodes []struct {
+		ID            int        `json:"id"`
+		EpisodeNumber int        `json:"episodeNumber"`
+		SeasonNumber  int        `json:"seasonNumber"`
+		AirDateUtc    *time.Time `json:"airDateUtc"`
+	} `json:"episodes"`
 	// Chaptarr sends a singular book on import and a plural list on grab. Only
 	// the record id is read; identity comes from a live lookup.
 	Book *struct {
@@ -81,6 +131,49 @@ type arrPayload struct {
 	Books []struct {
 		ID int `json:"id"`
 	} `json:"books"`
+}
+
+// checkPreAirImport hands an import that landed on an unaired episode to the
+// witness, and does nothing at all otherwise.
+//
+// The test is deliberately free: it reads air dates the payload already carries
+// and touches no network, so the overwhelmingly normal case — a file arriving
+// for an episode that has aired — costs one comparison per episode. Only the
+// impossible case pays for a library read, and it pays for it in the witness.
+func (h *Handler) checkPreAirImport(instanceID string, payload arrPayload) {
+	if h.preAir == nil || payload.Series == nil {
+		return
+	}
+	// The floor mirrors the season verdict's (arr.PreAirMarginFloor): an
+	// episode airing within it is a binge premiere on TheTVDB's runtime-
+	// staggered calendar, not a pre-air import, and must not even wake the
+	// witness for a season probe.
+	horizon := time.Now().UTC().Add(arr.PreAirMarginFloor)
+	for _, ep := range payload.Episodes {
+		if ep.AirDateUtc == nil || !ep.AirDateUtc.After(horizon) {
+			continue
+		}
+		h.preAir.RecordPreAirImport(instanceID, payload.Series.TvdbID, payload.Series.TmdbID,
+			ep.SeasonNumber, payload.Series.Title)
+		// One report per season is enough: the witness reads the whole season
+		// anyway, and a pack that imports as ten episodes must not open ten
+		// investigations of one problem.
+		return
+	}
+}
+
+// checkSuspectImport hands every completed import to the truncated-file
+// sentinel. Unlike the pre-air gate there is no free payload test — the
+// evidence (the arr's ffprobe runtime for the imported file) needs a library
+// read — so the witness owns the whole judgment and its cost.
+func (h *Handler) checkSuspectImport(instanceID string, payload arrPayload) {
+	if h.preAir == nil || payload.Series == nil {
+		return
+	}
+	for _, ep := range payload.Episodes {
+		h.preAir.RecordSuspectImport(instanceID, payload.Series.TvdbID, payload.Series.TmdbID,
+			ep.SeasonNumber, ep.EpisodeNumber, payload.Series.Title)
+	}
 }
 
 // bookIDs returns the usable Chaptarr record ids in the payload, deduplicated
@@ -167,10 +260,12 @@ func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPa
 	case "Download": // import completed (including manual imports)
 		h.requests.InvalidateAvailabilityDigests(instanceID)
 		if payload.Movie != nil {
-			h.movieImported(instanceID, payload.Movie.ID, payload.Movie.Title, payload.Movie.TmdbID)
+			h.movieImported(instanceID, payload.Movie.ID, payload.Movie.Title, payload.Movie.TmdbID, payload.IsUpgrade)
 		}
 		if payload.Series != nil {
-			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, true)
+			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, true, payload.IsUpgrade)
+			h.checkPreAirImport(instanceID, payload)
+			h.checkSuspectImport(instanceID, payload)
 		}
 
 	case "MovieAdded", "SeriesAdd":
@@ -190,7 +285,7 @@ func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPa
 	case "EpisodeFileDelete":
 		h.requests.InvalidateAvailabilityDigests(instanceID)
 		if payload.Series != nil {
-			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, false)
+			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, false, false)
 		}
 
 	default:
@@ -240,6 +335,12 @@ func (h *Handler) handleBookEvent(instanceID string, payload arrPayload) {
 			"service_type": "chaptarr",
 		},
 	})
+	if (event == "authoradd" || event == "authoradded") && h.parkResumer != nil {
+		// The arr just finished importing an author — the exit every
+		// author-import park waits on. Resume the sweep now; the maintenance
+		// cadence stays the fallback for missed callbacks.
+		h.parkResumer.ResumeBookParks()
+	}
 	if !isImport {
 		return
 	}
@@ -250,14 +351,15 @@ func (h *Handler) handleBookEvent(instanceID string, payload arrPayload) {
 		return
 	}
 	for _, id := range ids {
-		h.bookImported(instanceID, id)
+		h.bookImported(instanceID, id, payload.IsUpgrade)
 	}
 }
 
 // bookImported announces a completed book import after confirming it against
 // the live record, applying the same guards as the queue-departure witness so
 // the two witnesses produce an identical alert and dedupe against each other.
-func (h *Handler) bookImported(instanceID string, bookID int) {
+// isUpgrade reroutes the alert to the admin content_upgraded category.
+func (h *Handler) bookImported(instanceID string, bookID int, isUpgrade bool) {
 	if h.content == nil || h.registry == nil {
 		return
 	}
@@ -283,7 +385,11 @@ func (h *Handler) bookImported(instanceID string, bookID int) {
 	}
 	// Raw MediaType, exactly as the poller passes it: any normalization here
 	// would change the dedupe key and produce two pushes for one import.
-	h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+	if isUpgrade {
+		h.content.NotifyUpgradedBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+	} else {
+		h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+	}
 }
 
 // tokenMatches checks the Basic Auth password against every credential valid
@@ -303,9 +409,10 @@ func tokenMatches(r *http.Request, accepted []string) bool {
 
 // movieImported reflects a completed movie import: re-reads the movie so the
 // broadcast carries live state (mirrors the hub's queue-departure witness) and
-// pushes the new-content alert. Falls back to the payload identity when the
-// arr can't be reached.
-func (h *Handler) movieImported(instanceID string, movieID int, title string, tmdbID int) {
+// pushes the new-content alert — or, for a proven upgrade, the admin-only
+// upgrade alert. Falls back to the payload identity when the arr can't be
+// reached.
+func (h *Handler) movieImported(instanceID string, movieID int, title string, tmdbID int, isUpgrade bool) {
 	if client, err := h.registry.GetRadarrClient(instanceID); err == nil {
 		if movie, err := client.GetMovie(movieID); err == nil {
 			if !movie.HasFile {
@@ -324,7 +431,11 @@ func (h *Handler) movieImported(instanceID string, movieID int, title string, tm
 		},
 	})
 	if h.content != nil {
-		h.content.NotifyNewMovie(title, tmdbID)
+		if isUpgrade {
+			h.content.NotifyUpgradedMovie(title, tmdbID)
+		} else {
+			h.content.NotifyNewMovie(title, tmdbID)
+		}
 	}
 }
 
@@ -358,8 +469,9 @@ func (h *Handler) movieFileDeleted(instanceID string, movieID, tmdbID int) {
 // seriesChanged recomputes a series' availability from the live episode list
 // (the same aired-aware completion the hub and status endpoint use) and
 // broadcasts it; notify pushes the new-episode alert too (import events only —
-// file deletions change availability but aren't news).
-func (h *Handler) seriesChanged(instanceID string, seriesID int, title string, tmdbID int, notify bool) {
+// file deletions change availability but aren't news). isUpgrade reroutes that
+// alert to the admin content_upgraded category.
+func (h *Handler) seriesChanged(instanceID string, seriesID int, title string, tmdbID int, notify, isUpgrade bool) {
 	status := "partially_available"
 	if client, err := h.registry.GetSonarrClient(instanceID); err == nil {
 		if series, err := client.GetSeries(seriesID); err == nil {
@@ -383,7 +495,11 @@ func (h *Handler) seriesChanged(instanceID string, seriesID int, title string, t
 		},
 	})
 	if notify && h.content != nil {
-		h.content.NotifyNewEpisode(title, tmdbID)
+		if isUpgrade {
+			h.content.NotifyUpgradedEpisode(title, tmdbID)
+		} else {
+			h.content.NotifyNewEpisode(title, tmdbID)
+		}
 	}
 }
 

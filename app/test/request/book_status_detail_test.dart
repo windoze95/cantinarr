@@ -154,6 +154,40 @@ class _FailedPostAfterMutationAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+// _RejectedPostAdapter answers every status check with "not requested" and
+// rejects the POST outright with an error the app has no specific label for —
+// the shape of a live arr-side validation refusal that mutated nothing.
+class _RejectedPostAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method == 'POST') {
+      return ResponseBody.fromString(
+        jsonEncode({
+          'error': 'chaptarr add book: chaptarr POST returned status 400',
+        }),
+        500,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+    }
+    return ResponseBody.fromString(
+      jsonEncode({'status': 'unavailable'}),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
 class _DeferredPostRefreshAdapter implements HttpClientAdapter {
   final refreshResponse = Completer<ResponseBody>();
   var statusChecks = 0;
@@ -581,6 +615,201 @@ void main() {
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
   });
 
+  testWidgets('a request the library has not taken yet says what it is waiting on',
+      (tester) async {
+    await tester.pumpWidget(_panel(_service({
+      'status': 'requested',
+      'book_formats': {'ebook': 'requested'},
+      'book_format_waits': {
+        'ebook': {
+          'reason': 'author_import',
+          'waiting_since': '2026-08-14T20:27:36Z',
+        },
+      },
+    })));
+    await tester.pumpAndSettle();
+
+    // "Requested" is what this row said before, and it claims a library record
+    // that does not exist. One word is the whole defect.
+    expect(find.text('Waiting for library'), findsOneWidget);
+    expect(find.text('Requested'), findsNothing);
+    // Durable, not a toast: it is on screen without anyone having just tapped.
+    expect(
+      find.textContaining('The library is still adding this author'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('no action is needed'), findsOneWidget);
+    // Nothing to press on the waiting row. No retry, no ETA, no second ask.
+    expect(
+      find.descendant(of: _row('ebook'), matching: find.text('Request')),
+      findsNothing,
+    );
+    expect(find.text('Couldn’t check · Retry'), findsNothing);
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+    // The format nobody asked for is untouched and still offerable.
+    expect(
+      find.descendant(of: _row('audiobook'), matching: find.text('Request')),
+      findsOneWidget,
+    );
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
+  });
+
+  testWidgets('one wait, one explanation, even when both formats wait',
+      (tester) async {
+    await tester.pumpWidget(_panel(_service({
+      'status': 'requested',
+      'book_formats': {'ebook': 'requested', 'audiobook': 'requested'},
+      'book_format_waits': {
+        'ebook': {'reason': 'author_import'},
+        'audiobook': {'reason': 'author_import'},
+      },
+    })));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Waiting for library'), findsNWidgets(2));
+    // Both rows wait on the same import; saying it twice would read as two
+    // separate problems.
+    expect(
+      find.textContaining('The library is still adding this author'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a submitted wait survives a status read that has not caught up',
+      (tester) async {
+    final adapter = _WaitingSubmitAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(_row('ebook'));
+    await tester.pumpAndSettle();
+
+    // The status re-read still reports nothing (the row exists, but the live
+    // projection has no record to show). Falling back to a bare "Requested"
+    // here would put the original wrong word back on screen at exactly the
+    // moment the requester is looking.
+    expect(find.text('Waiting for library'), findsOneWidget);
+    expect(
+      find.textContaining('The library is still adding this author'),
+      findsOneWidget,
+    );
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+  });
+
+  // Pins the arrangement deterministically instead of by pixels. A golden of
+  // this scene sat at 1.01% against the tolerant comparator's 1.00% budget on
+  // the Linux CI renderer — glyph-box edges shifting, no structural difference
+  // — and test/flutter_test_config.dart says to keep golden scenes text-light
+  // for exactly that reason. Here the text IS the feature, so the scene can
+  // never be text-light, and a golden a hair from failing on rasterisation
+  // would flake on the next engine bump while proving nothing this doesn't.
+  testWidgets('the explanation sits under the whole panel, not inside a row',
+      (tester) async {
+    tester.view.physicalSize = const Size(402, 874);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(_panel(_service({
+      'status': 'requested',
+      'book_formats': {'ebook': 'requested'},
+      'book_format_waits': {
+        'ebook': {'reason': 'author_import'},
+      },
+    })));
+    await tester.pumpAndSettle();
+
+    final explanation =
+        find.textContaining('The library is still adding this author');
+    final pill = find.text('Waiting for library');
+
+    // The pill belongs to the row it describes; the explanation belongs to the
+    // panel, below both rows, so it reads as one wait rather than as a caption
+    // on the eBook line.
+    expect(
+      find.descendant(of: _row('ebook'), matching: pill),
+      findsOneWidget,
+    );
+    expect(find.descendant(of: _row('ebook'), matching: explanation),
+        findsNothing);
+    expect(
+      tester.getRect(explanation).top,
+      greaterThan(tester.getRect(_row('audiobook')).bottom),
+    );
+    // And it is inside the panel's own column, so it travels with the panel.
+    expect(
+      find.descendant(of: find.byType(BookFormatPanel), matching: explanation),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('the wait survives 320px at double text size', (tester) async {
+    // The narrowest screen the app targets, at 200% text. "Waiting for library"
+    // is longer than the "Requested" it replaces, so the row has to stack
+    // rather than run off the edge — and the explanation is a paragraph.
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(2.0)),
+          // The real screen hosts this panel in a ListView, so a tall
+          // accessibility layout scrolls; the failure worth catching is a row
+          // that cannot fit horizontally.
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              BookFormatPanel(
+                foreignId: 'fb',
+                title: 'The Body Keeps the Score',
+                service: _service({
+                  'status': 'requested',
+                  'book_formats': {'ebook': 'requested'},
+                  'book_format_waits': {
+                    'ebook': {'reason': 'author_import'},
+                  },
+                }),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Waiting for library'), findsOneWidget);
+    expect(
+      find.textContaining('The library is still adding this author'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('waiting formats keep rechecking so the wait can end on its own',
+      (tester) async {
+    final adapter = _GetAdapter({
+      'status': 'requested',
+      'book_formats': {'ebook': 'requested'},
+      'book_format_waits': {
+        'ebook': {'reason': 'author_import'},
+      },
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await tester.pumpAndSettle();
+
+    final initial = adapter.requestCount;
+    // The owner gets no push when the server completes a park — nobody decided
+    // anything — so this poll is the only way the screen ever stops saying
+    // "waiting".
+    await tester.pump(const Duration(seconds: 31));
+    await tester.pumpAndSettle();
+    expect(adapter.requestCount, greaterThan(initial));
+  });
+
   testWidgets('unknown book truth is visible and blocks request mutation',
       (tester) async {
     await tester.pumpWidget(_panel(_service({'status': 'future-status'})));
@@ -669,13 +898,28 @@ void main() {
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
     expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
     expect(find.text('Request'), findsOneWidget);
+    // The refresh proved the tapped format landed despite the failed call, so
+    // the announcement matches the row instead of disowning the outcome.
+    expect(find.text('eBook requested.'), findsOneWidget);
+  });
+
+  testWidgets('an answered rejection that changed nothing names the failure',
+      (tester) async {
+    final adapter = _RejectedPostAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await tester.pumpAndSettle();
+    await tester.tap(_row('ebook'));
+    await tester.pumpAndSettle();
+
+    // The server answered, so the outcome is a confirmed failure — not the
+    // hedged couldn't-confirm line — and the row stays requestable.
     expect(
-      find.text(
-        'The request outcome couldn’t be confirmed. The book status was '
-        'refreshed.',
-      ),
+      find.text('The library could not complete this request. Try again later.'),
       findsOneWidget,
     );
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNotNull);
   });
 
   testWidgets('a successful POST stays disabled until refreshed truth arrives',
@@ -828,6 +1072,40 @@ Widget _panel(
     );
 
 Finder _row(String format) => find.byKey(ValueKey('book-format-row:$format'));
+
+/// Accepts a request as a wait, then keeps answering status reads with nothing
+/// — the real sequence while the library is still importing the author, since
+/// there is no record for the live projection to find.
+class _WaitingSubmitAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    final body = options.method == 'POST'
+        ? {
+            'status': 'requested',
+            'book_formats': {'ebook': 'requested'},
+            'message':
+                'This book’s author is still being added to the library.',
+            'book_format_waits': {
+              'ebook': {'reason': 'author_import'},
+            },
+          }
+        : {'status': 'unavailable'};
+    return ResponseBody.fromString(
+      jsonEncode(body),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
 
 /// Holds each POST open per book_format so a test can interleave taps with
 /// in-flight submissions; GETs (status checks) answer immediately.

@@ -54,8 +54,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String? _testResult;
   bool _testSucceeded = false;
   bool _isConfiguringWebhook = false;
-  bool? _webhookConfigured;
   String? _webhookResult;
+  Color _webhookResultColor = AppTheme.textSecondary;
 
   // Completed-media path mappings belong to this exact arr instance. The
   // deployment roots remain server-owned; this form only routes arr paths into
@@ -166,6 +166,54 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _loadMediaRoots();
     _loadArrRootFolders();
     _loadDirectory();
+    _loadWebhookStatus();
+  }
+
+  /// Reads the live instant-updates state so the section says whether the
+  /// webhook is actually on. The server derives it from the arr's own Connect
+  /// list — a stored flag would keep claiming "configured" after an admin
+  /// deleted the record there. Older servers without the route answer 404/405
+  /// and the section simply shows no status line.
+  Future<void> _loadWebhookStatus() async {
+    if (!widget.isEditing || !_supportsWebhook) return;
+    String? result;
+    var color = AppTheme.textSecondary;
+    try {
+      final status =
+          await InstanceApiService(backendDio: ref.read(backendClientProvider))
+              .webhookStatus(widget.instanceId!);
+      if (!status.supported) return;
+      if (status.configured) {
+        result = 'Instant updates are on.';
+        color = AppTheme.available;
+      } else {
+        result = switch (status.state) {
+          'stale' => 'The $_serviceLabel webhook points at a different '
+              'Cantinarr address — configure to update it.',
+          'credential_missing' => 'The $_serviceLabel webhook exists, but the '
+              'server no longer holds its credential — configure to reissue '
+              'it.',
+          'no_public_url' => 'The server cannot determine its public URL — '
+              'set CANTINARR_PUBLIC_URL, then configure.',
+          _ => 'Instant updates are not configured yet.',
+        };
+      }
+    } on DioException catch (e) {
+      final code = e.response?.statusCode ?? 0;
+      // An older server has no status route; unknown is not worth a line.
+      if (code == 404 || code == 405) return;
+      // Blindness, not absence: the state could not be read, which is a
+      // different answer than "not configured".
+      result = 'Could not check instant updates: ${_errorMessage(e)}';
+    } catch (_) {
+      return;
+    }
+    // A manual configure that already reported wins over this snapshot.
+    if (!mounted || _isConfiguringWebhook || _webhookResult != null) return;
+    setState(() {
+      _webhookResult = result;
+      _webhookResultColor = color;
+    });
   }
 
   /// Reads the library folders this saved instance reports through the arr
@@ -821,14 +869,37 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           assignmentError = _errorMessage(e);
         }
       }
+      // Instant updates are on by default: install the server-managed webhook
+      // right away, so the feature never depends on the admin finding the
+      // button later. A failure (commonly a callback the arr cannot reach)
+      // must not undo or obscure the successful create — it is reported and
+      // retried from the edit screen.
+      String? webhookError;
+      var webhookConfigured = false;
+      if (_supportsWebhook) {
+        try {
+          await service.configureWebhook(created.id);
+          webhookConfigured = true;
+        } catch (e) {
+          webhookError = _errorMessage(e);
+        }
+      }
       await _refreshConfigAfterSave();
       if (mounted) {
+        final problems = <String>[
+          if (assignmentError != null)
+            'assigning users failed: $assignmentError',
+          if (webhookError != null)
+            "instant updates couldn't be configured: $webhookError",
+        ];
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text(assignmentError == null
-                  ? 'Instance created'
-                  : 'Instance created, but assigning users failed: '
-                      '$assignmentError — edit the instance to retry')),
+              content: Text(problems.isNotEmpty
+                  ? 'Instance created, but ${problems.join('; ')} '
+                      '— edit the instance to retry'
+                  : webhookConfigured
+                      ? 'Instance created — instant updates configured'
+                      : 'Instance created')),
         );
         context.pop(true); // Return true to signal refresh needed
       }
@@ -931,7 +1002,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     if (id == null) return;
     setState(() {
       _isConfiguringWebhook = true;
-      _webhookConfigured = null;
       _webhookResult = null;
     });
     try {
@@ -941,15 +1011,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       if (!mounted) return;
       setState(() {
         _isConfiguringWebhook = false;
-        _webhookConfigured = true;
         _webhookResult = 'Instant updates are configured.';
+        _webhookResultColor = AppTheme.available;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _isConfiguringWebhook = false;
-        _webhookConfigured = false;
         _webhookResult = _errorMessage(e);
+        _webhookResultColor = AppTheme.error;
       });
     }
   }
@@ -1619,9 +1689,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               Text(
                 _webhookResult!,
                 style: TextStyle(
-                  color: _webhookConfigured == true
-                      ? AppTheme.available
-                      : AppTheme.error,
+                  color: _webhookResultColor,
                   fontSize: 12,
                 ),
                 textAlign: TextAlign.center,

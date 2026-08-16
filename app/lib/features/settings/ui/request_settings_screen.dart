@@ -3,12 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../data/request_settings_service.dart';
+import '../settings_anchors.dart';
 import '../../request/data/request_service.dart';
 
 /// Admin screen for editing the global media-request defaults.
 class RequestSettingsScreen extends ConsumerStatefulWidget {
-  const RequestSettingsScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const RequestSettingsScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<RequestSettingsScreen> createState() =>
@@ -117,6 +122,9 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
 
   Widget _buildBody(AdminRequestSettings admin, GlobalRequestSettings edited) {
     return ListView(
+      // Build every child while a settings-search highlight needs to find
+      // its anchor (see SettingsHighlight).
+      cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         const Padding(
@@ -128,90 +136,115 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
           ),
         ),
         const _SectionLabel('Approval'),
-        SwitchListTile(
-          value: edited.requireApproval,
-          activeThumbColor: AppTheme.accent,
-          onChanged: (v) =>
-              setState(() => _edited = edited.copyWith(requireApproval: v)),
-          title: const Text(
-            'Require approval for new requests',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          subtitle: const Text(
-            'New requests wait in a queue for an admin to approve.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        SettingsHighlight(
+          anchorId: SettingsAnchors.requestsRequireApproval,
+          highlightId: widget.highlightId,
+          child: SwitchListTile(
+            value: edited.requireApproval,
+            activeThumbColor: AppTheme.accent,
+            onChanged: (v) =>
+                setState(() => _edited = edited.copyWith(requireApproval: v)),
+            title: const Text(
+              'Require approval for new requests',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'New requests wait in a queue for an admin to approve.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
           ),
         ),
         const _SectionLabel('Seasons'),
-        SwitchListTile(
-          value: edited.allowSeasonChoice,
-          activeThumbColor: AppTheme.accent,
-          onChanged: (v) =>
-              setState(() => _edited = edited.copyWith(allowSeasonChoice: v)),
-          title: const Text(
-            'Let users choose seasons',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          subtitle: const Text(
-            'Allow users to pick which seasons to request for a show.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        SettingsHighlight(
+          anchorId: SettingsAnchors.requestsSeasonChoice,
+          highlightId: widget.highlightId,
+          child: SwitchListTile(
+            value: edited.allowSeasonChoice,
+            activeThumbColor: AppTheme.accent,
+            onChanged: (v) =>
+                setState(() => _edited = edited.copyWith(allowSeasonChoice: v)),
+            title: const Text(
+              'Let users choose seasons',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'Allow users to pick which seasons to request for a show.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
           ),
         ),
-        ListTile(
-          title: const Text(
-            'Default season scope',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          trailing: DropdownButton<String>(
-            value: edited.defaultSeasonScope,
-            dropdownColor: AppTheme.surface,
-            underline: const SizedBox.shrink(),
-            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-            items: [
-              for (final c in SeasonScope.choices)
-                DropdownMenuItem<String>(
-                  value: c.value,
-                  child: Text(c.label),
-                ),
-            ],
-            onChanged: (v) {
-              if (v == null) return;
-              setState(() => _edited = edited.copyWith(defaultSeasonScope: v));
-            },
+        SettingsHighlight(
+          anchorId: SettingsAnchors.requestsSeasonScope,
+          highlightId: widget.highlightId,
+          child: ListTile(
+            title: const Text(
+              'Default season scope',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            trailing: DropdownButton<String>(
+              value: edited.defaultSeasonScope,
+              dropdownColor: AppTheme.surface,
+              underline: const SizedBox.shrink(),
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+              items: [
+                for (final c in SeasonScope.choices)
+                  DropdownMenuItem<String>(
+                    value: c.value,
+                    child: Text(c.label),
+                  ),
+              ],
+              onChanged: (v) {
+                if (v == null) return;
+                setState(
+                    () => _edited = edited.copyWith(defaultSeasonScope: v));
+              },
+            ),
           ),
         ),
         const _SectionLabel('Quality'),
-        SwitchListTile(
-          value: edited.allowQualityChoice,
-          activeThumbColor: AppTheme.accent,
-          onChanged: (v) =>
-              setState(() => _edited = edited.copyWith(allowQualityChoice: v)),
-          title: const Text(
-            'Let users choose quality',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          subtitle: const Text(
-            'Off by default. When off, users get the default profile below.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        SettingsHighlight(
+          anchorId: SettingsAnchors.requestsQualityChoice,
+          highlightId: widget.highlightId,
+          child: SwitchListTile(
+            value: edited.allowQualityChoice,
+            activeThumbColor: AppTheme.accent,
+            onChanged: (v) => setState(
+                () => _edited = edited.copyWith(allowQualityChoice: v)),
+            title: const Text(
+              'Let users choose quality',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'Off by default. When off, users get the default profile below.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
           ),
         ),
-        _qualityTile(
-          label: 'Default Radarr quality',
-          value: edited.defaultQualityRadarr,
-          profiles: admin.radarrProfiles,
-          onChanged: (v) => setState(
-              () => _edited = edited.copyWith(defaultQualityRadarr: v)),
+        SettingsHighlight(
+          anchorId: SettingsAnchors.requestsQualityRadarr,
+          highlightId: widget.highlightId,
+          child: _qualityTile(
+            label: 'Default Radarr quality',
+            value: edited.defaultQualityRadarr,
+            profiles: admin.radarrProfiles,
+            onChanged: (v) => setState(
+                () => _edited = edited.copyWith(defaultQualityRadarr: v)),
+          ),
         ),
-        _qualityTile(
-          label: 'Default Sonarr quality',
-          value: edited.defaultQualitySonarr,
-          profiles: admin.sonarrProfiles,
-          onChanged: (v) => setState(
-              () => _edited = edited.copyWith(defaultQualitySonarr: v)),
+        SettingsHighlight(
+          anchorId: SettingsAnchors.requestsQualitySonarr,
+          highlightId: widget.highlightId,
+          child: _qualityTile(
+            label: 'Default Sonarr quality',
+            value: edited.defaultQualitySonarr,
+            profiles: admin.sonarrProfiles,
+            onChanged: (v) => setState(
+                () => _edited = edited.copyWith(defaultQualitySonarr: v)),
+          ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),

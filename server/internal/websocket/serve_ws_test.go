@@ -471,7 +471,7 @@ func TestPollResultReachesSubscribedClients(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v3/queue":
-			_, _ = w.Write([]byte(`{"records":[{"movieId":7,"title":"Heat","status":"downloading","size":1000,"sizeleft":250}]}`))
+			_, _ = w.Write([]byte(`{"totalRecords":1,"records":[{"movieId":7,"title":"Heat","status":"downloading","size":1000,"sizeleft":250}]}`))
 		case "/api/v3/movie/7":
 			_, _ = w.Write([]byte(`{"id":7,"title":"Heat","tmdbId":949,"hasFile":false}`))
 		default:

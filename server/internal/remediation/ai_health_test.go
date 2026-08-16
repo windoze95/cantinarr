@@ -12,7 +12,7 @@ func TestSharedAIHealthFailureDedupesAdminOnlySystemIssueAndRecovers(t *testing.
 	if err := service.RecordSharedAIHealth("codex", "gpt-5.6-luna", false); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := service.ListIssues("")
+	issues, _, err := service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestSharedAIHealthFailureDedupesAdminOnlySystemIssueAndRecovers(t *testing.
 	if err := service.RecordSharedAIHealth("codex", "gpt-5.6-luna", false); err != nil {
 		t.Fatal(err)
 	}
-	issues, err = service.ListIssues("")
+	issues, _, err = service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestSharedAIHealthBoundsInvalidProviderMetadata(t *testing.T) {
 	if err := service.RecordSharedAIHealth(provider, model, false); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := service.ListIssues("")
+	issues, _, err := service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

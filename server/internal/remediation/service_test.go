@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -185,14 +186,14 @@ func TestUserIssueLifecycle(t *testing.T) {
 	}
 
 	// List (all + filtered) and open count.
-	all, err := svc.ListIssues("")
+	all, _, err := svc.ListIssues("", 0)
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}
 	if len(all) != 2 {
 		t.Fatalf("ListIssues all = %d, want 2 open issues", len(all))
 	}
-	openOnly, err := svc.ListIssues(IssueObserving)
+	openOnly, _, err := svc.ListIssues(IssueObserving, 0)
 	if err != nil {
 		t.Fatalf("ListIssues(open): %v", err)
 	}
@@ -590,5 +591,66 @@ func TestExplicitModeTakesPrecedenceOverLegacyAutonomy(t *testing.T) {
 	}
 	if settings.Mode != ModeInvestigateOnly {
 		t.Fatalf("explicit mode = %q, want investigate_only", settings.Mode)
+	}
+}
+
+// The issue list is the one read that grows forever: closed history only
+// accumulates, and the observation pipeline closes incidents nobody was ever
+// asked to look at. History is therefore capped and open work never is — a
+// client filtering "needs attention" must be filtering a complete set, and it
+// must be able to say how much history it is not showing.
+func TestListIssuesCapsHistoryAndNeverOpenWork(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	for i := 0; i < 5; i++ {
+		if _, err := svc.db.Exec(
+			`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, updated_at)
+			 VALUES ('auto', ?, 'movie', ?, 'open', 'd', datetime('now', ?))`,
+			IssueNeedsAdmin, 100+i, fmt.Sprintf("-%d minutes", i),
+		); err != nil {
+			t.Fatalf("seed open issue: %v", err)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		if _, err := svc.db.Exec(
+			`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, closed_at, updated_at)
+			 VALUES ('auto', ?, 'movie', ?, 'closed', 'd', CURRENT_TIMESTAMP, datetime('now', ?))`,
+			IssueResolved, 200+i, fmt.Sprintf("-%d minutes", i),
+		); err != nil {
+			t.Fatalf("seed closed issue: %v", err)
+		}
+	}
+
+	got, closedTotal, err := svc.ListIssues("", 3)
+	if err != nil {
+		t.Fatalf("ListIssues: %v", err)
+	}
+	var open, closed []Issue
+	for _, iss := range got {
+		if iss.ClosedAt == nil {
+			open = append(open, iss)
+		} else {
+			closed = append(closed, iss)
+		}
+	}
+	if len(open) != 5 {
+		t.Fatalf("open issues = %d, want all 5 — actionable work is never capped", len(open))
+	}
+	if len(closed) != 3 {
+		t.Fatalf("closed issues = %d, want the 3 the cap allows", len(closed))
+	}
+	if closedTotal != 10 {
+		t.Fatalf("closedTotal = %d, want 10 so the client can say what it is not showing", closedTotal)
+	}
+	// Newest-updated first, so a cap keeps the most recent history.
+	if closed[0].TmdbID != 200 || closed[2].TmdbID != 202 {
+		t.Fatalf("closed slice = %d..%d, want the newest three", closed[0].TmdbID, closed[2].TmdbID)
+	}
+	// An explicit open-status read stays uncapped for the same reason.
+	needing, _, err := svc.ListIssues(IssueNeedsAdmin, 2)
+	if err != nil {
+		t.Fatalf("ListIssues(needs_admin): %v", err)
+	}
+	if len(needing) != 5 {
+		t.Fatalf("needs_admin = %d, want 5 — a cap must never hide open work", len(needing))
 	}
 }

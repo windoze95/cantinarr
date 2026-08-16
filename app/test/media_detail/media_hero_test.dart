@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   Widget heroPage({
     required String title,
+    int? year,
     String? backdropPath,
     String? posterPath,
     ScrollController? controller,
@@ -19,6 +20,7 @@ void main() {
               pinned: true,
               delegate: MediaHeroDelegate(
                 title: title,
+                year: year,
                 posterPath: posterPath,
                 backdropPath: backdropPath,
                 expandedExtent: 480,
@@ -45,6 +47,29 @@ void main() {
     expect(find.bySemanticsIdentifier('media-detail-title'), findsOneWidget);
     expect(find.text('NOW IN FOCUS'), findsNothing);
     semantics.dispose();
+  });
+
+  testWidgets('a known premiere year rides small after the title',
+      (tester) async {
+    await tester.pumpWidget(
+      heroPage(title: 'Project Hail Mary', year: 2026),
+    );
+    await tester.pumpAndSettle();
+
+    // The year joins the display title's rich text; a missing year (every
+    // other test here) leaves the plain title untouched.
+    final richTitle = tester.widget<Text>(
+      find.byWidgetPredicate(
+        (w) =>
+            w is Text &&
+            w.textSpan?.toPlainText() == 'Project Hail Mary (2026)',
+      ),
+    );
+    final span = richTitle.textSpan! as TextSpan;
+    final yearSpan = span.children!.single as TextSpan;
+    expect(yearSpan.text, ' (2026)');
+    expect(yearSpan.style?.fontSize, lessThan(richTitle.style!.fontSize!),
+        reason: 'the year renders smaller than the title');
   });
 
   testWidgets('hero renders a finished composition without any artwork',

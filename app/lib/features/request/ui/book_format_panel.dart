@@ -76,8 +76,12 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   Timer? _pendingRecheckTimer;
 
   /// Formats this panel submitted and the server confirmed, kept for as long as
-  /// this book is on screen. See [_detail].
-  final Map<BookRequestFormat, RequestStatus> _submitted = {};
+  /// this book is on screen. The wait rides along with the status: a submission
+  /// that came back waiting must not decay into a bare "Requested" while the
+  /// status re-read is still in flight — that is the exact wording this panel
+  /// exists to stop showing.
+  final Map<BookRequestFormat, ({RequestStatus status, BookFormatWait? wait})>
+      _submitted = {};
 
   bool get _checking => _activeChecks > 0;
 
@@ -96,18 +100,22 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     );
     if (_submitted.isEmpty) return detail;
     final formats = {...detail.formats};
+    final waits = {...detail.formatWaits};
     var covered = false;
     for (final entry in _submitted.entries) {
       // Only an explicit "never requested" is overridden; an unresolved status
       // stays unknown rather than being dressed up as a live request.
       if (detail.statusFor(entry.key) != RequestStatus.unavailable) continue;
-      formats[entry.key] = entry.value;
+      formats[entry.key] = entry.value.status;
+      final wait = entry.value.wait;
+      if (wait != null) waits[entry.key] = wait;
       covered = true;
     }
     if (!covered) return detail;
     return BookRequestStatusDetail(
       status: detail.status,
       formats: formats,
+      formatWaits: waits,
       ownership: detail.ownership,
       isKnown: detail.isKnown,
       unknownReason: detail.unknownReason,
@@ -175,10 +183,15 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   }
 
   void _syncPendingRecheck() {
-    final hasPending = [
-      BookRequestFormat.ebook,
-      BookRequestFormat.audiobook,
-    ].any((format) => _detail.statusFor(format) == RequestStatus.pending);
+    // A wait polls on the same timer as an approval: both end without the
+    // requester doing anything, and a waiting row is the only notice the owner
+    // gets that the library caught up — a system completion deliberately sends
+    // them no push, because nobody decided anything.
+    final hasPending = _detail.hasFormatWait ||
+        [
+          BookRequestFormat.ebook,
+          BookRequestFormat.audiobook,
+        ].any((format) => _detail.statusFor(format) == RequestStatus.pending);
     if (!hasPending) {
       _pendingRecheckTimer?.cancel();
       _pendingRecheckTimer = null;
@@ -218,6 +231,19 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       if (submission == null) {
         await _refreshAfterSubmission();
         if (!mounted) return;
+        // The refresh just told us whether the tapped format landed despite the
+        // failed call (a server error can postdate a durable add). When it did,
+        // announce that truth — the rows already show it, and a failure toast
+        // beside a Requested row would contradict the screen.
+        final landed = _detail.statusFor(format);
+        final covered = landed == RequestStatus.requested ||
+            landed == RequestStatus.downloading ||
+            landed == RequestStatus.available ||
+            landed == RequestStatus.pending;
+        if (covered) {
+          _announce(_formatOutcome(format, landed));
+          return;
+        }
         _announce(definitiveFailure && failureMessage != null
             ? failureMessage
             : 'The request outcome couldn’t be confirmed. The book status was '
@@ -240,7 +266,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       final outcome = submission.message.isNotEmpty
           ? submission.message
           : _formatOutcome(format, resolved);
-      _rememberSubmission(format, resolved);
+      _rememberSubmission(format, resolved, submission.formatWaits[format]);
       await _refreshAfterSubmission();
       if (!mounted) return;
       _announce(outcome);
@@ -268,15 +294,22 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   /// Records a submission the server confirmed. An outcome that did not land —
   /// a denial, or a format the server refused — is never recorded, so it stays
   /// retryable.
-  void _rememberSubmission(BookRequestFormat format, RequestStatus? status) {
+  void _rememberSubmission(
+    BookRequestFormat format,
+    RequestStatus? status,
+    BookFormatWait? wait,
+  ) {
     if (status == null ||
         status == RequestStatus.unavailable ||
         status == RequestStatus.denied) {
       return;
     }
     setState(() {
-      _submitted[format] =
-          status == RequestStatus.partial ? RequestStatus.requested : status;
+      _submitted[format] = (
+        status:
+            status == RequestStatus.partial ? RequestStatus.requested : status,
+        wait: wait,
+      );
     });
   }
 
@@ -338,6 +371,31 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
             ],
           ),
         ),
+        // Stated in full, every time, not as a one-shot toast at submission.
+        // The toast is what the requester in the original report saw and could
+        // not get back; "Requested" was all the app said from then on.
+        if (_waitExplanation(detail) case final explanation?)
+          Padding(
+            padding: const EdgeInsets.only(top: 10, left: 4, right: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.schedule_rounded,
+                    size: 18, color: AppTheme.requested),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    explanation,
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         if (detail.effectiveUnknownReason ==
             BookStatusUnknownReason.formatNeedsAttention)
           const Padding(
@@ -374,12 +432,31 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     );
   }
 
+  /// One explanation for the panel, not one per row: both formats of a book
+  /// wait on the same author import, and saying it twice reads as two problems.
+  /// Two genuinely different reasons are named separately.
+  String? _waitExplanation(BookRequestStatusDetail detail) {
+    final reasons = <BookWaitReason, String>{};
+    for (final format in [
+      BookRequestFormat.ebook,
+      BookRequestFormat.audiobook,
+    ]) {
+      final wait = detail.waitFor(format);
+      if (wait != null) reasons[wait.reason] = wait.explanation;
+    }
+    if (reasons.isEmpty) return null;
+    return reasons.values.join('\n\n');
+  }
+
   Widget _row(
     BookRequestStatusDetail detail, {
     required BookRequestFormat format,
     required IconData icon,
     required Widget? download,
   }) {
+    // A waiting format is covered, so isRequestable already refuses it: the
+    // request is saved and re-requesting would only make a second row for the
+    // same wait.
     final requestable = !_loading && detail.isRequestable(format);
     // A denied format keeps its verdict visible; any other requestable row is
     // fully described by its action, so it carries no status pill as well.
@@ -582,6 +659,14 @@ class _SubmittingIndicator extends StatelessWidget {
 
   if (owned?.monitored ?? false) {
     return (label: 'Requested', color: AppTheme.requested);
+  }
+
+  // Checked before the plain status words below, because the server hands this
+  // state over as "requested" for the benefit of clients that know no other
+  // word. Requested claims a monitored library record; this row has none yet.
+  final wait = detail.waitFor(format);
+  if (wait != null) {
+    return (label: wait.label, color: AppTheme.requested);
   }
 
   final status = detail.statusFor(format);

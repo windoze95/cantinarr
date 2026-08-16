@@ -906,13 +906,233 @@ func (c *Client) AddAuthor(req AddAuthorRequest) (*Author, error) {
 	return &author, nil
 }
 
+// ErrAuthorPendingImport reports Chaptarr refusing an add because its metadata
+// service does not know the book's author yet: newer forks queue the author
+// for an asynchronous import and reject the add until that import lands
+// (verified live against Chaptarr 0.9.879 and since against its open source:
+// AddBookService throws the queued-for-import ValidationFailure). The
+// condition heals on its own, so
+// callers should keep the request alive rather than fail it.
+var ErrAuthorPendingImport = errors.New("the book's author is still being imported by the library's metadata service")
+
+// ErrEditionsNotHydrated reports the 0.9.879+ refusal of an add whose payload
+// carried no editions before the fork's metadata service could hydrate them.
+// Unlike the author case nothing is queued, so this is a plain retryable
+// failure with a name instead of a bare status code.
+var ErrEditionsNotHydrated = errors.New("the library could not prepare this book's editions yet; try again shortly")
+
 // AddBook adds a single book (and, if needed, its author) to the library.
+// Unlike the generic helpers it inspects a rejection's structured validation
+// fields so an author-pending-import refusal stays distinguishable; raw error
+// bodies are still never propagated (they can contain credentials or URLs).
 func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
-	var book Book
-	if err := c.do("POST", "/api/v1/book", req, &book); err != nil {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("chaptarr add book: marshal request body: %w", err)
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/v1/book", bytes.NewReader(data))
+	if err != nil {
 		return nil, fmt.Errorf("chaptarr add book: %w", err)
 	}
+	httpReq.Header.Set("X-Api-Key", c.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		// Host-free, like doWith: transport errors embed the full request URL.
+		return nil, fmt.Errorf("chaptarr add book: chaptarr POST /api/v1/book: %s", transporterr.Summarize(err))
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusBadRequest {
+			if classified := classifyAddBookRejection(resp.Body); classified != nil {
+				return nil, fmt.Errorf("chaptarr add book: %w", classified)
+			}
+		}
+		return nil, fmt.Errorf("chaptarr add book: chaptarr POST /api/v1/book returned status %d", resp.StatusCode)
+	}
+	var book Book
+	if err := json.NewDecoder(resp.Body).Decode(&book); err != nil {
+		return nil, fmt.Errorf("chaptarr add book: decode response: %w", err)
+	}
 	return &book, nil
+}
+
+// classifyAddBookRejection maps a 400 validation payload onto the named
+// refusals worth distinguishing: the author still importing, or editions the
+// metadata service hasn't hydrated. Only the structured propertyName/
+// errorMessage fields are inspected, and the match is phrase-based so wording
+// drift fails closed (nil) to the generic status error rather than
+// misclassifying a different rejection.
+func classifyAddBookRejection(body io.Reader) error {
+	var failures []struct {
+		PropertyName string `json:"propertyName"`
+		ErrorMessage string `json:"errorMessage"`
+	}
+	if err := json.NewDecoder(io.LimitReader(body, 64<<10)).Decode(&failures); err != nil {
+		return nil
+	}
+	for _, failure := range failures {
+		property := strings.ToLower(strings.TrimSpace(failure.PropertyName))
+		message := strings.ToLower(failure.ErrorMessage)
+		switch property {
+		case "author":
+			if strings.Contains(message, "queued for import") ||
+				(strings.Contains(message, "metadata server") && strings.Contains(message, "available")) {
+				return ErrAuthorPendingImport
+			}
+		case "editions":
+			if strings.Contains(message, "no editions were supplied") ||
+				strings.Contains(message, "hydrate") {
+				return ErrEditionsNotHydrated
+			}
+		}
+	}
+	return nil
+}
+
+// AuthorImportStatusFailed is the pending-import OverallStatus Chaptarr
+// assigns when a typed metadata-server outcome stopped its automatic retries —
+// and ALSO when someone cancels the row in its UI: the fork has no distinct
+// cancelled status, a cancel marks the row Failed with LastError "Cancelled by
+// user" (PendingAuthorImportService.Cancel in its source).
+const AuthorImportStatusFailed = "Failed"
+
+// AuthorImportStatusConcluded reports a pending-import status Chaptarr will
+// never process again. Its scheduler re-picks only Pending and Retrying rows
+// (GetDueForProcessing in its source), so Failed, PartialSuccess (one media
+// type succeeded, the other failed — both halves done), and Succeeded are all
+// final. A concluded row whose author is still absent from the library cannot
+// finish on its own; waiting on it waits forever.
+func AuthorImportStatusConcluded(status string) bool {
+	switch status {
+	case "Failed", "PartialSuccess", "Succeeded":
+		return true
+	}
+	return false
+}
+
+// AuthorImportStatus is Chaptarr's live answer about one author's standing on
+// the instance: already in the library (Exists), still queued on the fork's
+// own pending-import table (Pending, with its retry bookkeeping), or neither.
+// Chaptarr owns the retry loop for queued imports — 60s for the first
+// attempts, then every 5 minutes, unbounded — so callers should read this
+// instead of re-posting adds: a duplicate add merges into the pending row and
+// force-bumps its schedule.
+type AuthorImportStatus struct {
+	Exists       bool   `json:"exists"`
+	AuthorID     int    `json:"authorId"`
+	AuthorName   string `json:"authorName"`
+	Pending      bool   `json:"pending"`
+	PendingID    int    `json:"pendingId"`
+	Status       string `json:"status"`
+	AttemptCount int    `json:"attemptCount"`
+}
+
+// ErrPendingImportAPIUnavailable reports a Chaptarr build without the
+// pending-import read API (the route 404s). Callers fall back to probing with
+// the add itself — the only signal older forks offer.
+var ErrPendingImportAPIUnavailable = errors.New("this chaptarr build has no pending-import API")
+
+// GetAuthorImportStatus reads the fork's pending-import answer for one author
+// provider id (e.g. "gr:21186439"). The endpoint checks the live library
+// first, then the pending-import queue, so Exists and Pending are mutually
+// exclusive and both false means neither knows the author.
+func (c *Client) GetAuthorImportStatus(foreignAuthorID string) (*AuthorImportStatus, error) {
+	resp, err := c.doRequest("GET", "/api/v1/pendingauthorimport/author/exists/"+url.PathEscape(foreignAuthorID))
+	if err != nil {
+		return nil, fmt.Errorf("chaptarr author import status: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("chaptarr author import status: %w", ErrPendingImportAPIUnavailable)
+	}
+	if resp.StatusCode == http.StatusConflict {
+		// Chaptarr answers 409 when the provider id resolves to multiple local
+		// authors (its ProviderAmbiguityHelper). That is a structural state a
+		// human must untangle, not a transient read failure.
+		return nil, fmt.Errorf("chaptarr author import status: %w", ErrAuthorProviderAmbiguous)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("chaptarr author import status: chaptarr GET /api/v1/pendingauthorimport/author/exists returned status %d", resp.StatusCode)
+	}
+	var status AuthorImportStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("chaptarr author import status: decode response: %w", err)
+	}
+	return &status, nil
+}
+
+// ErrAuthorProviderAmbiguous reports Chaptarr's 409 ambiguity answer: the
+// author provider id matches more than one local author (alias merges), so no
+// read or add against that id can pick one. Only a human can.
+var ErrAuthorProviderAmbiguous = errors.New("author provider id resolves to multiple local authors")
+
+// PendingAuthorImportDetail is the slice of one pending-import row the watcher
+// reads by id: whether the row concluded and — because Chaptarr has no
+// distinct cancelled status — the LastError text that says WHY a Failed row
+// stopped ("Cancelled by user" for a cancel in its UI).
+type PendingAuthorImportDetail struct {
+	ID            int    `json:"id"`
+	OverallStatus string `json:"overallStatus"`
+	LastError     string `json:"lastError"`
+}
+
+// GetPendingAuthorImport reads one pending-import row by id. A 404 returns
+// (nil, nil): the row is gone, which the caller treats as its own verdict.
+func (c *Client) GetPendingAuthorImport(pendingID int) (*PendingAuthorImportDetail, error) {
+	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/pendingauthorimport/%d", pendingID))
+	if err != nil {
+		return nil, fmt.Errorf("chaptarr pending author import: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("chaptarr pending author import: chaptarr GET /api/v1/pendingauthorimport returned status %d", resp.StatusCode)
+	}
+	var detail PendingAuthorImportDetail
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return nil, fmt.Errorf("chaptarr pending author import: decode response: %w", err)
+	}
+	return &detail, nil
+}
+
+// CancelPendingAuthorImport removes one queued author import. The queued row
+// carries the whole add intent — the monitored book and the search flag — so
+// a request an admin closes must cancel it, or the content still arrives
+// whenever the import finally lands.
+func (c *Client) CancelPendingAuthorImport(pendingID int) error {
+	resp, err := c.doRequest("DELETE", fmt.Sprintf("/api/v1/pendingauthorimport/%d", pendingID))
+	if err != nil {
+		return fmt.Errorf("chaptarr cancel pending author import: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("chaptarr cancel pending author import: %w", ErrPendingImportAPIUnavailable)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("chaptarr cancel pending author import: chaptarr DELETE /api/v1/pendingauthorimport returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// RetryPendingAuthorImport asks Chaptarr to reprocess one queued author import
+// now. This is also the reopen lever for a Failed row, whose automatic
+// retries have stopped.
+func (c *Client) RetryPendingAuthorImport(pendingID int) error {
+	resp, err := c.doRequest("POST", fmt.Sprintf("/api/v1/pendingauthorimport/%d/retry", pendingID))
+	if err != nil {
+		return fmt.Errorf("chaptarr retry pending author import: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("chaptarr retry pending author import: %w", ErrPendingImportAPIUnavailable)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("chaptarr retry pending author import: chaptarr POST /api/v1/pendingauthorimport/retry returned status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // SetBookMonitored toggles monitoring for the given books. Chaptarr's
@@ -927,20 +1147,12 @@ func (c *Client) SetBookMonitored(bookIDs []int, monitored bool) error {
 	return nil
 }
 
+// GetQueue returns the same complete bounded snapshot as GetQueueDetailed.
+// It used to issue an unpaged read, which Chaptarr answers with its default
+// page of 10 rows — a silently truncated queue for any instance downloading
+// more than that.
 func (c *Client) GetQueue() ([]QueueItem, error) {
-	resp, err := c.doRequest("GET", "/api/v1/queue?includeAuthor=true&includeBook=true")
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr queue: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var queueResp struct {
-		Records []QueueItem `json:"records"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&queueResp); err != nil {
-		return nil, fmt.Errorf("decode queue: %w", err)
-	}
-	return queueResp.Records, nil
+	return c.GetQueueDetailed()
 }
 
 // queueMaxRecords is a safety cap on the queue records a detailed snapshot may
@@ -957,7 +1169,10 @@ func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
 		TotalRecords int                 `json:"totalRecords"`
 		Records      []DetailedQueueItem `json:"records"`
 	}
-	path := fmt.Sprintf("/api/v1/queue?page=1&pageSize=%d&includeAuthor=true&includeBook=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	// includeUnknownAuthorItems: without it Chaptarr silently drops queue rows
+	// it could not match to a library author — exactly the rows most likely to
+	// be stuck — before the completeness checks below ever see them.
+	path := fmt.Sprintf("/api/v1/queue?page=1&pageSize=%d&includeAuthor=true&includeBook=true&includeUnknownAuthorItems=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
 	if err := c.do("GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("chaptarr queue: %w", err)
 	}
@@ -1037,6 +1252,35 @@ func (c *Client) GetImportHistorySince(since time.Time, pageSize int) (inWindow 
 	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=3", pageSize)
 	if err := c.do("GET", path, nil, &hp); err != nil {
 		return nil, false, fmt.Errorf("chaptarr import history since: %w", err)
+	}
+	complete = hp.TotalRecords <= len(hp.Records)
+	for _, rec := range hp.Records {
+		if rec.Date == nil {
+			continue
+		}
+		if !rec.Date.After(since) {
+			// The page reached past the window boundary, so the window is
+			// fully enumerated even when older records exist beyond the page.
+			complete = true
+			continue
+		}
+		inWindow = append(inWindow, rec)
+	}
+	return inWindow, complete, nil
+}
+
+// GetUpgradeDeleteHistorySince returns the book-file-deleted history records
+// dated after since, newest first, from one bounded page (eventType=5 —
+// bookFileDeleted in the Readarr-lineage enum). The import-history catch-up
+// pairs these against the same window's imports: a delete with data.reason
+// "Upgrade" is the only durable proof that an import replaced a file rather
+// than filled a gap. Callers must treat an error or incomplete window as "no
+// upgrade proof" (announce as new content), never as "no upgrades happened".
+func (c *Client) GetUpgradeDeleteHistorySince(since time.Time, pageSize int) (inWindow []HistoryRecord, complete bool, err error) {
+	var hp HistoryPage
+	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=5", pageSize)
+	if err := c.do("GET", path, nil, &hp); err != nil {
+		return nil, false, fmt.Errorf("chaptarr upgrade-delete history since: %w", err)
 	}
 	complete = hp.TotalRecords <= len(hp.Records)
 	for _, rec := range hp.Records {
@@ -1269,4 +1513,71 @@ func FormatOf(qualityName string) string {
 		}
 	}
 	return FormatUnknown
+}
+
+// GetConfigSummary returns a bounded, secret-free summary of one settings
+// section. The raw payloads (which carry API keys and passwords in their
+// dynamic fields) are summarized HERE and never leave the client.
+func (c *Client) GetConfigSummary(section string) ([]arrcommon.ConfigEntry, error) {
+	paths := map[string]string{
+		arrcommon.ConfigIndexers:           "/api/v1/indexer",
+		arrcommon.ConfigDelayProfiles:      "/api/v1/delayprofile",
+		arrcommon.ConfigReleaseProfiles:    "/api/v1/releaseprofile",
+		arrcommon.ConfigDownloadClients:    "/api/v1/downloadclient",
+		arrcommon.ConfigRemotePathMappings: "/api/v1/remotepathmapping",
+	}
+	path, ok := paths[section]
+	if !ok {
+		return nil, fmt.Errorf("unknown config section %q", section)
+	}
+	var raws []json.RawMessage
+	if err := c.do("GET", path, nil, &raws); err != nil {
+		return nil, fmt.Errorf("read %s: %w", section, err)
+	}
+	return arrcommon.SummarizeConfigSection(section, raws), nil
+}
+
+// GetBookGrabs returns the grab history for one book, newest first (eventType=1
+// — grabbed in the Readarr-lineage enum), from one bounded page.
+func (c *Client) GetBookGrabs(bookID, pageSize int) ([]HistoryRecord, error) {
+	var hp HistoryPage
+	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=1&bookId=%d",
+		pageSize, bookID)
+	if err := c.do("GET", path, nil, &hp); err != nil {
+		return nil, fmt.Errorf("chaptarr book grabs: %w", err)
+	}
+	return hp.Records, nil
+}
+
+// DeleteBookFile removes one imported book file from disk and the library —
+// the Readarr-lineage DELETE /bookfile/{id} the wrong-book repair needs.
+func (c *Client) DeleteBookFile(id int) error {
+	path := fmt.Sprintf("/api/v1/bookfile/%d", id)
+	if err := c.do("DELETE", path, nil, nil); err != nil {
+		return fmt.Errorf("chaptarr delete book file: %w", err)
+	}
+	return nil
+}
+
+// MarkHistoryFailed marks one grab record as a failed download — the only
+// route to blocklist a release that already imported, exactly as on
+// Sonarr/Radarr.
+func (c *Client) MarkHistoryFailed(historyID int64) error {
+	path := fmt.Sprintf("/api/v1/history/failed/%d", historyID)
+	if err := c.do("POST", path, nil, nil); err != nil {
+		return fmt.Errorf("chaptarr mark history failed: %w", err)
+	}
+	return nil
+}
+
+// GetFailedDownloadPolicy reports autoRedownloadFailed: whether the service
+// itself searches for a replacement when a grab is marked failed.
+func (c *Client) GetFailedDownloadPolicy() (autoRedownloadFailed bool, err error) {
+	var config struct {
+		AutoRedownloadFailed bool `json:"autoRedownloadFailed"`
+	}
+	if err := c.do("GET", "/api/v1/config/downloadclient", nil, &config); err != nil {
+		return false, fmt.Errorf("chaptarr download client config: %w", err)
+	}
+	return config.AutoRedownloadFailed, nil
 }

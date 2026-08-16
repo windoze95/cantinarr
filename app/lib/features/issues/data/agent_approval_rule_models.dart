@@ -22,6 +22,8 @@ class AgentApprovalRule {
   /// it). Null while active.
   final String? pausedReason;
   final DateTime? pausedAt;
+  final int? pausedByIssueId;
+  final int approvedSincePause;
 
   final int? createdBy;
   final String? createdByName;
@@ -47,6 +49,8 @@ class AgentApprovalRule {
     required this.status,
     required this.pausedReason,
     required this.pausedAt,
+    this.pausedByIssueId,
+    this.approvedSincePause = 0,
     required this.createdBy,
     required this.createdByName,
     required this.seedActionId,
@@ -72,6 +76,9 @@ class AgentApprovalRule {
       status: json['status'] as String? ?? '',
       pausedReason: json['paused_reason'] as String?,
       pausedAt: time('paused_at'),
+      pausedByIssueId: (json['paused_by_issue_id'] as num?)?.toInt(),
+      approvedSincePause:
+          (json['approved_since_pause'] as num?)?.toInt() ?? 0,
       createdBy: (json['created_by'] as num?)?.toInt(),
       createdByName: json['created_by_name'] as String?,
       seedActionId: (json['seed_action_id'] as num?)?.toInt(),

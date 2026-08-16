@@ -1,16 +1,17 @@
 package chaptarr
 
-// Chaptarr is distributed as an image rather than source, so its event
-// vocabulary is inherited from the Readarr lineage rather than verified. This
+// Chaptarr's event vocabulary is now verified against its open source
+// (github.com/Chaptarr/chaptarr): the webhook import event serializes as
+// "Download" (WebhookEventType) and the history enum's import events as
+// "bookFileImported" and "downloadImported" (EntityHistoryEventType). This
 // file is the single home for the names Cantinarr accepts as "a book import
 // completed", shared by the webhook receiver and the queue poller's
 // import-history catch-up so the two witnesses can never disagree about what
 // counts as an import.
 
-// importEventTypes are the normalized Readarr-lineage event names announcing a
-// completed import. The set is deliberately generous — a fork spelling the
-// event "ReleaseImport", "Download", "bookFileImported" or the Radarr/Sonarr
-// style "DownloadFolderImported" all land here — because an unrecognized name
+// importEventTypes are the normalized event names announcing a completed
+// import. The set stays deliberately generous — the verified names plus the
+// wider Readarr/Radarr/Sonarr-lineage spellings — because an unrecognized name
 // degrades to the queue witness (an alert delayed), while a wrongly recognized
 // one would announce a book that never arrived. Rename, retag and delete are
 // deliberately NOT import events: announcing "your book is ready" because a

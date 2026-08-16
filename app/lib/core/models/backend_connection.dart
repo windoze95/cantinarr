@@ -44,6 +44,10 @@ class BackendConnection {
 
   /// The running server version, reported by /api/config.
   final String? serverVersion;
+
+  /// The oldest app build the server still fully supports, reported by
+  /// /api/config as min_app_version. Drives a warn-only skew banner.
+  final String? minAppVersion;
   final AvailableServices services;
   final List<ServiceInstance> instances;
 
@@ -59,6 +63,7 @@ class BackendConnection {
     required this.refreshToken,
     this.serverName,
     this.serverVersion,
+    this.minAppVersion,
     this.services = const AvailableServices(),
     this.instances = const [],
     this.issuesEnabled = false,
@@ -71,6 +76,7 @@ class BackendConnection {
     String? refreshToken,
     String? serverName,
     String? serverVersion,
+    String? minAppVersion,
     AvailableServices? services,
     List<ServiceInstance>? instances,
     bool? issuesEnabled,
@@ -82,6 +88,7 @@ class BackendConnection {
         refreshToken: refreshToken ?? this.refreshToken,
         serverName: serverName ?? this.serverName,
         serverVersion: serverVersion ?? this.serverVersion,
+        minAppVersion: minAppVersion ?? this.minAppVersion,
         services: services ?? this.services,
         instances: instances ?? this.instances,
         issuesEnabled: issuesEnabled ?? this.issuesEnabled,

@@ -1,3 +1,4 @@
+import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -12,6 +13,11 @@ import '../logic/issues_provider.dart';
 /// checkbox. Each card shows the rule's fixed server-authored label, its
 /// active/paused state (with the server's pause reason), and its track record,
 /// with explicit Pause / Resume / Delete actions.
+String _dayLabel(DateTime when) {
+  final local = when.toLocal();
+  return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+}
+
 class AgentApprovalRulesScreen extends ConsumerStatefulWidget {
   const AgentApprovalRulesScreen({super.key});
 
@@ -23,6 +29,7 @@ class AgentApprovalRulesScreen extends ConsumerStatefulWidget {
 class _AgentApprovalRulesScreenState
     extends ConsumerState<AgentApprovalRulesScreen> {
   List<AgentApprovalRule>? _rules;
+  List<Map<String, dynamic>> _candidates = const [];
   bool _isLoading = true;
   String? _error;
   int _loadEpoch = 0;
@@ -42,6 +49,19 @@ class _AgentApprovalRulesScreenState
     return m != null ? m.group(1)! : 'Something went wrong';
   }
 
+  Future<void> _armCandidate(Map<String, dynamic> candidate) async {
+    try {
+      await ref.read(issuesServiceProvider).armRule(
+            candidate['problem_kind'] as String? ?? '',
+            candidate['action_kind'] as String? ?? '',
+            candidate['action_facet'] as String? ?? '',
+          );
+    } catch (_) {
+      // Grounding is re-checked server-side; a refusal just leaves the list.
+    }
+    if (mounted) _load();
+  }
+
   Future<void> _load() async {
     final epoch = ++_loadEpoch;
     setState(() {
@@ -49,10 +69,18 @@ class _AgentApprovalRulesScreenState
       _error = null;
     });
     try {
-      final rules = await ref.read(issuesServiceProvider).listApprovalRules();
+      final service = ref.read(issuesServiceProvider);
+      final rules = await service.listApprovalRules();
+      List<Map<String, dynamic>> candidates = const [];
+      try {
+        candidates = await service.listRuleCandidates();
+      } catch (_) {
+        // The catalog is a convenience; the rules list works without it.
+      }
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _rules = rules;
+        _candidates = candidates;
         _isLoading = false;
       });
     } catch (e) {
@@ -211,13 +239,20 @@ class _AgentApprovalRulesScreenState
         ],
       );
     }
+    final extra = _candidates.isEmpty ? 0 : 1;
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
-      itemCount: rules.length,
+      itemCount: rules.length + extra,
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
-        final rule = rules[index];
+        if (extra == 1 && index == 0) {
+          return _ReadyToAutomateCard(
+            candidates: _candidates,
+            onArm: _armCandidate,
+          );
+        }
+        final rule = rules[index - extra];
         return _RuleCard(
           rule: rule,
           busy: _busyRules.contains(rule.id),
@@ -294,13 +329,42 @@ class _RuleCard extends StatelessWidget {
           if (rule.isPaused && (rule.pausedReason?.isNotEmpty ?? false)) ...[
             const SizedBox(height: 6),
             Text(
-              rule.pausedReason!,
+              rule.pausedAt != null
+                  ? '${rule.pausedReason!} (since ${_dayLabel(rule.pausedAt!)})'
+                  : rule.pausedReason!,
               style: const TextStyle(
                 color: AppTheme.requested,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
+            if (rule.pausedByIssueId != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: InkWell(
+                  onTap: () => context.push('/issues/${rule.pausedByIssueId}'),
+                  child: const Text(
+                    'See the issue that paused it →',
+                    style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ),
+              ),
+            if (rule.approvedSincePause > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  "You've approved this exact fix ${rule.approvedSincePause} time(s) by hand since it paused — Resume puts it back on autopilot.",
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
           ],
           const SizedBox(height: 8),
           Text(
@@ -361,5 +425,63 @@ class _RuleCard extends StatelessWidget {
     if (d.inMinutes < 60) return '${d.inMinutes}m ago';
     if (d.inHours < 24) return '${d.inHours}h ago';
     return '${d.inDays}d ago';
+  }
+}
+
+/// Triples the admin has already approved by hand and could put on autopilot —
+/// "remember, later", grounded server-side.
+class _ReadyToAutomateCard extends StatelessWidget {
+  final List<Map<String, dynamic>> candidates;
+  final Future<void> Function(Map<String, dynamic>) onArm;
+
+  const _ReadyToAutomateCard({required this.candidates, required this.onArm});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Ready to automate',
+            style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            "Fixes you've already approved by hand. Arming one approves future matches automatically; it pauses itself if a fix fails.",
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          for (final c in candidates)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${c['label'] ?? ''} · approved ${c['approved_count'] ?? 0}x by hand',
+                      style: const TextStyle(
+                          color: AppTheme.textPrimary, fontSize: 13),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => onArm(c),
+                    child: const Text('Arm'),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }

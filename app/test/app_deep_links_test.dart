@@ -389,8 +389,9 @@ class _FakeAuthNotifier extends AuthNotifier {
   }
 
   @override
-  Future<ServerStatus> checkServer(String serverUrl) async =>
-      const ServerStatus(needsSetup: false);
+  Future<({String serverUrl, ServerStatus status})> checkServer(
+          String serverUrl) async =>
+      (serverUrl: serverUrl, status: const ServerStatus(needsSetup: false));
 }
 
 Dio _fakeDio() {

@@ -30,6 +30,9 @@ import '../../../core/widgets/cached_image.dart';
 /// The backdrop is never blurred — legibility comes from gradient scrims.
 class MediaHeroDelegate extends SliverPersistentHeaderDelegate {
   final String title;
+
+  /// Premiere year rendered small after the title; null hides it.
+  final int? year;
   final String? posterPath;
   final String? backdropPath;
   final double expandedExtent;
@@ -40,6 +43,7 @@ class MediaHeroDelegate extends SliverPersistentHeaderDelegate {
 
   const MediaHeroDelegate({
     required this.title,
+    this.year,
     required this.posterPath,
     required this.backdropPath,
     required this.expandedExtent,
@@ -90,6 +94,7 @@ class MediaHeroDelegate extends SliverPersistentHeaderDelegate {
     return LayoutBuilder(
       builder: (context, constraints) => _MediaHeroBody(
         title: title,
+        year: year,
         posterPath: posterPath,
         backdropPath: backdropPath,
         expandedExtent: maxExtent,
@@ -110,6 +115,7 @@ class MediaHeroDelegate extends SliverPersistentHeaderDelegate {
   @override
   bool shouldRebuild(MediaHeroDelegate oldDelegate) =>
       title != oldDelegate.title ||
+      year != oldDelegate.year ||
       posterPath != oldDelegate.posterPath ||
       backdropPath != oldDelegate.backdropPath ||
       expandedExtent != oldDelegate.expandedExtent ||
@@ -126,6 +132,7 @@ double _ramp(double t, double a, double b) =>
 /// rebuilds during a scroll.
 class _MediaHeroBody extends StatefulWidget {
   final String title;
+  final int? year;
   final String? posterPath;
   final String? backdropPath;
   final double expandedExtent;
@@ -139,6 +146,7 @@ class _MediaHeroBody extends StatefulWidget {
 
   const _MediaHeroBody({
     required this.title,
+    this.year,
     required this.posterPath,
     required this.backdropPath,
     required this.expandedExtent,
@@ -310,6 +318,7 @@ class _MediaHeroBodyState extends State<_MediaHeroBody> {
             bottom: 20,
             child: _HeroForeground(
               title: widget.title,
+              year: widget.year,
               posterPath: widget.posterPath,
               hasBackdrop: hasBackdrop,
               expandedLayout: expandedLayout,
@@ -553,6 +562,7 @@ class _BackdropPlaneState extends State<_BackdropPlane>
 /// of the collapse.
 class _HeroForeground extends StatelessWidget {
   final String title;
+  final int? year;
   final String? posterPath;
   final bool hasBackdrop;
   final bool expandedLayout;
@@ -562,6 +572,7 @@ class _HeroForeground extends StatelessWidget {
 
   const _HeroForeground({
     required this.title,
+    this.year,
     required this.posterPath,
     required this.hasBackdrop,
     required this.expandedLayout,
@@ -653,8 +664,28 @@ class _HeroForeground extends StatelessWidget {
                     label: e2eWebSemanticsEnabled ? title : null,
                     header: true,
                     excludeSemantics: e2eWebSemanticsEnabled,
-                    child: Text(
-                      title,
+                    child: Text.rich(
+                      TextSpan(
+                        text: title,
+                        children: [
+                          // The premiere year rides along at roughly half the
+                          // display size — identification, not headline.
+                          if (year != null)
+                            TextSpan(
+                              text: ' ($year)',
+                              style: TextStyle(
+                                fontSize: expandedLayout
+                                    ? 28
+                                    : mobileFontSize * 0.6,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing:
+                                    expandedLayout ? -0.5 : -0.25,
+                                color: AppTheme.textPrimary
+                                    .withValues(alpha: 0.75),
+                              ),
+                            ),
+                        ],
+                      ),
                       style:
                           Theme.of(context).textTheme.displaySmall?.copyWith(
                         color: AppTheme.textPrimary,

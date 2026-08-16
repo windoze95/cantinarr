@@ -886,9 +886,9 @@ func TestRefresh_LegacyJWTAmnesty(t *testing.T) {
 	}
 }
 
-// TestRefresh_RejectsNonRefreshTokens locks the amnesty gate: short-lived
-// access tokens, audience-bound (OAuth/setup) tokens, device-less tokens, and
-// forgeries must never mint a session.
+// TestRefresh_RejectsNonRefreshTokens locks the amnesty gate: access tokens,
+// audience-bound (OAuth/setup) tokens, device-less tokens, and forgeries must
+// never mint a session.
 func TestRefresh_RejectsNonRefreshTokens(t *testing.T) {
 	svc := setupTestService(t)
 
@@ -901,7 +901,9 @@ func TestRefresh_RejectsNonRefreshTokens(t *testing.T) {
 		t.Fatalf("load user: %v", err)
 	}
 
-	// A real access token (15-minute lifetime) fails the lifetime bar.
+	// A real access token fails the scope bar. Lifetime no longer discriminates
+	// (access tokens are long-lived now), so the explicit scope stamp is what
+	// keeps a bearer access token from laundering into an immortal session.
 	if _, err := svc.Refresh(loginResp.AccessToken); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("access token as refresh: err = %v, want ErrInvalidCredentials", err)
 	}
@@ -949,6 +951,34 @@ func TestRefresh_RejectsNonRefreshTokens(t *testing.T) {
 	// Unknown opaque token.
 	if _, err := svc.Refresh(opaqueRefreshPrefix + strings.Repeat("ab", 32)); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("unknown opaque token: err = %v, want ErrInvalidCredentials", err)
+	}
+}
+
+// TestAccessTokenLifetimeAndScope pins the long-lived access token contract:
+// a month of validity (per-request device checks keep revocation instant, so
+// expiry adds no security — it only decides how often a client must survive
+// the refresh round-trip) and the explicit scope stamp the amnesty gate
+// rejects.
+func TestAccessTokenLifetimeAndScope(t *testing.T) {
+	svc := setupTestService(t)
+
+	loginResp, err := svc.Login("admin", "testpass123", "", "")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	claims, err := svc.ValidateToken(loginResp.AccessToken)
+	if err != nil {
+		t.Fatalf("validate freshly minted access token: %v", err)
+	}
+	if claims.Scope != "access" {
+		t.Fatalf("access token scope = %q, want %q", claims.Scope, "access")
+	}
+	lifetime := claims.ExpiresAt.Sub(claims.IssuedAt.Time)
+	if lifetime != accessTokenLifetime {
+		t.Fatalf("access token lifetime = %v, want %v", lifetime, accessTokenLifetime)
+	}
+	if accessTokenLifetime < 7*24*time.Hour {
+		t.Fatalf("accessTokenLifetime = %v; a short lifetime reintroduces the refresh round-trip as a frequent single point of failure", accessTokenLifetime)
 	}
 }
 

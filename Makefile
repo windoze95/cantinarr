@@ -1,6 +1,6 @@
 .PHONY: all flutter-web copy-web server run clean check-test-automation test-e2e-tooling maestro-lab-smoke
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= $(shell git describe --tags --always --dirty --match 'v[0-9]*' 2>/dev/null || echo dev)
 
 all: flutter-web copy-web server
 

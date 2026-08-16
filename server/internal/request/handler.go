@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,6 +63,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.CreateMediaRequest(claims.UserID, &req)
 	if err != nil {
+		// Service errors are host-free by construction, so the one line that
+		// makes a failed create diagnosable from the container log is safe.
+		log.Printf("request: create %s request failed: %v", req.MediaType, err)
 		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
@@ -233,6 +237,21 @@ func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pending)
 }
 
+// ListWaiting returns the requests the server owns and is retrying itself.
+// Informational only: these rows carry no decision, which is exactly why they
+// are served apart from the approval queue rather than mixed into it.
+func (h *Handler) ListWaiting(w http.ResponseWriter, r *http.Request) {
+	waiting, err := h.service.ListWaiting()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch waiting requests"})
+		return
+	}
+	if waiting == nil {
+		waiting = []PendingRequest{}
+	}
+	writeJSON(w, http.StatusOK, waiting)
+}
+
 // Approve fulfills a pending request, optionally overriding its options.
 func (h *Handler) Approve(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -252,6 +271,31 @@ func (h *Handler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.service.ApproveRequest(claims.UserID, id, &override)
 	if err != nil {
+		log.Printf("request: approve request %d failed: %v", id, err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// Wait resumes the watch on a demoted author-import book request: the admin's
+// "try again", the opposite verb to closing it. The service replays the add
+// once and either completes the request (the author landed), re-parks it for
+// the sweep to watch, or surfaces the real failure.
+func (h *Handler) Wait(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request id"})
+		return
+	}
+	resp, err := h.service.ExtendBookWait(claims.UserID, id)
+	if err != nil {
+		log.Printf("request: resume wait on request %d failed: %v", id, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

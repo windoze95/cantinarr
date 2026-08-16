@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS request_log (
     book_format TEXT,
     book_record_id INTEGER,
     search_term TEXT,
+    park_reason TEXT,
+    add_failure_reason TEXT,
     instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL,
     approved_by INTEGER REFERENCES users(id),
     decided_at DATETIME,
@@ -144,7 +146,10 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     issue_created    INTEGER NOT NULL DEFAULT 1,
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
     plex_access_request INTEGER NOT NULL DEFAULT 1,
-    plex_invite_sent INTEGER NOT NULL DEFAULT 1
+    plex_invite_sent INTEGER NOT NULL DEFAULT 1,
+    issue_report_update INTEGER NOT NULL DEFAULT 1,
+    agent_digest INTEGER NOT NULL DEFAULT 1,
+    content_upgraded INTEGER NOT NULL DEFAULT 0
 );
 
 -- Durable replacement for the notifier's in-memory new-content dedupe map. The
@@ -158,10 +163,16 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
 -- The rows granted inside the window are also counted as the content-alert
 -- storm breaker: past a burst cap the alert is suppressed (and logged) while
 -- the claim stays recorded, so a mass import cannot page the household once
--- per title through either witness.
+-- per title through either witness. storm_scope keeps the breaker honest now
+-- that upgrades ride the same ledger: 'broadcast' rows count toward the
+-- new-content cap, 'upgrade' rows toward the admin content_upgraded cap, and
+-- 'none' rows (a proven upgrade claiming the broadcast key so the poller
+-- stays silent, without any send) toward no cap at all -- a mass cutoff
+-- upgrade sweep must never starve a genuine new-content alert.
 CREATE TABLE IF NOT EXISTS content_alert_claims (
     alert_key  TEXT PRIMARY KEY,
-    claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    storm_scope TEXT NOT NULL DEFAULT 'broadcast'
 );
 
 CREATE INDEX IF NOT EXISTS idx_content_alert_claims_claimed_at
@@ -328,6 +339,11 @@ CREATE TABLE IF NOT EXISTS issues (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_open_dedupe
     ON issues(dedupe_key) WHERE dedupe_key IS NOT NULL AND closed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+-- The admin list reads open issues in full and the most recent slice of closed
+-- ones. Closed history is the half that grows without bound, so both halves are
+-- served newest-first straight from this index instead of sorting the table.
+CREATE INDEX IF NOT EXISTS idx_issues_closed_recent
+    ON issues(closed_at, updated_at DESC, id DESC);
 
 -- Durable retry-aware observation state. An issue can exist here while it is
 -- intentionally invisible to the admin attention queue: the arr still has a
@@ -478,7 +494,7 @@ CREATE INDEX IF NOT EXISTS idx_issue_messages_issue ON issue_messages(issue_id, 
 CREATE TABLE IF NOT EXISTS agent_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
-    trigger TEXT NOT NULL,                       -- 'auto'|'user_report'|'user_reply'|'approval_granted'|'approval_denied'
+    trigger TEXT NOT NULL,                       -- 'auto'|'user_report' (a resume reuses its original run row, so no other value is ever written)
     status TEXT NOT NULL DEFAULT 'running',      -- running|waiting_user|waiting_approval|resume_pending|succeeded|gave_up|failed|aborted
     model TEXT NOT NULL DEFAULT '',
     proc_generation TEXT NOT NULL DEFAULT '',    -- process-start token; watchdog uses it to tell crashed-mid-run from parked
@@ -488,8 +504,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
     active_seconds INTEGER NOT NULL DEFAULT 0,   -- wall-clock excluding paused waits
-    deadline_at DATETIME,                        -- active-work deadline; NULL while parked
-    stop_reason TEXT,                            -- resolved|max_steps|timeout|repeated_failure|awaiting_approval|awaiting_user|tool_error
+    deadline_at DATETIME,                        -- retired 2026-08 (was a never-read watchdog deadline); kept NULL for rollback compatibility
+    stop_reason TEXT,                            -- vocabulary owned by runner.go's stop* constants plus the abort reasons (server_restarted, issue_closed, media_state_changed, external_resolution, arr_recovery_in_flight, action_outcome_unknown, superseded_by_later_run)
     transcript_json TEXT NOT NULL DEFAULT '',    -- UNTRUNCATED provider-neutral transcript for resume (NOT the audit ledger)
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     finished_at DATETIME
@@ -522,7 +538,7 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
     run_id INTEGER REFERENCES agent_runs(id),
     tool_use_id TEXT,                           -- the propose_action tool_use.id, so the resume tool_result pairs correctly
-    kind TEXT NOT NULL,                          -- grab_release|remediate_queue|manual_import|trigger_search|rescan
+    kind TEXT NOT NULL,                          -- the 6-kind vocabulary owned by models.go ProposableActionKinds (incl. delete_media_files)
     params TEXT NOT NULL DEFAULT '{}',           -- JSON: the exact typed args to replay on approval
     approved_params TEXT,                        -- immutable admin override; NULL means original params
     rationale TEXT NOT NULL DEFAULT '',          -- agent's plain-language justification (UNTRUSTED — render as text)
@@ -534,6 +550,7 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     decided_at DATETIME,
     deny_reason TEXT,
     executed_at DATETIME,
+    target_download_id TEXT,                     -- arr download id this action actually acted on, proven live at dispatch; NULL when the action targets no single download. Keyed on by the repeat guard, so a remedy is never auto-repeated against a release it already failed on
     result_text TEXT,                            -- execution outcome, mirrored back into agent_steps + transcript
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -570,6 +587,38 @@ CREATE TABLE IF NOT EXISTS agent_approval_rules (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_approval_rules_key
     ON agent_approval_rules(problem_kind, action_kind, action_facet);
+
+-- One durable record per (instance, problem label) that Cantinarr has told an
+-- admin about: this problem keeps happening, and here is the setting that would
+-- stop it. Distinct from an issue, which is the SURFACE — the issue can be
+-- dismissed and reopened, while this row is the memory that decides whether to
+-- speak again and how soon.
+--
+-- The key gets a standalone unique index, matching agent_approval_rules, so a
+-- later scope column is an index swap rather than a table rebuild.
+CREATE TABLE IF NOT EXISTS prevention_notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id TEXT NOT NULL,
+    problem_kind TEXT NOT NULL,                -- arr.Diagnosis.Problem label, verbatim
+    raise_count INTEGER NOT NULL DEFAULT 0,    -- how many times we have said it; caps the cooldown
+    occurrences INTEGER NOT NULL DEFAULT 0,    -- issues counted at the last raise
+    distinct_media INTEGER NOT NULL DEFAULT 0,
+    distinct_days INTEGER NOT NULL DEFAULT 0,  -- the recurrence axis: separate days, not fan-out
+    first_seen_at DATETIME,
+    last_seen_at DATETIME,
+    last_raised_at DATETIME,
+    issue_id INTEGER REFERENCES issues(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prevention_notices_key
+    ON prevention_notices(instance_id, problem_kind);
+
+-- Serves the recurrence roll-up. Partial on the exact predicate the sweep uses:
+-- with source = 'auto' as a LITERAL in the query, SQLite can use this as a
+-- covering index and satisfy the GROUP BY from index order instead of scanning
+-- issues and building a temp B-tree.
+CREATE INDEX IF NOT EXISTS idx_issues_problem_recurrence
+    ON issues(instance_id, problem_kind, created_at, dedupe_key)
+    WHERE source = 'auto' AND problem_kind IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_agent_approval_rules_status
     ON agent_approval_rules(status);
 
@@ -611,6 +660,51 @@ CREATE INDEX IF NOT EXISTS idx_external_setting_changes_created
     ON external_setting_changes(id DESC);
 CREATE INDEX IF NOT EXISTS idx_external_setting_changes_target
     ON external_setting_changes(service_type, instance_id, resource_type, resource_id, id DESC);
+
+-- Parked quality-profile change proposals from external MCP agents. The
+-- in-app preview/apply pair proves admin consent through same-turn chat
+-- provenance; an external agent has no server-witnessed turn, so its
+-- proposal parks here and consent happens in the app: an admin reviews the
+-- stored diff and approves, which re-validates live state (the stored
+-- hashes) and runs the same verified write path, recording the result in
+-- external_setting_changes. plan_json/diff_json and the hashes are
+-- server-only; they never leave the server as raw values. status:
+-- pending -> applied | rejected | superseded | expired | failed, passing
+-- through executing while an approval runs. The partial unique index keeps
+-- at most one pending proposal per profile: a newer proposal supersedes
+-- the older so an admin only ever reviews the latest diff.
+CREATE TABLE IF NOT EXISTS profile_change_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposed_by INTEGER NOT NULL DEFAULT 0,
+    proposer_device_id TEXT NOT NULL DEFAULT '',
+    source_client TEXT NOT NULL DEFAULT '',
+    service_type TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
+    instance_name TEXT NOT NULL DEFAULT '',
+    profile_id INTEGER NOT NULL,
+    profile_name TEXT NOT NULL DEFAULT '',
+    plan_json TEXT NOT NULL,
+    diff_json TEXT NOT NULL DEFAULT '[]',
+    profile_hash TEXT NOT NULL DEFAULT '',
+    desired_profile_hash TEXT NOT NULL DEFAULT '',
+    custom_format_hash TEXT NOT NULL DEFAULT '',
+    language_hash TEXT NOT NULL DEFAULT '',
+    has_language_hash INTEGER NOT NULL DEFAULT 0,
+    instance_binding BLOB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    executing_at DATETIME,
+    decided_by INTEGER NOT NULL DEFAULT 0,
+    decided_at DATETIME,
+    reject_note TEXT NOT NULL DEFAULT '',
+    result_text TEXT NOT NULL DEFAULT '',
+    setting_change_id INTEGER,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_profile_change_proposals_status
+    ON profile_change_proposals(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_change_proposals_one_pending
+    ON profile_change_proposals(service_type, instance_id, profile_id) WHERE status = 'pending';
 `
 
 type schemaMigration struct {
@@ -743,6 +837,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE issues ADD COLUMN arr_queue_id INTEGER"},
 		{alter: "ALTER TABLE issues ADD COLUMN resolution_kind TEXT NOT NULL DEFAULT ''"},
 		{alter: "ALTER TABLE agent_actions ADD COLUMN approved_params TEXT"},
+		// The arr download id an executed action actually acted on, proven from a
+		// live queue read at dispatch. It is the only identity that can tell
+		// "this remedy already ran against this exact release" apart from "the
+		// issue's download identity moved on", because issues.download_id tracks
+		// whatever the arr is holding now, not what a past fix touched.
+		{alter: "ALTER TABLE agent_actions ADD COLUMN target_download_id TEXT"},
 		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN arr_added_at DATETIME"},
 		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN queue_file_id INTEGER CHECK (queue_file_id >= 0)"},
 		// The numeric Chaptarr record id a fulfilled book-format request created
@@ -774,6 +874,50 @@ func Open(dbPath string) (*sql.DB, error) {
 		// fails toward human review.
 		{alter: "ALTER TABLE issues ADD COLUMN problem_kind TEXT"},
 		{alter: "ALTER TABLE agent_actions ADD COLUMN auto_rule_id INTEGER"},
+		// Why a pending book request is parked rather than awaiting a human
+		// decision ('author_import': Chaptarr's metadata service is still
+		// importing the author; the server retries and completes it itself).
+		// NULL for ordinary approval-queue rows, so every existing pending row
+		// keeps meaning "a human decides".
+		{alter: "ALTER TABLE request_log ADD COLUMN park_reason TEXT"},
+		// Reporter-loop pushes (question / fix-confirm / closed) share one
+		// user-scoped preference, on by default. New on existing databases.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN issue_report_update INTEGER NOT NULL DEFAULT 1"},
+		// One gentle re-ask before an unanswered confirm-wait is handed to an
+		// admin; the stamp is what makes the nudge happen exactly once.
+		{alter: "ALTER TABLE issues ADD COLUMN confirm_nudged_at DATETIME"},
+		// The weekly agent scoreboard push — the one push that reports success.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN agent_digest INTEGER NOT NULL DEFAULT 1"},
+		// The evidence link a paused rule was missing: WHICH issue's outcome
+		// stood it down. Written by every failure pause; the rules screen
+		// deep-links it.
+		{alter: "ALTER TABLE agent_approval_rules ADD COLUMN paused_by_issue_id INTEGER"},
+		// Quality upgrades stop broadcasting as new content and page only
+		// admins who opt in. Off by default: upgrades are library
+		// maintenance, not news.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN content_upgraded INTEGER NOT NULL DEFAULT 0"},
+		// Which storm cap a claim counts toward ('broadcast', 'upgrade', or
+		// 'none' for a silent claim) -- see the table comment.
+		{alter: "ALTER TABLE content_alert_claims ADD COLUMN storm_scope TEXT NOT NULL DEFAULT 'broadcast'"},
+		// When the alert queue last delivered an admin page for this issue —
+		// the durable per-issue send record the 2026-08-10 audit found missing,
+		// and the ledger behind the one-page-per-issue-per-24h budget. Stamped
+		// only by the queue flush (immediate category pushes keep their own
+		// dedupe mechanisms). NULL = never paged through the queue.
+		{alter: "ALTER TABLE issues ADD COLUMN last_paged_at DATETIME"},
+		// Why an approval-queue row is there beyond ordinary policy: the
+		// automatic add already ran and failed ('metadata_unresolved' — the
+		// library could not match the book; 'import_abandoned' — an add failure
+		// ended the watch on a server-owned author-import park; 'import_failed'
+		// / 'import_cancelled' — the arr's own pending author import reached a
+		// declared terminal or was cancelled). NULL is an ordinary "a human
+		// decides" row.
+		//
+		// Deliberately NOT a second park_reason value: park_reason answers who
+		// owns the row, and its NULL is the guard that keeps the sweep from
+		// bypassing approval policy. This answers what already went wrong, which
+		// is a different question and must not move a row out of the queue.
+		{alter: "ALTER TABLE request_log ADD COLUMN add_failure_reason TEXT"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
@@ -872,13 +1016,11 @@ func Open(dbPath string) (*sql.DB, error) {
 		   SELECT issue_id FROM agent_actions WHERE status = 'outcome_unknown'
 		 )`,
 		`UPDATE agent_runs
-		 SET status = 'aborted', stop_reason = 'action_outcome_unknown', deadline_at = NULL,
-		     finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		 SET status = 'aborted', stop_reason = 'action_outcome_unknown', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 		 WHERE status IN ('running','waiting_user','waiting_approval','resume_pending')
 		   AND issue_id IN (SELECT issue_id FROM agent_actions WHERE status = 'outcome_unknown')`,
 		`UPDATE agent_runs
-		 SET status = 'aborted', stop_reason = 'issue_closed', deadline_at = NULL,
-		     finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		 SET status = 'aborted', stop_reason = 'issue_closed', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 		 WHERE status IN ('running','waiting_user','waiting_approval','resume_pending')
 		   AND issue_id IN (SELECT id FROM issues WHERE closed_at IS NOT NULL)`,
 		`UPDATE issues SET active_run_id = NULL
@@ -1078,8 +1220,7 @@ func repairReleaseActionReferences(db *sql.DB) error {
 				return fmt.Errorf("escalate legacy release issue %d: %w", action.issueID, err)
 			}
 			if _, err := tx.Exec(
-				`UPDATE agent_runs SET status = 'aborted', stop_reason = 'legacy_release_metadata',
-				 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+				`UPDATE agent_runs SET status = 'aborted', stop_reason = 'legacy_release_metadata', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 				 WHERE issue_id = ? AND status = 'waiting_approval'`, action.issueID,
 			); err != nil {
 				return fmt.Errorf("abort legacy release run for issue %d: %w", action.issueID, err)

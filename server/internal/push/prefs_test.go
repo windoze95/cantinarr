@@ -18,7 +18,7 @@ func TestPrefsGetDefaultsForMissingRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	want := Prefs{RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, NewBook: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, PlexInviteSent: true}
+	want := Prefs{RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, NewBook: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, PlexInviteSent: true, IssueReportUpdate: true, AgentDigest: true, ContentUpgraded: false}
 	if got != want {
 		t.Errorf("default prefs = %+v, want %+v", got, want)
 	}
@@ -32,7 +32,7 @@ func TestPrefsSetThenGet(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
 
 	store := NewPrefsStore(database)
-	want := Prefs{RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true, NewBook: true, PlexAccessRequest: true}
+	want := Prefs{RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true, NewBook: true, PlexAccessRequest: true, ContentUpgraded: true}
 	if err := store.Set(1, want); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -107,6 +107,27 @@ func TestUsersOptedIntoDefaultBehavior(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("request_decision opted-in = %v, want none", got)
+	}
+
+	// content_upgraded: admin-scoped AND off by default => nobody yet.
+	got, err = store.usersOptedInto(CategoryContentUpgraded)
+	if err != nil {
+		t.Fatalf("usersOptedInto(content_upgraded): %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("content_upgraded opted-in = %v, want none by default", got)
+	}
+
+	// An opted-in regular user stays excluded — the role scope is enforced in
+	// SQL, not just by the default — while an opted-in admin is included.
+	mustExec(t, database, "UPDATE notification_prefs SET content_upgraded = 1 WHERE user_id = 2")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (3, 1)")
+	got, err = store.usersOptedInto(CategoryContentUpgraded)
+	if err != nil {
+		t.Fatalf("usersOptedInto(content_upgraded): %v", err)
+	}
+	if !equalIDs(got, []int64{3}) {
+		t.Errorf("content_upgraded opted-in = %v, want only the admin [3]", got)
 	}
 }
 

@@ -22,6 +22,7 @@ class _FakeAdapter implements HttpClientAdapter {
     this.mediaRoots = const ['/media'],
     this.arrRootFolders = const [],
     this.webhookError,
+    this.webhookStatus,
     this.testError,
   });
 
@@ -30,6 +31,10 @@ class _FakeAdapter implements HttpClientAdapter {
   final List<String> mediaRoots;
   final List<String> arrRootFolders;
   final String? webhookError;
+
+  /// GET /webhook status body; null mimics an older server (404), which the
+  /// screen must treat as "unknown" and render nothing.
+  final Map<String, dynamic>? webhookStatus;
   final String? testError;
   final List<({String method, String path, dynamic body})> requests = [];
 
@@ -77,6 +82,19 @@ class _FakeAdapter implements HttpClientAdapter {
       response = {...map, 'id': '${map['service_type']}-new'};
     } else if (options.method == 'PUT' && path.endsWith('/users')) {
       response = pins;
+    } else if (options.method == 'GET' && path.endsWith('/webhook')) {
+      final status = webhookStatus;
+      if (status == null) {
+        // Older server: the status route does not exist.
+        return ResponseBody.fromString(
+          '404 page not found\n',
+          404,
+          headers: {
+            'content-type': ['text/plain; charset=utf-8'],
+          },
+        );
+      }
+      response = status;
     } else if (options.method == 'POST' && path.endsWith('/webhook')) {
       final error = webhookError;
       if (error != null) {
@@ -275,7 +293,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Make Default'));
     await tester.pumpAndSettle();
-    final post = adapter.requests.singleWhere((r) => r.method == 'POST');
+    final post = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
     expect(post.body['is_default'], isTrue);
   });
 
@@ -303,7 +322,8 @@ void main() {
 
     // No confirmation dialog for chaptarr, the flag is forced off, and the
     // selected users are assigned to the new instance.
-    final post = adapter.requests.singleWhere((r) => r.method == 'POST');
+    final post = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
     expect(post.body['service_type'], 'chaptarr');
     expect(post.body['is_default'], isFalse);
     final putUsers = adapter.requests.singleWhere((r) =>
@@ -787,7 +807,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Reassign'));
     await tester.pumpAndSettle();
-    final post = adapter.requests.singleWhere((r) => r.method == 'POST');
+    final post = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
     expect(post.body['service_type'], 'chaptarr');
     final putUsers = adapter.requests.singleWhere((r) =>
         r.method == 'PUT' && r.path == '/api/instances/chaptarr-new/users');
@@ -975,5 +996,125 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text(guidance), findsOneWidget);
+  });
+
+  testWidgets('creating a source instance turns on instant updates itself',
+      (tester) async {
+    // The webhook install must not depend on the admin later finding the
+    // configure button at the bottom of the edit screen.
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await _fillForm(tester, 'Movies');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+
+    final webhook = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path.endsWith('/webhook'));
+    expect(webhook.path, '/api/instances/radarr-new/webhook');
+    expect(find.text('Instance created — instant updates configured'),
+        findsOneWidget);
+  });
+
+  testWidgets('a failed webhook install reports without undoing the create',
+      (tester) async {
+    const reason = 'failed to configure radarr webhook: callback unreachable';
+    final adapter = _FakeAdapter(webhookError: reason);
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await _fillForm(tester, 'Movies');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+
+    // The instance itself was created; the report carries the server's
+    // reason and points at the retry path (the edit screen's button).
+    expect(
+      adapter.requests
+          .any((r) => r.method == 'POST' && r.path == '/api/instances'),
+      isTrue,
+    );
+    expect(
+      find.textContaining("instant updates couldn't be configured: $reason"),
+      findsOneWidget,
+    );
+    expect(find.textContaining('edit the instance to retry'), findsOneWidget);
+  });
+
+  testWidgets('download clients skip the webhook install', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('SABnzbd').last);
+    await tester.pumpAndSettle();
+    await _fillForm(tester, 'Downloads');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.requests.any((r) => r.path.endsWith('/webhook')), isFalse);
+    expect(find.text('Instance created'), findsOneWidget);
+  });
+
+  testWidgets('the edit screen shows the live instant-updates state',
+      (tester) async {
+    final adapter = _FakeAdapter(
+      instances: [Map.of(_radarrB)],
+      webhookStatus: {'supported': true, 'configured': true, 'state': 'ok'},
+    );
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    expect(
+      adapter.requests.any((r) =>
+          r.method == 'GET' && r.path == '/api/instances/radarr-b/webhook'),
+      isTrue,
+    );
+    expect(find.text('Instant updates are on.'), findsOneWidget);
+  });
+
+  testWidgets('a webhook the arr no longer has reads as not configured',
+      (tester) async {
+    // The answer is derived from the arr's Connect list at read time; a
+    // stored "configured once" flag would keep lying after an admin deleted
+    // the record there.
+    final adapter = _FakeAdapter(
+      instances: [Map.of(_radarrB)],
+      webhookStatus: {
+        'supported': true,
+        'configured': false,
+        'state': 'missing',
+      },
+    );
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    expect(
+        find.text('Instant updates are not configured yet.'), findsOneWidget);
+
+    // Configuring from here replaces the status line with the result.
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, 'Configure instant updates'));
+    await tester.pumpAndSettle();
+    expect(find.text('Instant updates are configured.'), findsOneWidget);
+    expect(find.text('Instant updates are not configured yet.'), findsNothing);
   });
 }

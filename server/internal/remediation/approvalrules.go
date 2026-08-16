@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 )
 
@@ -34,7 +35,17 @@ const (
 	autoRulePausedUnverifiedOutcome = "An auto-approved fix ended with an unverified outcome. Verify the arr state before re-arming this rule."
 	autoRulePausedPreflightFailed   = "An auto-approved fix was stopped by a failed pre-dispatch safety check. Review the issue before re-arming this rule."
 	autoRulePausedIssueUnresolved   = "An issue this rule acted on closed without being resolved. Review the outcome before re-arming this rule."
+	// autoRulePausedNeedsAdmin is the give-up path's pause. It used to reuse
+	// the "closed without being resolved" copy above, which was false twice
+	// over on issue 859: the issue never closed (it parked needs_admin), and
+	// the pause note therefore described an event that had not happened.
+	autoRulePausedNeedsAdmin = "An issue this rule acted on had to be handed to an administrator. Review the outcome before re-arming this rule."
 )
+
+// executionFailedPauseCause is the issue-thread clause for every pause triggered
+// by a bad dispatch outcome (failed, partial, unverifiable, unresolved closure).
+// A rule stood down because a fix it approved did not work.
+const executionFailedPauseCause = "this fix did not complete successfully"
 
 // actionAutoFacet derives the rule key's per-kind safety discriminator from
 // the CANONICAL params (validateActionParams output; struct-field order).
@@ -57,6 +68,19 @@ func actionAutoFacet(kind ActionKind, canonical json.RawMessage) (string, bool) 
 			return "", false
 		}
 		return p.Action, true
+	case ActionDeleteMediaFiles:
+		// Deleting files is destructive either way, but blocklisting also stands
+		// down a release for good and hands the replacement decision to the
+		// service's own failed-download policy. An admin who is happy to
+		// auto-approve one has not thereby approved the other.
+		var p DeleteMediaFilesParams
+		if err := json.Unmarshal(canonical, &p); err != nil {
+			return "", false
+		}
+		if p.Blocklist {
+			return "blocklist", true
+		}
+		return "files_only", true
 	case ActionGrabRelease, ActionTriggerSearch, ActionRescan:
 		return "", true
 	default:
@@ -76,8 +100,12 @@ func approvalRuleLabel(problemKind string, kind ActionKind, facet string) string
 		switch facet {
 		case "remove":
 			action = "Remove from queue"
+		// The facet STRINGS are persisted rule keys — renaming one orphans every
+		// rule armed on it. Only these display labels may change.
 		case "blocklist_search":
-			action = "Blocklist & re-search"
+			action = "Blocklist the release"
+		case "blocklist_only":
+			action = "Blocklist, no replacement"
 		case "change_category":
 			action = "Change download category"
 		default:
@@ -93,6 +121,12 @@ func approvalRuleLabel(problemKind string, kind ActionKind, facet string) string
 		action = "Search again"
 	case ActionRescan:
 		action = "Rescan"
+	case ActionDeleteMediaFiles:
+		if facet == "blocklist" {
+			action = "Delete the wrong files and block that release"
+		} else {
+			action = "Delete the wrong files"
+		}
 	}
 	return action + " · " + problemKind
 }
@@ -102,7 +136,7 @@ func approvalRuleLabel(problemKind string, kind ActionKind, facet string) string
 func (s *Service) ListApprovalRules() ([]AgentApprovalRule, error) {
 	rows, err := s.db.Query(
 		`SELECT r.id, r.problem_kind, r.action_kind, r.action_facet, r.status,
-		        r.paused_reason, r.paused_at, r.created_by, u.username, r.seed_action_id,
+		        r.paused_reason, r.paused_at, r.paused_by_issue_id, r.created_by, u.username, r.seed_action_id,
 		        r.approved_count, r.resolved_count, r.last_approved_at, r.last_resolved_at,
 		        r.created_at, r.updated_at
 		 FROM agent_approval_rules r
@@ -121,14 +155,54 @@ func (s *Service) ListApprovalRules() ([]AgentApprovalRule, error) {
 		}
 		out = append(out, *rule)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].Status == ApprovalRulePaused && out[i].PausedAt != nil {
+			out[i].ApprovedSincePause = s.manualApprovalsSince(&out[i])
+		}
+	}
+	return out, nil
+}
+
+// manualApprovalsSince counts HUMAN approvals of a paused rule's exact triple
+// since the pause — the server-computed argument for resuming ("you have
+// automated this and keep doing it by hand"). Best-effort: zero on any read
+// error, facet derived by the same function the sweep matches with.
+func (s *Service) manualApprovalsSince(rule *AgentApprovalRule) int64 {
+	rows, err := s.db.Query(
+		`SELECT COALESCE(NULLIF(a.approved_params, ''), a.params)
+		 FROM agent_actions a
+		 JOIN issues i ON i.id = a.issue_id
+		 WHERE a.kind = ? AND i.problem_kind = ?
+		   AND a.decided_by IS NOT NULL AND a.executed_at IS NOT NULL
+		   AND a.decided_at >= ?`,
+		rule.ActionKind, rule.ProblemKind, rule.PausedAt.UTC(),
+	)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	var n int64
+	for rows.Next() {
+		var params string
+		if err := rows.Scan(&params); err != nil {
+			continue
+		}
+		facet, ok := actionAutoFacet(ActionKind(rule.ActionKind), json.RawMessage(params))
+		if ok && facet == rule.ActionFacet {
+			n++
+		}
+	}
+	return n
 }
 
 // GetApprovalRule loads one rule with its creator name.
 func (s *Service) GetApprovalRule(ruleID int64) (*AgentApprovalRule, error) {
 	row := s.db.QueryRow(
 		`SELECT r.id, r.problem_kind, r.action_kind, r.action_facet, r.status,
-		        r.paused_reason, r.paused_at, r.created_by, u.username, r.seed_action_id,
+		        r.paused_reason, r.paused_at, r.paused_by_issue_id, r.created_by, u.username, r.seed_action_id,
 		        r.approved_count, r.resolved_count, r.last_approved_at, r.last_resolved_at,
 		        r.created_at, r.updated_at
 		 FROM agent_approval_rules r
@@ -151,6 +225,7 @@ func scanApprovalRule(row rowScanner) (*AgentApprovalRule, error) {
 		rule           AgentApprovalRule
 		pausedReason   sql.NullString
 		pausedAt       sql.NullTime
+		pausedByIssue  sql.NullInt64
 		createdBy      sql.NullInt64
 		createdByName  sql.NullString
 		seedActionID   sql.NullInt64
@@ -159,11 +234,15 @@ func scanApprovalRule(row rowScanner) (*AgentApprovalRule, error) {
 	)
 	if err := row.Scan(
 		&rule.ID, &rule.ProblemKind, &rule.ActionKind, &rule.ActionFacet, &rule.Status,
-		&pausedReason, &pausedAt, &createdBy, &createdByName, &seedActionID,
+		&pausedReason, &pausedAt, &pausedByIssue, &createdBy, &createdByName, &seedActionID,
 		&rule.ApprovedCount, &rule.ResolvedCount, &lastApprovedAt, &lastResolvedAt,
 		&rule.CreatedAt, &rule.UpdatedAt,
 	); err != nil {
 		return nil, err
+	}
+	if pausedByIssue.Valid {
+		v := pausedByIssue.Int64
+		rule.PausedByIssueID = &v
 	}
 	if pausedReason.Valid && pausedReason.String != "" {
 		v := pausedReason.String
@@ -272,11 +351,19 @@ func (s *Service) DeleteApprovalRule(ruleID int64) error {
 // transitioned the rule so callers notify exactly once. One failure pauses
 // today; a future N-strikes policy changes only this helper's body.
 func pauseApprovalRuleTx(tx *sql.Tx, ruleID int64, reason string) (bool, error) {
+	return pauseApprovalRuleForIssueTx(tx, ruleID, 0, reason)
+}
+
+// pauseApprovalRuleForIssueTx records WHICH issue's outcome stood the rule
+// down beside the pause itself — the evidence link the rules screen renders.
+func pauseApprovalRuleForIssueTx(tx *sql.Tx, ruleID, issueID int64, reason string) (bool, error) {
 	res, err := tx.Exec(
 		`UPDATE agent_approval_rules
-		 SET status = ?, paused_reason = ?, paused_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		 SET status = ?, paused_reason = ?, paused_at = CURRENT_TIMESTAMP,
+		     paused_by_issue_id = CASE WHEN ? > 0 THEN ? ELSE paused_by_issue_id END,
+		     updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND status = ?`,
-		ApprovalRulePaused, reason, ruleID, ApprovalRuleActive,
+		ApprovalRulePaused, reason, issueID, issueID, ruleID, ApprovalRuleActive,
 	)
 	if err != nil {
 		return false, fmt.Errorf("pause approval rule %d: %w", ruleID, err)
@@ -304,7 +391,7 @@ func approvalRuleLabelTx(tx *sql.Tx, ruleID int64) (string, error) {
 // transitioned the rule (false = it was already paused or deleted), so callers
 // notify post-commit exactly once per real transition.
 func pauseRuleForFailureTx(tx *sql.Tx, ruleID, issueID int64, reason string) (bool, error) {
-	paused, err := pauseApprovalRuleTx(tx, ruleID, reason)
+	paused, err := pauseApprovalRuleForIssueTx(tx, ruleID, issueID, reason)
 	if err != nil || !paused {
 		return false, err
 	}
@@ -312,7 +399,7 @@ func pauseRuleForFailureTx(tx *sql.Tx, ruleID, issueID int64, reason string) (bo
 	if err != nil {
 		return false, err
 	}
-	if err := insertRulePausedMessageTx(tx, issueID, label); err != nil {
+	if err := insertRulePausedMessageTx(tx, issueID, label, executionFailedPauseCause); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -359,13 +446,14 @@ func autoRuleIDsForIssueTx(tx *sql.Tx, issueID int64) ([]int64, error) {
 
 // insertRulePausedMessageTx posts the fixed system-authored thread message
 // explaining that automation stood down on this issue. Committed atomically
-// with the pause itself.
-func insertRulePausedMessageTx(tx *sql.Tx, issueID int64, label string) error {
+// with the pause itself. cause is a code constant, never caller free text — the
+// whole message must stay server-authored copy.
+func insertRulePausedMessageTx(tx *sql.Tx, issueID int64, label, cause string) error {
 	_, err := tx.Exec(
 		`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
 		 VALUES (?, ?, NULL, ?)`,
 		issueID, AuthorSystem,
-		fmt.Sprintf("The standing auto-approval rule \"%s\" was paused because this fix did not complete successfully. Matching fixes will wait for manual approval until an administrator re-arms it.", label),
+		fmt.Sprintf("The standing auto-approval rule %q was paused because %s. Matching fixes will wait for manual approval until an administrator re-arms it.", label, cause),
 	)
 	if err != nil {
 		return fmt.Errorf("record rule-paused message: %w", err)
@@ -441,8 +529,10 @@ func (s *Service) decorateActionsAutoApproval(actions []AgentAction) {
 				act.AutoRuleLabel = &label
 			}
 		}
-		if act.Status != ActionProposed || !act.CanDecide ||
-			act.IssueSource != SourceAuto || act.IssueProblemKind == "" {
+		// D2: a user report whose diagnosis landed on a persisted problem label
+		// may seed a rule exactly like an auto incident — the subjectivity is in
+		// the TRIGGER, and the reporter still owns the close. No label, no offer.
+		if act.Status != ActionProposed || !act.CanDecide || act.IssueProblemKind == "" {
 			continue
 		}
 		facet, ok := actionAutoFacet(ActionKind(act.Kind), act.Params)
@@ -486,7 +576,9 @@ func (s *Service) ApproveActionRemembering(adminID, actionID int64, override *js
 		return nil, err
 	}
 	remembered := false
-	if act.Status == ActionProposed && act.IssueSource == SourceAuto && act.IssueProblemKind != "" {
+	// D2: any diagnosis that landed on a persisted label may seed a rule —
+	// auto incident or user report alike. No label, nothing to remember.
+	if act.Status == ActionProposed && act.IssueProblemKind != "" {
 		paramsForRule := act.Params
 		if override != nil && len(*override) > 0 && string(*override) != "null" {
 			if canonical, verr := validateActionParams(ActionKind(act.Kind), *override); verr == nil {
@@ -532,12 +624,12 @@ func (s *Service) sweepAutoApprovals(now time.Time) {
 		`SELECT a.id, a.kind, a.params, i.problem_kind
 		 FROM agent_actions a JOIN issues i ON i.id = a.issue_id
 		 WHERE a.status = ? AND i.closed_at IS NULL AND i.status = ?
-		   AND i.source = ? AND i.problem_kind IS NOT NULL AND i.problem_kind != ''
+		   AND i.source IN (?, ?) AND i.problem_kind IS NOT NULL AND i.problem_kind != ''
 		   AND EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = a.run_id AND r.status = 'waiting_approval')
 		   AND EXISTS (SELECT 1 FROM agent_approval_rules ru
 		               WHERE ru.status = ? AND ru.problem_kind = i.problem_kind AND ru.action_kind = a.kind)
 		 ORDER BY a.id LIMIT 25`,
-		ActionProposed, IssueAwaitingApproval, SourceAuto, ApprovalRuleActive,
+		ActionProposed, IssueAwaitingApproval, SourceAuto, SourceUser, ApprovalRuleActive,
 	)
 	if err != nil {
 		log.Printf("remediation: query auto-approval candidates: %v", err)
@@ -579,12 +671,154 @@ func (s *Service) sweepAutoApprovals(now time.Time) {
 		}
 		if _, err := s.autoApproveAction(ruleID, c.actionID); err != nil {
 			// A decision/closure/recovery race is normal: someone else owned the
-			// proposal first and the CAS or preflight said so. Anything else is
-			// worth a log line, but never stops the rest of the sweep.
-			if errors.Is(err, ErrActionDecisionConflict) {
+			// proposal first and the CAS or preflight said so. A repeated remedy
+			// is an expected stand-down, already recorded on the rule and in the
+			// issue thread. Anything else is worth a log line, but never stops
+			// the rest of the sweep.
+			if errors.Is(err, ErrActionDecisionConflict) || errors.Is(err, errRemedyAlreadyApplied) {
 				continue
 			}
 			log.Printf("remediation: auto-approve action %d via rule %d: %v", c.actionID, ruleID, err)
 		}
 	}
+}
+
+// announceBootPausedRules closes the one silent stand-down left: the schema
+// layer pauses rules whose auto-approved fix a restart interrupted, but the db
+// package has no notifier, so until now the only trace was the rules screen.
+// Called once at worker start (never on the ticker), it announces rules whose
+// pause the boot repair just wrote — recognized by the fixed restart copy and
+// a paused_at within the boot window — through the same thread-message + push
+// path every runtime pause uses. Autonomy never stands down silently.
+func (s *Service) announceBootPausedRules() {
+	rows, err := s.db.Query(
+		`SELECT id FROM agent_approval_rules
+		 WHERE status = 'paused'
+		   AND paused_reason LIKE 'Cantinarr restarted while an auto-approved fix%'
+		   AND paused_at >= datetime('now', '-10 minutes')`,
+	)
+	if err != nil {
+		return
+	}
+	var ruleIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err == nil {
+			ruleIDs = append(ruleIDs, id)
+		}
+	}
+	rows.Close()
+	for _, ruleID := range ruleIDs {
+		s.notifyAutoApprovalPaused(ruleID, 0)
+	}
+}
+
+// RuleCandidate is one (problem, fix, facet) triple the admin has actually
+// approved by hand and could automate — the arm-from-catalog surface, so
+// trusting a repeat fix no longer waits for the next proposal's checkbox.
+type RuleCandidate struct {
+	ProblemKind   string     `json:"problem_kind"`
+	ActionKind    string     `json:"action_kind"`
+	ActionFacet   string     `json:"action_facet"`
+	Label         string     `json:"label"`
+	ApprovedCount int64      `json:"approved_count"`
+	LastApproved  *time.Time `json:"last_approved_at"`
+}
+
+// ListRuleCandidates aggregates every triple with at least one HUMAN-approved
+// execution and no active rule. Grounded by construction: a triple nobody has
+// approved by hand cannot appear, so arming from here is "remember, later" —
+// never inventing a rule from thin air.
+func (s *Service) ListRuleCandidates() ([]RuleCandidate, error) {
+	rows, err := s.db.Query(
+		`SELECT i.problem_kind, a.kind, COALESCE(NULLIF(a.approved_params, ''), a.params), a.decided_at
+		 FROM agent_actions a JOIN issues i ON i.id = a.issue_id
+		 WHERE a.decided_by IS NOT NULL AND a.executed_at IS NOT NULL AND a.status = ?
+		   AND i.problem_kind IS NOT NULL AND i.problem_kind != ''`,
+		ActionExecuted,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query rule candidates: %w", err)
+	}
+	defer rows.Close()
+	type agg struct {
+		count int64
+		last  *time.Time
+	}
+	byKey := map[string]*agg{}
+	meta := map[string]RuleCandidate{}
+	for rows.Next() {
+		var problem, kind, params string
+		var decidedAt sql.NullTime
+		if err := rows.Scan(&problem, &kind, &params, &decidedAt); err != nil {
+			return nil, err
+		}
+		facet, ok := actionAutoFacet(ActionKind(kind), json.RawMessage(params))
+		if !ok {
+			continue
+		}
+		key := approvalRuleKey(problem, kind, facet)
+		if _, seen := byKey[key]; !seen {
+			byKey[key] = &agg{}
+			meta[key] = RuleCandidate{
+				ProblemKind: problem, ActionKind: kind, ActionFacet: facet,
+				Label: approvalRuleLabel(problem, ActionKind(kind), facet),
+			}
+		}
+		byKey[key].count++
+		if decidedAt.Valid && (byKey[key].last == nil || decidedAt.Time.After(*byKey[key].last)) {
+			v := decidedAt.Time
+			byKey[key].last = &v
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Subtract triples that already have an ACTIVE rule (paused ones stay
+	// listed — arming from the catalog reactivates, same as remember).
+	ruleRows, err := s.db.Query(
+		"SELECT problem_kind, action_kind, action_facet FROM agent_approval_rules WHERE status = ?",
+		ApprovalRuleActive,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query active rules: %w", err)
+	}
+	defer ruleRows.Close()
+	for ruleRows.Next() {
+		var problem, kind, facet string
+		if err := ruleRows.Scan(&problem, &kind, &facet); err != nil {
+			return nil, err
+		}
+		delete(byKey, approvalRuleKey(problem, kind, facet))
+	}
+	out := make([]RuleCandidate, 0, len(byKey))
+	for key, a := range byKey {
+		c := meta[key]
+		c.ApprovedCount = a.count
+		c.LastApproved = a.last
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ApprovedCount > out[j].ApprovedCount })
+	return out, nil
+}
+
+// ArmRuleFromCatalog creates (or reactivates) a rule for a triple the admin
+// has actually approved by hand — the grounding is re-checked here, server
+// side, whatever the client claimed.
+func (s *Service) ArmRuleFromCatalog(adminID int64, problemKind, actionKind, actionFacet string) (int64, error) {
+	candidates, err := s.ListRuleCandidates()
+	if err != nil {
+		return 0, err
+	}
+	grounded := false
+	for _, c := range candidates {
+		if c.ProblemKind == problemKind && c.ActionKind == actionKind && c.ActionFacet == actionFacet {
+			grounded = true
+			break
+		}
+	}
+	if !grounded {
+		return 0, fmt.Errorf("this exact fix has never been approved by hand; approve it once on a real proposal first")
+	}
+	return s.createOrReactivateApprovalRule(adminID, 0, problemKind, ActionKind(actionKind), actionFacet)
 }

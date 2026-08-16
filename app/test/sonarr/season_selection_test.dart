@@ -56,6 +56,7 @@ Map<String, dynamic> _episodeJson({
   required bool hasFile,
   required bool aired,
   int seasonNumber = 1,
+  bool monitored = false,
 }) =>
     {
       'id': id,
@@ -66,7 +67,7 @@ Map<String, dynamic> _episodeJson({
       'hasFile': hasFile,
       // Downloaded episodes carry their file id (used by delete-file flows).
       'episodeFileId': hasFile ? id * 10 : 0,
-      'monitored': false,
+      'monitored': monitored,
       'airDateUtc': DateTime.now()
           .toUtc()
           .add(Duration(days: aired ? -30 : 30))
@@ -294,6 +295,50 @@ void main() {
         'episodeIds': [102],
         'monitored': true
       });
+      expect(find.text('Monitoring S01E02'), findsOneWidget);
+
+      // The change is patched in place — no refetch — so the menu offers the
+      // other direction the next time it opens.
+      expect(
+        adapter.requests
+            .where((r) => r.method == 'GET' && r.path.endsWith('/episode')),
+        hasLength(1),
+      );
+      await tester.longPress(find.text('Episode 2'));
+      await tester.pumpAndSettle();
+      expect(find.text('Unmonitor Episode'), findsOneWidget);
+    });
+
+    testWidgets('unmonitored episodes are dimmed, monitored ones are not',
+        (tester) async {
+      await _pumpSeasonScreen(tester, episodes: [
+        _episodeJson(
+            id: 101,
+            episodeNumber: 1,
+            hasFile: true,
+            aired: true,
+            monitored: true),
+        _episodeJson(id: 102, episodeNumber: 2, hasFile: false, aired: true),
+      ]);
+
+      /// Every opacity applied to the row whose title is [episodeTitle].
+      List<double> rowOpacities(String episodeTitle) => tester
+          .widgetList<Opacity>(find.descendant(
+            of: find
+                .ancestor(
+                    of: find.text(episodeTitle), matching: find.byType(InkWell))
+                .first,
+            matching: find.byType(Opacity),
+          ))
+          .map((o) => o.opacity)
+          .toList();
+
+      expect(rowOpacities('Episode 1'), everyElement(1.0));
+      expect(rowOpacities('Episode 2'), isNotEmpty);
+      expect(rowOpacities('Episode 2'), everyElement(lessThan(1.0)));
+      // Dimming is the only monitoring signal on a row now — no bookmarks.
+      expect(find.byIcon(Icons.bookmark), findsNothing);
+      expect(find.byIcon(Icons.bookmark_border), findsNothing);
     });
 
     testWidgets('episode menu deletes a downloaded file after confirming',

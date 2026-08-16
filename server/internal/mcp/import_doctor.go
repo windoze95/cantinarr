@@ -26,6 +26,7 @@ func sonarrSignal(item sonarr.DetailedQueueItem) arr.QueueSignal {
 		ErrorMessage:          item.ErrorMessage,
 		StatusMessages:        messages,
 		Protocol:              item.Protocol,
+		MediaFileID:           item.FileIDAtSnapshot(),
 	}
 }
 
@@ -42,6 +43,7 @@ func radarrSignal(item radarr.DetailedQueueItem) arr.QueueSignal {
 		ErrorMessage:          item.ErrorMessage,
 		StatusMessages:        messages,
 		Protocol:              item.Protocol,
+		MediaFileID:           item.FileIDAtSnapshot(),
 	}
 }
 
@@ -103,6 +105,24 @@ func chaptarrQueueTitle(item chaptarr.QueueItem) string {
 	return fmt.Sprintf("book %d", item.BookID)
 }
 
+// resolveGrabProvenance fills in who asked for a download, but only when the
+// answer would change the fix (Diagnosis.ReplacementIsOptional). Provenance
+// costs a history read per item, so a queue full of healthy or unrelated
+// problems triggers none. A failed or empty lookup leaves the signal unknown,
+// which keeps the service's ordinary replacement behaviour.
+func resolveGrabProvenance(lookup func() (string, error), sig *arr.QueueSignal, d arr.Diagnosis) arr.Diagnosis {
+	if !d.ReplacementIsOptional(*sig) {
+		return d
+	}
+	source, err := lookup()
+	if err != nil || source == "" {
+		return d
+	}
+	opportunistic := strings.EqualFold(source, "Rss")
+	sig.GrabbedOpportunistically = &opportunistic
+	return arr.Diagnose(*sig)
+}
+
 // renderDiagnosis appends a problem item's diagnosis to the builder, including
 // the exact next MCP tool call(s) to run for each suggested action so a weak
 // agent can execute verbatim. tmdbID is the resolved TMDB id of the underlying
@@ -153,7 +173,7 @@ func nextCalls(mediaType string, queueID, tmdbID int, verbs []string) string {
 				" then " + toolCall("execute_manual_import", fmt.Sprintf(`{"queue_id": %d, "media_type": %q}`, queueID, mediaType))
 		case arr.ActionForceImport:
 			return toolCall("execute_manual_import", fmt.Sprintf(`{"queue_id": %d, "media_type": %q, "force": true}`, queueID, mediaType))
-		case arr.ActionRemove, arr.ActionBlocklistSearch, arr.ActionChangeCategory:
+		case arr.ActionRemove, arr.ActionBlocklistSearch, arr.ActionBlocklistOnly, arr.ActionChangeCategory:
 			return toolCall("remediate_queue_item", fmt.Sprintf(`{"queue_id": %d, "media_type": %q, "action": %q}`, queueID, mediaType, v))
 		}
 	}
@@ -313,11 +333,15 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 				return nil, err
 			}
 			for _, item := range items {
-				d := arr.Diagnose(radarrSignal(item))
+				sig := radarrSignal(item)
+				d := arr.Diagnose(sig)
 				if d.Severity == arr.SeverityOK {
 					healthy++
 					continue
 				}
+				d = resolveGrabProvenance(func() (string, error) {
+					return radarrClient.GrabProvenance(item.MovieID, item.DownloadID)
+				}, &sig, d)
 				problems++
 				// Radarr queue items embed the movie's TMDB id, so rescan_media
 				// calls can be rendered fully resolved.
@@ -347,11 +371,15 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 				return nil, err
 			}
 			for _, item := range items {
-				d := arr.Diagnose(sonarrSignal(item))
+				sig := sonarrSignal(item)
+				d := arr.Diagnose(sig)
 				if d.Severity == arr.SeverityOK {
 					healthy++
 					continue
 				}
+				d = resolveGrabProvenance(func() (string, error) {
+					return sonarrClient.GrabProvenance(item.EpisodeID, item.DownloadID)
+				}, &sig, d)
 				problems++
 				// Sonarr queue items carry only a TVDB id (no TMDB), so we
 				// cannot resolve a tmdb_id cheaply here; pass 0 and let
@@ -391,10 +419,7 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 
 	var header strings.Builder
 	if problems == 0 {
-		header.WriteString("Import Doctor: no queue problems found.")
-		if healthy > 0 {
-			fmt.Fprintf(&header, " %d item(s) are downloading or importing normally.", healthy)
-		}
+		header.WriteString(noQueueProblemsText(healthy, scope))
 	} else {
 		fmt.Fprintf(&header, "Import Doctor found %d queue item(s) needing attention", problems)
 		if healthy > 0 {
@@ -629,6 +654,11 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID
 			}
 		}
 		sb.WriteString("\n\nUse execute_manual_import to import these (add force=true to import despite permanent rejections).")
+		// Chaptarr re-runs author/book identification when the import actually
+		// executes, so "no rejections listed" above is not a promise: issue 856
+		// (2026-08-11) proposed a plain import off a clean candidate list and
+		// Chaptarr refused it at import time with an author-match rejection.
+		sb.WriteString(" Note: Chaptarr re-checks identification at import time — a candidate with no rejections listed can still be rejected when the import runs; if that happens the file is not moved and the queue item will show the reason.")
 		return &ToolResult{Text: sb.String()}, nil
 
 	default:

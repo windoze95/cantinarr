@@ -160,7 +160,8 @@ class ChaptarrApiService {
 
   /// Toggles monitoring for a set of books in one call. Chaptarr exposes a
   /// dedicated bulk endpoint, so unlike Sonarr's per-season GET-flip-PUT this
-  /// is a single POST. Admin only (proxy requires instances:manage).
+  /// is a single PUT (the endpoint is PUT-only; a POST answers 405). Admin
+  /// only (proxy requires instances:manage).
   Future<void> setBookMonitored(List<int> bookIds, bool monitored) async {
     await _dio.put('$_basePath/book/monitor',
         data: {'bookIds': bookIds, 'monitored': monitored});

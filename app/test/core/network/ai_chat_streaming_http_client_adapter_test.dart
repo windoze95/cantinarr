@@ -83,6 +83,39 @@ void main() {
         isTrue);
   });
 
+  test('routeAllThroughFetch sends every request via the Fetch client',
+      () async {
+    final fallback = _FallbackAdapter();
+    final client = _RecordingClient((_) async => http.StreamedResponse(
+        Stream.value(utf8.encode('{"ok":true}')), 200,
+        headers: {'content-type': 'application/json'}));
+    final adapter = AiChatStreamingHttpClientAdapter(
+      fallbackAdapter: fallback,
+      streamingClient: client,
+      routeAllThroughFetch: true,
+    );
+    // The shape of an auth call: a JSON POST nowhere near the AI chat route.
+    final refresh = RequestOptions(
+      path: '/api/auth/refresh',
+      method: 'POST',
+      baseUrl: 'http://localhost',
+      responseType: ResponseType.json,
+    );
+
+    final response = await adapter.fetch(
+        refresh, Stream.value(Uint8List.fromList(utf8.encode('{}'))), null);
+    final bytes = <int>[];
+    await for (final chunk in response.stream) {
+      bytes.addAll(chunk);
+    }
+
+    expect(fallback.requests, isEmpty,
+        reason: 'auth transport must never fall back to the default adapter');
+    expect(client.requests, hasLength(1));
+    expect(response.statusCode, 200);
+    expect(utf8.decode(bytes), '{"ok":true}');
+  });
+
   test('forwards URL, method, headers, body, and response metadata', () async {
     late http.AbortableRequest sent;
     final client = _RecordingClient((request) async {

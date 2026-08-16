@@ -5,13 +5,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../data/plex_admin_service.dart';
+import '../settings_anchors.dart';
 
 /// Admin screen for the Plex integration: link a Plex account (PIN flow),
 /// pick the server and libraries invites share, and turn on auto-invite so a
 /// user sharing their Plex email gets invited with zero admin taps.
 class PlexSettingsScreen extends ConsumerStatefulWidget {
-  const PlexSettingsScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const PlexSettingsScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<PlexSettingsScreen> createState() => _PlexSettingsScreenState();
@@ -262,6 +267,9 @@ class _PlexSettingsScreenState extends ConsumerState<PlexSettingsScreen> {
   Widget _buildBody() {
     final status = _status!;
     return ListView(
+      // Build every child while a settings-search highlight needs to find
+      // its anchor (see SettingsHighlight).
+      cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         const Padding(
@@ -429,16 +437,20 @@ class _PlexSettingsScreenState extends ConsumerState<PlexSettingsScreen> {
       ],
       const SizedBox(height: 8),
       const _SectionHeader(title: 'Invites'),
-      SwitchListTile(
-        value: _autoInvite,
-        onChanged: (v) => setState(() => _autoInvite = v),
-        activeThumbColor: AppTheme.accent,
-        title: const Text('Auto-invite',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
-        subtitle: const Text(
-            'Send the invite automatically when someone shares their Plex email',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+      SettingsHighlight(
+        anchorId: SettingsAnchors.plexAutoInvite,
+        highlightId: widget.highlightId,
+        child: SwitchListTile(
+          value: _autoInvite,
+          onChanged: (v) => setState(() => _autoInvite = v),
+          activeThumbColor: AppTheme.accent,
+          title: const Text('Auto-invite',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
+          subtitle: const Text(
+              'Send the invite automatically when someone shares their Plex email',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+        ),
       ),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

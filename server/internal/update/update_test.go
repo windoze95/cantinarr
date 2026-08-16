@@ -25,6 +25,8 @@ func TestIsNewer(t *testing.T) {
 		{"mixed prefix", "1.2.3", "v1.2.4", true},
 		{"prerelease suffix ignored", "1.2.3", "1.2.4-rc1", true},
 		{"two-component latest", "1.2.0", "1.3", true},
+		{"git describe current, newer release", "v0.1.0-12-gabc1234", "v0.1.1", true},
+		{"git describe current, same release", "v0.1.0-5-gdef0123", "v0.1.0", false},
 		{"current not comparable", "dev", "1.2.3", false},
 		{"latest not comparable", "1.2.3", "latest", false},
 		{"latest tag build", "latest", "1.2.3", false},
@@ -51,6 +53,12 @@ func TestNewCheckerDisabledForNonSemver(t *testing.T) {
 	}
 	if st.Current != "dev" {
 		t.Fatalf("Status().Current = %q, want %q", st.Current, "dev")
+	}
+
+	// Images built before the repo's first v* tag are stamped with a bare
+	// `git describe --always` SHA; they must stay dormant too.
+	if c := NewChecker("gabc1234", false); !c.disabled {
+		t.Fatal("checker should be disabled for a bare git SHA version")
 	}
 }
 
@@ -213,5 +221,10 @@ func TestParseVersion(t *testing.T) {
 	v, ok := parseVersion("v2.5")
 	if !ok || v.major != 2 || v.minor != 5 || v.patch != 0 {
 		t.Fatalf("v2.5 parsed as %+v ok=%v", v, ok)
+	}
+	// The shape CI stamps into latest/preview images once a v* tag exists.
+	v, ok = parseVersion("v0.1.0-12-gabc1234")
+	if !ok || v.major != 0 || v.minor != 1 || v.patch != 0 {
+		t.Fatalf("v0.1.0-12-gabc1234 parsed as %+v ok=%v", v, ok)
 	}
 }

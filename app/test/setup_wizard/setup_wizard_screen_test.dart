@@ -136,6 +136,23 @@ void _rowEmphasisTests() {
     expect(_pillOn(tester, 'trakt').color, AppTheme.accent);
   });
 
+  testWidgets('the problem-detection row deep-links like any other',
+      (tester) async {
+    await _pumpWizard(tester, [
+      ('tmdb', true, false),
+      ('remediation', false, true),
+    ]);
+
+    // 'remediation' has a real destination (Settings > AI Remediation), so it
+    // carries the action chip and a tap handler — it is not another push.
+    expect(_pillOn(tester, 'remediation').text, 'Set up');
+    final tile = tester.widget<ListTile>(
+      find.ancestor(
+          of: find.text('remediation'), matching: find.byType(ListTile)),
+    );
+    expect(tile.onTap, isNotNull);
+  });
+
   testWidgets('a row with nowhere to go offers no action', (tester) async {
     await _pumpWizard(tester, [
       ('tmdb', true, false),

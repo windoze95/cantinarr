@@ -76,8 +76,10 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		// 503 so the client keeps the token and retries later.
 		switch {
 		case errors.Is(err, ErrDeviceRevoked):
+			log.Printf("auth: refresh 401 from %s: device revoked (client will clear its session)", r.RemoteAddr)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "device has been revoked"})
 		case errors.Is(err, ErrInvalidCredentials):
+			log.Printf("auth: refresh 401 from %s: refresh token unknown (client will clear its session)", r.RemoteAddr)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid refresh token"})
 		default:
 			log.Printf("auth: refresh answered 503 (client will retry, session kept): %v", err)

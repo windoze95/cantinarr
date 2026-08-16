@@ -637,13 +637,13 @@ func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Cl
 }
 
 // RemediateQueueItemHelper applies one of the structured queue remediations
-// (remove | blocklist_search | change_category) to a queue item. Shared body of
+// (remove | blocklist_search | blocklist_only | change_category) to a queue item. Shared body of
 // the remediate_queue_item tool and the Executor's remediate_queue kind.
 func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, queueID int, action string) (string, error) {
 	switch action {
-	case "remove", "blocklist_search", "change_category":
+	case "remove", "blocklist_search", "blocklist_only", "change_category":
 	default:
-		return mutationNotStarted("action must be \"remove\", \"blocklist_search\", or \"change_category\"")
+		return mutationNotStarted("action must be \"remove\", \"blocklist_search\", \"blocklist_only\", or \"change_category\"")
 	}
 
 	switch mediaType {
@@ -665,16 +665,25 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			}
 			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, radarrQueueTitle(*item)), nil
 		case "blocklist_search":
+			// Clear the stuck item and blocklist it — then stop. Whether a
+			// replacement is searched for is the SERVICE's call, made from settings
+			// an administrator already set (including whether a release a human
+			// hand-picked may be substituted automatically). Blocklisting is exactly
+			// what triggers that policy, so skipRedownload stays false and Cantinarr
+			// adds no search of its own: an agent that searched here would be doing
+			// something no human clicking the same button would produce.
 			if err := rc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
 				return "", err
 			}
-			if item.MovieID != 0 {
-				if err := rc.TriggerMoviesSearch([]int{item.MovieID}); err != nil {
-					return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: err}
-				}
-				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, radarrQueueTitle(*item)), nil
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s). Whether a replacement is searched for now follows the service's own failed-download handling.", queueID, radarrQueueTitle(*item)), nil
+		case "blocklist_only":
+			// skipRedownload suppresses the automatic replacement search the
+			// blocklist would otherwise trigger. The blocklist still stands, so the
+			// dead release cannot come back through the service's own RSS pass.
+			if err := rc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+				return "", err
 			}
-			return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: fmt.Errorf("the queue item had no movie id")}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s) without searching for a replacement. The copy already in the library is untouched.", queueID, radarrQueueTitle(*item)), nil
 		case "change_category":
 			if err := rc.RemoveQueueItem(queueID, false, false, false, true); err != nil {
 				return "", err
@@ -700,16 +709,25 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			}
 			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, sonarrQueueTitle(*item)), nil
 		case "blocklist_search":
+			// Clear the stuck item and blocklist it — then stop. Whether a
+			// replacement is searched for is the SERVICE's call, made from settings
+			// an administrator already set (including whether a release a human
+			// hand-picked may be substituted automatically). Blocklisting is exactly
+			// what triggers that policy, so skipRedownload stays false and Cantinarr
+			// adds no search of its own: an agent that searched here would be doing
+			// something no human clicking the same button would produce.
 			if err := sc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
 				return "", err
 			}
-			if item.EpisodeID != 0 {
-				if err := sc.TriggerEpisodeSearch([]int{item.EpisodeID}); err != nil {
-					return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: err}
-				}
-				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, sonarrQueueTitle(*item)), nil
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s). Whether a replacement is searched for now follows the service's own failed-download handling.", queueID, sonarrQueueTitle(*item)), nil
+		case "blocklist_only":
+			// skipRedownload suppresses the automatic replacement search the
+			// blocklist would otherwise trigger. The blocklist still stands, so the
+			// dead release cannot come back through the service's own RSS pass.
+			if err := sc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+				return "", err
 			}
-			return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: fmt.Errorf("the queue item had no episode id")}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s) without searching for a replacement. The copy already in the library is untouched.", queueID, sonarrQueueTitle(*item)), nil
 		case "change_category":
 			if err := sc.RemoveQueueItem(queueID, false, false, false, true); err != nil {
 				return "", err
@@ -735,16 +753,25 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			}
 			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, chaptarrQueueTitle(*item)), nil
 		case "blocklist_search":
+			// Clear the stuck item and blocklist it — then stop. Whether a
+			// replacement is searched for is the SERVICE's call, made from settings
+			// an administrator already set (including whether a release a human
+			// hand-picked may be substituted automatically). Blocklisting is exactly
+			// what triggers that policy, so skipRedownload stays false and Cantinarr
+			// adds no search of its own: an agent that searched here would be doing
+			// something no human clicking the same button would produce.
 			if err := cc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
 				return "", err
 			}
-			if item.BookID != 0 {
-				if err := cc.TriggerBookSearch([]int{item.BookID}); err != nil {
-					return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: err}
-				}
-				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, chaptarrQueueTitle(*item)), nil
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s). Whether a replacement is searched for now follows the service's own failed-download handling.", queueID, chaptarrQueueTitle(*item)), nil
+		case "blocklist_only":
+			// skipRedownload suppresses the automatic replacement search the
+			// blocklist would otherwise trigger. The blocklist still stands, so the
+			// dead release cannot come back through the service's own RSS pass.
+			if err := cc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+				return "", err
 			}
-			return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: fmt.Errorf("the queue item had no book id")}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s) without searching for a replacement. The copy already in the library is untouched.", queueID, chaptarrQueueTitle(*item)), nil
 		case "change_category":
 			if err := cc.RemoveQueueItem(queueID, false, false, false, true); err != nil {
 				return "", err
@@ -1003,7 +1030,12 @@ func manualImportCandidateMatchesTVScope(candidate sonarr.ManualImportCandidate,
 // books carry no TMDB id, so tmdbID/seasonNumber are unused on the book path
 // (and authorID/bookIDs are unused on the movie/TV paths). Shared body of the
 // trigger_search tool and the Executor's trigger_search kind.
-func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, tmdbID int, seasonNumber, episodeNumber *int, authorID int, bookIDs []int) (string, error) {
+// airedOnly narrows a TV season search to the episodes that have already aired
+// and are still missing a file. The set is resolved HERE, at dispatch, and never
+// carried in the proposal: a proposal can wait hours or days for an admin, and
+// in that window the next episode airs. Resolving early would search a week-old
+// answer.
+func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, tmdbID int, seasonNumber, episodeNumber *int, airedOnly bool, authorID int, bookIDs []int) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -1052,6 +1084,9 @@ func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Clie
 			return mutationNotStarted(fmt.Sprintf("episode S%02dE%02d was not found in %s", *seasonNumber, *episodeNumber, series.Title))
 		}
 		if seasonNumber != nil {
+			if airedOnly {
+				return triggerAiredEpisodeSearch(sc, series, *seasonNumber)
+			}
 			if err := sc.TriggerSeasonSearch(series.ID, *seasonNumber); err != nil {
 				return "", err
 			}

@@ -112,7 +112,7 @@ func TestChaptarrSnapshotCreatesBookIssueWithDurableIdentity(t *testing.T) {
 	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", []arr.QueueObservation{observedBookProblem("download-1", 9)}, base); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil || len(issues) != 1 {
 		t.Fatalf("issues=%+v err=%v", issues, err)
 	}
@@ -129,7 +129,7 @@ func TestChaptarrSnapshotCreatesBookIssueWithDurableIdentity(t *testing.T) {
 	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", []arr.QueueObservation{observedBookProblem("download-1", 9)}, base.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if again, err := svc.ListIssues(""); err != nil || len(again) != 1 {
+	if again, _, err := svc.ListIssues("", 0); err != nil || len(again) != 1 {
 		t.Fatalf("post-reconcile issues=%+v err=%v", again, err)
 	}
 }
@@ -156,7 +156,7 @@ func TestBookRecoveryWitnessClosesAutoIssue(t *testing.T) {
 	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", nil, base.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil || len(issues) != 1 {
 		t.Fatalf("issues=%+v err=%v", issues, err)
 	}
@@ -190,7 +190,7 @@ func TestBookRecoveryRejectsStaleReceipt(t *testing.T) {
 	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", nil, base.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil || len(issues) != 1 {
 		t.Fatalf("issues=%+v err=%v", issues, err)
 	}
@@ -221,7 +221,7 @@ func TestBookPartialImportDoesNotCloseWhileQueueRowSignals(t *testing.T) {
 	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", []arr.QueueObservation{item}, base.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil || len(issues) != 1 {
 		t.Fatalf("issues=%+v err=%v", issues, err)
 	}
@@ -251,7 +251,7 @@ func TestBookRecoveryWithoutReceiptEscalates(t *testing.T) {
 	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", nil, base.Add(11*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil || len(issues) != 1 {
 		t.Fatalf("issues=%+v err=%v", issues, err)
 	}
@@ -426,7 +426,7 @@ func TestCreateUserIssueBookAdoptsMatchingAutoObservation(t *testing.T) {
 	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", []arr.QueueObservation{observedBookProblem("download-1", 9)}, base); err != nil {
 		t.Fatal(err)
 	}
-	before, err := svc.ListIssues("")
+	before, _, err := svc.ListIssues("", 0)
 	if err != nil || len(before) != 1 || before[0].Source != SourceAuto {
 		t.Fatalf("initial automatic observation=%+v err=%v", before, err)
 	}
@@ -438,7 +438,7 @@ func TestCreateUserIssueBookAdoptsMatchingAutoObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := svc.ListIssues("")
+	after, _, err := svc.ListIssues("", 0)
 	if err != nil || len(after) != 1 {
 		t.Fatalf("adopted issues=%+v err=%v", after, err)
 	}

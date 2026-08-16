@@ -19,6 +19,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
+	"sync"
 )
 
 const (
@@ -27,6 +28,37 @@ const (
 	observationStateSettling   = "settling"
 	queueSnapshotFreshness     = 90 * time.Second
 	observationSweepPeriod     = time.Minute
+	// decisionSweepPeriod paces the rule-approval sweep and the alert flushes —
+	// deliberately independent of the observation sweep so arr latency cannot
+	// hold decisions hostage, and faster than it: a parked proposal a rule
+	// covers should not wait a full observation cycle.
+	decisionSweepPeriod = 30 * time.Second
+	// preAirSweepTicks is how many sweep ticks pass between fallback pre-air
+	// checks. The instant path is a Sonarr webhook; this only covers instances
+	// that never had one configured, and a season filled ahead of its air dates
+	// has already been wrong for a while by the time anyone could act on it.
+	preAirSweepTicks = 15
+	// preventionSweepTicks is how many sweep ticks pass between recurrence
+	// roll-ups. Hourly: it is a DB-only pass whose input changes on the scale
+	// of days.
+	preventionSweepTicks = 60
+	// stalledIncidentDwell is how old a download must be before its "stalled"
+	// verdict is believed enough to open an automatic incident. Torrent clients
+	// flag "stalled" the moment no data is moving — which describes every
+	// torrent during tracker/DHT warmup, minutes before its first peer. Issue
+	// 859 (2026-08-13) opened 34 seconds after the grab; ten minutes later the
+	// promotion ran, a standing rule auto-approved blocklist+search, and the
+	// only release in existence was destroyed before it ever had a chance to
+	// connect.
+	//
+	// The dwell delays only the incident's BIRTH, and only for stalled-class
+	// signals: a download whose stalled flag is younger than this is skipped by
+	// auto-creation and re-read on every later sweep, so a genuinely dead
+	// torrent still becomes an issue — the promotion delay then adds its usual
+	// ObservationMinMinutes on top before anything can act. A stalled torrent
+	// is by definition not making progress, so the only cost of waiting is
+	// these minutes; acting early is what cost 859 its only copy.
+	stalledIncidentDwell = 15 * time.Minute
 )
 
 const observationDownloadUpsertSQL = `INSERT INTO issue_observation_downloads
@@ -49,6 +81,12 @@ const observationDownloadUpsertSQL = `INSERT INTO issue_observation_downloads
 const recoveryInFlightResult = "Superseded because the live arr state changed or the arr continued its own retry before approval; no fix was executed."
 const arrStateClearedResolution = "The requested movie or episode is now available."
 const arrStateClearedBookResolution = "The requested book is now available."
+
+// removedNoReplacementResolution narrates the removed-no-replacement terminal
+// (ResolutionRemovedNoReplacement) in the same plain language the give-up
+// headlines use: what ran, what the world looks like now, and who — nobody —
+// is being waited on.
+const removedNoReplacementResolution = "The dead download was removed and blocklisted. No other copy of this book is available right now; the library keeps monitoring and will grab one automatically when a release appears."
 const observationNeedsCloserLook = "We couldn't confirm the latest status from the connected media service. We didn't make automated changes, and this needs a closer look."
 
 var errStaleObservation = errors.New("stale observation")
@@ -221,6 +259,31 @@ func groupHasProblemSignal(group observationGroup) bool {
 	return false
 }
 
+// groupWarrantsAutoIncident is groupHasProblemSignal with the stalled dwell
+// applied: a "stalled" verdict on a download younger than stalledIncidentDwell
+// is not yet evidence of anything — every torrent looks stalled while its
+// trackers warm up — so it cannot be the signal that OPENS an incident. Any
+// other problem in the group still opens one, and an already-open incident's
+// machinery never consults this (a stalled flag that persists simply opens the
+// issue on a later sweep, once the download is old enough to mean it).
+//
+// A nil AddedAt keeps today's behavior (create): all three arrs supply the
+// added timestamp, so nil is the degenerate case, and inventing a birth time
+// for it would suppress real incidents on evidence we do not have.
+func groupWarrantsAutoIncident(group observationGroup, now time.Time) bool {
+	for _, item := range group.items {
+		if item.Diagnosis.Severity != arr.SeverityWarning && item.Diagnosis.Severity != arr.SeverityError {
+			continue
+		}
+		if item.Diagnosis.Problem == arr.ProblemDownloadStalled &&
+			item.AddedAt != nil && now.Sub(*item.AddedAt) < stalledIncidentDwell {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func selectObservation(group observationGroup, currentDownloadID string) arr.QueueObservation {
 	if len(group.items) == 0 {
 		return arr.QueueObservation{}
@@ -336,7 +399,7 @@ func (s *Service) observeQueueSnapshot(serviceType, instanceID string, items []a
 					}
 				}
 			}
-			if hasMatchingRecord || !groupHasProblemSignal(group) {
+			if hasMatchingRecord || !groupWarrantsAutoIncident(group, now) {
 				continue
 			}
 			record, createErr := s.createAutoObservation(serviceType, instanceID, group, now)
@@ -487,7 +550,18 @@ func (s *Service) storeQueueSnapshot(serviceType, instanceID string, items []arr
 func (s *Service) noteObservationFailure(serviceType, instanceID string, cause error, now time.Time) {
 	s.observationMu.Lock()
 	defer s.observationMu.Unlock()
+	// Persist the actual cause, redacted and bounded: the 2026-08 audit found
+	// this column always held the constant "queue_read_failed", which made
+	// "why couldn't the observer see the queue that night" permanently
+	// unanswerable (instance hosts never reach non-admin surfaces; this table
+	// has no API projection at all).
 	message := "queue_read_failed"
+	if cause != nil {
+		message = secrets.RedactText(cause.Error())
+		if len(message) > 500 {
+			message = message[:500]
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return
@@ -799,6 +873,19 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 	item := selectObservation(group, record.issue.DownloadID)
 	signature := observationSignature(group.items)
 	recovering := groupIsRecovery(group, record.issue.DownloadID)
+	// D2: a user report attached to a DIAGNOSED queue row earns the same
+	// persisted problem label an auto incident gets — it is the Doctor's
+	// verdict about the row, not anyone's opinion — which is what lets a
+	// standing rule cover the dispatch while the reporter keeps the close.
+	// First verdict wins; a label is never overwritten.
+	if record.issue.Source == SourceUser && item.Diagnosis.Problem != "" &&
+		item.Diagnosis.Severity != arr.SeverityOK {
+		_, _ = s.db.Exec(
+			`UPDATE issues SET problem_kind = ? WHERE id = ? AND source = ?
+			   AND (problem_kind IS NULL OR problem_kind = '')`,
+			item.Diagnosis.Problem, record.issue.ID, SourceUser,
+		)
+	}
 	state := observationStateObserving
 	if recovering {
 		state = observationStateRecovering
@@ -879,7 +966,7 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 				if bookReceiptCannotProveLiveRow(record.issue, group) {
 					return s.promoteObservedIssue(record.issue.ID, now)
 				}
-				return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
+				return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe.resolutionKind)
 			}
 			if probe.needsAdmin {
 				return s.promoteObservationNeedsAdmin(record.issue.ID, now, probe.reason)
@@ -910,7 +997,7 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 			if bookReceiptCannotProveLiveRow(record.issue, group) {
 				return s.promoteObservedIssue(record.issue.ID, now)
 			}
-			return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
+			return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe.resolutionKind)
 		}
 		if probe.needsAdmin {
 			return s.promoteObservationNeedsAdmin(record.issue.ID, now, probe.reason)
@@ -942,7 +1029,7 @@ func (s *Service) applyAbsentObservation(record *observationRecord, now time.Tim
 			return moveErr
 		}
 		if probe.completed {
-			return s.closeObservedRecovery(record.issue.ID, true)
+			return s.closeObservedRecovery(record.issue.ID, true, probe.resolutionKind)
 		}
 		if probe.needsAdmin {
 			_, err = s.moveIssueToObservationNeedsAdmin(record.issue, probe.reason, now)
@@ -979,7 +1066,7 @@ func (s *Service) applyAbsentObservation(record *observationRecord, now time.Tim
 		return nil
 	}
 	if probe.completed {
-		return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
+		return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe.resolutionKind)
 	}
 	if probe.needsAdmin {
 		return s.promoteObservationNeedsAdmin(record.issue.ID, now, probe.reason)
@@ -1112,10 +1199,16 @@ func (s *Service) suspendIssueForRecovery(issueID int64, item arr.QueueObservati
 		return false, err
 	}
 	superseded, _ := actionRes.RowsAffected()
+	// resume_pending deliberately SURVIVES suspension: it is a decision already
+	// made (approved and executed, or denied) whose continuation is pure
+	// follow-up, and the commonest trigger for this suspend is the fix's OWN
+	// success emptying the queue — aborting the very handoff that success just
+	// staged burned its transcript and forced a second fresh run. Live agent
+	// states are still cancelled; the surviving handoff is consumed when the
+	// issue re-promotes (claimResume accepts open) or finalized if it closes.
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted', stop_reason='arr_recovery_in_flight',
-		 deadline_at=NULL, finished_at=COALESCE(finished_at, ?)
-		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval','resume_pending')`,
+		`UPDATE agent_runs SET status='aborted', stop_reason='arr_recovery_in_flight', finished_at=COALESCE(finished_at, ?)
+		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval')`,
 		now, issueID,
 	); err != nil {
 		return false, err
@@ -1147,15 +1240,24 @@ func (s *Service) suspendIssueForRecovery(issueID int64, item arr.QueueObservati
 	return true, nil
 }
 
-func (s *Service) closeObservedRecovery(issueID int64, wasPromoted bool) error {
+func (s *Service) closeObservedRecovery(issueID int64, wasPromoted bool, kind string) error {
+	// The kind names which terminal the probe proved; the narration must match
+	// it. An empty kind is the ordinary recovery: the media arrived.
+	if kind == "" {
+		kind = ResolutionArrStateCleared
+	}
 	resolution := arrStateClearedResolution
-	var mediaType string
-	if err := s.db.QueryRow("SELECT media_type FROM issues WHERE id=?", issueID).Scan(&mediaType); err == nil && mediaType == "book" {
-		resolution = arrStateClearedBookResolution
+	if kind == ResolutionRemovedNoReplacement {
+		resolution = removedNoReplacementResolution
+	} else {
+		var mediaType string
+		if err := s.db.QueryRow("SELECT media_type FROM issues WHERE id=?", issueID).Scan(&mediaType); err == nil && mediaType == "book" {
+			resolution = arrStateClearedBookResolution
+		}
 	}
 	transitioned, err := s.concludeIssueAggregate(context.Background(), issueID, IssueResolved,
 		resolution,
-		ResolutionArrStateCleared, issueClosureOptions{silentNotifications: !wasPromoted})
+		kind, issueClosureOptions{silentNotifications: !wasPromoted})
 	// Silent means no alert/push, not no cache invalidation. `issue_updated` is a
 	// websocket-only refresh signal in the push notifier, so the Tracking list and
 	// an open thread learn that a never-promoted incident quietly resolved.
@@ -1438,6 +1540,15 @@ func mergeObservedDownload(existing, candidate observedDownload) observedDownloa
 	return merged
 }
 
+// importReceiptSkewTolerance absorbs clock skew between the stamps the attempt
+// boundary compares: a queue row's `added` can carry the download client's
+// clock while the history record's `date` is the arr's own. A genuine import
+// receipt may therefore be dated slightly BEFORE its download's added time
+// without being a stale record. Anything beyond a minute is treated as what
+// the boundary exists to reject: a reused download id resurrecting an old
+// import as proof.
+const importReceiptSkewTolerance = time.Minute
+
 func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internalMediaID int, requireAttemptBoundary bool) (importReceipt, error) {
 	downloadsByKey := map[string]observedDownload{}
 	rows, err := s.db.Query(
@@ -1519,9 +1630,17 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 					record.MovieID != internalMediaID || record.ID <= 0 {
 					continue
 				}
-				if requireAttemptBoundary && (!download.addedAt.Valid || !download.queueFileID.Valid ||
-					(download.queueFileID.Int64 > 0 && download.queueFileID.Int64 != currentFileID) ||
-					record.Date.Before(download.addedAt.Time)) {
+				// The attempt boundary pins the receipt to THIS download attempt:
+				// the added time must be known, and the import must not predate
+				// it (minus client/arr clock skew). It deliberately does NOT
+				// compare the queue row's file id to the current one — for an
+				// upgrade observed before its import lands, the queue-time file
+				// is the OLD file by definition, and requiring equality made
+				// every fast upgrade's recovery unprovable (the 2026-08-10
+				// seven-false-pages incident). Identity is already bound by the
+				// download id, event type, data.fileId, and media checks.
+				if requireAttemptBoundary && (!download.addedAt.Valid ||
+					record.Date.Before(download.addedAt.Time.Add(-importReceiptSkewTolerance))) {
 					continue
 				}
 				if record.Movie != nil && (record.Movie.ID != internalMediaID || record.Movie.TmdbID != issue.TmdbID) {
@@ -1547,9 +1666,11 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 					record.EpisodeID != internalMediaID || record.ID <= 0 {
 					continue
 				}
-				if requireAttemptBoundary && (!download.addedAt.Valid || !download.queueFileID.Valid ||
-					(download.queueFileID.Int64 > 0 && download.queueFileID.Int64 != currentFileID) ||
-					record.Date.Before(download.addedAt.Time)) {
+				// Same attempt boundary as the movie branch: added-time known,
+				// receipt not predating it beyond clock skew; never a
+				// queue-file equality (see the movie branch's comment).
+				if requireAttemptBoundary && (!download.addedAt.Valid ||
+					record.Date.Before(download.addedAt.Time.Add(-importReceiptSkewTolerance))) {
 					continue
 				}
 				if record.Series != nil && record.Series.TvdbID != issue.TvdbID {
@@ -1604,9 +1725,11 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 						continue
 					}
 				}
-				if requireAttemptBoundary && (!download.addedAt.Valid || !download.queueFileID.Valid ||
-					(download.queueFileID.Int64 > 0 && download.queueFileID.Int64 != currentFileID) ||
-					record.Date == nil || record.Date.Before(download.addedAt.Time)) {
+				// Same attempt boundary as the movie branch (Chaptarr dates are
+				// nullable): added-time known, receipt not predating it beyond
+				// clock skew; never a queue-file equality.
+				if requireAttemptBoundary && (!download.addedAt.Valid ||
+					record.Date == nil || record.Date.Before(download.addedAt.Time.Add(-importReceiptSkewTolerance))) {
 					continue
 				}
 				if record.Book != nil && record.Book.ID != issue.BookID {
@@ -1711,16 +1834,45 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 			a.svc.flushActionAlerts(time.Now().UTC())
 			ticker := time.NewTicker(observationSweepPeriod)
 			defer ticker.Stop()
+			// The pre-air fallback rides this same goroutine rather than its own:
+			// every arr library read in the service already happens here, and a
+			// second timer would race reconciliation for the one DB connection.
+			preAirTicks := 0
+			preventionTicks := 0
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
 					a.sweepObservedInstances()
-					// Owed admin pushes advance on the same clock that moves
-					// incidents in and out of tracking, so a hold-down is
-					// always measured against fresh state. Rule approvals stay
-					// ahead of the flushes for the same reason as at boot.
+					if preAirTicks++; preAirTicks >= preAirSweepTicks {
+						preAirTicks = 0
+						a.svc.SweepPreAirImports()
+					}
+					// Recurrence is measured in days, so an hourly pass is
+					// already far finer than the thing it looks at.
+					if preventionTicks++; preventionTicks >= preventionSweepTicks {
+						preventionTicks = 0
+						a.svc.SweepPreventionNotices()
+					}
+				}
+			}
+		}()
+		// Decisions and owed pushes run on their OWN clock, so a slow arr on
+		// one instance can never delay a standing rule's approval or an
+		// admin's page for every other instance. The load-bearing ordering is
+		// INTRA-tick and preserved verbatim: rule approvals strictly before
+		// the flushes, so a proposal a rule approves this tick drops its owed
+		// push instead of paging for work no admin needs to do. All DB-only —
+		// the single-writer discipline stays with the reconciler.
+		go func() {
+			ticker := time.NewTicker(decisionSweepPeriod)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
 					a.svc.sweepAutoApprovals(time.Now().UTC())
 					a.svc.flushIssueAlerts(time.Now().UTC())
 					a.svc.flushActionAlerts(time.Now().UTC())
@@ -1748,25 +1900,39 @@ func (a *AutoDispatcher) sweepObservedInstances() {
 		}
 	}
 	rows.Close()
+	// The arr I/O fans out with bounded concurrency; reconciliation is
+	// untouched — every result still lands as a snapshot job the single
+	// reconciler goroutine drains, so one slow instance delays only itself.
+	const maxConcurrentSweepFetches = 4
+	sem := make(chan struct{}, maxConcurrentSweepFetches)
+	var wg sync.WaitGroup
 	for _, target := range targets {
+		target := target
 		observedAt := time.Now().UTC()
 		if a.now != nil {
 			observedAt = a.now().UTC()
 		}
-		items, err := a.svc.fetchQueueSnapshot(target.serviceType, target.instanceID)
-		if err != nil {
-			log.Printf("remediation: observation sweep %s %s: %v", target.serviceType, target.instanceID, err)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			items, err := a.svc.fetchQueueSnapshot(target.serviceType, target.instanceID)
+			if err != nil {
+				log.Printf("remediation: observation sweep %s %s: %v", target.serviceType, target.instanceID, err)
+				a.enqueueSnapshotJob(queueSnapshotJob{
+					serviceType: target.serviceType, instanceID: target.instanceID,
+					failure: err, observedAt: observedAt,
+				})
+				return
+			}
 			a.enqueueSnapshotJob(queueSnapshotJob{
 				serviceType: target.serviceType, instanceID: target.instanceID,
-				failure: err, observedAt: observedAt,
+				items: items, observedAt: observedAt,
 			})
-			continue
-		}
-		a.enqueueSnapshotJob(queueSnapshotJob{
-			serviceType: target.serviceType, instanceID: target.instanceID,
-			items: items, observedAt: observedAt,
-		})
+		}()
 	}
+	wg.Wait()
 }
 
 func (s *Service) fetchQueueSnapshot(serviceType, instanceID string) ([]arr.QueueObservation, error) {
@@ -1827,6 +1993,10 @@ type arrRecoveryProbe struct {
 	needsAdmin bool
 	reason     string
 	item       arr.QueueObservation
+	// resolutionKind names WHICH terminal a completed probe proved, so the
+	// close can narrate it honestly. Empty means the ordinary recovery
+	// (arr_state_cleared: the media arrived).
+	resolutionKind string
 }
 
 // exactRecoveryGuard interprets the exact library baseline and a locally
@@ -1870,6 +2040,21 @@ func (s *Service) exactRecoveryGuard(issue *Issue) (arrRecoveryProbe, error) {
 	}
 	if !stateKnown || changed {
 		return arrRecoveryProbe{needsAdmin: true, reason: observationNeedsCloserLook}, nil
+	}
+	// An unchanged 0-file baseline is not always "nothing to conclude". A book
+	// want whose dispatched blocklist fix removed the only live attempt, with
+	// nothing grabbed to replace it, has ENDED — 0→0 with an empty queue is
+	// that fix's success shape, and without this branch the incident
+	// re-promoted a fresh run on every settle, forever (issue 859). Callers of
+	// this guard have already established the exact queue scope is absent.
+	if issue.Source == SourceAuto {
+		removed, err := s.bookRemoveWithoutReplacementProven(issue)
+		if err != nil {
+			return arrRecoveryProbe{}, err
+		}
+		if removed {
+			return arrRecoveryProbe{completed: true, resolutionKind: ResolutionRemovedNoReplacement}, nil
+		}
 	}
 	return arrRecoveryProbe{}, nil
 }
@@ -1917,6 +2102,22 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" {
 		return arrRecoveryProbe{}, nil
 	}
+	// A pre-air season issue is not a queue incident: it deliberately has no
+	// issue_observations row, its season scope has no queue-shaped key, and
+	// recovery for this class means "no unaired episode holds a file" — never
+	// "the queue settled". Route it to its own proof; the queue-shaped flow
+	// below would misread the missing observation row as a hard error and park
+	// the issue for an admin before the agent ever ran. Gated on SourceAuto so a
+	// future problem-labelled user report keeps the never-machine-close rule.
+	if issue.Source == SourceAuto && serviceType == "sonarr" {
+		kind, err := s.storedProblemKind(issue.ID)
+		if err != nil {
+			return arrRecoveryProbe{}, err
+		}
+		if kind == arr.ProblemPreAirSeasonFill {
+			return s.probePreAirRecovery(issue)
+		}
+	}
 	now := time.Now().UTC() // request-start ordering; delayed reads remain stale.
 	items, err := s.fetchQueueSnapshot(serviceType, issue.InstanceID)
 	if err != nil {
@@ -1960,6 +2161,15 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 	}
 	if len(matched) == 0 {
 		settled, err := s.queueAbsenceSettled(issue.ID, now)
+		if errors.Is(err, sql.ErrNoRows) {
+			// No observation row exists for this issue — nothing ever created
+			// one, so there is no absence timer to advance and nothing here can
+			// prove recovery. Report "no recovery detected" rather than failing
+			// the preflight: the runner's conclusion gate still holds its own
+			// proofs, and parking a never-observed issue over a missing timer
+			// row is how a whole incident class silently loses its agent.
+			return arrRecoveryProbe{}, nil
+		}
 		if err != nil {
 			return arrRecoveryProbe{}, err
 		}
@@ -2055,6 +2265,15 @@ func (s *Service) preflightArrRecovery(issueID int64) (bool, error) {
 	}
 	serviceType := mediaServiceType(issue.MediaType)
 	probe, err := s.probeArrRecovery(issue)
+	if errors.Is(err, errStaleObservation) {
+		// A fresher complete snapshot committed between this probe's queue fetch
+		// and its store; the stale read proves nothing about the present. Defer
+		// exactly like live recovery — report "the arr still owns this attempt"
+		// without touching any state — so the next enqueue or sweep retries
+		// against current data instead of parking a healthy issue for an admin
+		// over a pure timing artifact.
+		return true, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -2074,7 +2293,7 @@ func (s *Service) preflightArrRecovery(issueID int64) (bool, error) {
 	}
 	var promoted int
 	_ = s.db.QueryRow("SELECT promoted_at IS NOT NULL FROM issue_observations WHERE issue_id=?", issue.ID).Scan(&promoted)
-	return true, s.closeObservedRecovery(issue.ID, promoted != 0)
+	return true, s.closeObservedRecovery(issue.ID, promoted != 0, probe.resolutionKind)
 }
 
 func (s *Service) moveIssueToObservationNeedsAdmin(issue *Issue, reason string, now time.Time) (bool, error) {
@@ -2102,8 +2321,7 @@ func (s *Service) moveIssueToObservationNeedsAdmin(issue *Issue, reason string, 
 	}
 	superseded, _ := actions.RowsAffected()
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='media_state_changed',
-		 deadline_at=NULL,finished_at=COALESCE(finished_at,?)
+		`UPDATE agent_runs SET status='aborted',stop_reason='media_state_changed',finished_at=COALESCE(finished_at,?)
 		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval','resume_pending')`,
 		now, issue.ID); err != nil {
 		return false, err
@@ -2159,8 +2377,7 @@ func (s *Service) cancelExecutingForRecovery(act *AgentAction, probe arrRecovery
 		return ErrActionDecisionConflict
 	}
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='arr_recovery_in_flight',
-		 deadline_at=NULL,finished_at=COALESCE(finished_at,?)
+		`UPDATE agent_runs SET status='aborted',stop_reason='arr_recovery_in_flight',finished_at=COALESCE(finished_at,?)
 		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval','resume_pending')`,
 		now, act.IssueID,
 	); err != nil {
@@ -2182,7 +2399,7 @@ func (s *Service) cancelExecutingForRecovery(act *AgentAction, probe arrRecovery
 	}
 	s.notifyActionsChanged(act.IssueID, ActionSuperseded)
 	if probe.completed {
-		return s.closeObservedRecovery(act.IssueID, true)
+		return s.closeObservedRecovery(act.IssueID, true, probe.resolutionKind)
 	}
 	return nil
 }
@@ -2213,8 +2430,7 @@ func (s *Service) failExecutingRecoveryPreflight(act *AgentAction, cause error) 
 		return err
 	}
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='recovery_preflight_failed',
-		 deadline_at=NULL,finished_at=COALESCE(finished_at,?)
+		`UPDATE agent_runs SET status='aborted',stop_reason='recovery_preflight_failed',finished_at=COALESCE(finished_at,?)
 		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval','resume_pending')`,
 		now, act.IssueID,
 	); err != nil {
@@ -2256,8 +2472,7 @@ func (s *Service) cancelExecutingForObservationReview(act *AgentAction, reason s
 		return ErrActionDecisionConflict
 	}
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='media_state_changed',deadline_at=NULL,
-		 finished_at=COALESCE(finished_at,?) WHERE issue_id=?
+		`UPDATE agent_runs SET status='aborted',stop_reason='media_state_changed',finished_at=COALESCE(finished_at,?) WHERE issue_id=?
 		 AND status IN ('running','waiting_user','waiting_approval','resume_pending')`, now, act.IssueID); err != nil {
 		return err
 	}
@@ -2287,6 +2502,7 @@ func radarrObservation(item radarr.DetailedQueueItem) arr.QueueObservation {
 		Status: item.Status, TrackedDownloadStatus: item.TrackedDownloadStatus,
 		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
 		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
+		MediaFileID: item.FileIDAtSnapshot(),
 	}
 	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, FileIDAtSnapshot: item.FileIDAtSnapshot(), Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
 }
@@ -2338,6 +2554,7 @@ func sonarrObservation(item sonarr.DetailedQueueItem) arr.QueueObservation {
 		Status: item.Status, TrackedDownloadStatus: item.TrackedDownloadStatus,
 		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
 		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
+		MediaFileID: item.FileIDAtSnapshot(),
 	}
 	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, FileIDAtSnapshot: item.FileIDAtSnapshot(), Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
 }

@@ -44,13 +44,14 @@ const (
 const DefaultDiscoveryEnglishOnly = true
 
 // DefaultSourceFor returns the feed that backs the headline rows when no admin
-// has chosen one. Trakt wins whenever it is configured: adding the credential
-// is itself the statement that Trakt should be used, and its trending feed is
-// ranked by what people are watching right now rather than by TMDB engagement.
-// This is derived rather than written on credential save, so removing the Trakt
-// key silently reverts the rows instead of stranding them on a source that can
-// no longer answer — and so auto-adoption never masquerades as an admin's
-// decision (see DiscoveryChosen).
+// has chosen one. Trakt wins whenever it is available — via an admin-stored
+// client ID or the built-in application, which makes it the out-of-the-box
+// default on stock builds: its trending feed is ranked by what people are
+// watching right now rather than by TMDB engagement, which is why the UI tags
+// it Recommended. This is derived rather than written, so a Trakt that stops
+// being available silently reverts the rows instead of stranding them on a
+// source that can no longer answer — and auto-adoption never masquerades as
+// an admin's decision (see DiscoveryChosen).
 func DefaultSourceFor(traktConfigured bool) string {
 	if traktConfigured {
 		return DiscoverySourceTraktTrending

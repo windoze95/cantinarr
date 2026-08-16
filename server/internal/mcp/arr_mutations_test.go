@@ -16,7 +16,7 @@ func TestMutationHelpersReportNoDispatchAsPreflightFailure(t *testing.T) {
 		{
 			name: "search target unavailable",
 			run: func() (string, error) {
-				return TriggerSearchHelper(nil, nil, nil, nil, "movie", 42, nil, nil, 0, nil)
+				return TriggerSearchHelper(nil, nil, nil, nil, "movie", 42, nil, nil, false, 0, nil)
 			},
 		},
 		{

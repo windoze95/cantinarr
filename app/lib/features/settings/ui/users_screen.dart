@@ -28,6 +28,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   bool _isLoading = true;
   String? _error;
   String _sharedAiProvider = '';
+  bool _sharedAiConfigured = true;
 
   @override
   void initState() {
@@ -47,6 +48,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           backendDio: ref.read(backendClientProvider),
         ).getStatus();
         _sharedAiProvider = credentials.ai.provider;
+        _sharedAiConfigured = credentials.ai.sharedConfigured;
       } catch (_) {
         // User management remains usable if provider status is temporarily
         // unavailable. The confirmation falls back to a generic quota warning.
@@ -248,9 +250,10 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   }
 
   /// Send a test push to a user's devices and report the real outcome — how
-  /// many devices are registered and whether Apple accepted the push. The
-  /// self-only test on the notifications screen can't reach another account, so
-  /// this is how an admin verifies a specific user's delivery.
+  /// many devices are registered and whether the platform's push service
+  /// (APNs/FCM) accepted it. The self-only test on the notifications screen
+  /// can't reach another account, so this is how an admin verifies a specific
+  /// user's delivery.
   Future<void> _sendTestPush(UserSummary user) async {
     try {
       final result =
@@ -336,13 +339,18 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       // refresh deliberately becomes "unknown" so the stronger combined
       // warning is shown instead of trusting a stale API-key snapshot.
       var currentProvider = '';
+      var currentConfigured = true;
       try {
         final credentials = await CredentialsService(
           backendDio: ref.read(backendClientProvider),
         ).getStatus();
         currentProvider = credentials.ai.provider;
+        currentConfigured = credentials.ai.sharedConfigured;
         if (mounted) {
-          setState(() => _sharedAiProvider = currentProvider);
+          setState(() {
+            _sharedAiProvider = currentProvider;
+            _sharedAiConfigured = currentConfigured;
+          });
         }
       } catch (_) {
         if (mounted) {
@@ -350,14 +358,22 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         }
       }
       if (!mounted) return;
-      final codex = currentProvider == 'codex';
       final providerUnknown = currentProvider.isEmpty;
+      // The server defaults the provider name even with nothing set up, so
+      // the provider-specific warnings only apply when one actually exists.
+      final unconfigured = !currentConfigured && !providerUnknown;
+      final codex = currentProvider == 'codex' && !unconfigured;
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: Text('Include AI access for ${user.username}?'),
           content: Text(
-            codex
+            unconfigured
+                ? 'No shared AI provider is set up yet, so this only stages '
+                    'access. Once an admin configures one under Providers & '
+                    'Credentials, this user\'s prompts will run through it '
+                    'and count against its quota or allowance.'
+                : codex
                 ? 'Prompts and tool context will use the shared OpenAI OAuth '
                     'account. All enabled users consume the same Codex '
                     'allowance, and activity is attributable to that account. '
@@ -505,6 +521,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             ),
             onSetSharedAiAccess: (enabled) => _setSharedAiAccess(user, enabled),
             sharedAiProvider: _sharedAiProvider,
+            sharedAiConfigured: _sharedAiConfigured,
           );
         },
       ),
@@ -527,6 +544,7 @@ class _UserTile extends StatelessWidget {
     required this.onRequestSettings,
     required this.onSetSharedAiAccess,
     required this.sharedAiProvider,
+    required this.sharedAiConfigured,
   });
 
   final UserSummary user;
@@ -543,6 +561,7 @@ class _UserTile extends StatelessWidget {
   final VoidCallback onRequestSettings;
   final ValueChanged<bool> onSetSharedAiAccess;
   final String sharedAiProvider;
+  final bool sharedAiConfigured;
 
   /// A user who has never connected a device is stuck in "invited limbo":
   /// either their invite is still pending or the link was lost/expired.
@@ -681,11 +700,16 @@ class _UserTile extends StatelessWidget {
             leading: const Icon(Icons.auto_awesome_outlined),
             title: const Text('Included AI access'),
             subtitle: Text(
-              sharedAiProvider == 'codex'
-                  ? 'Shared OpenAI OAuth allowance'
-                  : sharedAiProvider.isEmpty
-                      ? 'Provider status unavailable'
-                      : 'Server provider quota',
+              // An unknown provider (failed fetch) is not the same as a known
+              // absence — and the server-defaulted provider name may not
+              // claim an allowance that doesn't exist yet.
+              !sharedAiConfigured && sharedAiProvider.isNotEmpty
+                  ? 'No shared provider configured yet'
+                  : sharedAiProvider == 'codex'
+                      ? 'Shared OpenAI OAuth allowance'
+                      : sharedAiProvider.isEmpty
+                          ? 'Provider status unavailable'
+                          : 'Server provider quota',
             ),
             trailing: IgnorePointer(
               child: Switch(

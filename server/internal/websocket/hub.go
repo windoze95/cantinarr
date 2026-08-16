@@ -87,6 +87,12 @@ type ContentNotifier interface {
 	NotifyNewMovie(title string, tmdbID int)
 	NotifyNewEpisode(seriesTitle string, tmdbID int)
 	NotifyNewBook(title, foreignID, instanceID, format string)
+	// The Upgraded variants page only admins opted into content_upgraded and
+	// silently claim the matching broadcast key, which is what keeps the queue
+	// poller from re-announcing a proven upgrade as new content.
+	NotifyUpgradedMovie(title string, tmdbID int)
+	NotifyUpgradedEpisode(seriesTitle string, tmdbID int)
+	NotifyUpgradedBook(title, foreignID, instanceID, format string)
 }
 
 // IssueOpener is the auto-dispatch seam: after every successful detailed queue
@@ -349,6 +355,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	// Flutter sends protocols: ['Bearer', 'actualToken']
 	protocols := websocket.Subprotocols(r)
 	if len(protocols) < 2 || protocols[0] != "Bearer" {
+		log.Printf("websocket: 401 from %s: no bearer subprotocol", r.RemoteAddr)
 		http.Error(w, "missing auth", http.StatusUnauthorized)
 		return
 	}
@@ -356,6 +363,9 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	claims, _, err := h.authService.AuthenticateToken(token)
 	if err != nil {
+		// Reason and source only — never token material (see the subprotocol
+		// echo note below for the same rule on the success path).
+		log.Printf("websocket: 401 from %s: %v", r.RemoteAddr, err)
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
@@ -535,6 +545,12 @@ func (h *Hub) resumeOrigin(instanceID string) (since time.Time, boot bool) {
 //     a fetch failure degrades to the witnessed departures, never silences
 //     them, and every merged id still passes the same live re-verification
 //     (HasFile / BookFileCount) before anything is announced.
+//   - History proof may REROUTE an alert, never suppress it: an import whose
+//     every record is matched by a delete-for-upgrade goes to the returned
+//     upgraded list (the admin content_upgraded audience) instead of the
+//     broadcast. The proof read fails open — any error, drift, or ambiguity
+//     leaves the id in the broadcast list, so vocabulary drift re-pages
+//     upgrades as new content rather than silencing anything.
 //   - A window older than queueWitnessStaleAfter describes completions the
 //     user has long since found in the app: the whole batch is dropped.
 //   - A merged batch over restoredAlertCap, or a window importsSince reports
@@ -550,38 +566,85 @@ func (h *Hub) resumeOrigin(instanceID string) (since time.Time, boot bool) {
 //     request_status_changed broadcasts — accepted because the push those
 //     alerts exist for is undeliverable during exactly that window, and
 //     availability is recomputed live on every read.
-func (h *Hub) resolveAnnouncements(instanceID string, departed []int, importsSince func(time.Time) ([]int, error)) (announce []int, hold bool) {
+func (h *Hub) resolveAnnouncements(instanceID string, departed []int, importsSince func(time.Time) (fresh, upgraded []int, err error)) (announce, upgraded []int, hold bool) {
 	since, boot := h.resumeOrigin(instanceID)
 	if since.IsZero() {
-		return departed, false // steady state is never gated
+		return departed, nil, false // steady state is never gated
 	}
 	if time.Since(since) > queueWitnessStaleAfter {
 		delete(h.restoredWitness, instanceID)
 		if len(departed) > 0 {
 			log.Printf("websocket: dropping %d stale resumed completion(s) for %s", len(departed), instanceID)
 		}
-		return nil, false
+		return nil, nil, false
 	}
-	catchup, err := importsSince(since)
+	catchup, upgrades, err := importsSince(since)
 	if errors.Is(err, errImportBacklogOverflow) {
 		delete(h.restoredWitness, instanceID)
 		log.Printf("websocket: skipping resumed alerts for %s: over %d imports while unwatched", instanceID, catchUpHistoryPageSize)
-		return nil, false
+		return nil, nil, false
 	}
 	if err != nil {
 		log.Printf("websocket: import catch-up (%s): %v (announcing witnessed departures only)", instanceID, err)
-		catchup = nil
+		catchup, upgrades = nil, nil
 	}
-	merged := unionInts(departed, catchup)
-	if len(merged) > 0 && boot && !h.contentReady() {
-		return nil, true
+	// A departed id history proved to be an upgrade moves to the upgrade list:
+	// both witnesses saw the same import, and the proof travels with it. A
+	// departed id history never saw stays a broadcast — suppression requires
+	// positive proof.
+	merged := subtractInts(unionInts(departed, catchup), upgrades)
+	if len(merged)+len(upgrades) > 0 && boot && !h.contentReady() {
+		return nil, nil, true
 	}
 	delete(h.restoredWitness, instanceID)
+	// Independent caps, each dropped whole: upgrades are filtered out before
+	// the broadcast cap is judged, so a mass upgrade sweep during the gap
+	// cannot evict a genuine new-content alert — and an over-cap upgrade batch
+	// is dropped without touching the broadcasts.
 	if len(merged) > restoredAlertCap {
 		log.Printf("websocket: skipping %d resumed completion alert(s) for %s (over cap)", len(merged), instanceID)
-		return nil, false
+		merged = nil
 	}
-	return merged, false
+	if len(upgrades) > restoredAlertCap {
+		log.Printf("websocket: skipping %d resumed upgrade alert(s) for %s (over cap)", len(upgrades), instanceID)
+		upgrades = nil
+	}
+	return merged, upgrades, false
+}
+
+// historyDataValue reads a history record's data value by case-insensitive
+// key. The lineage's API camelCases dictionary keys ("Reason" → "reason"),
+// but a fork on a different serializer may not, and a missed key here would
+// only re-page an upgrade as new content — tolerate the drift instead.
+func historyDataValue(data map[string]string, key string) string {
+	if v, ok := data[key]; ok {
+		return v
+	}
+	for k, v := range data {
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
+}
+
+// subtractInts returns the members of a not present in b, preserving a's order.
+func subtractInts(a, b []int) []int {
+	if len(b) == 0 {
+		return a
+	}
+	drop := make(map[int]struct{}, len(b))
+	for _, id := range b {
+		drop[id] = struct{}{}
+	}
+	var out []int
+	for _, id := range a {
+		if _, gone := drop[id]; gone {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // unionInts merges two id sets into one sorted, duplicate-free slice.
@@ -602,47 +665,100 @@ func unionInts(a, b []int) []int {
 }
 
 // radarrImportsSince lists the distinct movie ids with a completed-import
-// history record dated after since. The event name is re-checked against the
-// response (the query asks by enum id) so a renumbered enum in a fork yields
-// an empty catch-up rather than presenting deletions as imports — history may
-// only ever add alerts, so an unrecognized vocabulary degrades to the queue
-// witness instead of misfiring.
-func radarrImportsSince(client *radarr.Client, since time.Time) ([]int, error) {
+// history record dated after since, split into fresh imports and proven
+// upgrades. The event name is re-checked against the response (the query asks
+// by enum id) so a renumbered enum in a fork yields an empty catch-up rather
+// than presenting deletions as imports — history may only ever add alerts, so
+// an unrecognized vocabulary degrades to the queue witness instead of
+// misfiring.
+//
+// A movie is a proven upgrade only when every one of its window imports is
+// matched by a delete-for-upgrade record (count-aware: two imports against one
+// upgrade delete means at least one filled a gap, so the movie broadcasts).
+// The proof read itself fails open — see radarrUpgradeDeletesSince.
+func radarrImportsSince(client *radarr.Client, since time.Time) (fresh, upgraded []int, err error) {
 	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !complete {
-		return nil, errImportBacklogOverflow
+		return nil, nil, errImportBacklogOverflow
 	}
-	seen := make(map[int]struct{}, len(records))
+	imports := make(map[int]int, len(records))
 	var ids []int
 	for _, rec := range records {
 		if !strings.EqualFold(rec.EventType, "downloadFolderImported") || rec.MovieID <= 0 {
 			continue
 		}
-		if _, dup := seen[rec.MovieID]; dup {
-			continue
+		if imports[rec.MovieID] == 0 {
+			ids = append(ids, rec.MovieID)
 		}
-		seen[rec.MovieID] = struct{}{}
-		ids = append(ids, rec.MovieID)
+		imports[rec.MovieID]++
 	}
 	sort.Ints(ids)
-	return ids, nil
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	deletes := radarrUpgradeDeletesSince(client, since)
+	for _, id := range ids {
+		if deletes[id] >= imports[id] {
+			upgraded = append(upgraded, id)
+		} else {
+			fresh = append(fresh, id)
+		}
+	}
+	return fresh, upgraded, nil
+}
+
+// radarrUpgradeDeletesSince counts the window's delete-for-upgrade records per
+// movie. Any failure — fetch error, a window over one page, a drifted event
+// name or missing reason — returns no proof, so every import announces as new
+// content. History proof can only reroute an alert to admins by positively
+// matching both the event name and the Upgrade reason; drift degrades to
+// alerting, never to silence.
+func radarrUpgradeDeletesSince(client *radarr.Client, since time.Time) map[int]int {
+	records, complete, err := client.GetUpgradeDeleteHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		log.Printf("websocket: radarr upgrade-delete catch-up: %v (announcing all imports as new)", err)
+		return nil
+	}
+	if !complete {
+		log.Printf("websocket: radarr upgrade-delete catch-up: window over one page (announcing all imports as new)")
+		return nil
+	}
+	counts := make(map[int]int, len(records))
+	for _, rec := range records {
+		if !strings.EqualFold(rec.EventType, "movieFileDeleted") || rec.MovieID <= 0 {
+			continue
+		}
+		if !strings.EqualFold(historyDataValue(rec.Data, "reason"), "Upgrade") {
+			continue
+		}
+		counts[rec.MovieID]++
+	}
+	return counts
 }
 
 // sonarrImportsSince is the Sonarr analogue of radarrImportsSince, collapsing
 // per-episode-file import records to their distinct series ids so a season
 // pack imported during the gap becomes one alert, not twenty.
-func sonarrImportsSince(client *sonarr.Client, since time.Time) ([]int, error) {
+//
+// Upgrade proof pairs per EPISODE, not per series: a series moves to the
+// upgraded list only when every import record it produced in the window is
+// matched by a delete-for-upgrade of the same episode. One unproven import —
+// including one whose episode id the record doesn't carry — keeps the whole
+// series a broadcast, because "one new episode plus three upgrades" is news.
+func sonarrImportsSince(client *sonarr.Client, since time.Time) (fresh, upgraded []int, err error) {
 	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !complete {
-		return nil, errImportBacklogOverflow
+		return nil, nil, errImportBacklogOverflow
 	}
-	seen := make(map[int]struct{}, len(records))
+	// series id → episode id → import-record count. Episode id 0 buckets the
+	// records that carry none; they can never be proven upgrades.
+	imports := make(map[int]map[int]int, len(records))
 	var ids []int
 	for _, rec := range records {
 		if !strings.EqualFold(rec.EventType, "downloadFolderImported") {
@@ -658,43 +774,136 @@ func sonarrImportsSince(client *sonarr.Client, since time.Time) ([]int, error) {
 		if seriesID <= 0 {
 			continue
 		}
-		if _, dup := seen[seriesID]; dup {
-			continue
+		episodeID := rec.EpisodeID
+		if episodeID <= 0 && rec.Episode != nil {
+			episodeID = rec.Episode.ID
 		}
-		seen[seriesID] = struct{}{}
-		ids = append(ids, seriesID)
+		if episodeID < 0 {
+			episodeID = 0
+		}
+		if imports[seriesID] == nil {
+			imports[seriesID] = make(map[int]int)
+			ids = append(ids, seriesID)
+		}
+		imports[seriesID][episodeID]++
 	}
 	sort.Ints(ids)
-	return ids, nil
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	deletes := sonarrUpgradeDeletesSince(client, since)
+	for _, id := range ids {
+		allUpgrades := true
+		for episodeID, n := range imports[id] {
+			if episodeID <= 0 || deletes[episodeID] < n {
+				allUpgrades = false
+				break
+			}
+		}
+		if allUpgrades {
+			upgraded = append(upgraded, id)
+		} else {
+			fresh = append(fresh, id)
+		}
+	}
+	return fresh, upgraded, nil
+}
+
+// sonarrUpgradeDeletesSince counts the window's delete-for-upgrade records per
+// episode, failing open exactly like radarrUpgradeDeletesSince.
+func sonarrUpgradeDeletesSince(client *sonarr.Client, since time.Time) map[int]int {
+	records, complete, err := client.GetUpgradeDeleteHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		log.Printf("websocket: sonarr upgrade-delete catch-up: %v (announcing all imports as new)", err)
+		return nil
+	}
+	if !complete {
+		log.Printf("websocket: sonarr upgrade-delete catch-up: window over one page (announcing all imports as new)")
+		return nil
+	}
+	counts := make(map[int]int, len(records))
+	for _, rec := range records {
+		if !strings.EqualFold(rec.EventType, "episodeFileDeleted") {
+			continue
+		}
+		episodeID := rec.EpisodeID
+		if episodeID <= 0 && rec.Episode != nil {
+			episodeID = rec.Episode.ID
+		}
+		if episodeID <= 0 {
+			continue
+		}
+		if !strings.EqualFold(historyDataValue(rec.Data, "reason"), "Upgrade") {
+			continue
+		}
+		counts[episodeID]++
+	}
+	return counts
 }
 
 // chaptarrImportsSince is the Chaptarr analogue of radarrImportsSince. The
 // event name is re-checked against the shared Readarr-lineage import
 // vocabulary (the same set the webhook receiver accepts), so both witnesses
 // agree on what counts as an import and an unrecognized fork vocabulary
-// contributes nothing rather than misfiring.
-func chaptarrImportsSince(client *chaptarr.Client, since time.Time) ([]int, error) {
+// contributes nothing rather than misfiring. Upgrade proof pairs per book
+// record, count-aware like the Radarr split.
+func chaptarrImportsSince(client *chaptarr.Client, since time.Time) (fresh, upgraded []int, err error) {
 	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !complete {
-		return nil, errImportBacklogOverflow
+		return nil, nil, errImportBacklogOverflow
 	}
-	seen := make(map[int]struct{}, len(records))
+	imports := make(map[int]int, len(records))
 	var ids []int
 	for _, rec := range records {
 		if !chaptarr.IsImportEventType(rec.EventType) || rec.BookID <= 0 {
 			continue
 		}
-		if _, dup := seen[rec.BookID]; dup {
-			continue
+		if imports[rec.BookID] == 0 {
+			ids = append(ids, rec.BookID)
 		}
-		seen[rec.BookID] = struct{}{}
-		ids = append(ids, rec.BookID)
+		imports[rec.BookID]++
 	}
 	sort.Ints(ids)
-	return ids, nil
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	deletes := chaptarrUpgradeDeletesSince(client, since)
+	for _, id := range ids {
+		if deletes[id] >= imports[id] {
+			upgraded = append(upgraded, id)
+		} else {
+			fresh = append(fresh, id)
+		}
+	}
+	return fresh, upgraded, nil
+}
+
+// chaptarrUpgradeDeletesSince counts the window's delete-for-upgrade records
+// per book, failing open exactly like radarrUpgradeDeletesSince.
+func chaptarrUpgradeDeletesSince(client *chaptarr.Client, since time.Time) map[int]int {
+	records, complete, err := client.GetUpgradeDeleteHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		log.Printf("websocket: chaptarr upgrade-delete catch-up: %v (announcing all imports as new)", err)
+		return nil
+	}
+	if !complete {
+		log.Printf("websocket: chaptarr upgrade-delete catch-up: window over one page (announcing all imports as new)")
+		return nil
+	}
+	counts := make(map[int]int, len(records))
+	for _, rec := range records {
+		if !strings.EqualFold(rec.EventType, "bookFileDeleted") || rec.BookID <= 0 {
+			continue
+		}
+		if !strings.EqualFold(historyDataValue(rec.Data, "reason"), "Upgrade") {
+			continue
+		}
+		counts[rec.BookID]++
+	}
+	return counts
 }
 
 // saveQueueWitness records this instance's current queue membership. A failure
@@ -1085,8 +1294,14 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 		if item.Size > 0 {
 			progress = (item.Size - item.Sizeleft) / item.Size
 		}
-		currentQueue[item.MovieID] = progress
 		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.MovieID, item.Status, item.Sizeleft))
+		if item.MovieID <= 0 {
+			// A queue row Radarr could not match to a library movie has no id
+			// to witness or announce; it still counts toward the composition
+			// tuple above so its arrival/departure invalidates queue views.
+			continue
+		}
+		currentQueue[item.MovieID] = progress
 
 		// Look up TMDB ID for this movie
 		movie, err := client.GetMovie(item.MovieID)
@@ -1111,14 +1326,15 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	var departed []int
 	if prevQueue := h.prevRadarrQueue[instanceID]; prevQueue != nil {
 		for movieID := range prevQueue {
-			if _, stillInQueue := currentQueue[movieID]; !stillInQueue {
-				departed = append(departed, movieID)
+			if _, stillInQueue := currentQueue[movieID]; stillInQueue || movieID <= 0 {
+				continue
 			}
+			departed = append(departed, movieID)
 		}
 		sort.Ints(departed)
 	}
 
-	announce, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) ([]int, error) {
+	announce, upgraded, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) (fresh, upgrades []int, err error) {
 		return radarrImportsSince(client, since)
 	})
 	if hold {
@@ -1132,26 +1348,40 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	h.saveQueueWitness(instanceID, "radarr", progressKeys(currentQueue))
 	h.lastPollAt[instanceID] = time.Now()
 
-	for _, movieID := range announce {
+	// Upgrades pass the same live re-verification as broadcasts; only the
+	// audience differs (admins opted into content_upgraded).
+	announceMovie := func(movieID int, upgrade bool) {
 		movie, err := client.GetMovie(movieID)
 		if err != nil {
 			log.Printf("websocket: get completed radarr movie %d: %v", movieID, err)
-			continue
+			return
 		}
-		if movie.HasFile {
-			h.Broadcast(Event{
-				Type: "request_status_changed",
-				Data: map[string]interface{}{
-					"tmdb_id":     movie.TmdbID,
-					"media_type":  "movie",
-					"status":      "available",
-					"instance_id": instanceID,
-				},
-			})
-			if h.content != nil {
-				h.content.NotifyNewMovie(movie.Title, movie.TmdbID)
-			}
+		if !movie.HasFile {
+			return
 		}
+		h.Broadcast(Event{
+			Type: "request_status_changed",
+			Data: map[string]interface{}{
+				"tmdb_id":     movie.TmdbID,
+				"media_type":  "movie",
+				"status":      "available",
+				"instance_id": instanceID,
+			},
+		})
+		if h.content == nil {
+			return
+		}
+		if upgrade {
+			h.content.NotifyUpgradedMovie(movie.Title, movie.TmdbID)
+		} else {
+			h.content.NotifyNewMovie(movie.Title, movie.TmdbID)
+		}
+	}
+	for _, movieID := range announce {
+		announceMovie(movieID, false)
+	}
+	for _, movieID := range upgraded {
+		announceMovie(movieID, true)
 	}
 
 	h.noteArrQueueComposition(instanceID, "radarr", tuples)
@@ -1176,8 +1406,14 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 		if item.Size > 0 {
 			progress = (item.Size - item.Sizeleft) / item.Size
 		}
-		currentQueue[item.SeriesID] = progress
 		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.SeriesID, item.Status, item.Sizeleft))
+		if item.SeriesID <= 0 {
+			// A queue row Sonarr could not match to a library series has no id
+			// to witness or announce; it still counts toward the composition
+			// tuple above so its arrival/departure invalidates queue views.
+			continue
+		}
+		currentQueue[item.SeriesID] = progress
 
 		series, err := client.GetSeries(item.SeriesID)
 		if err != nil {
@@ -1201,14 +1437,15 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	var departed []int
 	if prevQueue := h.prevSonarrQueue[instanceID]; prevQueue != nil {
 		for seriesID := range prevQueue {
-			if _, stillInQueue := currentQueue[seriesID]; !stillInQueue {
-				departed = append(departed, seriesID)
+			if _, stillInQueue := currentQueue[seriesID]; stillInQueue || seriesID <= 0 {
+				continue
 			}
+			departed = append(departed, seriesID)
 		}
 		sort.Ints(departed)
 	}
 
-	announce, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) ([]int, error) {
+	announce, upgraded, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) (fresh, upgrades []int, err error) {
 		return sonarrImportsSince(client, since)
 	})
 	if hold {
@@ -1222,11 +1459,13 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	h.saveQueueWitness(instanceID, "sonarr", progressKeys(currentQueue))
 	h.lastPollAt[instanceID] = time.Now()
 
-	for _, seriesID := range announce {
+	// Upgrades pass the same live availability recomputation as broadcasts;
+	// only the audience differs (admins opted into content_upgraded).
+	announceSeries := func(seriesID int, upgrade bool) {
 		series, err := client.GetSeries(seriesID)
 		if err != nil {
 			log.Printf("websocket: get completed sonarr series %d: %v", seriesID, err)
-			continue
+			return
 		}
 		// "available" strictly means every aired episode has a file.
 		// Sonarr's percentOfEpisodes only counts monitored episodes,
@@ -1253,9 +1492,20 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 				"instance_id": instanceID,
 			},
 		})
-		if h.content != nil {
+		if h.content == nil {
+			return
+		}
+		if upgrade {
+			h.content.NotifyUpgradedEpisode(series.Title, series.TmdbID)
+		} else {
 			h.content.NotifyNewEpisode(series.Title, series.TmdbID)
 		}
+	}
+	for _, seriesID := range announce {
+		announceSeries(seriesID, false)
+	}
+	for _, seriesID := range upgraded {
+		announceSeries(seriesID, true)
 	}
 
 	h.noteArrQueueComposition(instanceID, "sonarr", tuples)
@@ -1284,8 +1534,14 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	currentQueue := make(map[int]struct{}, len(queue))
 	tuples := make([]string, 0, len(queue))
 	for _, item := range queue {
-		currentQueue[item.BookID] = struct{}{}
 		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.BookID, item.Status, item.Sizeleft))
+		if item.BookID <= 0 {
+			// A queue row Chaptarr could not match to a library book has no id
+			// to witness or announce; it still counts toward the composition
+			// tuple above so its arrival/departure invalidates queue views.
+			continue
+		}
+		currentQueue[item.BookID] = struct{}{}
 	}
 
 	// A book record that left the queue and now has a file finished importing.
@@ -1303,7 +1559,7 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 		sort.Ints(departed)
 	}
 
-	announce, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) ([]int, error) {
+	announce, upgraded, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) (fresh, upgrades []int, err error) {
 		return chaptarrImportsSince(client, since)
 	})
 	if hold {
@@ -1323,22 +1579,34 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	h.lastPollAt[instanceID] = time.Now()
 
 	if h.content != nil {
-		for _, bookID := range announce {
+		// Upgrades pass the same live re-verification as broadcasts; only the
+		// audience differs (admins opted into content_upgraded).
+		announceBook := func(bookID int, upgrade bool) {
 			book, err := client.GetBook(bookID)
 			if err != nil {
 				log.Printf("websocket: get completed chaptarr book %d: %v", bookID, err)
-				continue
+				return
 			}
 			// Chaptarr answers 404 with (nil, nil) for a record deleted while it
 			// was downloading. Dereferencing that would panic the poll goroutine
 			// and take the process down.
 			if book == nil {
-				continue
+				return
 			}
 			if book.Statistics.BookFileCount == 0 {
-				continue
+				return
 			}
-			h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+			if upgrade {
+				h.content.NotifyUpgradedBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+			} else {
+				h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+			}
+		}
+		for _, bookID := range announce {
+			announceBook(bookID, false)
+		}
+		for _, bookID := range upgraded {
+			announceBook(bookID, true)
 		}
 	}
 

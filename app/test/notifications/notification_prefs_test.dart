@@ -25,6 +25,7 @@ void main() {
           'agent_action_pending',
           'plex_access_request',
           'plex_invite_sent',
+          'content_upgraded',
         ]),
       );
     });
@@ -46,6 +47,29 @@ void main() {
       expect(prefs.copyWith(newBook: true).newBook, isTrue);
       // copyWith without the flag preserves the current value.
       expect(prefs.copyWith(newMovie: true).newBook, isFalse);
+    });
+
+    test('content_upgraded defaults OFF when the key is absent', () {
+      // Unlike the other admin categories, the server default is off —
+      // mirroring on here would silently opt an admin in the first time they
+      // saved any unrelated toggle against an older server.
+      final prefs = NotificationPrefs.fromJson(const {
+        'request_decision': false,
+        'request_pending': true,
+        'new_movie': true,
+        'new_episode': true,
+      });
+      expect(prefs.contentUpgraded, isFalse);
+    });
+
+    test('content_upgraded round-trips through json and copyWith', () {
+      final prefs =
+          NotificationPrefs.fromJson(const {'content_upgraded': true});
+      expect(prefs.contentUpgraded, isTrue);
+      expect(prefs.toJson()['content_upgraded'], isTrue);
+      expect(prefs.copyWith(contentUpgraded: false).contentUpgraded, isFalse);
+      // copyWith without the flag preserves the current value.
+      expect(prefs.copyWith(newMovie: true).contentUpgraded, isTrue);
     });
   });
 }

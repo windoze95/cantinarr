@@ -334,6 +334,24 @@ class SonarrEpisode {
             : null,
       );
 
+  /// The same episode with a different monitored flag, so a monitor toggle can
+  /// patch one row instead of refetching the season.
+  SonarrEpisode withMonitored(bool value) => SonarrEpisode(
+        id: id,
+        seriesId: seriesId,
+        seasonNumber: seasonNumber,
+        episodeNumber: episodeNumber,
+        absoluteEpisodeNumber: absoluteEpisodeNumber,
+        title: title,
+        overview: overview,
+        hasFile: hasFile,
+        monitored: value,
+        episodeFileId: episodeFileId,
+        airDate: airDate,
+        airDateUtc: airDateUtc,
+        episodeFile: episodeFile,
+      );
+
   /// e.g. "S01E05".
   String get seasonEpisodeLabel =>
       'S${seasonNumber.toString().padLeft(2, '0')}'

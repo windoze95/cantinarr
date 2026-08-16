@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../settings/settings_anchors.dart';
 import '../notification_prefs.dart';
 import '../notification_prefs_service.dart';
 import '../push_service.dart';
@@ -14,7 +16,10 @@ import '../push_service.dart';
 /// the saved preferences on open and persists each toggle immediately,
 /// reverting the switch if the server rejects the change.
 class NotificationPreferencesScreen extends ConsumerStatefulWidget {
-  const NotificationPreferencesScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const NotificationPreferencesScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<NotificationPreferencesScreen> createState() =>
@@ -28,8 +33,10 @@ class _NotificationPreferencesScreenState
   String? _error;
   NotificationPrefs? _prefs;
 
-  /// Whether the push status section is shown at all (iOS only).
-  static final bool _pushSupported = !kIsWeb && Platform.isIOS;
+  /// Whether the push status section is shown at all (mobile only — web has
+  /// no push registration, just the in-tab WebSocket updates).
+  static final bool _pushSupported =
+      !kIsWeb && (Platform.isIOS || Platform.isAndroid);
 
   /// Current OS notification authorization status. Mirrors the strings from
   /// [PushService.authorizationStatus]: `authorized`, `denied`,
@@ -178,6 +185,9 @@ class _NotificationPreferencesScreenState
     final showBooks = auth?.connection?.services.chaptarr ?? false;
 
     return ListView(
+      // Build every child while a settings-search highlight needs to find
+      // its anchor (see SettingsHighlight).
+      cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         if (_pushSupported) ..._buildStatusSection(),
@@ -193,6 +203,7 @@ class _NotificationPreferencesScreenState
           subtitle: 'When your request is approved or denied',
           value: prefs.requestDecision,
           onChanged: (v) => _save(prefs.copyWith(requestDecision: v), prefs),
+          anchor: SettingsAnchors.notificationsRequestDecision,
         ),
         if (isAdmin) ...[
           _toggle(
@@ -200,12 +211,14 @@ class _NotificationPreferencesScreenState
             subtitle: 'When someone submits a request needing approval',
             value: prefs.requestPending,
             onChanged: (v) => _save(prefs.copyWith(requestPending: v), prefs),
+            anchor: SettingsAnchors.notificationsRequestPending,
           ),
           _toggle(
             title: 'Problem reports',
             subtitle: 'When someone reports a problem with their media',
             value: prefs.issueCreated,
             onChanged: (v) => _save(prefs.copyWith(issueCreated: v), prefs),
+            anchor: SettingsAnchors.notificationsProblemReports,
           ),
           _toggle(
             title: 'Fixes awaiting approval',
@@ -213,6 +226,15 @@ class _NotificationPreferencesScreenState
             value: prefs.agentActionPending,
             onChanged: (v) =>
                 _save(prefs.copyWith(agentActionPending: v), prefs),
+            anchor: SettingsAnchors.notificationsAgentFixes,
+          ),
+          _toggle(
+            title: 'Weekly agent summary',
+            subtitle:
+                'One line a week: what resolved itself, what your rules handled, what needs you',
+            value: prefs.agentDigest,
+            onChanged: (v) => _save(prefs.copyWith(agentDigest: v), prefs),
+            anchor: SettingsAnchors.notificationsAgentDigest,
           ),
           _toggle(
             title: 'Plex access requests',
@@ -220,6 +242,15 @@ class _NotificationPreferencesScreenState
             value: prefs.plexAccessRequest,
             onChanged: (v) =>
                 _save(prefs.copyWith(plexAccessRequest: v), prefs),
+            anchor: SettingsAnchors.notificationsPlexAccessRequests,
+          ),
+          _toggle(
+            title: 'Quality upgrades',
+            subtitle:
+                'When an existing movie, episode, or book is replaced with a better version',
+            value: prefs.contentUpgraded,
+            onChanged: (v) => _save(prefs.copyWith(contentUpgraded: v), prefs),
+            anchor: SettingsAnchors.notificationsQualityUpgrades,
           ),
         ],
         _toggle(
@@ -227,12 +258,14 @@ class _NotificationPreferencesScreenState
           subtitle: 'When a movie finishes downloading',
           value: prefs.newMovie,
           onChanged: (v) => _save(prefs.copyWith(newMovie: v), prefs),
+          anchor: SettingsAnchors.notificationsNewMovie,
         ),
         _toggle(
-          title: 'New episode available',
-          subtitle: 'When a new episode is available',
+          title: 'New episodes available',
+          subtitle: 'When new episodes are available',
           value: prefs.newEpisode,
           onChanged: (v) => _save(prefs.copyWith(newEpisode: v), prefs),
+          anchor: SettingsAnchors.notificationsNewEpisode,
         ),
         if (showBooks)
           _toggle(
@@ -240,12 +273,22 @@ class _NotificationPreferencesScreenState
             subtitle: 'When a book finishes downloading',
             value: prefs.newBook,
             onChanged: (v) => _save(prefs.copyWith(newBook: v), prefs),
+            anchor: SettingsAnchors.notificationsNewBook,
           ),
         _toggle(
           title: 'Plex invite sent',
           subtitle: 'When your Plex invite email goes out',
           value: prefs.plexInviteSent,
           onChanged: (v) => _save(prefs.copyWith(plexInviteSent: v), prefs),
+          anchor: SettingsAnchors.notificationsPlexInviteSent,
+        ),
+        _toggle(
+          title: 'My report updates',
+          subtitle:
+              'When the assistant has a question about your report, a fix is ready to confirm, or your report closes',
+          value: prefs.issueReportUpdate,
+          onChanged: (v) => _save(prefs.copyWith(issueReportUpdate: v), prefs),
+          anchor: SettingsAnchors.notificationsReportUpdates,
         ),
         const SizedBox(height: 32),
       ],
@@ -272,8 +315,8 @@ class _NotificationPreferencesScreenState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Notifications are turned off. Enable them in iOS Settings to '
-                'receive push notifications.',
+                'Notifications are turned off. Enable them in system settings '
+                'to receive push notifications.',
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
               const SizedBox(height: 12),
@@ -281,7 +324,7 @@ class _NotificationPreferencesScreenState
                 onPressed: () =>
                     ref.read(pushServiceProvider).openSystemSettings(),
                 icon: const Icon(Icons.settings_outlined, size: 18),
-                label: const Text('Open iOS Settings'),
+                label: const Text('Open system settings'),
               ),
             ],
           ),
@@ -356,8 +399,9 @@ class _NotificationPreferencesScreenState
     required String subtitle,
     required bool value,
     required ValueChanged<bool> onChanged,
+    String? anchor,
   }) {
-    return SwitchListTile(
+    final tile = SwitchListTile(
       value: value,
       onChanged: onChanged,
       activeThumbColor: AppTheme.accent,
@@ -366,6 +410,12 @@ class _NotificationPreferencesScreenState
               color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
       subtitle: Text(subtitle,
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+    );
+    if (anchor == null) return tile;
+    return SettingsHighlight(
+      anchorId: anchor,
+      highlightId: widget.highlightId,
+      child: tile,
     );
   }
 }

@@ -6,14 +6,20 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../../ai_assistant/data/codex_oauth_service.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
+import '../settings_anchors.dart';
+import 'credential_section.dart';
 
 /// Admin screen for managing API credentials (write-only).
 class CredentialsScreen extends ConsumerStatefulWidget {
-  const CredentialsScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const CredentialsScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<CredentialsScreen> createState() => _CredentialsScreenState();
@@ -27,11 +33,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
   static const _customModelValue = '__custom__';
 
-  final _tmdbController = TextEditingController();
   final _anthropicController = TextEditingController();
   final _openAIController = TextEditingController();
   final _geminiController = TextEditingController();
-  final _traktIdController = TextEditingController();
   final _customModelController = TextEditingController();
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
@@ -73,9 +77,6 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   Future<void> _save() async {
     final creds = <String, String>{};
     var aiChanged = false;
-    if (_tmdbController.text.isNotEmpty) {
-      creds['tmdb_access_token'] = _tmdbController.text.trim();
-    }
     if (_anthropicController.text.isNotEmpty) {
       creds['anthropic_key'] = _anthropicController.text.trim();
       aiChanged = true;
@@ -87,9 +88,6 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     if (_geminiController.text.isNotEmpty) {
       creds['gemini_key'] = _geminiController.text.trim();
       aiChanged = true;
-    }
-    if (_traktIdController.text.isNotEmpty) {
-      creds['trakt_client_id'] = _traktIdController.text.trim();
     }
 
     final selectedModel = _selectedModel == _customModelValue
@@ -127,11 +125,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     });
     try {
       await _service.update(creds);
-      _tmdbController.clear();
       _anthropicController.clear();
       _openAIController.clear();
       _geminiController.clear();
-      _traktIdController.clear();
       await _loadStatus();
       // Provider selection and scoped Codex availability are separate live
       // server facts. Refresh both so the underlying Settings screen and the
@@ -165,12 +161,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     }
   }
 
-  Future<void> _deleteCredential(String key, String label) async {
+  Future<void> _deleteCredential(String key, String label,
+      {String? message}) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Remove $label?'),
-        content: Text('This will disable the $label integration.'),
+        content: Text(message ?? 'This will disable the $label integration.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -207,11 +204,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
   @override
   void dispose() {
-    _tmdbController.dispose();
     _anthropicController.dispose();
     _openAIController.dispose();
     _geminiController.dispose();
-    _traktIdController.dispose();
     _customModelController.dispose();
     super.dispose();
   }
@@ -265,6 +260,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     });
   }
 
+  /// Wraps [child] with the settings-search highlight for [anchorId].
+  Widget _anchor(String anchorId, Widget child) => SettingsHighlight(
+        anchorId: anchorId,
+        highlightId: widget.highlightId,
+        child: child,
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -288,6 +290,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                       ),
                     )
                   : ListView(
+                      // Build every child while a settings-search highlight
+                      // needs to find its anchor (see SettingsHighlight).
+                      cacheExtent:
+                          SettingsHighlight.cacheExtentFor(widget.highlightId),
                       padding: const EdgeInsets.all(16),
                       children: [
                         const Text(
@@ -298,40 +304,46 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                               color: AppTheme.textSecondary, fontSize: 13),
                         ),
                         const SizedBox(height: 24),
-                        _AISelectionSection(
-                          providers: _status?.ai.providers ?? const [],
-                          selectedProvider: _selectedProvider,
-                          selectedModel: _selectedModel,
-                          customModelValue: _customModelValue,
-                          customModelController: _customModelController,
-                          isSelectedProviderConfigured: _status?.isConfigured(
-                                _providerFor(
-                                      _selectedProvider,
-                                      _status?.ai.providers ?? const [],
-                                    )?.credentialKey ??
-                                    'anthropic_key',
-                              ) ??
-                              false,
-                          selectedProviderAuthType: _providerFor(
-                                _selectedProvider,
-                                _status?.ai.providers ?? const [],
-                              )?.authType ??
-                              'api_key',
-                          onProviderChanged: _selectProvider,
-                          onModelChanged: (value) =>
-                              setState(() => _selectedModel = value),
+                        _anchor(
+                          SettingsAnchors.credentialsAiModel,
+                          _AISelectionSection(
+                            providers: _status?.ai.providers ?? const [],
+                            selectedProvider: _selectedProvider,
+                            selectedModel: _selectedModel,
+                            customModelValue: _customModelValue,
+                            customModelController: _customModelController,
+                            isSelectedProviderConfigured: _status?.isConfigured(
+                                  _providerFor(
+                                        _selectedProvider,
+                                        _status?.ai.providers ?? const [],
+                                      )?.credentialKey ??
+                                      'anthropic_key',
+                                ) ??
+                                false,
+                            selectedProviderAuthType: _providerFor(
+                                  _selectedProvider,
+                                  _status?.ai.providers ?? const [],
+                                )?.authType ??
+                                'api_key',
+                            onProviderChanged: _selectProvider,
+                            onModelChanged: (value) =>
+                                setState(() => _selectedModel = value),
+                          ),
                         ),
                         const SizedBox(height: 14),
-                        _AIHealthCheckSection(
-                          enabled: _healthCheckEnabled,
-                          intervalHours:
-                              _status?.ai.healthCheckIntervalHours ?? 24,
-                          lastCheckedAt: _status?.ai.healthLastCheckedAt,
-                          onChanged: _isSaving
-                              ? null
-                              : (value) => setState(
-                                    () => _healthCheckEnabled = value,
-                                  ),
+                        _anchor(
+                          SettingsAnchors.credentialsHealthCheck,
+                          _AIHealthCheckSection(
+                            enabled: _healthCheckEnabled,
+                            intervalHours:
+                                _status?.ai.healthCheckIntervalHours ?? 24,
+                            lastCheckedAt: _status?.ai.healthLastCheckedAt,
+                            onChanged: _isSaving
+                                ? null
+                                : (value) => setState(
+                                      () => _healthCheckEnabled = value,
+                                    ),
+                          ),
                         ),
                         const SizedBox(height: 14),
                         if (_selectedProvider == 'codex')
@@ -363,68 +375,52 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                 _selectedProvider,
                           ),
                         const SizedBox(height: 24),
-                        _CredentialSection(
-                          title: 'TMDB',
-                          description:
-                              'Required for media discovery and search',
-                          isConfigured:
-                              _status?.isConfigured('tmdb_access_token') ??
-                                  false,
-                          controller: _tmdbController,
-                          hint: 'TMDB access token',
-                          onDelete: () =>
-                              _deleteCredential('tmdb_access_token', 'TMDB'),
-                        ),
-                        const SizedBox(height: 20),
-                        _CredentialSection(
-                          title: 'Anthropic (AI)',
-                          description:
-                              'Shared Claude API key for included AI usage',
-                          isConfigured:
-                              _status?.isConfigured('anthropic_key') ?? false,
-                          controller: _anthropicController,
-                          hint: 'Anthropic API key',
-                          onDelete: () =>
-                              _deleteCredential('anthropic_key', 'Anthropic'),
+                        _anchor(
+                          SettingsAnchors.credentialsAnthropic,
+                          CredentialSection(
+                            title: 'Anthropic (AI)',
+                            description:
+                                'Shared Claude API key for included AI usage',
+                            isConfigured:
+                                _status?.isConfigured('anthropic_key') ?? false,
+                            controller: _anthropicController,
+                            hint: 'Anthropic API key',
+                            onDelete: () =>
+                                _deleteCredential('anthropic_key', 'Anthropic'),
+                          ),
                         ),
                         if (_status?.ai.providers.isNotEmpty ?? false) ...[
                           const SizedBox(height: 20),
-                          _CredentialSection(
-                            title: 'OpenAI (AI)',
-                            description:
-                                'Shared OpenAI API key for included AI usage',
-                            isConfigured:
-                                _status?.isConfigured('openai_key') ?? false,
-                            controller: _openAIController,
-                            hint: 'OpenAI API key',
-                            onDelete: () =>
-                                _deleteCredential('openai_key', 'OpenAI'),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAi,
+                            CredentialSection(
+                              title: 'OpenAI (AI)',
+                              description:
+                                  'Shared OpenAI API key for included AI usage',
+                              isConfigured:
+                                  _status?.isConfigured('openai_key') ?? false,
+                              controller: _openAIController,
+                              hint: 'OpenAI API key',
+                              onDelete: () =>
+                                  _deleteCredential('openai_key', 'OpenAI'),
+                            ),
                           ),
                           const SizedBox(height: 20),
-                          _CredentialSection(
-                            title: 'Google Gemini (AI)',
-                            description:
-                                'Shared Gemini API key for included AI usage',
-                            isConfigured:
-                                _status?.isConfigured('gemini_key') ?? false,
-                            controller: _geminiController,
-                            hint: 'Gemini API key',
-                            onDelete: () => _deleteCredential(
-                                'gemini_key', 'Google Gemini'),
+                          _anchor(
+                            SettingsAnchors.credentialsGemini,
+                            CredentialSection(
+                              title: 'Google Gemini (AI)',
+                              description:
+                                  'Shared Gemini API key for included AI usage',
+                              isConfigured:
+                                  _status?.isConfigured('gemini_key') ?? false,
+                              controller: _geminiController,
+                              hint: 'Gemini API key',
+                              onDelete: () => _deleteCredential(
+                                  'gemini_key', 'Google Gemini'),
+                            ),
                           ),
                         ],
-                        const SizedBox(height: 20),
-                        _CredentialSection(
-                          title: 'Trakt',
-                          description:
-                              'Enhances discovery with trending and popular lists',
-                          isConfigured:
-                              _status?.isConfigured('trakt_client_id') ?? false,
-                          controller: _traktIdController,
-                          hint: 'Trakt client ID',
-                          onDelete: () =>
-                              _deleteCredential('trakt_client_id', 'Trakt'),
-                        ),
                         const SizedBox(height: 32),
                         SizedBox(
                           width: double.infinity,
@@ -794,86 +790,6 @@ class _SharedApiCostNotice extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _CredentialSection extends StatelessWidget {
-  final String title;
-  final String description;
-  final bool isConfigured;
-  final TextEditingController controller;
-  final String hint;
-  final VoidCallback onDelete;
-
-  const _CredentialSection({
-    required this.title,
-    required this.description,
-    required this.isConfigured,
-    required this.controller,
-    required this.hint,
-    required this.onDelete,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                title,
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: isConfigured
-                    ? AppTheme.available.withValues(alpha: 0.15)
-                    : AppTheme.unavailable.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                isConfigured ? 'Configured' : 'Not set',
-                style: TextStyle(
-                  color:
-                      isConfigured ? AppTheme.available : AppTheme.unavailable,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            if (isConfigured) ...[
-              const SizedBox(width: 8),
-              GestureDetector(
-                onTap: onDelete,
-                child: const Icon(Icons.close,
-                    size: 18, color: AppTheme.textSecondary),
-              ),
-            ],
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(description,
-            style:
-                const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-        const SizedBox(height: 8),
-        TextField(
-          controller: controller,
-          obscureText: true,
-          decoration: InputDecoration(
-            hintText: isConfigured ? 'Enter new value to replace' : hint,
-            isDense: true,
-          ),
-        ),
-      ],
     );
   }
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -351,6 +352,73 @@ func TestNotifyAdminsUsesAutomaticIssueCopy(t *testing.T) {
 	}
 }
 
+// A system issue is a condition on the server, and there are several distinct
+// ones. This copy used to name shared-AI health outright, which was wrong on
+// every push-delivery and book-import-stall alert it ever sent. It must stay
+// generic: the only fields that could tell them apart are the issue's own
+// untrusted title and detail, which never reach a lock screen.
+func TestNotifyAdminsUsesGenericSystemIssueCopy(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("issue_created", map[string]interface{}{
+		"issue_id":   7,
+		"source":     "system",
+		"open_count": 1,
+	})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Cantinarr needs attention" {
+		t.Errorf("title = %v, want generic server-condition copy", notif["title"])
+	}
+	text, _ := notif["body"].(string)
+	if text != "Something on the server needs an administrator" {
+		t.Errorf("body = %v, want generic server-condition copy", text)
+	}
+	// The specific regression: a push-delivery or book-import issue must never
+	// announce itself as a shared-AI failure.
+	if strings.Contains(strings.ToLower(text), "ai") {
+		t.Errorf("system copy still names one particular condition: %q", text)
+	}
+}
+
+// Two server conditions clearing the hold-down on the same tick really do
+// coalesce, so the system branch has to carry the count the way the auto branch
+// does. It used to discard it and send the singular shared-AI line twice over.
+func TestNotifyAdminsCoalescesSystemConditions(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("issue_created", map[string]interface{}{
+		"source":     "system",
+		"count":      2,
+		"open_count": 2,
+	})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["body"] != "2 server conditions need an administrator" {
+		t.Errorf("body = %v, want the counted system copy", notif["body"])
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "issue_created:system" {
+		t.Errorf("collapse_id = %v, want a per-source summary collapse", opts["collapse_id"])
+	}
+}
+
 // A batch cause produces one incident per exact media scope, so a coalesced
 // alert has to say how many rather than fan out one identical line per episode.
 // It also collapses by source: the summary is a state, and a later summary
@@ -479,30 +547,6 @@ func TestNotifyAdminsKeepsSingleApprovalPushUncollapsed(t *testing.T) {
 	}
 }
 
-func TestNotifyAdminsUsesSharedAIHealthIssueCopy(t *testing.T) {
-	database, err := dbOpen(t)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
-
-	mgr, capture := newNotifierTestGateway(t, database)
-	notifier := NewNotifier(database, mgr, nil)
-	notifier.NotifyAdmins("issue_created", map[string]interface{}{
-		"issue_id": 51,
-		"source":   "system",
-	})
-
-	body := capture.waitForNotification(t)
-	notification, _ := body["notification"].(map[string]any)
-	if notification["title"] != "Shared AI needs attention" {
-		t.Fatalf("title=%v", notification["title"])
-	}
-	if notification["body"] != "Cantinarr's shared AI model failed its daily response test" {
-		t.Fatalf("body=%v", notification["body"])
-	}
-}
-
 // PUSH-010: Requester opt-in cannot bypass admin-only recipient selection.
 func TestNotifyAdminsHonorsOptOutAndRole(t *testing.T) {
 	database, err := dbOpen(t)
@@ -542,6 +586,137 @@ func TestNotifierDisabledClientIsNoop(t *testing.T) {
 	n.NotifyNewMovie("The Matrix", 603)
 	n.NotifyNewEpisode("Severance", 95396)
 	n.NotifyNewBook("Ahsoka", "29749107", "books-a", "ebook")
+	n.NotifyUpgradedMovie("The Matrix", 603)
+	n.NotifyUpgradedEpisode("Severance", 95396)
+	n.NotifyUpgradedBook("Ahsoka", "29749107", "books-a", "ebook")
+}
+
+// TestNotifyUpgradedClaimsBroadcastKeyEvenWithNilClient pins the one part of
+// an upgrade alert that must run while the push gateway is unenrolled: the
+// silent claim of the broadcast key. Without it, a boot-resumption hold could
+// later broadcast an upgrade the webhook already proved.
+func TestNotifyUpgradedClaimsBroadcastKeyEvenWithNilClient(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	n := NewNotifier(database, nil, nil)
+
+	n.NotifyUpgradedMovie("The Matrix", 603)
+	if n.claimContentAlert(CategoryNewMovie, "movie", "603", "The Matrix") {
+		t.Error("the broadcast key was not silently claimed, so the poller would page everyone")
+	}
+	n.NotifyUpgradedEpisode("Severance", 95396)
+	if n.claimContentAlert(CategoryNewEpisode, "tv", "95396", "Severance") {
+		t.Error("the episode broadcast key was not silently claimed")
+	}
+	n.NotifyUpgradedBook("Ahsoka", "29749107", "books-a", "ebook")
+	if n.claimContentAlert(CategoryNewBook, "book", "29749107|ebook", "Ahsoka") {
+		t.Error("the book broadcast key was not silently claimed")
+	}
+}
+
+// TestNotifyUpgradedMovieReachesOptedInAdminsOnly pins the audience and the
+// payload of the admin upgrade alert: default off, role-scoped in SQL, and a
+// tap payload shaped exactly like new_movie's so the app's existing routing
+// applies.
+func TestNotifyUpgradedMovieReachesOptedInAdminsOnly(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// alice: regular user OPTED IN (must still be excluded). root: admin opted
+	// in. dora: admin with no row (default off, excluded).
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'root', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'dora', '', 'admin')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (1, 1)")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (2, 1)")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyUpgradedMovie("The Matrix", 603)
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "2" {
+		t.Errorf("content_upgraded recipients = %v, want only the opted-in admin [\"2\"]", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Movie upgraded" {
+		t.Errorf("title = %v, want \"Movie upgraded\"", notif["title"])
+	}
+	if notif["body"] != "The Matrix was replaced with a better version" {
+		t.Errorf("body = %v", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "content_upgraded" || data["media_type"] != "movie" {
+		t.Errorf("data = %v, want type content_upgraded, media_type movie", data)
+	}
+	if num, ok := data["tmdb_id"].(float64); !ok || int(num) != 603 {
+		t.Errorf("data.tmdb_id = %v, want 603", data["tmdb_id"])
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "content_upgraded:603" {
+		t.Errorf("collapse_id = %v, want content_upgraded:603", opts["collapse_id"])
+	}
+
+	// The matching broadcast key was claimed silently: the poller's later
+	// re-witness of this import must not page the household.
+	if n.claimContentAlert(CategoryNewMovie, "movie", "603", "The Matrix") {
+		t.Error("new_movie key was claimable after the upgrade alert — the poller would double-page")
+	}
+}
+
+// TestNotifyUpgradedBookIsAdminScopedNotInstanceScoped pins the deliberate
+// asymmetry with new_book: an upgrade is operational oversight, not a "ready
+// to read" call to action, so it takes the standard admin path — the
+// instance's assigned reader (a regular user) is NOT paged — while the payload
+// still carries the full book deep-link identity.
+func TestNotifyUpgradedBookIsAdminScopedNotInstanceScoped(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// alice: books-a's assigned reader, opted into everything (still excluded
+	// — not an admin). root: admin opted in, no books assignment needed.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'root', '', 'admin')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (1, 'chaptarr', 'books-a')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_book, content_upgraded) VALUES (1, 1, 1)")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (2, 1)")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyUpgradedBook("Ahsoka", "29749107", "books-a", "ebook")
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "2" {
+		t.Errorf("book upgrade recipients = %v, want only the admin [\"2\"]", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Book upgraded" {
+		t.Errorf("title = %v, want \"Book upgraded\"", notif["title"])
+	}
+	if notif["body"] != "Ahsoka eBook was upgraded" {
+		t.Errorf("body = %v, want \"Ahsoka eBook was upgraded\"", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "content_upgraded" || data["media_type"] != "book" ||
+		data["foreign_id"] != "29749107" || data["instance_id"] != "books-a" ||
+		data["title"] != "Ahsoka" || data["book_format"] != "ebook" {
+		t.Errorf("data = %v, want the full book deep-link identity", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "content_upgraded:29749107:ebook" {
+		t.Errorf("collapse_id = %v, want content_upgraded:29749107:ebook", opts["collapse_id"])
+	}
+	if n.claimContentAlert(CategoryNewBook, "book", "29749107|ebook", "Ahsoka") {
+		t.Error("new_book key was claimable after the upgrade alert — the poller would double-page")
+	}
 }
 
 func TestNotifyNewMovieReachesOptedInUsers(t *testing.T) {
@@ -612,8 +787,8 @@ func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
 		t.Errorf("new_episode recipients = %v, want [\"1\"]", ids)
 	}
 	notif, _ := body["notification"].(map[string]any)
-	if notif["title"] != "New episode available" {
-		t.Errorf("title = %v, want \"New episode available\"", notif["title"])
+	if notif["title"] != "New episodes available" {
+		t.Errorf("title = %v, want \"New episodes available\"", notif["title"])
 	}
 	if notif["body"] != "New on Severance" {
 		t.Errorf("body = %v, want \"New on Severance\"", notif["body"])
@@ -842,5 +1017,120 @@ func TestNotifyAdminsAutoApprovalPausedFixedTemplateAndSharedPref(t *testing.T) 
 	opts, _ := body["options"].(map[string]any)
 	if opts["collapse_id"] != "agent_autoapproval_paused:5" {
 		t.Errorf("collapse_id = %v, want per-rule collapse", opts["collapse_id"])
+	}
+}
+
+// A parked profile-change proposal pages the same audience as an agent fix
+// awaiting approval — it shares the agent_action_pending preference column —
+// with a fixed body (profile/instance names ride only as data fields) and a
+// per-target collapse so a superseding proposal replaces the stale alert.
+func TestNotifyAdminsProfileChangePendingSharedPrefAndCollapse(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// admin1: default prefs (on). admin2: opted out of agent_action_pending,
+	// which must also silence proposal alerts (shared column). user3: never
+	// paged (admin-scoped category).
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'admin2', '', 'admin')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, agent_action_pending) VALUES (2, 0)")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'user3', '', 'user')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("profile_change_pending", map[string]interface{}{
+		"proposal_id":  int64(12),
+		"service":      "radarr",
+		"instance_id":  "movies-a",
+		"profile_id":   6,
+		"profile_name": "HD-1080p",
+	})
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "1" {
+		t.Errorf("user_ids = %v, want only the opted-in admin", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "A settings change needs your approval" {
+		t.Errorf("title = %v", notif["title"])
+	}
+	if notif["body"] != "An external assistant proposed a quality-profile change and needs you to approve it" {
+		t.Errorf("body = %v, want the fixed template", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "profile_change_pending" {
+		t.Errorf("data.type = %v", data["type"])
+	}
+	if got, ok := data["proposal_id"]; !ok || fmt.Sprint(got) != "12" {
+		t.Errorf("proposal_id = %v, want 12 for the deep link", got)
+	}
+	if _, ok := data["profile_name"]; ok {
+		t.Errorf("profile name leaked into the push payload: %v", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "profile_change_pending:radarr:movies-a:6" {
+		t.Errorf("collapse_id = %v, want per-target collapse", opts["collapse_id"])
+	}
+}
+
+// The weekly digest speaks outcome vocabulary: "resolved" is every problem
+// that ended well, with attribution glued to the number so automation claims
+// only its own work. A week where everything cleared on its own says exactly
+// that, and open work stays in its own "Right now" clause.
+func TestNotifyAgentDigestOutcomeBody(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'boss', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	// The live shape that motivated the change: 438 self-cleared, nothing else.
+	n.NotifyAdmins(CategoryAgentDigest, map[string]interface{}{
+		"issues_resolved":   0,
+		"self_cleared":      438,
+		"rule_approved":     0,
+		"resolved_by_agent": 0,
+		"resolved_by_admin": 0,
+		"needs_admin_open":  0,
+		"pending_proposals": 0,
+	})
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["body"] != "Last 7 days: 438 resolved — all on their own" {
+		t.Errorf("self-cleared week body = %q", notif["body"])
+	}
+
+	// A busier week attributes each lane, and one open item reads "needs you".
+	n.NotifyAdmins(CategoryAgentDigest, map[string]interface{}{
+		"issues_resolved":   4,
+		"self_cleared":      37,
+		"rule_approved":     1,
+		"resolved_by_agent": 2,
+		"resolved_by_admin": 1,
+		"needs_admin_open":  1,
+		"pending_proposals": 0,
+	})
+	body = cap.waitForNotification(t)
+	notif, _ = body["notification"].(map[string]any)
+	want := "Last 7 days: 41 resolved — 2 by the agent · 1 by your rules · 1 by you · 37 on their own. Right now: 1 needs you"
+	if notif["body"] != want {
+		t.Errorf("attributed week body = %q, want %q", notif["body"], want)
+	}
+
+	// A lone self-cleared incident resolved on ITS own.
+	n.NotifyAdmins(CategoryAgentDigest, map[string]interface{}{
+		"issues_resolved": 0,
+		"self_cleared":    1,
+	})
+	body = cap.waitForNotification(t)
+	notif, _ = body["notification"].(map[string]any)
+	if notif["body"] != "Last 7 days: 1 resolved — on its own" {
+		t.Errorf("singular body = %q", notif["body"])
 	}
 }

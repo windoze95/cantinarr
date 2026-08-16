@@ -63,12 +63,16 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     });
 
     try {
-      final status =
+      final result =
           await ref.read(authProvider.notifier).checkServer(serverUrl);
+      // Reflect the URL that actually answered (scheme included) back into
+      // the field — the setup/login views read it from here, so they reuse
+      // exactly the scheme the probe settled on.
+      _serverUrlController.text = result.serverUrl;
       setState(() {
-        _serverStatus = status;
+        _serverStatus = result.status;
         _isCheckingServer = false;
-        _view = status.needsSetup ? _AuthView.setup : _AuthView.login;
+        _view = result.status.needsSetup ? _AuthView.setup : _AuthView.login;
       });
     } catch (e) {
       setState(() {
@@ -395,7 +399,7 @@ class _ServerUrlView extends StatelessWidget {
           controller: controller,
           decoration: const InputDecoration(
             labelText: 'Server URL',
-            hintText: 'https://cantinarr.example.com',
+            hintText: 'cantinarr.example.com',
             prefixIcon: Icon(Icons.dns_outlined),
           ),
           keyboardType: TextInputType.url,

@@ -2,19 +2,30 @@ import 'package:dio/dio.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/models/user_profile.dart';
+import '../../../core/network/backend_http_adapter.dart';
 import 'server_status.dart';
 
 /// Handles authentication requests against the Cantinarr backend.
 ///
 /// Uses a plain Dio instance (no auth interceptor) since these endpoints
-/// are called before/during authentication.
+/// are called before/during authentication. On web the instance rides the
+/// Fetch transport: these calls decide whether a session lives, and the
+/// default browser adapter was observed stalling them for the full receive
+/// timeout while Fetch requests from the same page completed instantly.
 class AuthService {
-  Dio _createDio(String serverUrl) => Dio(BaseOptions(
-        baseUrl: serverUrl,
-        connectTimeout: AppConfig.requestTimeout,
-        receiveTimeout: AppConfig.requestTimeout,
-        headers: {'Content-Type': 'application/json'},
-      ));
+  Dio _createDio(String serverUrl) {
+    final dio = Dio(BaseOptions(
+      baseUrl: serverUrl,
+      connectTimeout: AppConfig.requestTimeout,
+      receiveTimeout: AppConfig.requestTimeout,
+      headers: {'Content-Type': 'application/json'},
+    ));
+    final adapter = createAuthHttpClientAdapter();
+    if (adapter != null) {
+      dio.httpClientAdapter = adapter;
+    }
+    return dio;
+  }
 
   /// Check server status (needs setup, webauthn available).
   Future<ServerStatus> getServerStatus(String serverUrl) async {
@@ -503,6 +514,10 @@ class ServerConfig {
 
   /// The running server version, from the `version` field of /api/config.
   final String? serverVersion;
+
+  /// The oldest app build the server still fully supports
+  /// (`min_app_version`). Drives the warn-only skew banner.
+  final String? minAppVersion;
   final AvailableServices services;
   final List<ServiceInstance> instances;
 
@@ -515,6 +530,7 @@ class ServerConfig {
   const ServerConfig({
     required this.serverName,
     this.serverVersion,
+    this.minAppVersion,
     required this.services,
     this.instances = const [],
     this.issuesEnabled = false,
@@ -530,6 +546,7 @@ class ServerConfig {
     return ServerConfig(
       serverName: json['server_name'] as String? ?? 'Cantinarr',
       serverVersion: json['version'] as String?,
+      minAppVersion: json['min_app_version'] as String?,
       services: AvailableServices.fromJson(
           json['services'] as Map<String, dynamic>? ?? {}),
       instances: instancesList,

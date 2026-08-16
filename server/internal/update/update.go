@@ -26,7 +26,8 @@ const (
 	// checkInterval is how long a successful result is cached.
 	checkInterval = 12 * time.Hour
 	// errorBackoff is how long to wait before retrying after a failed check, so
-	// a GitHub outage can't turn every /api/config call into a fetch attempt.
+	// a GitHub outage can't turn every /api/admin/update-status request into a
+	// fetch attempt.
 	errorBackoff = 1 * time.Hour
 )
 

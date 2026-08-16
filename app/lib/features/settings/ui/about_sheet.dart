@@ -77,6 +77,17 @@ class AboutSheet extends ConsumerWidget {
               ),
             ),
           ],
+          const SizedBox(height: AppTheme.spaceLg),
+          // Required by TMDB's API terms of use.
+          const Text(
+            'This product uses the TMDB API but is not endorsed '
+            'or certified by TMDB.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 11,
+            ),
+          ),
         ],
       ),
     );

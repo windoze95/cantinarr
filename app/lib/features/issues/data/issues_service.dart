@@ -92,10 +92,61 @@ class IssuesService {
     await _dio.post('/api/issues/$id/reply', data: {'body': body});
   }
 
+  /// Record the reporter's own verdict that the applied fix worked, closing the
+  /// issue. Only the reporter may call it — an admin's verdict goes through
+  /// [resolveIssue] so the audit trail never attributes one to the other — and
+  /// it is irreversible: the thread stops accepting replies.
+  ///
+  /// A refusal (the issue closed meanwhile, or a fix started executing) arrives
+  /// as a 409 whose body carries the server's explanation; the thrown
+  /// [DioException] keeps that response so the caller can show it verbatim
+  /// instead of a generic failure.
+  Future<void> confirmFixed(int issueId) async {
+    await _dio.post('/api/issues/$issueId/confirm-fixed');
+  }
+
   // ---- Admin ---------------------------------------------------------------
 
   /// List issues for the admin queue, optionally filtered by [status].
-  Future<List<Issue>> listIssues({String? status}) async {
+  /// Triples the admin has hand-approved and could automate.
+  Future<List<Map<String, dynamic>>> listRuleCandidates() async {
+    final resp = await _dio.get('/api/admin/agent-approval-rules/candidates');
+    return ((resp.data['candidates'] as List?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+  }
+
+  /// Arm a rule from the catalog (server re-checks the grounding).
+  Future<void> armRule(String problemKind, String actionKind, String actionFacet) async {
+    await _dio.post('/api/admin/agent-approval-rules', data: {
+      'problem_kind': problemKind,
+      'action_kind': actionKind,
+      'action_facet': actionFacet,
+    });
+  }
+
+  /// The agent scoreboard: what the pipeline did over the trailing window.
+  Future<Map<String, dynamic>> agentDigest({int days = 7}) async {
+    final resp = await _dio
+        .get('/api/admin/agent-digest', queryParameters: {'days': days});
+    return (resp.data as Map).cast<String, dynamic>();
+  }
+
+  /// The reporter inbox: the caller's OWN reports, requester copy applied
+  /// server-side. Non-admin accessible.
+  Future<List<Issue>> listMyIssues() async {
+    final resp = await _dio.get('/api/issues');
+    final list = (resp.data['issues'] as List?) ?? const [];
+    return list
+        .map((e) => Issue.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// The admin issue list. Open issues always arrive in full; the closed tail
+  /// is bounded server-side, and [IssuePage.closedTotal] is how much history
+  /// exists — so the Closed tab can say what it is not showing instead of
+  /// presenting a truncated list as the whole story.
+  Future<IssuePage> listIssues({String? status}) async {
     final resp = await _dio.get(
       '/api/admin/issues',
       queryParameters: {
@@ -103,9 +154,12 @@ class IssuesService {
       },
     );
     final data = resp.data as Map<String, dynamic>?;
-    return ((data?['issues'] as List?) ?? const [])
-        .map((e) => Issue.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return IssuePage(
+      issues: ((data?['issues'] as List?) ?? const [])
+          .map((e) => Issue.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      closedTotal: (data?['closed_total'] as num?)?.toInt() ?? 0,
+    );
   }
 
   /// Dismiss an issue (admin).

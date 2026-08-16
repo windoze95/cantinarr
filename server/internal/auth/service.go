@@ -67,10 +67,11 @@ const (
 	opaqueRefreshPrefix = "cnr1."
 
 	// legacyRefreshMinLifetime separates legacy JWT *refresh* tokens (issued
-	// with 30- or 365-day expiries by older versions) from access tokens
-	// (always 15 minutes). Only tokens minted with a lifetime above this bar
-	// are accepted on the refresh amnesty path, so a leaked short-lived
-	// access token can never be laundered into a permanent session.
+	// with 30- or 365-day expiries by older versions) from that era's
+	// 15-minute access tokens. Current access tokens are long-lived, so the
+	// lifetime bar no longer discriminates them — their explicit "access"
+	// scope does (the amnesty gate rejects any scoped token). The bar stays
+	// for the legacy population it was built for.
 	legacyRefreshMinLifetime = 24 * time.Hour
 )
 
@@ -426,9 +427,9 @@ func (s *Service) refreshOpaque(refreshToken string) (*TokenResponse, error) {
 // is migrated to an opaque token and never touches this path again.
 //
 // The gate is strict about what counts as a refresh token: audience-free,
-// device-bound, and minted with a multi-day lifetime. Access tokens (15 min)
-// and OAuth tokens (audience-bound) can never pass, and forgeries still fail
-// the signature check.
+// scope-free, device-bound, and minted with a multi-day lifetime. Access
+// tokens (stamped with an explicit scope) and OAuth tokens (audience-bound)
+// can never pass, and forgeries still fail the signature check.
 func (s *Service) refreshLegacyJWT(tokenStr string) (*TokenResponse, error) {
 	parser := jwt.NewParser(
 		jwt.WithValidMethods([]string{"HS256"}),
@@ -1097,7 +1098,18 @@ func hasAudience(claims *Claims, audience string) bool {
 	return false
 }
 
-// signAccessToken mints the short-lived bearer JWT. Signing failures are
+// accessTokenLifetime bounds the bearer JWT. It is deliberately long: every
+// request re-authenticates the user and device against the database
+// (authenticateClaims), so revocation and role changes take effect on the very
+// next request regardless of this value — a short expiry added no security,
+// only a hard dependency on the refresh round-trip firing like clockwork.
+// The 2026-08-01 incident proved what that dependency costs: any client whose
+// refresh transport hiccups died 15 minutes later with a perfectly valid
+// session. Refresh remains the recovery path for restarts and long-idle
+// clients; it just stops being a quarter-hourly single point of failure.
+const accessTokenLifetime = 30 * 24 * time.Hour
+
+// signAccessToken mints the bearer JWT. Signing failures are
 // ErrAuthUnavailable: the credential was already accepted, so failing to mint
 // its successor is a server fault, never a rejection.
 func (s *Service) signAccessToken(user *User, deviceID string) (string, error) {
@@ -1107,8 +1119,13 @@ func (s *Service) signAccessToken(user *User, deviceID string) (string, error) {
 		Username: user.Username,
 		Role:     user.Role,
 		DeviceID: deviceID,
+		// The explicit scope structurally bars access tokens from the legacy
+		// refresh amnesty gate (which rejects any scoped token). The old gate
+		// relied on access tokens being short-lived; now that they are not,
+		// the discrimination must not depend on lifetime.
+		Scope: "access",
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(15 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(accessTokenLifetime)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}

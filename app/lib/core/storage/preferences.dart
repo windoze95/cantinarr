@@ -90,6 +90,8 @@ const _approvalsMenuOnlyWhenPendingKey = 'approvals_menu_only_when_pending';
 const _issuesMenuOnlyWhenActiveKey = 'issues_menu_only_when_active';
 const _agentFixesMenuOnlyWhenAwaitingReviewKey =
     'agent_fixes_menu_only_when_awaiting_review';
+const _profileApprovalsMenuOnlyWhenPendingKey =
+    'profile_approvals_menu_only_when_pending';
 
 /// A device-local preference that hides an admin queue from the navigation
 /// menu while that queue has no active work. The default is false so existing
@@ -136,29 +138,59 @@ final agentFixesMenuOnlyWhenAwaitingReviewProvider =
   ),
 );
 
-const _dismissedUpdateVersionKey = 'dismissed_update_version';
+/// Whether Profile approvals appears only while an external agent's
+/// quality-profile proposal awaits an admin decision.
+final profileApprovalsMenuOnlyWhenPendingProvider =
+    StateNotifierProvider<ConditionalMenuVisibilityNotifier, bool>(
+  (ref) => ConditionalMenuVisibilityNotifier(
+    _profileApprovalsMenuOnlyWhenPendingKey,
+  ),
+);
 
-/// The server version the admin last dismissed the "update available" banner
-/// for. Stored locally per device; the banner reappears once a newer version
-/// than this is offered, so a dismissal only silences the release it was for.
-class DismissedUpdateNotifier extends StateNotifier<String?> {
-  DismissedUpdateNotifier() : super(null) {
+const _dismissedUpdateVersionKey = 'dismissed_update_version';
+const _dismissedAppSkewPairKey = 'dismissed_app_skew_pair';
+const _dismissedServerSkewPairKey = 'dismissed_server_skew_pair';
+
+/// A device-local "don't show this exact notice again" slot: one string
+/// holding the identity of the dismissed notice (a release version, or a
+/// `version|floor` pair). The notice resurfaces as soon as its identity
+/// changes, so a dismissal only ever silences the thing it was for.
+class DismissedNoticeNotifier extends StateNotifier<String?> {
+  DismissedNoticeNotifier(this._key) : super(null) {
     _load();
   }
 
+  final String _key;
+
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = prefs.getString(_dismissedUpdateVersionKey);
+    state = prefs.getString(_key);
   }
 
-  Future<void> set(String version) async {
-    state = version;
+  Future<void> set(String value) async {
+    state = value;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_dismissedUpdateVersionKey, version);
+    await prefs.setString(_key, value);
   }
 }
 
+/// The server version the admin last dismissed the "update available" banner
+/// for; the banner reappears once a newer version is offered.
 final dismissedUpdateVersionProvider =
-    StateNotifierProvider<DismissedUpdateNotifier, String?>(
-  (ref) => DismissedUpdateNotifier(),
+    StateNotifierProvider<DismissedNoticeNotifier, String?>(
+  (ref) => DismissedNoticeNotifier(_dismissedUpdateVersionKey),
+);
+
+/// The `appVersion|serverFloor` pair whose "update this app" skew warning was
+/// dismissed; either side changing brings the warning back.
+final dismissedAppSkewPairProvider =
+    StateNotifierProvider<DismissedNoticeNotifier, String?>(
+  (ref) => DismissedNoticeNotifier(_dismissedAppSkewPairKey),
+);
+
+/// The `serverVersion|appFloor` pair whose "update the server" skew warning
+/// was dismissed; either side changing brings the warning back.
+final dismissedServerSkewPairProvider =
+    StateNotifierProvider<DismissedNoticeNotifier, String?>(
+  (ref) => DismissedNoticeNotifier(_dismissedServerSkewPairKey),
 );

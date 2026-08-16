@@ -1,8 +1,10 @@
 services:
   cantinarr:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # The published image carries a stamped build version, which is what the
+    # admin update banner compares against releases — `docker compose pull`
+    # is the update path. To build from this checkout instead, layer
+    # docker-compose.dev.yml on top (see that file).
+    image: ghcr.io/windoze95/cantinarr:latest
     ports:
       - "8585:8585"
     volumes:

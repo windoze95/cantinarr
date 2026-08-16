@@ -61,6 +61,7 @@ class IssueQueueCountsNotifier extends StateNotifier<IssueQueueCounts> {
     _sub?.cancel();
     _sub = null;
     if (!admin) {
+      _ref.read(issueQueueCountsStaleProvider.notifier).state = false;
       _set(const IssueQueueCounts());
       return;
     }
@@ -93,7 +94,9 @@ class IssueQueueCountsNotifier extends StateNotifier<IssueQueueCounts> {
       // Resolve the service for every request. The authenticated Dio client is
       // replaced on reconnect/server switch, so caching this provider value
       // would keep calling the old server.
-      final issues = await _ref.read(issuesServiceProvider).listIssues();
+      // Only the non-terminal buckets feed the badge, and those always come
+      // back in full — the server bounds closed history alone.
+      final issues = (await _ref.read(issuesServiceProvider).listIssues()).issues;
       if (!_isAdmin || epoch != _refreshEpoch) return;
       _set(IssueQueueCounts(
         needsAttention:
@@ -101,6 +104,7 @@ class IssueQueueCountsNotifier extends StateNotifier<IssueQueueCounts> {
         tracking: issues.where((issue) => issue.status.isTracking).length,
         hasLoaded: true,
       ));
+      _ref.read(issueQueueCountsStaleProvider.notifier).state = false;
     } catch (_) {
       if (!_isAdmin || epoch != _refreshEpoch) return;
       // Preserve the last badge counts, but fail open for conditional menu
@@ -109,6 +113,7 @@ class IssueQueueCountsNotifier extends StateNotifier<IssueQueueCounts> {
         needsAttention: state.needsAttention,
         tracking: state.tracking,
       ));
+      _ref.read(issueQueueCountsStaleProvider.notifier).state = true;
     }
   }
 
@@ -159,13 +164,18 @@ final activeIssuesProvider = Provider<int>(
   ),
 );
 
-/// Whether the issue counts have an authoritative snapshot. Conditional menu
-/// visibility fails open until this is true.
+/// Whether the issue counts have an authoritative snapshot.
 final issueQueueCountsLoadedProvider = Provider<bool>(
   (ref) => ref.watch(
     issueQueueCountsProvider.select((counts) => counts.hasLoaded),
   ),
 );
+
+/// Whether the issue counts are currently unknowable: the last refresh failed
+/// and nothing authoritative has arrived since. The conditional menu entry
+/// fails open on this — never on a load merely in flight, which is what made
+/// cold starts flash every conditional entry.
+final issueQueueCountsStaleProvider = StateProvider<bool>((ref) => false);
 
 /// Tracks the number of agent-proposed actions awaiting an admin decision, for
 /// admins only.
@@ -191,13 +201,18 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
     if (!force && admin == _isAdmin) return;
     _refreshEpoch++;
     _isAdmin = admin;
-    _ref.read(pendingAgentActionsLoadedProvider.notifier).state = false;
     _sub?.cancel();
     _sub = null;
     if (!admin) {
+      _ref.read(pendingAgentActionsLoadedProvider.notifier).state = false;
+      _ref.read(pendingAgentActionsStaleProvider.notifier).state = false;
       _set(0);
       return;
     }
+    // An admin-to-admin re-bind (token refresh, resume, client swap) keeps
+    // the last count authoritative while refresh() re-reads it. Resetting
+    // the loaded flag here would flash every conditional menu entry
+    // fail-open on each auth emission.
     refresh();
     _sub = _ref
         .read(realtimeEventsProvider)
@@ -219,6 +234,7 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
       _refreshEpoch++;
       _set(raw.toInt());
       _ref.read(pendingAgentActionsLoadedProvider.notifier).state = true;
+      _ref.read(pendingAgentActionsStaleProvider.notifier).state = false;
     } else {
       _refreshDebounce?.cancel();
       _refreshDebounce = Timer(const Duration(milliseconds: 300), refresh);
@@ -236,11 +252,13 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
       if (!_isAdmin || epoch != _refreshEpoch) return;
       _set(actions.where((a) => a.canTakeAction).length);
       _ref.read(pendingAgentActionsLoadedProvider.notifier).state = true;
+      _ref.read(pendingAgentActionsStaleProvider.notifier).state = false;
     } catch (_) {
       if (!_isAdmin || epoch != _refreshEpoch) return;
       // Preserve the last badge count while making a conditionally hidden row
       // visible again until an authoritative refresh succeeds.
       _ref.read(pendingAgentActionsLoadedProvider.notifier).state = false;
+      _ref.read(pendingAgentActionsStaleProvider.notifier).state = true;
     }
   }
 
@@ -250,6 +268,7 @@ class PendingAgentActionsNotifier extends StateNotifier<int> {
     _refreshEpoch++;
     _set(value);
     _ref.read(pendingAgentActionsLoadedProvider.notifier).state = true;
+    _ref.read(pendingAgentActionsStaleProvider.notifier).state = false;
   }
 
   void _set(int value) {
@@ -272,3 +291,8 @@ final pendingAgentActionsProvider =
 
 /// Whether the agent-action count has been read successfully at least once.
 final pendingAgentActionsLoadedProvider = StateProvider<bool>((ref) => false);
+
+/// Whether the agent-actions count is currently unknowable (last refresh
+/// failed, nothing authoritative since). Fail-open signal for the
+/// conditional menu entry; loading alone never sets it.
+final pendingAgentActionsStaleProvider = StateProvider<bool>((ref) => false);

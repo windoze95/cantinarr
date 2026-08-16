@@ -25,6 +25,8 @@ One thing that carries straight over: if Chaptarr shares a gateway's network sta
 
 Chaptarr speaks the Readarr `/api/v1` API. Enter just the base URL; Cantinarr appends the API path.
 
+Use Chaptarr's **root** URL, never one of its media-scoped prefixes (`/ebook`, `/audiobook`, or a `/readarr/...` compatibility path). Those prefixes exist for Readarr-only clients and change how Chaptarr answers identity lookups; Cantinarr talks to the native API and handles both formats itself.
+
 ## 3. Grant access per user
 
 This is the step people miss. Unlike Radarr and Sonarr, Chaptarr has no global default — pinning a user to a Chaptarr instance is how you grant that user access to books.
@@ -33,13 +35,15 @@ Pin from either side: the instance editor, or **Settings → Users** for one per
 
 Running more than one Chaptarr instance is fine — pin different households or different libraries to different instances.
 
-## 4. Turn on instant updates
+## 4. Check instant updates
 
-Open the instance and tap **Configure instant updates**. The server rotates a per-instance credential and installs its own authenticated webhook in Chaptarr; the secret moves server-to-server and never reaches a device.
+Adding the instance already turned these on: the server rotates a per-instance credential and installs its own authenticated webhook in Chaptarr the moment the instance is created; the secret moves server-to-server and never reaches a device. The create confirmation says whether it worked.
 
-Set `CANTINARR_PUBLIC_URL` first if Cantinarr sits behind a reverse proxy. The callback has to be resolvable **from inside the Chaptarr container**, so in Docker or Kubernetes a cluster-internal origin like `http://cantinarr:8585` is usually the right value.
+If it couldn't — most commonly because the callback wasn't reachable — open the instance: the **Instant updates** section shows the live state, read from Chaptarr itself, and **Configure instant updates** re-runs the install. Set `CANTINARR_PUBLIC_URL` first if Cantinarr sits behind a reverse proxy. The callback has to be resolvable **from inside the Chaptarr container**, so in Docker or Kubernetes a cluster-internal origin like `http://cantinarr:8585` is usually the right value.
 
 Without this, Cantinarr falls back to polling, and a fast ebook grab can land and be announced late — or, if it imports and finishes between two polls, look like nothing happened.
+
+The webhook also speeds up "Waiting for library" requests: Chaptarr announces the moment a queued author import lands, and Cantinarr completes the waiting request right then instead of on its next five-minute check.
 
 ## 5. Optional — let people download the files
 

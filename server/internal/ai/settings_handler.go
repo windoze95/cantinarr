@@ -268,6 +268,9 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 	}
 	response := map[string]any{
 		"providers": credentials.AIProviders,
+		// The zero-config pair the UI preselects when nothing is chosen yet.
+		"default_provider": credentials.DefaultAIProvider,
+		"default_model":    credentials.DefaultSharedAIModel,
 		"personal": map[string]any{
 			"selected":    selected,
 			"config":      personalConfigJSON,

@@ -13,6 +13,9 @@ for a user-facing version change — build numbers/version codes are computed pe
 `app/**` paths (web/ios/desktop subdirs, tests, dev tooling, and markdown excluded), and on manual dispatch (inputs: track
 `alpha`/`internal`, release status `completed`/`draft`).
 
+0. A `gate` job waits for the `CI` run on that exact commit and fails the workflow if it isn't
+   green, so nothing is built or uploaded from an unproven commit. The build-only PR check is
+   exempt (it uploads nothing).
 1. Version code = max version code across all Play tracks + 1 (`next_build_number` lane in
    `app/android/fastlane/Fastfile`); version name = `pubspec.yaml` version minus the `+` suffix.
 2. The AAB is signed with the upload keystore from the `ANDROID_KEYSTORE_*` secrets and attached
@@ -23,6 +26,21 @@ for a user-facing version change — build numbers/version codes are computed pe
 
 Runs are serialized (`concurrency: playstore-deploy`) because two concurrent runs would compute
 the same version code.
+
+### Push (Firebase)
+
+Android push needs two Google artifacts, deliberately kept apart:
+
+- **`app/android/app/google-services.json`** — committed in this repo. Firebase project
+  identifiers for the registered Android app (`codes.julian.cantinarr`); not a secret. Self-built
+  APKs against a different backend swap in their own Firebase app's file.
+- **The FCM service-account key** — the send credential. It never lives in this repo: it belongs
+  to the push gateway's deploy secrets (see the push-gateway repo's `docs/FCM-SETUP.md`, which
+  also covers the Firebase-console walkthrough and the Play-key-vs-FCM-key trap).
+
+Store impact: the `firebase-messaging` SDK counts toward the **Data safety** form (device
+identifiers transmitted for push delivery) — fold it into the reassessment below before the next
+console submission.
 
 ### Signing material
 
@@ -111,7 +129,10 @@ The Play 512 icon and the 1024×500 feature graphic derive from the committed 10
 ### Pipeline
 
 `.github/workflows/testflight.yml` auto-deploys to TestFlight on `main` for iOS-relevant `app/**`
-changes (tests, dev tooling, and markdown excluded). Build number = latest TestFlight build + 1 (`next_build_number` lane in
+changes (tests, dev tooling, and markdown excluded). It opens with a `gate` job that waits for the
+`CI` run on that exact commit and fails if it isn't green, so no IPA is even built from a commit
+the suite hasn't passed — an upload is irreversible and burns a build number permanently.
+Build number = latest TestFlight build + 1 (`next_build_number` lane in
 `app/ios/fastlane/Fastfile`); signing is manual via the `IOS_DIST_CERT_*` and
 `IOS_PROVISIONING_PROFILE_BASE64` secrets (team `2M54LKDR89`, bundle `codes.julian.cantinarr`).
 Capability/entitlement changes invalidate the provisioning profile — regenerate it and update the

@@ -18,6 +18,7 @@ import '../features/chaptarr/ui/chaptarr_queue_screen.dart';
 import '../features/chaptarr/ui/chaptarr_wanted_screen.dart';
 import '../features/config_changes/ui/config_change_detail_screen.dart';
 import '../features/config_changes/ui/config_change_history_screen.dart';
+import '../features/profile_proposals/ui/profile_proposals_screen.dart';
 import '../features/dashboard/ui/dashboard_books_tab.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_releases_tab.dart';
@@ -463,13 +464,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: SettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: SettingsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/ai',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: AiAccessScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: AiAccessScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/chatgpt',
@@ -486,18 +487,24 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/credentials',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: CredentialsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: CredentialsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/ai-tools',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: AiToolsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: AiToolsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/change-history',
             builder: (_, __) => const AppAmbientBackground(
               child: ConfigChangeHistoryScreen(),
+            ),
+          ),
+          GoRoute(
+            path: '/settings/profile-approvals',
+            builder: (_, __) => const AppAmbientBackground(
+              child: ProfileProposalsScreen(),
             ),
           ),
           GoRoute(
@@ -579,8 +586,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/ai-remediation',
-            builder: (_, __) => const AppAmbientBackground(
-                child: AiRemediationSettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: AiRemediationSettingsScreen(
+                    highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/agent-approval-rules',
@@ -589,13 +597,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/request-settings',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: RequestSettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: RequestSettingsScreen(
+                    highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/discovery',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: DiscoverySettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: DiscoverySettingsScreen(
+                    highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/devices',
@@ -604,13 +614,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/plex',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: PlexSettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child:
+                    PlexSettingsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/notifications',
-            builder: (_, __) => const AppAmbientBackground(
-                child: NotificationPreferencesScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: NotificationPreferencesScreen(
+                    highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/passkeys',
@@ -665,6 +677,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   );
 });
 
+/// The settings-search anchor requested via `?highlight=<anchorId>`, passed
+/// through to screens that support scroll-to-and-flash on arrival.
+String? _highlightParam(GoRouterState state) =>
+    state.uri.queryParameters['highlight'];
+
 bool _isInternalReturnLocation(Uri uri) {
   return !uri.hasScheme &&
       !uri.hasAuthority &&
@@ -693,6 +710,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/credentials',
     '/settings/ai-tools',
     '/settings/change-history',
+    '/settings/profile-approvals',
     '/settings/users',
     '/settings/ai-remediation',
     '/settings/agent-approval-rules',
@@ -702,8 +720,9 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/instance',
   ];
 
-  return path == '/issues' ||
-      adminRoots.any((route) => _isWithinRoute(path, route));
+  // '/issues' is deliberately NOT admin-gated any more: for non-admins the
+  // same route is the reporter inbox ("My reports"), scoped server-side.
+  return adminRoots.any((route) => _isWithinRoute(path, route));
 }
 
 int? _positiveIntParameter(GoRouterState state, String name) {

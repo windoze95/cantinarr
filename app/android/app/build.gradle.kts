@@ -6,6 +6,7 @@ plugins {
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+    id("com.google.gms.google-services")
 }
 
 // CI decodes the upload keystore and writes android/key.properties; local builds
@@ -62,4 +63,11 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Native FCM (no Flutter Firebase plugin — mirrors the iOS no-plugin push
+    // architecture; see PushMessagingService/MainActivity).
+    implementation("com.google.firebase:firebase-messaging:25.1.1")
+    implementation("androidx.core:core-ktx:1.15.0")
 }

@@ -41,11 +41,14 @@ func NewClient(baseURL, apiKey string) *Client {
 }
 
 type Series struct {
-	ID             int               `json:"id"`
-	Title          string            `json:"title"`
-	TvdbID         int               `json:"tvdbId"`
-	TmdbID         int               `json:"tmdbId"`
-	Year           int               `json:"year"`
+	ID     int    `json:"id"`
+	Title  string `json:"title"`
+	TvdbID int    `json:"tvdbId"`
+	TmdbID int    `json:"tmdbId"`
+	Year   int    `json:"year"`
+	// Runtime is the show's own per-episode runtime in minutes — the honest
+	// baseline the truncated-import sentinel judges an imported file against.
+	Runtime        int               `json:"runtime"`
 	Monitored      bool              `json:"monitored"`
 	RootFolderPath string            `json:"rootFolderPath,omitempty"`
 	Statistics     *SeriesStatistics `json:"statistics,omitempty"`
@@ -497,18 +500,25 @@ func (c *Client) SetEpisodesMonitored(episodeIDs []int, monitored bool) error {
 	return nil
 }
 
+// GetQueue returns the lean queue view as one complete bounded page. It used
+// to issue an unpaged read, which Sonarr answers with its default page of 10
+// rows — a silently truncated queue for any instance downloading more than
+// that. includeUnknownSeriesItems keeps rows Sonarr could not match to a
+// library series visible; consumers must treat SeriesID 0 as unmatched.
 func (c *Client) GetQueue() ([]QueueItem, error) {
-	resp, err := c.doRequest("GET", "/api/v3/queue?includeSeries=true")
-	if err != nil {
+	var queueResp struct {
+		TotalRecords int         `json:"totalRecords"`
+		Records      []QueueItem `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeSeries=true&includeUnknownSeriesItems=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	if err := c.do("GET", path, nil, &queueResp); err != nil {
 		return nil, fmt.Errorf("sonarr queue: %w", err)
 	}
-	defer resp.Body.Close()
-
-	var queueResp struct {
-		Records []QueueItem `json:"records"`
+	if queueResp.TotalRecords < 0 || queueResp.TotalRecords > queueMaxRecords {
+		return nil, fmt.Errorf("sonarr queue snapshot incomplete: invalid or oversized total %d (safety cap %d)", queueResp.TotalRecords, queueMaxRecords)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&queueResp); err != nil {
-		return nil, fmt.Errorf("decode queue: %w", err)
+	if len(queueResp.Records) != queueResp.TotalRecords {
+		return nil, fmt.Errorf("sonarr queue snapshot incomplete: received %d of %d records in bounded page", len(queueResp.Records), queueResp.TotalRecords)
 	}
 	return queueResp.Records, nil
 }
@@ -590,7 +600,10 @@ func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
 		TotalRecords int                 `json:"totalRecords"`
 		Records      []DetailedQueueItem `json:"records"`
 	}
-	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeSeries=true&includeEpisode=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	// includeUnknownSeriesItems: without it Sonarr silently drops queue rows it
+	// could not match to a library series — exactly the rows most likely to be
+	// stuck — before the completeness checks below ever see them.
+	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeSeries=true&includeEpisode=true&includeUnknownSeriesItems=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
 	if err := c.do("GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("sonarr queue: %w", err)
 	}
@@ -657,6 +670,36 @@ func (c *Client) GetHistory(pageSize int) ([]HistoryRecord, error) {
 	return resp.Records, nil
 }
 
+// GetSeriesHistory returns the history Sonarr still holds for one series —
+// every grab, import and failure — optionally narrowed to a single season.
+// Prefer it over GetHistory whenever the caller knows the series: GetHistory
+// reads one page of the GLOBAL log, so a busy instance buries a title's records
+// within hours, while this endpoint filters server-side and reaches records
+// months old.
+//
+// /history/series answers with a bare JSON array, not the paged envelope the
+// /history endpoint uses, so there is no records wrapper to unwrap and no
+// server-side page size to ask for. pageSize is therefore a purely client-side
+// cap on how many of the returned records (newest first, the order Sonarr sends
+// them in) the caller wants back; pageSize <= 0 returns all of them.
+//
+// Only a positive seasonNumber narrows the read — 0 asks for the whole series
+// rather than for Specials, which is what every caller here wants.
+func (c *Client) GetSeriesHistory(seriesID, seasonNumber, pageSize int) ([]HistoryRecord, error) {
+	path := fmt.Sprintf("/api/v3/history/series?seriesId=%d&includeSeries=true&includeEpisode=true", seriesID)
+	if seasonNumber > 0 {
+		path += fmt.Sprintf("&seasonNumber=%d", seasonNumber)
+	}
+	var records []HistoryRecord
+	if err := c.do("GET", path, nil, &records); err != nil {
+		return nil, fmt.Errorf("sonarr series history: %w", err)
+	}
+	if pageSize > 0 && len(records) > pageSize {
+		records = records[:pageSize]
+	}
+	return records, nil
+}
+
 func (c *Client) GetImportHistory(episodeID int, downloadID string, pageSize int) ([]HistoryRecord, error) {
 	var resp struct {
 		TotalRecords int             `json:"totalRecords"`
@@ -671,6 +714,35 @@ func (c *Client) GetImportHistory(episodeID int, downloadID string, pageSize int
 		return nil, fmt.Errorf("sonarr import history incomplete: %d records exceeds bound %d", resp.TotalRecords, pageSize)
 	}
 	return resp.Records, nil
+}
+
+// GrabProvenance reports how the *newest* grab of this download came about —
+// the grab that put the item currently in the queue there. Radarr stamps a
+// releaseSource on every grabbed history event: "Rss" means it found the
+// release on its own because it beat what the library already had; anything
+// else ("Search", "UserInvokedSearch", "InteractiveSearch", "ReleasePush")
+// means something went looking. An empty string means unknown, which callers
+// must treat as "assume a search was involved" rather than guessing.
+//
+// One download can carry several grab records (a re-grab of the same release
+// makes another), so newest-first ordering is load-bearing.
+func (c *Client) GrabProvenance(episodeID int, downloadID string) (string, error) {
+	var resp struct {
+		Records []HistoryRecord `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=10&sortKey=date&sortDirection=descending&eventType=1&episodeId=%d&downloadId=%s",
+		episodeID, url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return "", fmt.Errorf("sonarr grab provenance: %w", err)
+	}
+	for _, record := range resp.Records {
+		for key, value := range record.Data {
+			if strings.EqualFold(key, "releaseSource") {
+				return value, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // GetImportHistorySince returns the completed-import history records dated
@@ -699,6 +771,65 @@ func (c *Client) GetImportHistorySince(since time.Time, pageSize int) (inWindow 
 		inWindow = append(inWindow, rec)
 	}
 	return inWindow, complete, nil
+}
+
+// GetUpgradeDeleteHistorySince returns the episode-file-deleted history
+// records dated after since, newest first, from one bounded page (eventType=5
+// — episodeFileDeleted). The import-history catch-up pairs these against the
+// same window's imports: a delete with data.reason "Upgrade" is the only
+// durable proof that an import replaced a file rather than filled a gap.
+// Callers must treat an error or incomplete window as "no upgrade proof"
+// (announce as new content), never as "no upgrades happened".
+func (c *Client) GetUpgradeDeleteHistorySince(since time.Time, pageSize int) (inWindow []HistoryRecord, complete bool, err error) {
+	var resp struct {
+		TotalRecords int             `json:"totalRecords"`
+		Records      []HistoryRecord `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=5", pageSize)
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return nil, false, fmt.Errorf("sonarr upgrade-delete history since: %w", err)
+	}
+	complete = resp.TotalRecords <= len(resp.Records)
+	for _, rec := range resp.Records {
+		if !rec.Date.After(since) {
+			// The page reached past the window boundary, so the window is
+			// fully enumerated even when older records exist beyond the page.
+			complete = true
+			continue
+		}
+		inWindow = append(inWindow, rec)
+	}
+	return inWindow, complete, nil
+}
+
+// MarkHistoryFailed marks one grab history record as a failed download — the
+// "Mark as Failed" button. It is Sonarr's only route to blocklist a release
+// that already finished and imported: the blocklist endpoint has no add
+// operation, and the queue-side blocklist flag needs a live queue row, which a
+// download that completed two weeks ago no longer has. Marking a grab failed
+// also lets Sonarr decide for itself whether to look for a replacement (see
+// GetFailedDownloadPolicy).
+func (c *Client) MarkHistoryFailed(historyID int64) error {
+	path := fmt.Sprintf("/api/v3/history/failed/%d", historyID)
+	if err := c.do(http.MethodPost, path, nil, nil); err != nil {
+		return fmt.Errorf("sonarr mark history failed: %w", err)
+	}
+	return nil
+}
+
+// GetFailedDownloadPolicy reports the instance's autoRedownloadFailed setting:
+// whether Sonarr searches for a replacement on its own once a download is
+// marked failed. That is the admin's decision, so a caller that blocklists a
+// release must read it rather than assume — with the policy on, adding a search
+// of our own only duplicates the grab Sonarr already dispatched.
+func (c *Client) GetFailedDownloadPolicy() (autoRedownloadFailed bool, err error) {
+	var config struct {
+		AutoRedownloadFailed bool `json:"autoRedownloadFailed"`
+	}
+	if err := c.do("GET", "/api/v3/config/downloadclient", nil, &config); err != nil {
+		return false, fmt.Errorf("sonarr download client config: %w", err)
+	}
+	return config.AutoRedownloadFailed, nil
 }
 
 type CalendarItem struct {
@@ -878,13 +1009,42 @@ type Episode struct {
 }
 
 // EpisodeFile is Sonarr's metadata for one completed episode file on disk.
+// SceneName is the release the file arrived as and DateAdded is when Sonarr
+// imported it — together they say which release put this file here and when,
+// which is the only way to tell a file apart from the episode it claims to be.
 type EpisodeFile struct {
-	ID           int    `json:"id"`
-	SeriesID     int    `json:"seriesId"`
-	SeasonNumber int    `json:"seasonNumber"`
-	RelativePath string `json:"relativePath"`
-	Path         string `json:"path"`
-	Size         int64  `json:"size"`
+	ID           int        `json:"id"`
+	SeriesID     int        `json:"seriesId"`
+	SeasonNumber int        `json:"seasonNumber"`
+	RelativePath string     `json:"relativePath"`
+	Path         string     `json:"path"`
+	Size         int64      `json:"size"`
+	SceneName    string     `json:"sceneName"`
+	DateAdded    *time.Time `json:"dateAdded"`
+	Quality      struct {
+		Quality struct {
+			Name string `json:"name"`
+		} `json:"quality"`
+	} `json:"quality"`
+	// MediaInfo is the arr's ffprobe-derived truth about the file on disk —
+	// the only place resolution, codecs, audio languages, and subtitles are
+	// knowable without scanning anything ourselves. Pointer-typed: older
+	// records may not carry it.
+	MediaInfo *FileMediaInfo `json:"mediaInfo"`
+}
+
+// FileMediaInfo is the media-property block Sonarr serves on a file record.
+type FileMediaInfo struct {
+	AudioChannels     float64 `json:"audioChannels"`
+	AudioCodec        string  `json:"audioCodec"`
+	AudioLanguages    string  `json:"audioLanguages"`
+	Height            int     `json:"height"`
+	Width             int     `json:"width"`
+	Resolution        string  `json:"resolution"`
+	RunTime           string  `json:"runTime"`
+	VideoCodec        string  `json:"videoCodec"`
+	VideoDynamicRange string  `json:"videoDynamicRange"`
+	Subtitles         string  `json:"subtitles"`
 }
 
 // GetEpisodeFile returns live metadata for one completed file in Sonarr.
@@ -895,6 +1055,30 @@ func (c *Client) GetEpisodeFile(id int) (*EpisodeFile, error) {
 		return nil, fmt.Errorf("sonarr episode file: %w", err)
 	}
 	return &file, nil
+}
+
+// GetEpisodeFiles lists every file Sonarr holds for a series, across seasons.
+// The episode list says only whether a file exists; these records say what it
+// actually is (scene name, quality) and when it landed, so a file's import time
+// can be compared against the air time of the episode it sits on.
+func (c *Client) GetEpisodeFiles(seriesID int) ([]EpisodeFile, error) {
+	var files []EpisodeFile
+	path := fmt.Sprintf("/api/v3/episodefile?seriesId=%d", seriesID)
+	if err := c.do(http.MethodGet, path, nil, &files); err != nil {
+		return nil, fmt.Errorf("sonarr episode files: %w", err)
+	}
+	return files, nil
+}
+
+// DeleteEpisodeFile deletes one imported file from disk and from Sonarr's
+// records. The episode itself stays monitored, so Sonarr remains free to grab a
+// replacement under its own policy.
+func (c *Client) DeleteEpisodeFile(id int) error {
+	path := fmt.Sprintf("/api/v3/episodefile/%d", id)
+	if err := c.do(http.MethodDelete, path, nil, nil); err != nil {
+		return fmt.Errorf("sonarr delete episode file: %w", err)
+	}
+	return nil
 }
 
 // GetEpisodes lists the episodes of one season of a series.
@@ -1088,4 +1272,26 @@ func (c *Client) ProcessMonitoredDownloads() error {
 // RescanSeries rescans the files on disk for a series.
 func (c *Client) RescanSeries(seriesID int) error {
 	return c.triggerCommand(map[string]any{"name": "RescanSeries", "seriesId": seriesID})
+}
+
+// GetConfigSummary returns a bounded, secret-free summary of one settings
+// section. The raw payloads (which carry API keys and passwords in their
+// dynamic fields) are summarized HERE and never leave the client.
+func (c *Client) GetConfigSummary(section string) ([]arrcommon.ConfigEntry, error) {
+	paths := map[string]string{
+		arrcommon.ConfigIndexers:           "/api/v3/indexer",
+		arrcommon.ConfigDelayProfiles:      "/api/v3/delayprofile",
+		arrcommon.ConfigReleaseProfiles:    "/api/v3/releaseprofile",
+		arrcommon.ConfigDownloadClients:    "/api/v3/downloadclient",
+		arrcommon.ConfigRemotePathMappings: "/api/v3/remotepathmapping",
+	}
+	path, ok := paths[section]
+	if !ok {
+		return nil, fmt.Errorf("unknown config section %q", section)
+	}
+	var raws []json.RawMessage
+	if err := c.do("GET", path, nil, &raws); err != nil {
+		return nil, fmt.Errorf("read %s: %w", section, err)
+	}
+	return arrcommon.SummarizeConfigSection(section, raws), nil
 }

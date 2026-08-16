@@ -378,8 +378,11 @@ func TestConclusionRejectsFreshReadWithoutTypedResolutionProof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
 	}
-	if issue.Status != IssueNeedsAdmin || issue.Resolution != "Agent needs administrator review: "+stopUnverifiedClose {
+	if issue.Status != IssueNeedsAdmin || issue.Resolution != giveUpResolution(stopUnverifiedClose) {
 		t.Fatalf("conclusion = status %q resolution %q", issue.Status, issue.Resolution)
+	}
+	if !strings.Contains(issue.Resolution, "could not verify") || !strings.Contains(issue.Resolution, "("+stopUnverifiedClose+")") {
+		t.Fatalf("give-up headline lost its plain language or its greppable token: %q", issue.Resolution)
 	}
 }
 

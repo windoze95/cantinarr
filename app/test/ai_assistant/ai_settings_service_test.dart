@@ -6,6 +6,20 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('parses the server-advertised default selection', () {
+    final settings = AiSettings.fromJson(const {
+      'providers': [],
+      'default_provider': 'codex',
+      'default_model': 'gpt-5.6-luna',
+    });
+    expect(settings.defaultProvider, 'codex');
+    expect(settings.defaultModel, 'gpt-5.6-luna');
+
+    final legacy = AiSettings.fromJson(const {});
+    expect(legacy.defaultProvider, isNull);
+    expect(legacy.defaultModel, isNull);
+  });
+
   test('parses personal, included, and effective settings independently', () {
     final settings = AiSettings.fromJson(_settingsJson(
       personalSelected: true,

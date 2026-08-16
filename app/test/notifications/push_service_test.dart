@@ -147,6 +147,10 @@ void main() {
     const directRoutes = {
       'request_pending': '/approvals',
       'agent_action_pending': '/agent-actions',
+      // A parked external profile change routes to the approvals list: it
+      // shows every pending proposal newest-first, so it is right whether or
+      // not this particular proposal is still pending on arrival.
+      'profile_change_pending': '/settings/profile-approvals',
       'plex_access_request': '/settings/users',
       'plex_invite_sent': '/plex-guide',
       'remediation_autodispatch_disabled': '/settings/ai-remediation',
@@ -411,6 +415,23 @@ void main() {
       expect(h.router.pushed, isEmpty);
     });
 
+    test('an all-string payload (the Android intent-extras shape) routes',
+        () async {
+      // Android taps arrive from FCM data maps — every value is a string, so
+      // numeric ids must parse out of their string form on each route.
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'issue_updated',
+        'issue_id': '12',
+      });
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'request_decision',
+        'media_type': 'tv',
+        'tmdb_id': '603',
+      });
+      expect(h.router.pushed, ['/issues/12', '/detail/tv/603']);
+    });
+
     test('unknown, missing-type, and non-map payloads are ignored', () async {
       final h = _Harness();
       await _emitNativeCall('onNotificationTap', {'type': 'shiny_new_thing'});
@@ -421,7 +442,7 @@ void main() {
     });
   });
 
-  group('APNs token registration', () {
+  group('push token registration', () {
     test('a delivered token is registered once with the device identity',
         () async {
       final h = _Harness();
@@ -470,7 +491,9 @@ void main() {
       expect(h.tokenPosts.last.data['apns_token'], 'token-a');
     });
 
-    test('registerForPush is a no-op off iOS', () async {
+    test('registerForPush is a no-op on unsupported platforms', () async {
+      // The test host is macOS — neither iOS nor Android — so the service
+      // must touch neither the channel nor the backend.
       final h = _Harness();
       final outgoing = <String>[];
       const channel = MethodChannel(_channelName);
@@ -605,6 +628,43 @@ void main() {
       final message = describePushTest(r);
       expect(message, startsWith('Delivery failed for 1 device'));
       expect(message, contains('no longer valid'));
+    });
+
+    test('FCM failures carry their hints', () {
+      final unregistered = result(
+        tokens: 1,
+        failed: 1,
+        results: const [
+          PushTestDeviceResult(ok: false, pruned: true, error: 'UNREGISTERED'),
+        ],
+      );
+      expect(
+        describePushTest(unregistered),
+        contains('Google says the token is no longer valid'),
+      );
+
+      final mismatch = result(
+        tokens: 1,
+        failed: 1,
+        results: const [
+          PushTestDeviceResult(
+              ok: false, pruned: false, error: 'SENDER_ID_MISMATCH'),
+        ],
+      );
+      expect(describePushTest(mismatch), contains('different Firebase project'));
+
+      final notEnabled = result(
+        tokens: 1,
+        failed: 1,
+        results: const [
+          PushTestDeviceResult(
+              ok: false, pruned: false, error: 'provider_not_enabled'),
+        ],
+      );
+      expect(
+        describePushTest(notEnabled),
+        contains('does not have this platform'),
+      );
     });
 
     test('unrecognised errors are echoed verbatim', () {

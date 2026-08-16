@@ -194,13 +194,17 @@ import UserNotifications
     completionHandler()
   }
 
-  /// Extracts the tap-routing fields the Dart side understands from an APNs
-  /// `userInfo` dict. Custom keys are delivered as siblings of `aps`.
+  /// Extracts the tap-routing payload from an APNs `userInfo` dict. Custom keys
+  /// are delivered as siblings of the reserved `aps` dictionary; forward every
+  /// one of them — Dart's router consumes more keys than just type/media_type/
+  /// tmdb_id (issue_id, foreign_id, title, instance_id), and a whitelist here
+  /// silently breaks deep links whenever the server grows the payload.
   private func routingPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
     var payload: [String: Any] = [:]
-    if let type = userInfo["type"] as? String { payload["type"] = type }
-    if let mediaType = userInfo["media_type"] as? String { payload["media_type"] = mediaType }
-    if let tmdbID = userInfo["tmdb_id"] { payload["tmdb_id"] = tmdbID }
+    for (key, value) in userInfo {
+      guard let key = key as? String, key != "aps" else { continue }
+      payload[key] = value
+    }
     return payload
   }
 }

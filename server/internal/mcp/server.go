@@ -99,6 +99,18 @@ type ToolServer struct {
 	settingsMutationLocks map[string]chan struct{}
 	profileChanges        *profileChangeStore
 	settingsChanges       *settingChangeStore
+	profileProposals      *profileProposalStore
+
+	// adminNotifier pages admins when an external MCP agent parks a profile
+	// change awaiting their approval. nil when push is not configured — the
+	// proposal still parks and the app's approval screen still lists it.
+	adminNotifier AdminNotifier
+}
+
+// AdminNotifier pushes an admin-scoped event. *push.Notifier satisfies it;
+// declared here so the mcp package stays decoupled from push.
+type AdminNotifier interface {
+	NotifyAdmins(eventType string, data map[string]interface{})
 }
 
 // SetCallAuthorizer wires the live account/device authorization check used by
@@ -109,10 +121,19 @@ func (s *ToolServer) SetCallAuthorizer(authorizer CallAuthorizer) {
 }
 
 // SetSettingsChangeDatabase enables the durable ledger required before any AI
-// settings write. Production wires it during startup; tests that exercise a
+// settings write, and with it the parked-proposal store external MCP profile
+// previews land in. Production wires it during startup; tests that exercise a
 // mutation wire their isolated database through the same boundary.
 func (s *ToolServer) SetSettingsChangeDatabase(database *sql.DB) {
 	s.settingsChanges = newSettingChangeStore(database)
+	s.profileProposals = newProfileProposalStore(database)
+}
+
+// SetAdminNotifier wires the push surface that pages admins about parked
+// profile-change proposals. Optional: without it proposals still park and are
+// decided from the app's approval screen.
+func (s *ToolServer) SetAdminNotifier(notifier AdminNotifier) {
+	s.adminNotifier = notifier
 }
 
 func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, registry *instance.Registry, bridge *tmdb.Bridge) *ToolServer {
@@ -371,6 +392,14 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.getArrHealth(input, callCtx.InstanceID)
 	case "diagnose_queue":
 		return s.diagnoseQueue(input, callCtx.InstanceID)
+	case "get_episode_timeline":
+		return s.getEpisodeTimeline(input, callCtx.InstanceID)
+	case "get_media_file_details":
+		return s.getMediaFileDetails(input, callCtx.InstanceID)
+	case "get_service_config":
+		return s.getServiceConfig(input, callCtx.InstanceID)
+	case "get_book_timeline":
+		return s.getBookTimeline(input, callCtx.InstanceID)
 	case "get_manual_import_candidates":
 		return s.getManualImportCandidates(input, callCtx.InstanceID)
 	case "execute_manual_import":

@@ -3,13 +3,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../../../core/widgets/status_pill.dart';
+import '../../auth/logic/auth_provider.dart';
+import '../data/credentials_service.dart';
 import '../data/discovery_settings_service.dart';
+import '../settings_anchors.dart';
+import 'credential_section.dart';
 
-/// Admin screen for choosing which feed backs the headline discovery rows and
-/// whether those rows drop non-English titles.
+/// Admin screen for the Discover module: which feed backs the headline rows,
+/// whether those rows drop non-English titles, and the TMDB/Trakt credentials
+/// those feeds run on.
 class DiscoverySettingsScreen extends ConsumerStatefulWidget {
-  const DiscoverySettingsScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const DiscoverySettingsScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<DiscoverySettingsScreen> createState() =>
@@ -19,11 +28,16 @@ class DiscoverySettingsScreen extends ConsumerStatefulWidget {
 class _DiscoverySettingsScreenState
     extends ConsumerState<DiscoverySettingsScreen> {
   late final DiscoverySettingsService _service;
+  late final CredentialsService _credentialsService;
 
   DiscoverySettings? _edited;
+  CredentialsStatus? _credentials;
   bool _isLoading = true;
   String? _error;
   bool _saving = false;
+
+  final _tmdbController = TextEditingController();
+  final _traktIdController = TextEditingController();
 
   @override
   void initState() {
@@ -32,8 +46,18 @@ class _DiscoverySettingsScreenState
       _service = DiscoverySettingsService(
         backendDio: ref.read(backendClientProvider),
       );
+      _credentialsService = CredentialsService(
+        backendDio: ref.read(backendClientProvider),
+      );
       _load();
     });
+  }
+
+  @override
+  void dispose() {
+    _tmdbController.dispose();
+    _traktIdController.dispose();
+    super.dispose();
   }
 
   String _friendlyError(Object e) {
@@ -47,10 +71,14 @@ class _DiscoverySettingsScreenState
       _error = null;
     });
     try {
-      final settings = await _service.get();
+      final results = await Future.wait<Object>([
+        _service.get(),
+        _credentialsService.getStatus(),
+      ]);
       if (!mounted) return;
       setState(() {
-        _edited = settings;
+        _edited = results[0] as DiscoverySettings;
+        _credentials = results[1] as CredentialsStatus;
         _isLoading = false;
       });
     } catch (e) {
@@ -67,10 +95,28 @@ class _DiscoverySettingsScreenState
     if (edited == null || _saving) return;
     setState(() => _saving = true);
     try {
+      // Credentials first: a new Trakt client ID can make a source
+      // selectable, and the reload below lets the rows reflect it.
+      final creds = <String, String>{};
+      if (_tmdbController.text.isNotEmpty) {
+        creds['tmdb_access_token'] = _tmdbController.text.trim();
+      }
+      if (_traktIdController.text.isNotEmpty) {
+        creds['trakt_client_id'] = _traktIdController.text.trim();
+      }
+      if (creds.isNotEmpty) {
+        await _credentialsService.update(creds);
+        _tmdbController.clear();
+        _traktIdController.clear();
+        // Capability flags (services.tmdb/trakt) live in /api/config.
+        await ref.read(authProvider.notifier).refreshConfig();
+      }
       final saved = await _service.update(edited);
       if (!mounted) return;
+      final refreshed = creds.isEmpty ? null : await _reloadAfterCreds();
+      if (!mounted) return;
       setState(() {
-        _edited = saved;
+        _edited = refreshed ?? saved;
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -85,10 +131,65 @@ class _DiscoverySettingsScreenState
     }
   }
 
+  /// Re-reads settings + credential status after a credential change, so the
+  /// source list's selectability and the status chips are live truth.
+  Future<DiscoverySettings?> _reloadAfterCreds() async {
+    final results = await Future.wait<Object>([
+      _service.get(),
+      _credentialsService.getStatus(),
+    ]);
+    if (!mounted) return null;
+    _credentials = results[1] as CredentialsStatus;
+    return results[0] as DiscoverySettings;
+  }
+
+  Future<void> _deleteCredential(String key, String label,
+      {String? message}) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Remove $label?'),
+        content: Text(message ?? 'This will disable the $label integration.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child:
+                const Text('Remove', style: TextStyle(color: AppTheme.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    try {
+      await _credentialsService.delete(key);
+      // Losing Trakt can invalidate the selected source server-side; reload
+      // both settings and capability flags rather than trusting local state.
+      await ref.read(authProvider.notifier).refreshConfig();
+      final refreshed = await _reloadAfterCreds();
+      if (!mounted) return;
+      setState(() {
+        if (refreshed != null) _edited = refreshed;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$label credential removed')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Discovery')),
+      appBar: AppBar(title: const Text('Discover')),
       body: CenteredContent(
         child: _isLoading
             ? const Center(
@@ -160,7 +261,7 @@ class _DiscoverySettingsScreenState
         subtitle: Text(
           selectable
               ? source.description
-              : 'Add a Trakt client ID under Credentials to use this.',
+              : 'Add a Trakt client ID below to use this.',
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
       ),
@@ -169,6 +270,9 @@ class _DiscoverySettingsScreenState
 
   Widget _buildBody(DiscoverySettings edited) {
     return ListView(
+      // Build every child while a settings-search highlight needs to find
+      // its anchor (see SettingsHighlight).
+      cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         const Padding(
@@ -184,20 +288,75 @@ class _DiscoverySettingsScreenState
         for (final source in edited.sources)
           _sourceTile(edited, source),
         const _SectionLabel('Language'),
-        SwitchListTile(
-          value: edited.englishOnly,
-          activeThumbColor: AppTheme.accent,
-          onChanged: (v) =>
-              setState(() => _edited = edited.copyWith(englishOnly: v)),
-          title: const Text(
-            'Only show English-language titles',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+        SettingsHighlight(
+          anchorId: SettingsAnchors.discoveryEnglishOnly,
+          highlightId: widget.highlightId,
+          child: SwitchListTile(
+            value: edited.englishOnly,
+            activeThumbColor: AppTheme.accent,
+            onChanged: (v) =>
+                setState(() => _edited = edited.copyWith(englishOnly: v)),
+            title: const Text(
+              'Only show English-language titles',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'Hides titles whose original language is not English from the '
+              'discovery and recommendation rows. Search still finds everything.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
           ),
-          subtitle: const Text(
-            'Hides titles whose original language is not English from the '
-            'discovery and recommendation rows. Search still finds everything.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        ),
+        const _SectionLabel('Credentials'),
+        // Trakt leads: it is the credential that unlocks a source, while
+        // TMDB is an optional override of the built-in key.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: SettingsHighlight(
+            anchorId: SettingsAnchors.credentialsTrakt,
+            highlightId: widget.highlightId,
+            child: CredentialSection(
+              title: 'Trakt',
+              description: 'Trending, popular lists, and the calendar run '
+                  'on Cantinarr\'s built-in Trakt app out of the box. Add '
+                  'your own client ID to use your Trakt application instead.',
+              isConfigured:
+                  _credentials?.isConfigured('trakt_client_id') ?? false,
+              builtinActive: _credentials?.traktUsingBuiltin ?? false,
+              controller: _traktIdController,
+              hint: 'Trakt client ID',
+              onDelete: () => _deleteCredential(
+                'trakt_client_id',
+                'Trakt',
+                message: 'Your client ID will be removed and '
+                    'Cantinarr\'s built-in app takes over.',
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+          child: SettingsHighlight(
+            anchorId: SettingsAnchors.credentialsTmdb,
+            highlightId: widget.highlightId,
+            child: CredentialSection(
+              title: 'TMDB',
+              description: 'Discovery and search run on Cantinarr\'s '
+                  'built-in key out of the box. Add your own '
+                  'access token to use your TMDB account instead.',
+              isConfigured:
+                  _credentials?.isConfigured('tmdb_access_token') ?? false,
+              builtinActive: _credentials?.tmdbUsingBuiltin ?? false,
+              controller: _tmdbController,
+              hint: 'TMDB access token',
+              onDelete: () => _deleteCredential(
+                'tmdb_access_token',
+                'TMDB',
+                message: 'Your token will be removed and '
+                    'Cantinarr\'s built-in key takes over.',
+              ),
+            ),
           ),
         ),
         Padding(

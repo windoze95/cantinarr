@@ -9,6 +9,7 @@ void main() {
           'anthropic_key': true,
           'openai_key': false,
         },
+        'tmdb_using_builtin': true,
         'ai': {
           'config': {
             'provider': 'openai',
@@ -36,6 +37,7 @@ void main() {
       });
 
       expect(status.isConfigured('anthropic_key'), true);
+      expect(status.tmdbUsingBuiltin, isTrue);
       expect(status.ai.provider, 'openai');
       expect(status.ai.model, 'gpt-5.4-mini');
       expect(status.ai.providers.single.credentialKey, 'openai_key');
@@ -51,6 +53,7 @@ void main() {
       });
 
       expect(status.isConfigured('anthropic_key'), true);
+      expect(status.tmdbUsingBuiltin, isFalse);
       expect(status.ai.provider, 'anthropic');
       expect(status.ai.model, 'claude-opus-4-8');
       expect(status.ai.providers, isEmpty);

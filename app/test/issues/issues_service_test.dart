@@ -53,6 +53,20 @@ void main() {
     expect(adapter.body['episode_number'], 1);
   });
 
+  test('reporter confirmation posts the reporter-only route with no body',
+      () async {
+    final adapter = _CaptureAdapter(response: {'ok': true});
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    await IssuesService(backendDio: dio).confirmFixed(42);
+
+    // Not the admin resolve route: the reporter's verdict must be recorded as
+    // theirs, and it carries no wording — the decision is the whole request.
+    expect(adapter.path, '/api/issues/42/confirm-fixed');
+    expect(adapter.body, isEmpty);
+  });
+
   test('admin resolution sends typed disposition and required note', () async {
     final adapter = _CaptureAdapter(response: {
       'id': 42,
@@ -102,7 +116,9 @@ class _CaptureAdapter implements HttpClientAdapter {
         bytes.addAll(chunk);
       }
     }
-    body = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    // A bodyless POST sends no bytes at all; decoding that would throw.
+    final decoded = bytes.isEmpty ? null : jsonDecode(utf8.decode(bytes));
+    body = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
     return ResponseBody.fromString(
       jsonEncode(response),
       200,

@@ -14,10 +14,13 @@ import (
 // recordingContent captures ContentNotifier calls so the Chaptarr departure
 // witness can be pinned without a push gateway.
 type recordingContent struct {
-	mu       sync.Mutex
-	books    []string // "title|foreignID|instanceID|format"
-	movies   []string // "title|tmdbID"
-	episodes []string // "seriesTitle|tmdbID"
+	mu               sync.Mutex
+	books            []string // "title|foreignID|instanceID|format"
+	movies           []string // "title|tmdbID"
+	episodes         []string // "seriesTitle|tmdbID"
+	upgradedBooks    []string // "title|foreignID|instanceID|format"
+	upgradedMovies   []string // "title|tmdbID"
+	upgradedEpisodes []string // "seriesTitle|tmdbID"
 }
 
 func (r *recordingContent) NotifyNewMovie(title string, tmdbID int) {
@@ -34,6 +37,21 @@ func (r *recordingContent) NotifyNewBook(title, foreignID, instanceID, format st
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.books = append(r.books, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
+}
+func (r *recordingContent) NotifyUpgradedMovie(title string, tmdbID int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.upgradedMovies = append(r.upgradedMovies, fmt.Sprintf("%s|%d", title, tmdbID))
+}
+func (r *recordingContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.upgradedEpisodes = append(r.upgradedEpisodes, fmt.Sprintf("%s|%d", seriesTitle, tmdbID))
+}
+func (r *recordingContent) NotifyUpgradedBook(title, foreignID, instanceID, format string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.upgradedBooks = append(r.upgradedBooks, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
 }
 
 func (r *recordingContent) calls() []string {
@@ -54,16 +72,35 @@ func (r *recordingContent) episodeCalls() []string {
 	return append([]string(nil), r.episodes...)
 }
 
+func (r *recordingContent) upgradedMovieCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.upgradedMovies...)
+}
+
+func (r *recordingContent) upgradedEpisodeCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.upgradedEpisodes...)
+}
+
+func (r *recordingContent) upgradedBookCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.upgradedBooks...)
+}
+
 // chaptarrBackend is a minimal Chaptarr API double: a mutable queue plus a
 // fixed book table, recording every book lookup it serves. history holds the
 // records array for /api/v1/history; empty means no history at all, so the
 // catch-up reader sees a provably complete empty window.
 type chaptarrBackend struct {
-	mu        sync.Mutex
-	queue     string         // JSON records array for /api/v1/queue
-	history   string         // JSON records array for /api/v1/history
-	books     map[int]string // id -> JSON body for /api/v1/book/{id}
-	bookAsked []int          // ids requested via /api/v1/book/{id}
+	mu            sync.Mutex
+	queue         string         // JSON records array for /api/v1/queue
+	history       string         // JSON records array for /api/v1/history
+	deleteHistory string         // JSON records array for the bookFileDeleted (eventType=5) query
+	books         map[int]string // id -> JSON body for /api/v1/book/{id}
+	bookAsked     []int          // ids requested via /api/v1/book/{id}
 }
 
 func (b *chaptarrBackend) handler() http.HandlerFunc {
@@ -73,9 +110,12 @@ func (b *chaptarrBackend) handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == "/api/v1/queue":
-			fmt.Fprintf(w, `{"records":%s}`, b.queue)
+			fmt.Fprint(w, queueEnvelope(b.queue))
 		case r.URL.Path == "/api/v1/history":
 			records := b.history
+			if r.URL.Query().Get("eventType") == "5" {
+				records = b.deleteHistory
+			}
 			if records == "" {
 				records = "[]"
 			}
@@ -105,6 +145,12 @@ func (b *chaptarrBackend) setHistory(records string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.history = records
+}
+
+func (b *chaptarrBackend) setDeleteHistory(records string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.deleteHistory = records
 }
 
 func (b *chaptarrBackend) asked() []int {

@@ -167,7 +167,7 @@ func NewRouter(
 
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
-			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, plexService, serverSettings))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, plexService, serverSettings, remediationService))
 
 			// Update availability + the admin-configured management-portal URL that
 			// backs the "update available" banner. GET returns both; PUT sets the
@@ -223,10 +223,25 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/external-settings-changes/{id}", settingsChangesHandler.Get)
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/external-settings-changes/{id}/revert", settingsChangesHandler.Revert)
 
+			// Profile changes parked by external MCP agents: an admin reviews
+			// the stored diff here and approves (which re-validates live state
+			// and executes the same verified write path as the in-app apply)
+			// or rejects without touching the arr.
+			profileProposalsHandler := mcp.NewProfileProposalHandler(toolServer)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/profile-change-proposals", profileProposalsHandler.List)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/profile-change-proposals/{id}", profileProposalsHandler.Get)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/profile-change-proposals/{id}/approve", profileProposalsHandler.Approve)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/profile-change-proposals/{id}/reject", profileProposalsHandler.Reject)
+
 			// Media request management: approval queue + request defaults
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/requests", requestHandler.ListPending)
+			// Static segment, so it wins over /requests/{id}/… in chi's router.
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/requests/waiting", requestHandler.ListWaiting)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/approve", requestHandler.Approve)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/deny", requestHandler.Deny)
+			// "Try again" on a demoted author-import book request: resume the
+			// watch instead of deciding it.
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/wait", requestHandler.Wait)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/request-settings", requestHandler.GetSettings)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Put("/request-settings", requestHandler.UpdateSettings)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/users/{userID}/request-settings", requestHandler.GetUserSettings)
@@ -237,6 +252,9 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/dismiss", remediationHandler.Dismiss)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/resolve", remediationHandler.ResolveIssue)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/issues/{id}/activity", remediationHandler.GetIssueActivity)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-digest", remediationHandler.Digest)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-approval-rules/candidates", remediationHandler.ListRuleCandidates)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-approval-rules", remediationHandler.ArmRule)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/remediation-settings", remediationHandler.GetSettings)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Put("/remediation-settings", remediationHandler.UpdateSettings)
 
@@ -314,8 +332,10 @@ func NewRouter(
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.With(auth.RequirePermission(auth.PermissionMediaRequest)).Post("/issues", remediationHandler.Create)
+			r.Get("/issues", remediationHandler.ListMine)
 			r.Get("/issues/{id}", remediationHandler.Get)
 			r.Post("/issues/{id}/reply", remediationHandler.Reply)
+			r.Post("/issues/{id}/confirm-fixed", remediationHandler.ConfirmFixed)
 		})
 
 		// Discover / media routes (authenticated)
@@ -417,6 +437,10 @@ func NewRouter(
 				// Configure the server-managed Radarr/Sonarr Connect webhook
 				// without ever returning its callback credential to the app.
 				r.Post("/instances/{instanceID}/webhook", instanceHandler.ConfigureWebhook)
+				// Live webhook state, derived from the arr itself on every
+				// call — a stored flag would drift the moment an admin edited
+				// the arr's Connect list.
+				r.Get("/instances/{instanceID}/webhook", instanceHandler.WebhookStatus)
 			})
 
 			// Instance proxy — forward to specific instance. Read-only
@@ -603,8 +627,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"chaptarr":        false,
 			"media_downloads": false,
 			"ai":              aiAvailable,
-			"tmdb":            creds.IsConfigured(credentials.KeyTMDBAccessToken),
-			"trakt":           creds.IsConfigured(credentials.KeyTraktClientID),
+			"tmdb":            creds.TMDBAvailable(),
+			"trakt":           creds.TraktAvailable(),
 		}
 		for _, inst := range instances {
 			if inst.MediaDownloads {
@@ -629,6 +653,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"server_name":     cfg.ServerName,
 			"version":         version.Version,
+			"min_app_version": version.MinAppVersion,
 			"services":        services,
 			"instances":       instances,
 			"issues_enabled":  remSettings.Enabled,

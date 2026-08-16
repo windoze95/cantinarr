@@ -230,3 +230,44 @@ func TestBatchApproveHandler(t *testing.T) {
 		t.Fatalf("executor ran %d times after rejected requests, want still 1", fx.count())
 	}
 }
+
+// D6: a destructive fix never rides a batch — the server refuses it per-item
+// whatever client sent the list, and the rest of the batch still runs.
+func TestBatchApproveRefusesDestructiveKinds(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	res, err := svc.db.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail)
+		 VALUES ('auto', 'awaiting_approval', 'tv', 615, 'Show', 'pre-air')`,
+	)
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	issueID, _ := res.LastInsertId()
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_runs (issue_id, trigger, status, model) VALUES (?, 'auto', 'waiting_approval', 'test')`,
+		issueID,
+	); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	var runID int64
+	_ = svc.db.QueryRow("SELECT id FROM agent_runs WHERE issue_id = ?", issueID).Scan(&runID)
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, run_id, kind, params, rationale, risk, status, fingerprint, tool_use_id)
+		 VALUES (?, ?, 'delete_media_files', '{"media_type":"tv","tmdb_id":615,"season":11,"episodes":[1],"blocklist":true}', 'impossible files', 'mutating', 'proposed', 'fp-del', 'tu-del')`,
+		issueID, runID,
+	); err != nil {
+		t.Fatalf("seed destructive proposal: %v", err)
+	}
+	var actionID int64
+	_ = svc.db.QueryRow("SELECT id FROM agent_actions WHERE issue_id = ?", issueID).Scan(&actionID)
+
+	results := svc.ApproveActions(1, []int64{actionID})
+	if len(results) != 1 || results[0].Status != "skipped" {
+		t.Fatalf("batch over a destructive kind = %+v, want a per-item skip", results)
+	}
+	var status string
+	_ = svc.db.QueryRow("SELECT status FROM agent_actions WHERE id = ?", actionID).Scan(&status)
+	if status != ActionProposed {
+		t.Fatalf("destructive proposal after batch = %q, want untouched %q", status, ActionProposed)
+	}
+}

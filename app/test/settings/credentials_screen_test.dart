@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
+import 'package:cantinarr/features/settings/settings_anchors.dart';
 import 'package:cantinarr/features/settings/ui/credentials_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -102,9 +103,43 @@ void main() {
       'ai_model': 'gpt-4.1-mini',
     });
   });
+
+  testWidgets(
+      'a highlight deep link scrolls to the Gemini section on load',
+      (tester) async {
+    final adapter = _CredentialsAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [backendClientProvider.overrideWithValue(dio)],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const CredentialsScreen(
+            highlightId: SettingsAnchors.credentialsGemini,
+          ),
+        ),
+      ),
+    );
+    // The body mounts only after the async status load; the anchor's trigger
+    // fires then, so settling covers load, scroll, and the highlight fade.
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .state<ScrollableState>(find.byType(Scrollable).first)
+          .position
+          .pixels,
+      greaterThan(0),
+    );
+    expect(find.text('Google Gemini (AI)'), findsOneWidget);
+  });
 }
 
 class _CredentialsAdapter implements HttpClientAdapter {
+  _CredentialsAdapter();
+
   Map<String, dynamic>? lastUpdate;
 
   @override
@@ -127,6 +162,7 @@ class _CredentialsAdapter implements HttpClientAdapter {
     return ResponseBody.fromString(
       jsonEncode({
         'credentials': const <String, bool>{},
+        'tmdb_using_builtin': false,
         'ai': {
           'config': {
             'provider': 'codex',

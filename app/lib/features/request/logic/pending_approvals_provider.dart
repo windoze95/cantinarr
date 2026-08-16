@@ -35,13 +35,18 @@ class PendingApprovalsNotifier extends StateNotifier<int> {
     if (!force && admin == _isAdmin) return;
     _refreshEpoch++;
     _isAdmin = admin;
-    _ref.read(pendingApprovalsLoadedProvider.notifier).state = false;
     _sub?.cancel();
     _sub = null;
     if (!admin) {
+      _ref.read(pendingApprovalsLoadedProvider.notifier).state = false;
+      _ref.read(pendingApprovalsStaleProvider.notifier).state = false;
       _set(0);
       return;
     }
+    // An admin-to-admin re-bind (token refresh, resume, client swap) keeps
+    // the last count authoritative while refresh() re-reads it. Resetting
+    // the loaded flag here would flash every conditional menu entry
+    // fail-open on each auth emission.
     refresh();
     _sub = _ref
         .read(realtimeEventsProvider)
@@ -60,6 +65,7 @@ class PendingApprovalsNotifier extends StateNotifier<int> {
       _set(state + 1);
     }
     _ref.read(pendingApprovalsLoadedProvider.notifier).state = true;
+    _ref.read(pendingApprovalsStaleProvider.notifier).state = false;
   }
 
   /// Re-reads the queue depth from the backend. Call after an approve/deny so
@@ -75,11 +81,13 @@ class PendingApprovalsNotifier extends StateNotifier<int> {
       if (!_isAdmin || epoch != _refreshEpoch) return;
       _set(pending.length);
       _ref.read(pendingApprovalsLoadedProvider.notifier).state = true;
+      _ref.read(pendingApprovalsStaleProvider.notifier).state = false;
     } catch (_) {
       if (!_isAdmin || epoch != _refreshEpoch) return;
       // Preserve the last badge count, but fail open for conditional menu
       // visibility because the queue's emptiness is no longer authoritative.
       _ref.read(pendingApprovalsLoadedProvider.notifier).state = false;
+      _ref.read(pendingApprovalsStaleProvider.notifier).state = true;
     }
   }
 
@@ -89,6 +97,7 @@ class PendingApprovalsNotifier extends StateNotifier<int> {
     _refreshEpoch++;
     _set(value);
     _ref.read(pendingApprovalsLoadedProvider.notifier).state = true;
+    _ref.read(pendingApprovalsStaleProvider.notifier).state = false;
   }
 
   void _set(int value) {
@@ -113,3 +122,9 @@ final pendingApprovalsProvider =
 
 /// Whether the approvals count has been read successfully at least once.
 final pendingApprovalsLoadedProvider = StateProvider<bool>((ref) => false);
+
+/// Whether the approvals count is currently unknowable: the last refresh
+/// failed and nothing authoritative has arrived since. The conditional menu
+/// entry fails open on this — never on a load that is merely in flight,
+/// which is what made cold starts flash every conditional entry.
+final pendingApprovalsStaleProvider = StateProvider<bool>((ref) => false);

@@ -9,8 +9,8 @@ import (
 
 func TestBuildSetupItemsNothingConfigured(t *testing.T) {
 	items := buildSetupItems(setupFacts{})
-	if len(items) != 12 {
-		t.Fatalf("items = %d, want 12", len(items))
+	if len(items) != 13 {
+		t.Fatalf("items = %d, want 13", len(items))
 	}
 	for _, item := range items {
 		if item.Configured {
@@ -158,5 +158,18 @@ func TestAdoptedTraktLeavesTheStepUnfinished(t *testing.T) {
 		if item.Key == "discovery_prefs" && item.Configured {
 			t.Error("discovery_prefs configured by an auto-adopted Trakt source, want it still open")
 		}
+	}
+}
+
+// The one genuinely broken remediation shape gets called out in the item copy:
+// detection on, nothing configured to investigate.
+func TestRemediationSetupItemWarnsWhenProviderless(t *testing.T) {
+	broken := remediationDescription(setupFacts{RemediationEnabled: true, AI: false})
+	if !strings.Contains(broken, "no shared AI provider") {
+		t.Fatalf("providerless copy = %q, want the warning", broken)
+	}
+	fine := remediationDescription(setupFacts{RemediationEnabled: true, AI: true})
+	if strings.Contains(fine, "no shared AI provider") {
+		t.Fatalf("healthy copy still warns: %q", fine)
 	}
 }

@@ -52,6 +52,113 @@ enum BookRequestFormat {
 
 enum BookStatusUnknownReason { transient, formatNeedsAttention }
 
+/// Why a book format reads as Requested while the library still has no record
+/// of it. The server owns these requests and retries them itself, so they are
+/// neither an approval anyone will make nor a failure anyone must fix.
+enum BookWaitReason {
+  /// The library's metadata service is still importing the book's author, so
+  /// the add cannot be made yet. It completes on its own.
+  authorImport('author_import'),
+
+  /// A wait this app version has no words for. Still a wait: the format stays
+  /// covered and unrequestable, and the generic copy says what is knowable.
+  unknown('');
+
+  const BookWaitReason(this.value);
+  final String value;
+
+  static BookWaitReason fromValue(String? value) {
+    for (final reason in BookWaitReason.values) {
+      if (reason != BookWaitReason.unknown && reason.value == value) {
+        return reason;
+      }
+    }
+    return BookWaitReason.unknown;
+  }
+}
+
+/// The durable explanation behind a waiting format.
+///
+/// Before this existed the only word for the state was "Requested", which
+/// promises a library record that is not there — leaving an active retry loop
+/// and an app that silently dropped the request looking exactly alike.
+class BookFormatWait {
+  final BookWaitReason reason;
+
+  /// When the request was accepted, for surfaces that show how long this has
+  /// been going. Null only if an older or malformed payload omitted it.
+  final DateTime? waitingSince;
+
+  /// When the server last actually retried. Null means the server could not
+  /// vouch for an attempt (it restarted since this request was parked) — not
+  /// that nothing has been tried.
+  final DateTime? lastAttemptAt;
+
+  const BookFormatWait({
+    required this.reason,
+    this.waitingSince,
+    this.lastAttemptAt,
+  });
+
+  /// The pill that replaces "Requested" — the whole point is that the requester
+  /// can tell the two states apart at a glance.
+  String get label => 'Waiting for library';
+
+  /// The persistent explanation. It says what is happening, who is doing it,
+  /// and that the requester is not the one being waited on. No ETA is offered
+  /// because none is knowable.
+  String get explanation => switch (reason) {
+        BookWaitReason.authorImport =>
+          'Your request is saved. The library is still adding this author. '
+              'Cantinarr keeps retrying automatically — no action is needed.',
+        BookWaitReason.unknown =>
+          'Your request is saved. The library isn’t ready for this book yet. '
+              'Cantinarr keeps retrying automatically — no action is needed.',
+      };
+
+  static BookFormatWait? tryParse(Object? value) {
+    if (value is! Map) return null;
+    final reason = value['reason'];
+    return BookFormatWait(
+      reason: BookWaitReason.fromValue(reason is String ? reason : null),
+      waitingSince: _tryParseTimestamp(value['waiting_since']),
+      lastAttemptAt: _tryParseTimestamp(value['last_attempt_at']),
+    );
+  }
+}
+
+DateTime? _tryParseTimestamp(Object? value) {
+  if (value is! String || value.isEmpty) return null;
+  return DateTime.tryParse(value)?.toLocal();
+}
+
+/// Reads a `book_format_waits` map, expanding a "both" entry the way stored
+/// "both" request rows are expanded elsewhere. An unreadable entry is dropped
+/// rather than failing the whole status closed: a wait explains a state the
+/// caller already has from `book_formats`, so losing it costs an explanation,
+/// never coverage.
+Map<BookRequestFormat, BookFormatWait> _parseFormatWaits(Object? raw) {
+  final waits = <BookRequestFormat, BookFormatWait>{};
+  if (raw is! Map) return waits;
+  BookFormatWait? both;
+  raw.forEach((key, value) {
+    final format = BookRequestFormat.tryFromValue(key.toString());
+    final wait = BookFormatWait.tryParse(value);
+    if (format == null || wait == null) return;
+    if (format == BookRequestFormat.both) {
+      both = wait;
+    } else {
+      waits[format] = wait;
+    }
+  });
+  final shared = both;
+  if (shared != null) {
+    waits.putIfAbsent(BookRequestFormat.ebook, () => shared);
+    waits.putIfAbsent(BookRequestFormat.audiobook, () => shared);
+  }
+  return waits;
+}
+
 /// A user's per-format request state for a book. [formats] contains the server's
 /// live/request-history projection and [ownership] is the current Chaptarr
 /// digest. The two are reduced into one requester-facing truth by [statusFor].
@@ -60,6 +167,12 @@ enum BookStatusUnknownReason { transient, formatNeedsAttention }
 class BookRequestStatusDetail {
   final RequestStatus status;
   final Map<BookRequestFormat, RequestStatus> formats;
+
+  /// Per-format explanations for a [RequestStatus.requested] the library cannot
+  /// back with a record yet. Empty on older servers, which is why a missing
+  /// wait must never be read as "definitely not waiting" — only as "no reason
+  /// was given", which is what the app showed before this existed.
+  final Map<BookRequestFormat, BookFormatWait> formatWaits;
   final BookOwnership? ownership;
   final bool isKnown;
   final BookStatusUnknownReason? unknownReason;
@@ -73,6 +186,7 @@ class BookRequestStatusDetail {
   const BookRequestStatusDetail({
     this.status = RequestStatus.unavailable,
     this.formats = const {},
+    this.formatWaits = const {},
     this.ownership,
     this.isKnown = true,
     this.unknownReason,
@@ -81,6 +195,22 @@ class BookRequestStatusDetail {
 
   BookStatusUnknownReason? get effectiveUnknownReason =>
       isKnown ? null : (unknownReason ?? BookStatusUnknownReason.transient);
+
+  /// The wait to show for [format], or null when there is nothing to explain.
+  ///
+  /// Gated on the reduced state rather than on the raw map, so every source of
+  /// live truth — including the ownership digest, which the server never saw —
+  /// retires the explanation at the same moment it retires the absence.
+  BookFormatWait? waitFor(BookRequestFormat format) {
+    if (format == BookRequestFormat.both) return null;
+    if (statusFor(format) != RequestStatus.requested) return null;
+    return formatWaits[format];
+  }
+
+  /// Whether any concrete format is waiting on the library.
+  bool get hasFormatWait =>
+      waitFor(BookRequestFormat.ebook) != null ||
+      waitFor(BookRequestFormat.audiobook) != null;
 
   /// Returns a copy carrying library [ownership] (from the owned-books digest).
   /// A matched digest row whose format truth is unresolved fails the combined
@@ -92,6 +222,7 @@ class BookRequestStatusDetail {
       BookRequestStatusDetail(
         status: status,
         formats: formats,
+        formatWaits: formatWaits,
         ownership: ownership,
         isKnown: isKnown && ownershipStatusKnown,
         unknownReason: !ownershipStatusKnown
@@ -185,11 +316,18 @@ class BookRequestSubmission {
   /// Empty when the status speaks for itself.
   final String message;
 
+  /// The durable form of [message] for a format the server is retrying itself.
+  /// [message] is a one-shot toast; this is what the row keeps saying after the
+  /// toast is gone, and what carries the state through the re-read that follows
+  /// a submission before the server has caught up.
+  final Map<BookRequestFormat, BookFormatWait> formatWaits;
+
   const BookRequestSubmission({
     required this.status,
     this.formats = const {},
     this.isKnown = true,
     this.message = '',
+    this.formatWaits = const {},
   });
 
   bool succeeded(BookRequestFormat format) {
@@ -230,21 +368,21 @@ String _requestErrorMessage(DioException error) {
   if (lower.contains('book not found') || lower.contains('foreign id')) {
     return 'This book could not be matched in the library. Search for it again and retry.';
   }
+  if (_requestErrorIsDefinitive(error)) {
+    return 'The library could not complete this request. Try again later.';
+  }
   return 'This book could not be requested. Check the connection and try again.';
 }
 
 bool _requestErrorIsDefinitive(DioException error) {
-  final data = error.response?.data;
-  final raw = data is Map
-      ? (data['error'] ?? data['message'])?.toString().toLowerCase() ?? ''
-      : data?.toString().toLowerCase() ?? '';
-  return raw.contains('no audiobook edition') ||
-      raw.contains('no ebook edition') ||
-      raw.contains('root folder') ||
-      raw.contains('quality profile') ||
-      raw.contains('metadata profile') ||
-      raw.contains('book not found') ||
-      raw.contains('foreign id');
+  // The server rejects a book create atomically, so an answered request is a
+  // definitive "nothing was submitted" and its message is worth showing.
+  // No response (timeout, connection drop) and gateway statuses (a proxy
+  // answering for a server that may still be working) leave the outcome
+  // genuinely unknown — only those fall back to the couldn't-confirm toast.
+  final status = error.response?.statusCode;
+  if (status == null) return false;
+  return status < 502 || status > 504;
 }
 
 /// The TV season-scope choices a user may attach to a request. The string
@@ -566,6 +704,7 @@ class RequestService {
       return BookRequestStatusDetail(
         status: status ?? RequestStatus.unavailable,
         formats: formats,
+        formatWaits: _parseFormatWaits(data['book_format_waits']),
         isKnown: isKnown,
         unknownReason: unknownReason,
         canonicalForeignId: canonical,
@@ -643,6 +782,7 @@ class RequestService {
         formats: formats,
         isKnown: isKnown,
         message: rawMessage is String ? rawMessage.trim() : '',
+        formatWaits: _parseFormatWaits(data?['book_format_waits']),
       );
     } on DioException catch (e) {
       throw RequestSubmissionException(

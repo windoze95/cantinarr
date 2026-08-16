@@ -140,6 +140,9 @@ func (r *Registry) loadSharedAIProfileTx(tx *sql.Tx) (AIProfile, error) {
 		provider = inferAIProvider(model)
 		if provider == "" {
 			provider = DefaultAIProvider
+			if model == "" {
+				model = DefaultSharedAIModel
+			}
 		}
 	} else if !IsValidAIProvider(provider) {
 		return AIProfile{Config: AIConfig{Provider: provider, Model: model}}, ErrAIStorage

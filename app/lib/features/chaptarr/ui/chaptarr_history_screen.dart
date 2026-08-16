@@ -215,7 +215,10 @@ String _timeLabel(DateTime? date) {
   return DateFormat('h:mm a').format(local);
 }
 
-({IconData icon, Color color, String label}) _eventStyle(String eventType) {
+/// Exported for the wire-vocabulary test: every event name Chaptarr's
+/// history enum can emit must map to a styled label, never the raw fallback.
+({IconData icon, Color color, String label}) chaptarrHistoryEventStyle(
+    String eventType) {
   switch (eventType) {
     case 'grabbed':
       return (
@@ -223,13 +226,23 @@ String _timeLabel(DateTime? date) {
         color: AppTheme.downloading,
         label: 'Grabbed'
       );
-    case 'bookImported':
-    case 'downloadFolderImported':
-    case 'authorFolderImported':
+    // Import events as Chaptarr's history enum actually spells them:
+    // bookFileImported per file, downloadImported when the whole download
+    // lands. The previously matched bookImported / downloadFolderImported /
+    // authorFolderImported never occur on the wire, so every import rendered
+    // through the generic fallback.
+    case 'bookFileImported':
+    case 'downloadImported':
       return (
         icon: Icons.check_circle_outline,
         color: AppTheme.available,
         label: 'Imported'
+      );
+    case 'bookImportIncomplete':
+      return (
+        icon: Icons.warning_amber,
+        color: AppTheme.warning,
+        label: 'Import incomplete'
       );
     case 'downloadFailed':
       return (
@@ -248,6 +261,24 @@ String _timeLabel(DateTime? date) {
         icon: Icons.drive_file_rename_outline,
         color: AppTheme.accent,
         label: 'Renamed'
+      );
+    case 'bookFileRetagged':
+      return (
+        icon: Icons.sell_outlined,
+        color: AppTheme.accent,
+        label: 'Retagged'
+      );
+    case 'bookFileConverted':
+      return (
+        icon: Icons.autorenew,
+        color: AppTheme.available,
+        label: 'Converted'
+      );
+    case 'bookFileConversionFailed':
+      return (
+        icon: Icons.error_outline,
+        color: AppTheme.error,
+        label: 'Conversion failed'
       );
     case 'downloadIgnored':
       return (icon: Icons.block, color: AppTheme.unavailable, label: 'Ignored');
@@ -289,7 +320,7 @@ class _HistoryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = _eventStyle(record.eventType);
+    final style = chaptarrHistoryEventStyle(record.eventType);
     final subtitleParts = [
       style.label,
       if (record.quality != null && record.quality!.isNotEmpty) record.quality!,

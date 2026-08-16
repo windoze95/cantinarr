@@ -1,0 +1,104 @@
+name: Require CI green
+
+# GitHub has no `needs:` across workflows, so anything that ships calls this to
+# hold its irreversible step — pushing `latest` to GHCR, uploading an IPA to
+# TestFlight, uploading an AAB to Play — until the CI suite has finished green
+# on the exact commit being shipped. Without it the shipping workflows and CI
+# fire on the same `push` event and simply race: an upload that outruns the
+# test suite ships an unproven commit, and a TestFlight build number burns
+# permanently when it does.
+#
+# The gate always finds a run to wait for: `ci.yml` has no path filters, and
+# branch protection routes every `main` commit through a PR, so every shipping
+# commit has a CI run of its own. A `v*` tag resolves against the CI run from
+# the `main` push of the same SHA, so tag releases are gated without CI having
+# to re-run on the tag.
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: >
+          Commit that must have a successful CI run. For a pull_request event
+          pass the PR head SHA — that is what CI records as the run's head.
+        type: string
+        required: true
+      enforce:
+        description: >
+          Set false for events that ship nothing (a PR's build-only checks), so
+          the gate records that and returns instead of waiting.
+        type: boolean
+        default: true
+      wait-minutes:
+        description: How long to wait for CI to reach a conclusion.
+        type: number
+        default: 45
+
+jobs:
+  ci-green:
+    name: CI green
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Must stay within what the calling job grants — every caller hands this
+    # exactly these two scopes.
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Nothing ships from this event
+        if: ${{ !inputs.enforce }}
+        run: echo "This event publishes nothing, so it does not wait on CI."
+
+      - name: Wait for CI to pass on ${{ inputs.sha }}
+        if: ${{ inputs.enforce }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+          WAIT_MINUTES: ${{ inputs.wait-minutes }}
+          # A run for the commit is created with the push itself, so absence
+          # this long means no run is coming (e.g. a dispatch on a ref CI never
+          # saw) — fail fast instead of burning the full wait.
+          STARTUP_GRACE_MINUTES: 5
+        run: |
+          set -euo pipefail
+
+          started=$(date +%s)
+          deadline=$(( started + WAIT_MINUTES * 60 ))
+          startup_deadline=$(( started + STARTUP_GRACE_MINUTES * 60 ))
+
+          while :; do
+            # Any CI run for this exact commit is proof: the push to `main`, the
+            # pull_request run that produced it, or the weekly schedule. A rerun
+            # updates the existing run in place, so a fixed rerun counts too.
+            runs=$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=100" \
+              --jq '.workflow_runs[] | "\(.status)/\(.conclusion // "pending") \(.event) \(.html_url)"')
+
+            if printf '%s\n' "$runs" | grep -q '^completed/success '; then
+              echo "CI is green on $SHA:"
+              printf '%s\n' "$runs" | grep '^completed/success '
+              exit 0
+            fi
+
+            if [ -n "$runs" ] && ! printf '%s\n' "$runs" | grep -qv '^completed/'; then
+              echo "::error::CI did not pass on $SHA — refusing to ship it."
+              printf '%s\n' "$runs"
+              exit 1
+            fi
+
+            now=$(date +%s)
+
+            if [ -z "$runs" ] && [ "$now" -ge "$startup_deadline" ]; then
+              echo "::error::No CI run exists for $SHA after ${STARTUP_GRACE_MINUTES}m. Nothing has proved this commit — refusing to ship it."
+              exit 1
+            fi
+
+            if [ "$now" -ge "$deadline" ]; then
+              echo "::error::CI never reached a conclusion on $SHA within ${WAIT_MINUTES}m."
+              printf '%s\n' "$runs"
+              exit 1
+            fi
+
+            echo "CI has not concluded on $SHA yet; checking again in 20s."
+            sleep 20
+          done

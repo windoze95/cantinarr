@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,15 @@ import (
 )
 
 const remediationAdmissionActor = "system:remediation"
+
+// ErrSharedAIUnavailable marks the standing no-usable-shared-profile condition —
+// nothing configured, or the stored credential/model failed its save-time
+// validation — as distinct from a transient provider failure, which surfaces
+// later at NextTurn. Resolution reads only local credential state (no network),
+// so this error means configuration, not weather. Background workers branch on
+// it to park work quietly instead of recording a missing configuration as a
+// failed run.
+var ErrSharedAIUnavailable = errors.New("shared AI is unavailable")
 
 // AutonomousTurn is one server-owned provider selection and single-turn
 // implementation. It is intentionally resolved only from the admin's shared
@@ -40,7 +50,7 @@ func (h *Handler) ResolveSharedAutonomousTurn(ctx context.Context, override Auto
 	resolved := h.resolveSharedAI(ctx)
 	if !resolved.Available {
 		return AutonomousTurn{Provider: resolved.Provider, Model: resolved.Model},
-			fmt.Errorf("shared AI is unavailable: %s", resolved.Reason)
+			fmt.Errorf("%w: %s", ErrSharedAIUnavailable, resolved.Reason)
 	}
 	model := resolved.Model
 	if override.Provider == resolved.Provider && strings.TrimSpace(override.Model) != "" {

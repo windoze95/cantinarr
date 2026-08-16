@@ -101,6 +101,53 @@ void main() {
     expect(auth.aiAccessUpdates, isEmpty);
   });
 
+  testWidgets('an unconfigured shared provider stages access without OAuth claims',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final auth = _FakeAuthNotifier();
+    // The server defaults the provider name to codex even when nothing is
+    // configured — the flag, not the name, decides what the admin is told.
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter =
+          _CredentialsAdapter(provider: 'codex', configured: false);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(() => auth),
+          backendClientProvider.overrideWithValue(dio),
+          plexInviteConfiguredProvider.overrideWith((_) async => false),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const UsersScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    expect(find.text('No shared provider configured yet'), findsOneWidget);
+    await tester.tap(find.text('Included AI access'));
+    await tester.pumpAndSettle();
+
+    expect(auth.aiAccessUpdates, isEmpty);
+    expect(
+      find.textContaining('No shared AI provider is set up yet'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Codex'), findsNothing);
+    expect(find.textContaining('OAuth'), findsNothing);
+
+    // The grant itself still saves — it simply waits for a provider.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Include AI access'));
+    await tester.pumpAndSettle();
+    expect(auth.aiAccessUpdates, [(7, true)]);
+  });
+
   testWidgets('enable confirmation refreshes a provider changed elsewhere',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1000, 800));
@@ -247,11 +294,15 @@ class _CredentialsAdapter implements HttpClientAdapter {
     required this.provider,
     this.nextProvider,
     this.fail = false,
+    this.configured,
   });
 
   final String provider;
   final String? nextProvider;
   final bool fail;
+
+  /// null omits the `shared` block, exercising the older-server default.
+  final bool? configured;
   int requests = 0;
 
   @override
@@ -277,6 +328,7 @@ class _CredentialsAdapter implements HttpClientAdapter {
         'ai': {
           'config': {'provider': responseProvider, 'model': 'default'},
           'providers': const [],
+          if (configured != null) 'shared': {'configured': configured},
         },
       }),
       200,

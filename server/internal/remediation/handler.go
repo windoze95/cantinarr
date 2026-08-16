@@ -75,6 +75,109 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// ListRuleCandidates handles GET /api/admin/agent-approval-rules/candidates.
+func (h *Handler) ListRuleCandidates(w http.ResponseWriter, r *http.Request) {
+	candidates, err := h.service.ListRuleCandidates()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates})
+}
+
+// ArmRule handles POST /api/admin/agent-approval-rules — grounded server-side:
+// only triples the admin has actually hand-approved can be armed.
+func (h *Handler) ArmRule(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var body struct {
+		ProblemKind string `json:"problem_kind"`
+		ActionKind  string `json:"action_kind"`
+		ActionFacet string `json:"action_facet"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	ruleID, err := h.service.ArmRuleFromCatalog(claims.UserID, body.ProblemKind, body.ActionKind, body.ActionFacet)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rule_id": ruleID})
+}
+
+// Digest handles GET /api/admin/agent-digest?days=7 — the agent scoreboard.
+func (h *Handler) Digest(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v > 0 {
+		days = v
+	}
+	digest, err := h.service.Digest(days)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
+// ListMine handles GET /api/issues — the reporter inbox: the caller's OWN
+// reports, newest first. Reporter-visible copy only: the requester-copy
+// boundary rewrites admin-facing resolution text before it leaves the server.
+func (h *Handler) ListMine(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	issues, err := h.service.ListIssuesForReporter(claims.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	for i := range issues {
+		applyRequesterCopy(&issues[i])
+	}
+	writeJSON(w, http.StatusOK, ListIssuesResponse{Issues: issues})
+}
+
+// applyRequesterCopy is the requester-copy boundary: an issue leaving the
+// server to its REPORTER carries only server-authored requester vocabulary.
+// The resolution column accumulates admin-facing diagnostics — executor result
+// text, give-up reasons, "verify the current arr state" — which are the right
+// words for the admin queue and the wrong words for the person who reported a
+// wrong episode. Every (status, resolution_kind) pair maps to fixed copy here;
+// the admin surfaces keep the raw fields. Rewriting at the read boundary,
+// rather than at each write site, means a new admin-side message can never
+// leak by default.
+func applyRequesterCopy(issue *Issue) {
+	switch issue.Status {
+	case IssueNeedsAdmin:
+		issue.Resolution = "An administrator is taking a closer look at this."
+	case IssueAwaitingConfirmation:
+		issue.Resolution = "A fix was applied — please open the report and confirm whether it's right now."
+	case IssueWontFix:
+		switch issue.ResolutionKind {
+		case ResolutionReporterTimeout:
+			issue.Resolution = "Closed after no reply. If this is still a problem, report it again."
+		default:
+			issue.Resolution = "This was closed without a fix. If it still looks wrong, report it again."
+		}
+	case IssueResolved:
+		switch issue.ResolutionKind {
+		case ResolutionReporterConfirmed:
+			issue.Resolution = "You confirmed this is fixed."
+		default:
+			issue.Resolution = "This was resolved. If it still looks wrong, report it again."
+		}
+	case IssueDismissed:
+		issue.Resolution = "An administrator closed this report."
+	}
+}
+
 // Get handles GET /api/issues/{id} (the issue's reporter or an admin). Returns
 // the issue plus its thread.
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +200,20 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if !canAccessIssue(claims, issue) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
+	}
+
+	// Whether the reporter may close this themselves is a live question about
+	// dispatch state, so it is answered on the read that renders the control
+	// rather than cached on the row.
+	if issue.ReporterID != nil && *issue.ReporterID == claims.UserID {
+		if allowed, err := h.service.CanReporterConfirmFix(issue); err == nil {
+			issue.CanConfirmFixed = allowed
+		}
+	}
+	// The requester-copy boundary: a non-admin reader never sees admin-facing
+	// resolution diagnostics.
+	if !auth.HasPermission(claims.Role, auth.PermissionRemediationManage) {
+		applyRequesterCopy(issue)
 	}
 
 	// An admin opening the thread marks the issue read (clears the unread dot);
@@ -162,15 +279,54 @@ func (h *Handler) Reply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// ListAdmin handles GET /api/admin/issues?status= (PermissionRemediationManage).
+// ConfirmFixed handles POST /api/issues/{id}/confirm-fixed — the reporter's own
+// verdict that the applied fix worked, and the only way a subjective report ever
+// closes without an administrator adjudicating someone else's opinion.
+func (h *Handler) ConfirmFixed(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid issue id"})
+		return
+	}
+	issue, err := h.service.GetIssue(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	// Deliberately NOT canAccessIssue: that also admits any admin, and an
+	// administrator recording their verdict as the reporter's would be a lie in
+	// the audit trail. Admins have /api/admin/issues/{id}/resolve.
+	if issue.ReporterID == nil || *issue.ReporterID != claims.UserID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if err := h.service.ReporterConfirmFix(r.Context(), id, claims.UserID); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ListAdmin handles GET /api/admin/issues?status=&closed_limit=
+// (PermissionRemediationManage). Open issues always come back in full; the
+// closed tail is bounded, and closed_total says how much history exists.
 func (h *Handler) ListAdmin(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
-	issues, err := h.service.ListIssues(status)
+	closedLimit := 0
+	if v, err := strconv.Atoi(r.URL.Query().Get("closed_limit")); err == nil {
+		closedLimit = v
+	}
+	issues, closedTotal, err := h.service.ListIssues(status, closedLimit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, ListIssuesResponse{Issues: issues})
+	writeJSON(w, http.StatusOK, ListIssuesResponse{Issues: issues, ClosedTotal: closedTotal})
 }
 
 // Dismiss handles POST /api/admin/issues/{id}/dismiss (PermissionRemediationManage).

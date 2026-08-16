@@ -107,7 +107,6 @@ void main() {
 
     for (final path in [
       '/approvals',
-      '/issues',
       '/agent-actions',
       '/agent-runs/1',
       '/setup',
@@ -130,6 +129,20 @@ void main() {
         reason: '$path must remain admin-only',
       );
     }
+  });
+
+  testWidgets('a requester keeps /issues — it is their My Reports inbox',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/issues');
+    await tester.pumpAndSettle();
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/issues',
+      reason:
+          'the issues route is the reporter inbox for non-admins, scoped server-side',
+    );
   });
 
   testWidgets('a requester can still open a specific issue thread',

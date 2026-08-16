@@ -331,6 +331,13 @@ type ToolVerification struct {
 
 const VerificationQueueTarget = "queue_target"
 
+// VerificationSeasonClean is the typed witness for a season that was filled
+// before it aired: TargetPresent reports whether the impossible content is STILL
+// there. A queue-shaped incident proves recovery by its queue row disappearing;
+// this one has no queue row and never did, so its recovery is the season no
+// longer holding files for episodes that have not aired.
+const VerificationSeasonClean = "season_clean"
+
 // ToolsWithUI is the set of externally exposed MCP tools backed by the bundled
 // MCP App resource. Do not add in-app-only receipt payloads here: mcpserver
 // uses this map to attach the media-results resource URI to tool metadata.
@@ -1032,8 +1039,20 @@ func (s *ToolServer) listMyRequests(userID int64) (*ToolResult, error) {
 	}
 	var sb strings.Builder
 	for i, r := range requests {
-		fmt.Fprintf(&sb, "%d. %s (%s) - Status: %s - Requested: %s\n",
+		fmt.Fprintf(&sb, "%d. %s (%s) - Status: %s - Requested: %s",
 			i+1, r.Title, r.MediaType, r.Status, r.RequestedAt.Format("2006-01-02"))
+		// "requested" is the closest single word for a book the server is still
+		// retrying, and on its own it tells the assistant the library has the
+		// title — so the assistant would reassure a requester about a record
+		// that does not exist. Say what the status word cannot.
+		if wait := r.BookFormatWait; wait != nil {
+			detail := "the library is not ready for it yet"
+			if wait.Reason == request.BookWaitReasonAuthorImport {
+				detail = "the library is still importing its author"
+			}
+			fmt.Fprintf(&sb, " - Not in the library yet: %s. The library retries on its own and Cantinarr completes the request when it lands; nobody needs to approve anything.", detail)
+		}
+		sb.WriteByte('\n')
 	}
 	return &ToolResult{Text: sb.String()}, nil
 }

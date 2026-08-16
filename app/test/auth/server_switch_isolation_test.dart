@@ -16,6 +16,10 @@ import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/notifications/push_service.dart';
 import 'package:cantinarr/features/request/logic/pending_approvals_provider.dart';
+import 'package:cantinarr/features/settings/data/setup_status_service.dart';
+import 'package:cantinarr/features/settings/data/update_status_service.dart';
+import 'package:cantinarr/features/settings/logic/setup_status_provider.dart';
+import 'package:cantinarr/features/settings/logic/update_status_provider.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -186,6 +190,72 @@ void main() {
     expect(container.read(pendingApprovalsProvider), 1,
         reason: "server A's queue depth must never appear on server B");
     expect(container.read(pendingApprovalsLoadedProvider), isTrue);
+  });
+
+  test(
+      'admin update/setup statuses drop old-server data on switch, and a '
+      'stale in-flight fetch cannot resurrect it', () async {
+    final auth = _MutableAuthNotifier(_adminStateFor(_serverA));
+    final adapter = _PerHostAdminStatusAdapter();
+    final container = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => auth),
+      // Mirrors the real backendClientProvider contract: a new Dio keyed on
+      // the connection's serverUrl, so the fetch target follows the switch.
+      backendClientProvider.overrideWith((ref) {
+        final serverUrl = ref.watch(
+          authProvider.select((s) => s.valueOrNull?.connection?.serverUrl),
+        );
+        return Dio(BaseOptions(baseUrl: serverUrl ?? 'http://localhost'))
+          ..httpClientAdapter = adapter;
+      }),
+      realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+      pushServiceProvider.overrideWith(_NoopPushService.new),
+    ]);
+    addTearDown(container.dispose);
+
+    await container.read(authProvider.future);
+    final updateSub = container.listen<UpdateStatus?>(
+      updateStatusProvider,
+      (_, __) {},
+      fireImmediately: true,
+    );
+    addTearDown(updateSub.close);
+    final setupSub = container.listen<SetupStatus?>(
+      setupStatusProvider,
+      (_, __) {},
+      fireImmediately: true,
+    );
+    addTearDown(setupSub.close);
+
+    // Server A answers both admin statuses; its banner data becomes visible.
+    await _waitFor(() =>
+        container.read(updateStatusProvider) != null &&
+        container.read(setupStatusProvider) != null);
+    expect(container.read(updateStatusProvider)!.update.latest, '9.9.9');
+    expect(container.read(updateStatusProvider)!.managementUrl,
+        'http://portal-a.example.com');
+    expect(container.read(setupStatusProvider)!.items.single.key, 'radarr');
+
+    // A second update-status fetch (an app-resume refresh) hangs on A …
+    adapter.deferNextServerAUpdateStatus();
+    unawaited(container.read(updateStatusProvider.notifier).refresh());
+    await _waitFor(() => adapter.deferredServerACalls == 1);
+
+    // … when the user switches to server B, which refuses both reads (403).
+    auth.setAuth(_adminStateFor(_serverB));
+    await pumpEventQueue();
+
+    expect(container.read(updateStatusProvider), isNull,
+        reason: "server A's update banner must never show against server B, "
+            'even while B refuses the read');
+    expect(container.read(setupStatusProvider), isNull,
+        reason: "server A's checklist must not survive the switch");
+
+    // Server A's hung response finally lands: too late, wrong server.
+    adapter.completeDeferredServerAUpdateStatus();
+    await pumpEventQueue();
+    expect(container.read(updateStatusProvider), isNull,
+        reason: 'a stale in-flight response must be discarded (epoch guard)');
   });
 }
 
@@ -374,6 +444,77 @@ class _PerHostApprovalsAdapter implements HttpClientAdapter {
     return Future.value(_json([
       {'id': 21, 'title': 'Server B request'},
     ]));
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+/// Admin update-/setup-status fake that answers per server: server A serves
+/// canned payloads (with one update-status response optionally deferred so a
+/// switch can race it); server B refuses every read with a 403.
+class _PerHostAdminStatusAdapter implements HttpClientAdapter {
+  Completer<ResponseBody>? _deferredServerAUpdate;
+  int deferredServerACalls = 0;
+
+  void deferNextServerAUpdateStatus() {
+    _deferredServerAUpdate = Completer<ResponseBody>();
+  }
+
+  void completeDeferredServerAUpdateStatus() {
+    _deferredServerAUpdate!.complete(_json(_serverAUpdateStatus));
+  }
+
+  static const _serverAUpdateStatus = {
+    'update': {
+      'current': '1.0.0',
+      'latest': '9.9.9',
+      'available': true,
+      'url': 'https://github.com/windoze95/cantinarr/releases/tag/v9.9.9',
+    },
+    'management_url': 'http://portal-a.example.com',
+  };
+
+  static const _serverASetupStatus = {
+    'items': [
+      {
+        'key': 'radarr',
+        'title': 'Radarr',
+        'description': '',
+        'configured': true,
+        'optional': false,
+      },
+    ],
+    'configured': 1,
+    'total': 1,
+  };
+
+  static ResponseBody _json(Object body) => ResponseBody.fromString(
+        jsonEncode(body),
+        200,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) {
+    if (options.uri.host != 'server-a.example.com') {
+      return Future.value(ResponseBody.fromString('forbidden', 403));
+    }
+    if (options.path.endsWith('/update-status')) {
+      final deferred = _deferredServerAUpdate;
+      if (deferred != null && !deferred.isCompleted) {
+        deferredServerACalls++;
+        return deferred.future;
+      }
+      return Future.value(_json(_serverAUpdateStatus));
+    }
+    return Future.value(_json(_serverASetupStatus));
   }
 
   @override

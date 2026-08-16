@@ -44,7 +44,14 @@ const (
 	AIAuthTypeAPIKey    = "api_key"
 	AIAuthTypeUserOAuth = "user_oauth"
 
-	DefaultAIProvider = AIProviderAnthropic
+	// DefaultAIProvider is the zero-config choice for untouched installs:
+	// OAuth needs a ChatGPT login, not a purchased API key.
+	DefaultAIProvider = AIProviderCodex
+
+	// DefaultSharedAIModel pairs with that zero-config default: the fast
+	// GPT-5.6 tier, so an untouched install doesn't spend the admin's ChatGPT
+	// meter on heavyweight turns nobody chose.
+	DefaultSharedAIModel = "gpt-5.6-luna"
 
 	// AIHealthCheckInterval deliberately keeps the default background cost to
 	// one tiny shared-provider turn per day.
@@ -198,15 +205,47 @@ type Registry struct {
 	db     *sql.DB
 	cipher *secrets.Cipher
 
+	// defaultTMDBToken is the built-in public TMDB token
+	// (tmdb.DefaultAccessToken in production). Empty means no fallback: TMDB
+	// stays unconfigured until an admin stores a token.
+	defaultTMDBToken string
+
+	// defaultTraktClientID is the built-in public Trakt client ID
+	// (trakt.DefaultClientID in production), with the same empty-means-no-
+	// fallback contract as the TMDB token above.
+	defaultTraktClientID string
+
 	mu          sync.RWMutex
 	cachedTMDB  *tmdb.Client
 	cachedTrakt *trakt.Client
 	loaded      bool // true once we've attempted to load from DB
 }
 
+// Option customizes a Registry at construction.
+type Option func(*Registry)
+
+// WithDefaultTMDBToken supplies the built-in public TMDB token used whenever
+// no admin-supplied token is stored. Only the server binary wires it, so
+// registries built in tests stay TMDB-less (and network-less) unless a test
+// opts in.
+func WithDefaultTMDBToken(token string) Option {
+	return func(r *Registry) { r.defaultTMDBToken = token }
+}
+
+// WithDefaultTraktClientID supplies the built-in public Trakt client ID used
+// whenever no admin-supplied ID is stored. Only the server binary wires it,
+// so registries built in tests stay Trakt-less unless a test opts in.
+func WithDefaultTraktClientID(clientID string) Option {
+	return func(r *Registry) { r.defaultTraktClientID = clientID }
+}
+
 // NewRegistry creates a new credentials registry.
-func NewRegistry(db *sql.DB, cipher *secrets.Cipher) *Registry {
-	return &Registry{db: db, cipher: cipher}
+func NewRegistry(db *sql.DB, cipher *secrets.Cipher, opts ...Option) *Registry {
+	r := &Registry{db: db, cipher: cipher}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // TMDB returns the cached TMDB client, creating it lazily from the DB credential.
@@ -229,6 +268,18 @@ func (r *Registry) TMDB() *tmdb.Client {
 	return r.cachedTMDB
 }
 
+// TMDBAvailable reports whether TMDB calls can be made at all — via an
+// admin-supplied token or the built-in public one.
+func (r *Registry) TMDBAvailable() bool {
+	return r.TMDB() != nil
+}
+
+// TMDBUsingBuiltIn reports whether TMDB is running on the built-in public
+// token rather than an admin-supplied credential.
+func (r *Registry) TMDBUsingBuiltIn() bool {
+	return r.defaultTMDBToken != "" && !r.IsConfigured(KeyTMDBAccessToken)
+}
+
 // Trakt returns the cached Trakt client, creating it lazily from the DB credential.
 // Returns nil if the credential is not set.
 func (r *Registry) Trakt() *trakt.Client {
@@ -247,6 +298,18 @@ func (r *Registry) Trakt() *trakt.Client {
 	}
 	r.load()
 	return r.cachedTrakt
+}
+
+// TraktAvailable reports whether Trakt calls can be made at all — via an
+// admin-supplied client ID or the built-in application.
+func (r *Registry) TraktAvailable() bool {
+	return r.Trakt() != nil
+}
+
+// TraktUsingBuiltIn reports whether Trakt is running on the built-in
+// application rather than an admin-supplied client ID.
+func (r *Registry) TraktUsingBuiltIn() bool {
+	return r.defaultTraktClientID != "" && !r.IsConfigured(KeyTraktClientID)
 }
 
 // GetCredential reads a credential value from the DB, decrypting stored
@@ -320,7 +383,7 @@ func (r *Registry) AIHealthCheckDue(now time.Time) bool {
 }
 
 // AISelectionConfigured distinguishes an intentionally configured shared
-// provider from the untouched Anthropic fallback used by legacy installs.
+// provider from an untouched install's derived default.
 func (r *Registry) AISelectionConfigured() bool {
 	if strings.TrimSpace(r.GetSetting(KeyAIProvider)) != "" || strings.TrimSpace(r.GetSetting(KeyAIModel)) != "" {
 		return true
@@ -367,6 +430,9 @@ func (r *Registry) GetAIConfig() AIConfig {
 	}
 	if provider == "" {
 		provider = DefaultAIProvider
+		if model == "" {
+			model = DefaultSharedAIModel
+		}
 	}
 	// Preserve an explicitly invalid stored/environment value instead of
 	// presenting a healthy-looking default that the strict runtime resolver
@@ -440,9 +506,17 @@ func (r *Registry) load() {
 
 	if token := r.getSettingLocked(KeyTMDBAccessToken); token != "" {
 		r.cachedTMDB = tmdb.NewClient(token)
+	} else if r.defaultTMDBToken != "" {
+		// No admin token stored (or it failed to decrypt): run on the built-in
+		// public token so discovery works without any TMDB signup.
+		r.cachedTMDB = tmdb.NewClient(r.defaultTMDBToken)
 	}
 	if clientID := r.getSettingLocked(KeyTraktClientID); clientID != "" {
 		r.cachedTrakt = trakt.NewClient(clientID)
+	} else if r.defaultTraktClientID != "" {
+		// No admin client ID stored (or it failed to decrypt): run on the
+		// built-in application so Trakt discovery works without any signup.
+		r.cachedTrakt = trakt.NewClient(r.defaultTraktClientID)
 	}
 }
 

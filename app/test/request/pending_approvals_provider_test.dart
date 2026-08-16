@@ -66,6 +66,54 @@ void main() {
     expect(container.read(pendingApprovalsProvider), 0);
     expect(container.read(pendingApprovalsLoadedProvider), isFalse);
   });
+
+  test('an admin auth refresh keeps the loaded flag while recounting',
+      () async {
+    final auth = _MutableAuthNotifier();
+    final adapter = _ImmediateApprovalsAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(() => auth),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(authProvider.future);
+    final subscription = container.listen<int>(
+      pendingApprovalsProvider,
+      (_, __) {},
+      fireImmediately: true,
+    );
+    addTearDown(subscription.close);
+
+    await _waitFor(() => container.read(pendingApprovalsLoadedProvider));
+
+    // A routine re-emission of the same admin session (token refresh, app
+    // resume, client swap) re-binds the notifier. The queue's emptiness we
+    // already know must stay known during the recount — resetting it here is
+    // what made every conditional menu entry flash fail-open.
+    auth.setAuth(const AuthState(
+      connection: BackendConnection(
+        serverUrl: 'http://localhost',
+        accessToken: 'access-rotated',
+        refreshToken: 'refresh',
+      ),
+      user: UserProfile(id: 1, username: 'admin', role: 'admin'),
+    ));
+    expect(container.read(pendingApprovalsLoadedProvider), isTrue,
+        reason: 'the re-bind itself must not un-know the count');
+
+    await pumpEventQueue();
+    await _waitFor(() => adapter.calls >= 2);
+    expect(container.read(pendingApprovalsLoadedProvider), isTrue);
+    expect(container.read(pendingApprovalsProvider), 0);
+  });
 }
 
 class _MutableAuthNotifier extends AuthNotifier {
@@ -97,6 +145,29 @@ class _DeferredApprovalsAdapter implements HttpClientAdapter {
   ) {
     calls++;
     return _response.future;
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _ImmediateApprovalsAdapter implements HttpClientAdapter {
+  int calls = 0;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    calls++;
+    return ResponseBody.fromString(
+      jsonEncode(const <Map<String, dynamic>>[]),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
   }
 
   @override

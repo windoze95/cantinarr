@@ -51,6 +51,36 @@ class ProposedActionCard extends ConsumerStatefulWidget {
 }
 
 class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
+  /// For a decidable TV delete: which of the proposed episodes stay selected.
+  /// Starts as the full proposal; unchecking builds an approval override so
+  /// the admin can spare an episode without denying the whole repair — the
+  /// only editing this card offers, because shrinking a destructive fix is
+  /// the one edit with no wrong answer.
+  Set<int>? _deleteEpisodeSelection;
+
+  List<int> get _proposedDeleteEpisodes {
+    final raw = _action.params.raw['episodes'];
+    if (raw is List) {
+      return raw.whereType<num>().map((e) => e.toInt()).toList()..sort();
+    }
+    return const [];
+  }
+
+  bool get _deleteSelectionActive =>
+      _action.kind == AgentActionKind.deleteMediaFiles &&
+      _action.canTakeAction &&
+      _proposedDeleteEpisodes.length > 1;
+
+  Object? _deleteOverride() {
+    final selection = _deleteEpisodeSelection;
+    final proposed = _proposedDeleteEpisodes;
+    if (selection == null || proposed.isEmpty) return null;
+    if (selection.length == proposed.length) return null; // as proposed
+    final params = Map<String, dynamic>.from(_action.params.raw);
+    params['episodes'] = (selection.toList()..sort());
+    return params;
+  }
+
   /// The authoritative action shown. Starts from the prop and is replaced by
   /// the server's response after a decision so the frozen footer is accurate.
   late AgentAction _action;
@@ -107,6 +137,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
     try {
       final updated = await service.approveAction(
         _action.id,
+        override: _deleteOverride(),
         remember: confirmation.remember,
       );
       if (!mounted) return;
@@ -153,6 +184,10 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) => AlertDialog(
           backgroundColor: AppTheme.surface,
+          // A destructive fix explains itself at length. Scrolling keeps the
+          // whole warning reachable on a small screen or at a large text scale,
+          // instead of clipping the part that says it cannot be undone.
+          scrollable: true,
           title: const Text(
             'Approve this change?',
             style: TextStyle(color: AppTheme.textPrimary),
@@ -188,7 +223,8 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
                     '${offer.label}'
                     '${offer.reactivatesPausedRule ? ' · re-enables a paused rule' : ''}'
                     ' — applies to future auto-detected issues and any already '
-                    'waiting; pauses itself if a fix fails.',
+                    'waiting; pauses itself if a fix fails. Applies on every '
+                    'connected service and media type.',
                     style: const TextStyle(
                       color: AppTheme.textSecondary,
                       fontSize: 12,
@@ -398,6 +434,20 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           _ActionTarget(action: action),
           const SizedBox(height: 12),
 
+          // What the fix is ABOUT, in the reader's own terms: exact scope and
+          // how many times this problem has come back.
+          if (action.issueSeason > 0 || action.issueOccurrences > 1) ...[
+            _MediaScopeLine(action: action),
+            const SizedBox(height: 12),
+          ],
+
+          // The server's own remediation memory, shown BEFORE the proposal:
+          // the approver must never decide with less evidence than the model.
+          if (action.priorAttempts.isNotEmpty) ...[
+            _PriorAttemptsBlock(attempts: action.priorAttempts),
+            const SizedBox(height: 12),
+          ],
+
           // Plain-language summary of the action kind (server-authored copy,
           // chosen by the typed kind enum — never an agent string).
           Text(
@@ -412,6 +462,48 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
 
           // The quoted, non-editable params (release / quality / queue id …).
           ..._buildParamRows(action),
+
+          // The one edit with no wrong answer: shrink a destructive delete.
+          if (_deleteSelectionActive) ...[
+            const SizedBox(height: 10),
+            const Text(
+              'Episodes to delete (uncheck to spare)',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final ep in _proposedDeleteEpisodes)
+                  FilterChip(
+                    label: Text('E$ep'),
+                    selected: (_deleteEpisodeSelection ??
+                            _proposedDeleteEpisodes.toSet())
+                        .contains(ep),
+                    onSelected: (selected) {
+                      setState(() {
+                        final current = _deleteEpisodeSelection ??
+                            _proposedDeleteEpisodes.toSet();
+                        final next = Set<int>.from(current);
+                        if (selected) {
+                          next.add(ep);
+                        } else if (next.length > 1) {
+                          // Never allow an empty delete: sparing everything
+                          // is what Deny is for.
+                          next.remove(ep);
+                        }
+                        _deleteEpisodeSelection = next;
+                      });
+                    },
+                  ),
+              ],
+            ),
+          ],
 
           if (action.approvedParams != null &&
               !mapEquals(
@@ -612,6 +704,95 @@ class _ApprovalConfirmation {
   const _ApprovalConfirmation({required this.remember});
 }
 
+/// Exact media scope + recurrence count for the approval card.
+class _MediaScopeLine extends StatelessWidget {
+  final AgentAction action;
+  const _MediaScopeLine({required this.action});
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = <String>[];
+    if (action.issueSeason > 0 && action.issueEpisode > 0) {
+      parts.add(
+          'S${action.issueSeason.toString().padLeft(2, '0')}E${action.issueEpisode.toString().padLeft(2, '0')}');
+    } else if (action.issueSeason > 0) {
+      parts.add('Season ${action.issueSeason}');
+    }
+    if (action.issueOccurrences > 1) {
+      parts.add('seen ${action.issueOccurrences} times');
+    }
+    return Row(
+      children: [
+        const Icon(Icons.movie_outlined,
+            size: 15, color: AppTheme.textSecondary),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            parts.join(' · '),
+            style:
+                const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The PRIOR ATTEMPTS block: fixes that already ran on this issue, with the
+/// recurrence verdict called out. A fix that came back is the strongest reason
+/// an approver has to say no to a repeat — it was previously visible only to
+/// the model.
+class _PriorAttemptsBlock extends StatelessWidget {
+  final List<PriorAttempt> attempts;
+  const _PriorAttemptsBlock({required this.attempts});
+
+  String _label(PriorAttempt a) {
+    final facet = a.facet.isNotEmpty ? ' (${a.facet})' : '';
+    return '${a.kind}$facet';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final anyRecurred = attempts.any((a) => a.recurred);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+            color: anyRecurred ? AppTheme.error : AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            anyRecurred
+                ? 'Already tried — and it came back'
+                : 'Already tried on this problem',
+            style: TextStyle(
+              color: anyRecurred ? AppTheme.error : AppTheme.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          for (final a in attempts)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Text(
+                a.recurred
+                    ? '${_label(a)} ran and the same download was re-added afterwards — that fix did not hold.'
+                    : '${_label(a)} ran on this issue.',
+                style: const TextStyle(
+                    color: AppTheme.textPrimary, fontSize: 13, height: 1.35),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ActionTarget extends StatelessWidget {
   final AgentAction action;
 
@@ -688,7 +869,9 @@ class _ActionCopy {
           case 'remove':
             return 'Remove the stuck item from the download queue';
           case 'blocklist_search':
-            return 'Blocklist the current release and search for a replacement';
+            return 'Blocklist the current release and let the service replace it';
+          case 'blocklist_only':
+            return 'Drop and blocklist this release — you already have a copy';
           case 'change_category':
             return 'Change the download category to unblock the import';
           default:
@@ -702,9 +885,30 @@ class _ActionCopy {
         return 'Start an automatic search for this title';
       case AgentActionKind.rescan:
         return 'Rescan the files on disk and re-run the import';
+      case AgentActionKind.deleteMediaFiles:
+        return _deleteSummary(a.params);
       case AgentActionKind.unknown:
         return 'Apply a fix';
     }
+  }
+
+  /// Summary for a deletion of files the media service already imported. This
+  /// is the WHOLE repair in one line — delete, optionally block, then go and
+  /// get what should have been there — because that is the single decision the
+  /// admin is being asked for. The blocklist choice stays a distinct promise
+  /// (files gone versus files gone *and* that release stood down), so it is
+  /// never folded away.
+  static String _deleteSummary(AgentActionParams p) {
+    final one = p.mediaType != 'tv' || p.episodes.length == 1;
+    final files = one ? 'file' : 'files';
+    final replacements = one ? 'a replacement' : 'replacements';
+    if (!p.blocklist) {
+      return 'Delete the wrong $files already in your library and look for '
+          '$replacements';
+    }
+    final release = one ? 'that release' : 'those releases';
+    return 'Delete the wrong $files, block $release from coming back, and look '
+        'for $replacements';
   }
 
   /// Fixed confirmation copy selected only from typed enums/validated flags.
@@ -720,7 +924,9 @@ class _ActionCopy {
           case 'remove':
             return 'Cantinarr will remove an item from the download queue. This cannot be undone from Cantinarr.';
           case 'blocklist_search':
-            return 'Cantinarr will blocklist the current release, remove it from the queue, and search for another copy.';
+            return 'Cantinarr will blocklist the current release and remove it from the queue. Whether a replacement is searched for follows your service\'s own failed-download settings.';
+          case 'blocklist_only':
+            return 'Cantinarr will blocklist the stuck release and remove it from the queue, without searching for a replacement. The copy already in your library is untouched.';
           case 'change_category':
             return 'Cantinarr will change a download category in your connected services.';
           default:
@@ -734,9 +940,110 @@ class _ActionCopy {
         return 'Cantinarr will start a search and may add a download to the queue.';
       case AgentActionKind.rescan:
         return 'Cantinarr will rescan files and run the import process in your connected media service.';
+      case AgentActionKind.deleteMediaFiles:
+        return _deleteConfirmation(a.params);
       case AgentActionKind.unknown:
         return 'Cantinarr will make a change in your connected media service.';
     }
+  }
+
+  /// Confirmation for the one fix that destroys something. These files are
+  /// already in the library — nothing is queued, nothing is recoverable from
+  /// Cantinarr — so the copy names the exact target (the show's title is not in
+  /// the params, the season and episode numbers are), says plainly that it
+  /// cannot be undone, and states what the blocklist choice does and does not
+  /// do. Every value interpolated here is a validated integer, never an
+  /// agent-authored string.
+  ///
+  /// It also describes the REPLACEMENT, because that is part of this same fix
+  /// rather than a follow-up an admin is asked to approve separately. Getting
+  /// rid of a wrong copy and getting the right one is one decision; a card that
+  /// stopped at "deleted" would be asking for authorisation to leave a hole.
+  /// The only thing that changes the ending is blocking: standing a release
+  /// down is what makes a media service go looking on its own, and when it
+  /// does, Cantinarr stays out of the way instead of duplicating the search.
+  static String _deleteConfirmation(AgentActionParams p) {
+    final episodes = p.episodes;
+    final isTv = p.mediaType == 'tv';
+    final one = !isTv || episodes.length == 1;
+
+    final String target;
+    if (isTv && episodes.isNotEmpty) {
+      final season = p.season;
+      target = '${one ? '1 file' : '${episodes.length} files'} from your '
+          'library — ${season == null ? '' : 'season $season, '}'
+          '${one ? 'episode' : 'episodes'} ${_episodeRanges(episodes)}';
+    } else if (isTv) {
+      target = 'the episode files listed on this fix';
+    } else {
+      target = 'the movie file in your library';
+    }
+
+    final buffer = StringBuffer(
+      'Cantinarr will permanently delete $target. This cannot be undone: '
+      '${one ? 'the file is' : 'the files are'} removed from disk and '
+      'Cantinarr keeps no copy.',
+    );
+    if (p.blocklist) {
+      buffer.write(
+        one
+            ? ' It also blocks the release that file came from, so your media '
+                'service will not download that same release again.'
+            : ' It also blocks the releases those files came from, so your '
+                'media service will not download those same releases again.',
+      );
+    } else {
+      buffer.write(
+        one
+            ? ' The release that file came from is not blocked, so your media '
+                'service could download the same one again.'
+            : ' The releases those files came from are not blocked, so your '
+                'media service could download the same ones again.',
+      );
+    }
+
+    buffer.write(
+      isTv
+          ? ' Cantinarr then looks for replacements, but only for the episodes '
+              'of this season that have already aired. The rest of the season '
+              'is left alone — your media service will grab each episode as it '
+              'comes out.'
+          : ' Cantinarr then looks for a replacement.',
+    );
+    if (p.blocklist) {
+      buffer.write(
+        one
+            ? ' If blocking that release already sent your media service '
+                'looking for a replacement itself, Cantinarr leaves that to it.'
+            : ' If blocking those releases already sent your media service '
+                'looking for replacements itself, Cantinarr leaves that to it.',
+      );
+    }
+    return buffer.toString();
+  }
+
+  /// Compresses a validated episode list into an exact, compact form ("1–9",
+  /// "1–3, 7, 10–12"). Exactness matters — this is the only place an admin sees
+  /// WHICH episodes an irreversible deletion covers — and compactness keeps a
+  /// whole season readable inside a confirmation dialog.
+  static String _episodeRanges(List<int> episodes) {
+    if (episodes.isEmpty) return '';
+    final sorted = [...episodes]..sort();
+    final parts = <String>[];
+    var start = sorted.first;
+    var previous = start;
+    for (var i = 1; i <= sorted.length; i++) {
+      final current = i < sorted.length ? sorted[i] : null;
+      if (current != null && (current == previous || current == previous + 1)) {
+        previous = current;
+        continue;
+      }
+      parts.add(start == previous ? '$start' : '$start–$previous');
+      if (current == null) break;
+      start = current;
+      previous = current;
+    }
+    return parts.join(', ');
   }
 
   /// The quoted, non-editable data rows for the action's params. Each tuple is
@@ -809,6 +1116,16 @@ class _ActionCopy {
         if (p.authorId != null) {
           rows.add(('Author id', '${p.authorId}', false));
         }
+      case AgentActionKind.deleteMediaFiles:
+        if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
+        if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
+        if (p.season != null) rows.add(('Season', '${p.season}', false));
+        final toDelete = p.episodes;
+        if (toDelete.isNotEmpty) {
+          rows.add(('Episodes', _episodeRanges(toDelete), false));
+          rows.add(('Files to delete', '${toDelete.length}', false));
+        }
+        rows.add(('Block the release', p.blocklist ? 'yes' : 'no', false));
       case AgentActionKind.unknown:
         // Unknown kind: list whatever params arrived, generically + verbatim.
         p.raw.forEach((k, v) {

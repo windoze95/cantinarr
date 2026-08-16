@@ -86,6 +86,7 @@ func (s *Service) StartWorkers(ctx context.Context, runner *Runner, n int) {
 	// budget ceiling deferred them). The DB states are authoritative; duplicate
 	// jobs are harmless because Runner claims with a CAS.
 	s.recoverWork(runner)
+	s.announceBootPausedRules()
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
@@ -108,8 +109,7 @@ func (s *Service) recoverWork(runner *Runner) {
 	// Always release these claims, even while remediation is disabled, so turning
 	// the feature back on cannot inherit a phantom worker.
 	s.db.Exec(
-		`UPDATE agent_runs SET status = 'aborted', stop_reason = 'server_restarted',
-		 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		`UPDATE agent_runs SET status = 'aborted', stop_reason = 'server_restarted', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 		 WHERE status = 'running' AND proc_generation != ?`, runner.procToken,
 	)
 	s.db.Exec(
@@ -128,6 +128,28 @@ func (s *Service) recoverWork(runner *Runner) {
 		   SELECT id FROM agent_runs WHERE status != ?
 		 )`, IssueNeedsAdmin, runStatusRunning,
 	)
+	// A staged decision handoff can outlive its moment: its issue closes, or a
+	// fresh promotion run reaches needs_admin first (issue 856, 2026-08-11 —
+	// the handoff sat resume_pending for two days). An unconsumable handoff is
+	// not just ledger clutter: the fresh-run lane below skips any issue that
+	// still owns a resume_pending run, so a stranded handoff also blocks every
+	// future recovery retry for that issue. Terminalize what can never run; a
+	// handoff whose issue may yet return to a workable state is kept.
+	s.db.Exec(
+		`UPDATE agent_runs SET status = 'aborted', stop_reason = 'issue_closed',
+		 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		 WHERE status = ? AND issue_id IN (SELECT id FROM issues WHERE closed_at IS NOT NULL)`,
+		runStatusResumePending,
+	)
+	s.db.Exec(
+		`UPDATE agent_runs SET status = 'aborted', stop_reason = 'superseded_by_later_run',
+		 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		 WHERE status = ?
+		   AND EXISTS (SELECT 1 FROM agent_runs later
+		               WHERE later.issue_id = agent_runs.issue_id AND later.id > agent_runs.id)
+		   AND issue_id IN (SELECT id FROM issues WHERE closed_at IS NULL AND status = ?)`,
+		runStatusResumePending, IssueNeedsAdmin,
+	)
 	if !s.Settings().Enabled {
 		return
 	}
@@ -137,16 +159,20 @@ func (s *Service) recoverWork(runner *Runner) {
 	// approval" placeholder and never repeat the external action.
 	s.recoverDecisionHandoffs()
 
+	// The resume lane accepts open as well as investigating: a suspend/
+	// re-promote cycle between an approval and its resume legitimately lands
+	// the issue back at open (the resume claim handles both), and treating
+	// that as unresumable is exactly what stranded issue 856's handoff.
 	rows, err := s.db.Query(
 		`SELECT i.id, 0 FROM issues i
 		 WHERE i.closed_at IS NULL AND i.active_run_id IS NULL AND i.status IN (?, ?)
 		   AND NOT EXISTS (SELECT 1 FROM agent_runs r WHERE r.issue_id = i.id AND r.status = ?)
 		 UNION ALL
 		 SELECT i.id, 1 FROM issues i JOIN agent_runs r ON r.issue_id = i.id
-		 WHERE i.closed_at IS NULL AND i.active_run_id IS NULL AND i.status = ?
+		 WHERE i.closed_at IS NULL AND i.active_run_id IS NULL AND i.status IN (?, ?)
 		   AND r.status = ?`,
 		IssueOpen, IssueInvestigating, runStatusResumePending,
-		IssueInvestigating, runStatusResumePending,
+		IssueOpen, IssueInvestigating, runStatusResumePending,
 	)
 	if err != nil {
 		return
@@ -193,6 +219,12 @@ func (s *Service) StartReplyTTLSweeper(ctx context.Context) {
 					log.Printf("remediation: reply-TTL sweep: %v", err)
 				} else if n > 0 {
 					log.Printf("remediation: reply-TTL sweep closed %d unanswered issue(s)", n)
+				}
+				s.SweepWeeklyDigest(time.Now().UTC())
+				if nudged, escalated, err := s.SweepAwaitingConfirmation(ctx); err != nil {
+					log.Printf("remediation: confirm-wait sweep: %v", err)
+				} else if nudged > 0 || escalated > 0 {
+					log.Printf("remediation: confirm-wait sweep nudged %d, escalated %d", nudged, escalated)
 				}
 			}
 		}

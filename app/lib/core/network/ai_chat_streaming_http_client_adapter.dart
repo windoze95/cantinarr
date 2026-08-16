@@ -7,18 +7,26 @@ import 'package:http/http.dart' as http;
 /// Routes the AI chat SSE request through `package:http` so browser responses
 /// are delivered incrementally by Fetch's `ReadableStream` implementation.
 ///
-/// Every other request stays on Dio's normal platform adapter. This keeps the
-/// streaming transport narrowly scoped while preserving the existing client
-/// behavior for the rest of the API.
+/// Every other request stays on Dio's normal platform adapter, keeping the
+/// Fetch transport narrowly scoped — unless [routeAllThroughFetch] is set, in
+/// which case every request rides Fetch. The auth clients use that mode on
+/// web: their session-critical calls were observed stalling for the full
+/// receive timeout on the default browser adapter (Chrome and Safari alike,
+/// live-diagnosed 2026-08-01) while Fetch-based requests from the same pages
+/// completed in milliseconds, so auth rides the transport that demonstrably
+/// works.
 class AiChatStreamingHttpClientAdapter implements HttpClientAdapter {
   final HttpClientAdapter _fallbackAdapter;
   final http.Client _streamingClient;
+  final bool _routeAllThroughFetch;
 
   AiChatStreamingHttpClientAdapter({
     required HttpClientAdapter fallbackAdapter,
     http.Client? streamingClient,
+    bool routeAllThroughFetch = false,
   })  : _fallbackAdapter = fallbackAdapter,
-        _streamingClient = streamingClient ?? http.Client();
+        _streamingClient = streamingClient ?? http.Client(),
+        _routeAllThroughFetch = routeAllThroughFetch;
 
   @override
   Future<ResponseBody> fetch(
@@ -26,7 +34,7 @@ class AiChatStreamingHttpClientAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) {
-    if (!_isAiChatStream(options)) {
+    if (!_routeAllThroughFetch && !_isAiChatStream(options)) {
       return _fallbackAdapter.fetch(options, requestStream, cancelFuture);
     }
     return _fetchAiChatStream(options, requestStream, cancelFuture);
@@ -147,7 +155,7 @@ class AiChatStreamingHttpClientAdapter implements HttpClientAdapter {
     } catch (_) {
       throw DioException.connectionError(
         requestOptions: options,
-        reason: 'The AI chat request body could not be sent.',
+        reason: 'The request body could not be sent.',
       );
     }
     return bytes.takeBytes();
@@ -168,7 +176,7 @@ class AiChatStreamingHttpClientAdapter implements HttpClientAdapter {
             ? _cancelled(options)
             : DioException.connectionError(
                 requestOptions: options,
-                reason: 'The AI chat response stream was interrupted.',
+                reason: 'The response stream was interrupted.',
               ),
         stackTrace,
       );
@@ -200,14 +208,14 @@ class AiChatStreamingHttpClientAdapter implements HttpClientAdapter {
     }
     return DioException.connectionError(
       requestOptions: options,
-      reason: 'The AI chat connection could not be established.',
+      reason: 'The connection could not be established.',
     );
   }
 
   DioException _cancelled(RequestOptions options) =>
       DioException.requestCancelled(
         requestOptions: options,
-        reason: 'The AI chat request was cancelled.',
+        reason: 'The request was cancelled.',
       );
 
   @override
