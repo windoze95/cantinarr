@@ -43,6 +43,7 @@ type issIssue struct {
 	UpdatedAt      time.Time
 	ClosedAt       *time.Time
 	InstanceID     string
+	IsPrevention   bool   // recurrence notice (real: derived from the dedupe namespace)
 	ProblemKind    string // internal: Import-Doctor problem label ("" = none)
 	ForeignID      string // internal: book scope for dedupe ("" = not a book)
 }
@@ -235,7 +236,64 @@ func issLockedIssueJSON(i *issIssue) map[string]any {
 		"created_at":      i.CreatedAt,
 		"updated_at":      i.UpdatedAt,
 		"closed_at":       issNullTime(i.ClosedAt),
-		"instance_id":     i.InstanceID,
+		// can_confirm_fixed is a live per-read answer, deliberately false on
+		// every list row; only the single-issue GET overrides it for the
+		// reporter (issLockedCanConfirmFixed).
+		"can_confirm_fixed": false,
+		"is_prevention":     i.IsPrevention,
+		"instance_id":       i.InstanceID,
+	}
+}
+
+// issLockedCanConfirmFixed mirrors the real CanReporterConfirmFix gate: the
+// reporter may close their own report as fixed only while it is a still-open
+// user report, a fix actually reached the arr (an executed or outcome-unknown
+// action with an execution timestamp), and nothing is mid-dispatch. Call with
+// issMu held; the caller has already checked the caller IS the reporter.
+func issLockedCanConfirmFixed(i *issIssue) bool {
+	if i == nil || i.Source != "user" || i.ClosedAt != nil {
+		return false
+	}
+	applied := false
+	for _, a := range issActions {
+		if a.IssueID != i.ID {
+			continue
+		}
+		if a.Status == "executing" {
+			return false
+		}
+		if (a.Status == "executed" || a.Status == "outcome_unknown") && a.ExecutedAt != nil {
+			applied = true
+		}
+	}
+	return applied
+}
+
+// issApplyRequesterCopy is the requester-copy boundary: an issue leaving the
+// server to a NON-ADMIN reader carries only server-authored requester
+// vocabulary in resolution, never admin-facing diagnostics. Every rewritten
+// (status, resolution_kind) pair matches the real applyRequesterCopy exactly;
+// statuses outside the switch keep their stored resolution.
+func issApplyRequesterCopy(m map[string]any, i *issIssue) {
+	switch i.Status {
+	case "needs_admin":
+		m["resolution"] = "An administrator is taking a closer look at this."
+	case "awaiting_confirmation":
+		m["resolution"] = "A fix was applied — please open the report and confirm whether it's right now."
+	case "wont_fix":
+		if i.ResolutionKind == "reporter_timeout" {
+			m["resolution"] = "Closed after no reply. If this is still a problem, report it again."
+		} else {
+			m["resolution"] = "This was closed without a fix. If it still looks wrong, report it again."
+		}
+	case "resolved":
+		if i.ResolutionKind == "reporter_confirmed" {
+			m["resolution"] = "You confirmed this is fixed."
+		} else {
+			m["resolution"] = "This was resolved. If it still looks wrong, report it again."
+		}
+	case "dismissed":
+		m["resolution"] = "An administrator closed this report."
 	}
 }
 
@@ -973,9 +1031,126 @@ func init() {
 		CreatedAt:      rule2Created, UpdatedAt: rule2Paused,
 	}
 
-	issNextIssueID = 4
-	issNextMsgID = 13
-	issNextActionID = 3
-	issNextRunID = 3
+	// (g) User-reported issue parked at awaiting_confirmation with its EXECUTED
+	// fix — His Girl Friday (tmdb 3085, PD film), Radarr, wrong audio language.
+	// The fix reached the arr and nothing is mid-dispatch, so the reporter's
+	// single-issue GET answers can_confirm_fixed=true and the confirm-fixed
+	// flow is demonstrable end to end. The wrong-audio complaint arrived after
+	// the queue was empty, so the agent diagnosed it from history, not queue
+	// state.
+	confirmCreated := now.Add(-26 * time.Hour)
+	confirmParked := now.Add(-24 * time.Hour)
+	issIssues[4] = &issIssue{
+		ID: 4, Source: "user", Status: "awaiting_confirmation", Category: "wrong_audio",
+		ReporterID: 2, ReporterName: "user",
+		TmdbID: 3085, MediaType: mediaTypeMovie, Title: "His Girl Friday",
+		Detail: "The copy of His Girl Friday that came in only has a French audio track — there's no English at all.",
+		// The park clears resolution/resolution_kind and leaves the issue READ:
+		// this state pages the reporter, never the admin queue.
+		Occurrences: 1, Read: true,
+		CreatedAt: confirmCreated, UpdatedAt: confirmParked,
+		InstanceID: instRadarr,
+	}
+	issThreads[4] = []*issMsg{
+		{ID: 13, AuthorKind: "user", AuthorName: "user",
+			Body:      "The copy of His Girl Friday that came in only has a French audio track — there's no English at all.",
+			CreatedAt: confirmCreated},
+		{ID: 14, AuthorKind: "agent",
+			Body:      "Thanks for the report. The queue is empty — this file already imported — so I checked the Radarr history for His Girl Friday: the release that imported is tagged FRENCH and its media info lists a single French audio stream, which matches what you're hearing. I'm looking for an English-audio copy now.",
+			CreatedAt: confirmCreated.Add(2 * time.Minute)},
+		{ID: 15, AuthorKind: "agent",
+			Body:      "Approved and executed: grabbed His.Girl.Friday.1940.1080p.BluRay.x264.ENG from Aurora NZB and blocklisted the French-audio release. I'll follow up once the import completes.",
+			CreatedAt: confirmCreated.Add(56 * time.Minute)},
+		{ID: 16, AuthorKind: "agent",
+			Body:      "I applied the approved fix. Whether it's right now is your call rather than something I can prove — have a look, and tap \"This is fixed\" if the content is what you expected. If it still isn't, reply and tell me what you see.",
+			CreatedAt: confirmParked},
+	}
+	issRuns[3] = &issRun{
+		ID: 3, IssueID: 4, Trigger: "user_report", Status: "gave_up",
+		Model: "claude-sonnet-4-5", StepCount: 8,
+		InputTokens: 21360, OutputTokens: 2540,
+		CacheCreationTokens: 5410, CacheReadTokens: 15230,
+		StopReason: "unverified_conclusion",
+		StartedAt:  confirmCreated.Add(1 * time.Minute), FinishedAt: tp(confirmParked),
+	}
+	issSteps[3] = []*issStep{
+		{ID: 14, Seq: 1, Kind: "assistant",
+			Text:      strPtr("A wrong-audio report came in for His Girl Friday. The queue is empty — the file already imported — so I'll start with the Radarr history for the imported release."),
+			CreatedAt: confirmCreated.Add(1 * time.Minute)},
+		{ID: 15, Seq: 2, Kind: "tool_call", ToolName: strPtr("get_history"),
+			ToolInput: strPtr(`{"instance_id":"` + instRadarr + `","media_type":"movie","tmdb_id":3085}`),
+			CreatedAt: confirmCreated.Add(1*time.Minute + 9*time.Second)},
+		{ID: 16, Seq: 3, Kind: "tool_result", ToolName: strPtr("get_history"),
+			ToolOut:   strPtr(`{"records":[{"eventType":"downloadFolderImported","sourceTitle":"His.Girl.Friday.1940.1080p.WEBRip.FRENCH.x264","data":{"fileId":"8802","audioLanguages":"fre"}}]}`),
+			CreatedAt: confirmCreated.Add(1*time.Minute + 12*time.Second)},
+		{ID: 17, Seq: 4, Kind: "tool_call", ToolName: strPtr("search_releases"),
+			ToolInput: strPtr(`{"instance_id":"` + instRadarr + `","media_type":"movie","tmdb_id":3085}`),
+			CreatedAt: confirmCreated.Add(3 * time.Minute)},
+		{ID: 18, Seq: 5, Kind: "tool_result", ToolName: strPtr("search_releases"),
+			ToolOut:   strPtr(`{"releases":[{"title":"His.Girl.Friday.1940.1080p.BluRay.x264.ENG","indexer":"Aurora NZB","size":9663676416,"protocol":"usenet","score":94}]}`),
+			CreatedAt: confirmCreated.Add(3*time.Minute + 4*time.Second)},
+		{ID: 19, Seq: 6, Kind: "assistant",
+			Text:      strPtr("The imported release is a French-audio encode. Proposing to grab the English-audio Blu-ray from Aurora NZB and blocklist the French release; this needs admin approval."),
+			CreatedAt: confirmCreated.Add(6 * time.Minute)},
+		{ID: 20, Seq: 7, Kind: "assistant",
+			Text:      strPtr("The approved grab executed and the English-audio release imported cleanly, replacing the French file. Whether the audio is right now is the reporter's judgment, not something I can prove — parking this for their confirmation."),
+			CreatedAt: confirmParked.Add(-1 * time.Minute)},
+		{ID: 21, Seq: 8, Kind: "giveup",
+			Text:      strPtr("awaiting reporter confirmation: unverified_conclusion"),
+			CreatedAt: confirmParked},
+	}
+	hgfParams := map[string]any{
+		"media_type":    mediaTypeMovie,
+		"guid":          "[REDACTED release sha256:9d21f4c7a80be5d2]",
+		"indexer_id":    3,
+		"release_title": "His.Girl.Friday.1940.1080p.BluRay.x264.ENG",
+		"quality":       "Bluray-1080p",
+		"size":          9663676416,
+		"protocol":      "usenet",
+		"indexer":       "Aurora NZB",
+		"rejected":      false,
+		"rejections":    []string{},
+	}
+	issActions[3] = &issAction{
+		ID: 3, IssueID: 4, RunID: 3, Kind: "grab_release",
+		Params: hgfParams, ApprovedParams: hgfParams,
+		Rationale: "The imported release of His Girl Friday carries a single French audio stream, so the reporter has no English track at all. Grabbing the English-audio 1080p Blu-ray from Aurora NZB and blocklisting the French release replaces the file with one in the expected language.",
+		Risk:      "mutating", Status: "executed",
+		DecidedBy: 1, DecidedAt: tp(confirmCreated.Add(55 * time.Minute)),
+		ExecutedAt: tp(confirmCreated.Add(56 * time.Minute)),
+		ResultText: "Grabbed His.Girl.Friday.1940.1080p.BluRay.x264.ENG from Aurora NZB and blocklisted the French-audio release. The import completed.",
+		CreatedAt:  confirmCreated.Add(6 * time.Minute),
+	}
+
+	// (h) One waiting system issue — the Chaptarr author-import park. A user
+	// requested "The Glass Harbor" (invented novel by the invented author
+	// Marian Ashwood) and Chaptarr's metadata service is still importing the
+	// author, so the request sits parked past the stall horizon. The server
+	// watches the import and resolves this itself: passive tracking, no admin
+	// verbs, mirroring RecordBookImportStall's exact row and copy (source
+	// system, media_type system, unread, refreshed each sweep pass).
+	waitingCreated := now.Add(-30 * time.Hour)
+	waitingDetail := `Chaptarr has book requests parked for more than a day because its metadata service is still importing their authors. Waiting: "The Glass Harbor". The instance retries the import on its own schedule; Cantinarr watches it and completes the requests automatically when it lands, or hands them to the approval queue if the import fails or is cancelled.`
+	waitingResolution := "Check the Chaptarr instance's queued author imports (System page / logs). Nothing is required on the Cantinarr side; this issue resolves itself when the imports land."
+	issIssues[5] = &issIssue{
+		ID: 5, Source: "system", Status: "waiting",
+		MediaType:   "system",
+		Title:       "Book requests are waiting on Chaptarr's metadata import",
+		Detail:      waitingDetail,
+		Occurrences: 3, Read: false,
+		Resolution: waitingResolution,
+		CreatedAt:  waitingCreated, UpdatedAt: now.Add(-1 * time.Hour),
+		InstanceID: instChaptarr,
+	}
+	issThreads[5] = []*issMsg{
+		{ID: 17, AuthorKind: "system",
+			Body:      waitingDetail + " " + waitingResolution,
+			CreatedAt: waitingCreated},
+	}
+
+	issNextIssueID = 6
+	issNextMsgID = 18
+	issNextActionID = 4
+	issNextRunID = 4
 	issNextRuleID = 3
 }

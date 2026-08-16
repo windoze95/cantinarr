@@ -111,6 +111,7 @@ func buildRouter() chi.Router {
 			registerAIAdmin(r)
 			registerIssues(r)
 			registerRemediation(r)
+			registerProposals(r)
 			registerInstances(r)
 			registerDownloads(r)
 			registerTautulli(r)

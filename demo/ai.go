@@ -291,6 +291,9 @@ func aiSettingsDocJSON(u *DemoUser) map[string]any {
 	}
 	return map[string]any{
 		"providers": aiProviderCatalog(),
+		// The zero-config pair the UI preselects when nothing is chosen yet.
+		"default_provider": "codex",
+		"default_model":    "gpt-5.6-luna",
 		"personal": map[string]any{
 			"selected": p.Selected,
 			"config":   personalConfig,

@@ -16,8 +16,10 @@ import (
 // registerIssues mounts the issue routes on the authenticated /api router.
 func registerIssues(r chi.Router) {
 	r.Post("/issues", issHandleCreateIssue)
+	r.Get("/issues", issHandleListMyIssues)
 	r.Get("/issues/{id}", issHandleGetIssue)
 	r.Post("/issues/{id}/reply", issHandleReplyIssue)
+	r.Post("/issues/{id}/confirm-fixed", issHandleConfirmFixed)
 
 	r.With(requireAdmin).Get("/admin/issues", issHandleAdminListIssues)
 	r.With(requireAdmin).Post("/admin/issues/{id}/dismiss", issHandleAdminDismissIssue)
@@ -233,6 +235,29 @@ func issHandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"issue_id": id, "status": status})
 }
 
+// ─── GET /api/issues ────────────────────────────────────
+
+// issHandleListMyIssues is the reporter inbox: the calling user's OWN reports,
+// newest first, in the same row shape as the admin list but with the
+// requester-copy boundary applied (mirrors remediation.Handler.ListMine). The
+// envelope reuses the admin ListIssuesResponse shape, so closed_total rides
+// along as 0.
+func issHandleListMyIssues(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	issMu.Lock()
+	out := make([]map[string]any, 0)
+	for _, i := range issLockedIssuesSorted() {
+		if i.ReporterID == 0 || i.ReporterID != u.ID {
+			continue
+		}
+		m := issLockedIssueJSON(i)
+		issApplyRequesterCopy(m, i)
+		out = append(out, m)
+	}
+	issMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"issues": out, "closed_total": 0})
+}
+
 // ─── GET /api/issues/{id} ───────────────────────────────
 
 func issHandleGetIssue(w http.ResponseWriter, r *http.Request) {
@@ -260,11 +285,23 @@ func issHandleGetIssue(w http.ResponseWriter, r *http.Request) {
 	if isAdmin {
 		i.Read = true
 	}
+	issueJSON := issLockedIssueJSON(i)
+	// Whether the reporter may close this themselves is a live question about
+	// dispatch state, answered only on the single-issue read that renders the
+	// control (list reads leave it false).
+	if i.ReporterID != 0 && i.ReporterID == u.ID {
+		issueJSON["can_confirm_fixed"] = issLockedCanConfirmFixed(i)
+	}
+	// The requester-copy boundary: a non-admin reader never sees admin-facing
+	// resolution diagnostics.
+	if !isAdmin {
+		issApplyRequesterCopy(issueJSON, i)
+	}
 	thread := make([]map[string]any, 0, len(issThreads[id]))
 	for _, m := range issThreads[id] {
 		thread = append(thread, issLockedMsgJSON(m))
 	}
-	payload := map[string]any{"issue": issLockedIssueJSON(i), "thread": thread}
+	payload := map[string]any{"issue": issueJSON, "thread": thread}
 	issMu.Unlock()
 	writeJSON(w, http.StatusOK, payload)
 }
@@ -374,21 +411,131 @@ func issHandleReplyIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// ─── POST /api/issues/{id}/confirm-fixed ────────────────
+
+// issHandleConfirmFixed is the reporter's own verdict that the applied fix
+// worked — the only way a subjective report ever closes without an
+// administrator adjudicating someone else's opinion. Deliberately reporter-only
+// (never the admin-or-reporter access gate): an administrator recording their
+// verdict as the reporter's would be a lie in the audit trail; admins have
+// /api/admin/issues/{id}/resolve.
+func issHandleConfirmFixed(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	id, ok := issParseID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid issue id")
+		return
+	}
+	issMu.Lock()
+	i := issIssues[id]
+	if i == nil {
+		issMu.Unlock()
+		writeErr(w, http.StatusNotFound, "issue not found")
+		return
+	}
+	if i.ReporterID == 0 || i.ReporterID != u.ID {
+		issMu.Unlock()
+		writeErr(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if !issLockedCanConfirmFixed(i) {
+		issMu.Unlock()
+		writeErr(w, http.StatusConflict, "this issue cannot be closed as fixed right now")
+		return
+	}
+	now := time.Now().UTC()
+	// The reporter's word lands in the thread BEFORE the close, attributed to
+	// them because it is their judgment (server-authored wording).
+	issLockedAppendMsg(id, "user", u.Username, "I checked, and this is fixed.", now)
+	i.Status = "resolved"
+	i.Resolution = "The reporter confirmed the fix worked."
+	i.ResolutionKind = "reporter_confirmed"
+	closed := now
+	i.ClosedAt = &closed
+	i.Read = true // a reporter-confirmed close never re-pages the admin queue
+	i.UpdatedAt = now
+	supersededCount := issLockedCloseIssueSideEffects(id, "external_resolution")
+	pending := issLockedPendingCount()
+	issMu.Unlock()
+
+	if supersededCount > 0 {
+		wsToAdmins(evtAgentActionDecided, map[string]any{
+			"issue_id": id, "status": "superseded", "pending_count": pending,
+		})
+	}
+	// No issue_closed push for the reporter here: a close THEY made needs no
+	// page — only the thin issue_updated ping fans out.
+	wsToAdmins(evtIssueUpdated, map[string]any{"issue_id": id})
+	wsToUser(u.ID, evtIssueUpdated, map[string]any{"issue_id": id})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // ─── GET /api/admin/issues ──────────────────────────────
 
+// issClosedStatus reports whether a status is one an issue only reaches with
+// closed_at set (the statuses whose explicit-filter reads are bounded).
+func issClosedStatus(status string) bool {
+	return status == "resolved" || status == "wont_fix" || status == "dismissed"
+}
+
+// issHandleAdminListIssues serves the admin queue: every open issue, plus the
+// most recent closed_limit closed ones (default 200, max 1000), newest-updated
+// first within each group. closed_total says how much closed history exists so
+// a truncated list never reads as the whole record.
 func issHandleAdminListIssues(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
+	closedLimit := 0
+	if v, err := strconv.Atoi(r.URL.Query().Get("closed_limit")); err == nil {
+		closedLimit = v
+	}
+	if closedLimit <= 0 {
+		closedLimit = 200
+	}
+	if closedLimit > 1000 {
+		closedLimit = 1000
+	}
+
 	issMu.Lock()
 	sorted := issLockedIssuesSorted()
-	out := make([]map[string]any, 0, len(sorted))
+	closedTotal := 0
 	for _, i := range sorted {
-		if statusFilter != "" && i.Status != statusFilter {
-			continue
+		if i.ClosedAt != nil {
+			closedTotal++
 		}
-		out = append(out, issLockedIssueJSON(i))
+	}
+	out := make([]map[string]any, 0, len(sorted))
+	if statusFilter != "" {
+		// An explicit status read caps only when that status is a closed one;
+		// asking for open work must never come back quietly short.
+		for _, i := range sorted {
+			if i.Status != statusFilter {
+				continue
+			}
+			if issClosedStatus(statusFilter) && len(out) >= closedLimit {
+				break
+			}
+			out = append(out, issLockedIssueJSON(i))
+		}
+	} else {
+		for _, i := range sorted {
+			if i.ClosedAt == nil {
+				out = append(out, issLockedIssueJSON(i))
+			}
+		}
+		closed := 0
+		for _, i := range sorted {
+			if i.ClosedAt == nil {
+				continue
+			}
+			if closed >= closedLimit {
+				break
+			}
+			out = append(out, issLockedIssueJSON(i))
+			closed++
+		}
 	}
 	issMu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"issues": out})
+	writeJSON(w, http.StatusOK, map[string]any{"issues": out, "closed_total": closedTotal})
 }
 
 // ─── POST /api/admin/issues/{id}/dismiss ────────────────
@@ -428,7 +575,7 @@ func issHandleAdminDismissIssue(w http.ResponseWriter, r *http.Request) {
 	i.ClosedAt = &closed
 	i.Read = true
 	i.UpdatedAt = now
-	supersededCount := issLockedCloseIssueSideEffects(id)
+	supersededCount := issLockedCloseIssueSideEffects(id, "admin_dismissed")
 	pending := issLockedPendingCount()
 	reporterID := i.ReporterID
 	issMu.Unlock()
@@ -446,9 +593,11 @@ func issHandleAdminDismissIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 // issLockedCloseIssueSideEffects supersedes any still-proposed action and
-// parks the issue's waiting runs when an issue closes. Returns how many
-// proposals were superseded. Call with issMu held.
-func issLockedCloseIssueSideEffects(issueID int) int {
+// aborts the issue's live runs when an issue closes, stamping stopReason on
+// the aborted runs (admin_dismissed | admin_completed | external_resolution,
+// matching the real closure kinds). Returns how many proposals were
+// superseded. Call with issMu held.
+func issLockedCloseIssueSideEffects(issueID int, stopReason string) int {
 	superseded := 0
 	for _, a := range issActions {
 		if a.IssueID == issueID && a.Status == "proposed" {
@@ -465,6 +614,7 @@ func issLockedCloseIssueSideEffects(issueID int) int {
 		switch run.Status {
 		case "running", "waiting_approval", "waiting_user", "resume_pending":
 			run.Status = "aborted"
+			run.StopReason = stopReason
 			f := now
 			run.FinishedAt = &f
 		}
@@ -531,7 +681,7 @@ func issHandleAdminResolveIssue(w http.ResponseWriter, r *http.Request) {
 	i.ClosedAt = &closed
 	i.Read = true
 	i.UpdatedAt = now
-	supersededCount := issLockedCloseIssueSideEffects(id)
+	supersededCount := issLockedCloseIssueSideEffects(id, "admin_completed")
 	pending := issLockedPendingCount()
 	payload := issLockedIssueJSON(i)
 	reporterID := i.ReporterID
@@ -566,7 +716,7 @@ func issHandleAdminIssueActivity(w http.ResponseWriter, r *http.Request) {
 	actions := make([]map[string]any, 0)
 	for _, a := range issLockedActionsSorted() {
 		if a.IssueID == id {
-			actions = append(actions, issLockedActionJSON(a))
+			actions = append(actions, issLockedActionJSONFull(a))
 		}
 	}
 	runIDs := make([]int, 0)

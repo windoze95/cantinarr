@@ -222,13 +222,16 @@ func bookStatusHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	book, found := bookByForeignID(foreignID)
-	formats := bookFormatStatusesFor(u, book, found, foreignID, instanceID)
+	formats, waits := bookFormatStatusesFor(u, book, found, foreignID, instanceID)
 	resp := map[string]any{
 		"status":   bookCollapse(formats),
 		"progress": 0,
 	}
 	if len(formats) > 0 {
 		resp["book_formats"] = formats
+	}
+	if len(waits) > 0 {
+		resp["book_format_waits"] = waits
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -237,8 +240,17 @@ func bookStatusHandler(w http.ResponseWriter, r *http.Request) {
 // (file → available, active download → downloading, monitored → requested)
 // outranks the logged status; pending/denied survive while there is no live
 // work; anything else heals to unavailable.
-func bookFormatStatusesFor(u *DemoUser, book *DemoBook, found bool, foreignID, instanceID string) map[string]string {
+//
+// The second result explains the waits: a format whose governing row is a
+// server-owned author-import park reads "requested" (the system finishes it
+// unattended, so no approval story is narrated) and carries a
+// book_format_waits entry saying why the library has no record yet. It is
+// applied strictly after the live overlay, so a format the library has
+// actually taken carries no wait.
+func bookFormatStatusesFor(u *DemoUser, book *DemoBook, found bool, foreignID, instanceID string) (map[string]string, map[string]any) {
 	logged := map[string]string{}
+	parked := map[string]bool{}
+	parkedSince := map[string]time.Time{}
 	reqMu.Lock()
 	for i := len(reqLog) - 1; i >= 0; i-- {
 		row := reqLog[i]
@@ -252,9 +264,14 @@ func bookFormatStatusesFor(u *DemoUser, book *DemoBook, found bool, foreignID, i
 		if row.UserID != u.ID && row.Status != statusPending {
 			continue
 		}
+		isImportPark := row.Status == statusPending && row.ParkReason == reqParkReasonAuthorImport
 		for _, f := range bookConcreteFormats(reqNormalizeBookFormat(row.BookFormat)) {
 			if _, ok := logged[f]; !ok {
 				logged[f] = row.Status
+				parked[f] = isImportPark
+				if isImportPark {
+					parkedSince[f] = row.RequestedAt
+				}
 			}
 		}
 	}
@@ -271,6 +288,7 @@ func bookFormatStatusesFor(u *DemoUser, book *DemoBook, found bool, foreignID, i
 		}
 	}
 	out := map[string]string{}
+	waits := map[string]any{}
 	for _, f := range keys {
 		live := ""
 		if found {
@@ -279,13 +297,16 @@ func bookFormatStatusesFor(u *DemoUser, book *DemoBook, found bool, foreignID, i
 		switch {
 		case live != "":
 			out[f] = live
+		case logged[f] == statusPending && parked[f]:
+			out[f] = statusRequested
+			waits[f] = reqBookWaitJSON(parkedSince[f])
 		case logged[f] == statusPending || logged[f] == statusDenied:
 			out[f] = logged[f]
 		default:
 			out[f] = statusUnavailable
 		}
 	}
-	return out
+	return out, waits
 }
 
 // ─── GET /api/requests/book-library ─────────────────────

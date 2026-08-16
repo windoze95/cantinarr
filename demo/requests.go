@@ -255,12 +255,24 @@ func reqCreateBook(w http.ResponseWriter, u *DemoUser, body *reqCreateBody) {
 	book, found := bookByForeignID(foreignID)
 
 	if !found {
-		// Metadata record can't be found: PARK as pending for an admin.
-		reqBookPark(w, u, nil, foreignID, title, requested, inst.ID, searchTerm, reqParkedBookMessage)
+		// Metadata record can't be found: PARK as pending for an admin. The
+		// add already ran and failed, which the queue card says out loud.
+		reqBookPark(w, u, nil, foreignID, title, requested, inst.ID, searchTerm,
+			reqParkedBookMessage, "", reqAddFailureMetadataUnresolved)
 		return
 	}
 	if pol.RequireApproval {
-		reqBookPark(w, u, book, foreignID, book.Title, requested, inst.ID, searchTerm, "")
+		reqBookPark(w, u, book, foreignID, book.Title, requested, inst.ID, searchTerm, "", "", "")
+		return
+	}
+	if bookAuthorImportPending(foreignID) {
+		// The library's metadata service still owes this book's author an
+		// import, so the add is refused. Only an auto-approved create can
+		// reach this refusal, and it parks SERVER-OWNED: no admin is paged,
+		// the sweep watches it, and the requester reads "requested" plus the
+		// wait that says why.
+		reqBookPark(w, u, book, foreignID, book.Title, requested, inst.ID, searchTerm,
+			reqBookAuthorImportingMessage, reqParkReasonAuthorImport, "")
 		return
 	}
 
@@ -305,12 +317,19 @@ func reqCreateBook(w http.ResponseWriter, u *DemoUser, body *reqCreateBody) {
 // reqBookPark parks a book request in the approval queue: pending rows dedupe
 // per foreign_id + instance across ALL users — overlapping formats subscribe
 // the caller as a waiter; only the missing formats insert a new row.
-func reqBookPark(w http.ResponseWriter, u *DemoUser, book *DemoBook, foreignID, title string, requested []string, instanceID, searchTerm, message string) {
+//
+// parkReason == reqParkReasonAuthorImport makes the park SERVER-OWNED: the
+// insert skips the admin page/badge, and the response narrates the wait —
+// pending formats read "requested" with a book_format_waits explanation
+// alongside (the real create's author-import lane). addFailure records an add
+// that already ran and failed (the metadata_unresolved lane).
+func reqBookPark(w http.ResponseWriter, u *DemoUser, book *DemoBook, foreignID, title string, requested []string, instanceID, searchTerm, message, parkReason, addFailure string) {
 	requestedSet := map[string]bool{}
 	for _, f := range requested {
 		requestedSet[f] = true
 	}
 	var inserted *reqLogRow
+	insertedAt := time.Now().UTC().Truncate(time.Second)
 	pendingCount := 0
 	reqMu.Lock()
 	covered := map[string]bool{}
@@ -347,15 +366,19 @@ func reqBookPark(w http.ResponseWriter, u *DemoUser, book *DemoBook, foreignID, 
 			ID: reqNextID, UserID: u.ID, ForeignID: foreignID,
 			BookFormat: bookFormatFromSlice(newFormats), InstanceID: instanceID,
 			MediaType: mediaTypeBook, Title: title, Status: statusPending,
-			SearchTerm: searchTerm, RequestedAt: time.Now(),
-			Waiters: map[int]string{},
+			SearchTerm: searchTerm, ParkReason: parkReason,
+			AddFailureReason: addFailure,
+			RequestedAt:      insertedAt,
+			Waiters:          map[int]string{},
 		}
 		reqLog = append(reqLog, inserted)
 		reqNextID++
 		pendingCount = reqLockedPendingCount()
 	}
 	reqMu.Unlock()
-	if inserted != nil {
+	// A server-owned park is not an admin work item — nothing pages until the
+	// watch ends and the row is demoted to a real approval.
+	if inserted != nil && parkReason == "" {
 		wsToAdmins(evtRequestPending, map[string]any{
 			"tmdb_id":       0,
 			"media_type":    mediaTypeBook,
@@ -379,9 +402,25 @@ func reqBookPark(w http.ResponseWriter, u *DemoUser, book *DemoBook, foreignID, 
 		}
 	}
 	resp := map[string]any{
-		"success": true, "status": bookCollapse(formats), "title": title,
+		"success": true, "title": title,
 		"book_formats": formats,
 	}
+	if parkReason == reqParkReasonAuthorImport {
+		// Neither stored word is the truth here: "pending" narrates an
+		// approval that is not happening, so the pending formats read
+		// "requested" and the wait alongside carries what that leaves out.
+		waits := map[string]any{}
+		for f, status := range formats {
+			if status == statusPending {
+				formats[f] = statusRequested
+				waits[f] = reqBookWaitJSON(insertedAt)
+			}
+		}
+		if len(waits) > 0 {
+			resp["book_format_waits"] = waits
+		}
+	}
+	resp["status"] = bookCollapse(formats)
 	if message != "" {
 		resp["message"] = message
 	}
@@ -688,6 +727,13 @@ func reqHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			"status":       status,
 			"status_known": true,
 			"requested_at": row.RequestedAt,
+		}
+		// A server-owned author-import park reads as requested — same mapping
+		// as the detail status endpoint — and carries the same wait, so the
+		// history says why instead of showing a request that looks finished.
+		if status == statusPending && row.ParkReason == reqParkReasonAuthorImport {
+			m["status"] = statusRequested
+			m["book_format_wait"] = reqBookWaitJSON(row.RequestedAt)
 		}
 		if row.ForeignID != "" {
 			m["foreign_id"] = row.ForeignID

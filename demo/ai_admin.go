@@ -89,6 +89,10 @@ func aiAdminGetCredentials(w http.ResponseWriter, r *http.Request) {
 		// Legacy + namespaced duplication — the five presence booleans appear
 		// both at top level and under "credentials"; keep both.
 		"credentials": presence,
+		// The demo presents admin-stored TMDB/Trakt credentials, so neither
+		// service runs on the server's built-in public fallbacks.
+		"tmdb_using_builtin":  false,
+		"trakt_using_builtin": false,
 		"ai": map[string]any{
 			"config":    sharedConfig,
 			"providers": aiProviderCatalog(),

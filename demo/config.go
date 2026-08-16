@@ -102,6 +102,7 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"server_name":     "Cantinarr Demo",
 		"version":         "demo",
+		"min_app_version": "0.0.0",
 		"services":        services,
 		"instances":       instances,
 		"issues_enabled":  true,
@@ -111,7 +112,7 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 
 // ─── GET /api/admin/setup-status ────────────────────────
 
-// cfgSetupItems derives the 12-item setup checklist from live state on every
+// cfgSetupItems derives the 13-item setup checklist from live state on every
 // request (never stored). Titles/descriptions are verbatim from the real
 // server; configured flags are truthful for the demo.
 func cfgSetupItems() []map[string]any {
@@ -156,7 +157,7 @@ func cfgSetupItems() []map[string]any {
 			"Connect Sonarr so TV requests have somewhere to go.",
 			haveType[serviceSonarr], false),
 		item("tmdb", "Discovery (TMDB)",
-			"Browsing, search, and artwork are powered by TMDB.",
+			"Browsing, search, and artwork are powered by TMDB. The built-in key works out of the box; add your own in the Discover settings to use your account instead.",
 			true, false),
 		item("push", "Push notifications",
 			"Approval, issue, and new-content alerts on devices. Set CANTINARR_PUSH_GATEWAY_URL on the server.",
@@ -164,6 +165,12 @@ func cfgSetupItems() []map[string]any {
 		item("plex_invites", "Plex invites",
 			"Link a Plex account to send server invites with one tap — or automatically.",
 			plexConfigured(), true),
+		item("trakt", "Trakt discovery",
+			"Trending, popular lists, and the release calendar run on Cantinarr's built-in Trakt app out of the box; add your own client ID in the Discover settings to use yours instead.",
+			true, true),
+		item("discovery_prefs", "Discovery rows",
+			discoveryDesc,
+			discoveryPrefsSaved(), true),
 		item("download_client", "Download activity",
 			"See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, or Transmission).",
 			anyDownloadClient, true),
@@ -173,17 +180,17 @@ func cfgSetupItems() []map[string]any {
 		item("tautulli", "Plex monitoring (Tautulli)",
 			"Watch live Plex streams, history, and stats from the app.",
 			haveType[serviceTautulli], true),
-		item("trakt", "Trakt discovery",
-			"Adds trending, popular lists, and the release calendar to discovery.",
-			true, true),
-		item("discovery_prefs", "Discovery rows",
-			discoveryDesc,
-			discoveryPrefsSaved(), true),
 		item("books", "Books (Chaptarr)",
 			"Let users request ebooks and audiobooks; access is granted per user.",
 			haveType[serviceChaptarr], true),
 		item("ai", "AI assistant",
 			"Conversational discovery, requests, and server management. Configure a shared provider; users may override it with their own credentials.",
+			true, true),
+		// The demo seeds remediation as deliberately decided-and-on, and a
+		// shared AI provider is always configured, so the graded
+		// broken-shape description can never apply here.
+		item("remediation", "Automatic problem detection",
+			"Decide whether Cantinarr should detect and investigate stuck downloads on its own. On or off — deciding is the step.",
 			true, true),
 	}
 }

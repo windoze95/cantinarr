@@ -38,6 +38,16 @@ type reqLogRow struct {
 	SearchTerm       string
 	RequestedAt      time.Time
 	Waiters          map[int]string // user id -> that waiter's format slice
+	// ParkReason marks a pending row the SERVER owns and retries itself
+	// (only reqParkReasonAuthorImport): hidden from the approval queue and
+	// badge, served on GET /api/admin/requests/waiting, and rendered to
+	// requesters as "requested" plus a book_format_wait(s) explanation.
+	ParkReason string
+	// AddFailureReason marks a pending approval-queue row whose automatic add
+	// already ran and failed (reqAddFailure*). The import_* values are ended
+	// waits: their queue card offers "Try again" (POST …/{id}/wait) alongside
+	// deny.
+	AddFailureReason string
 }
 
 // reqTitleState is the live availability of one movie/TV title — the demo's
@@ -84,7 +94,7 @@ var (
 	reqMu sync.Mutex
 
 	reqLog    []*reqLogRow
-	reqNextID int64 = 6
+	reqNextID int64 = 8
 
 	// reqTitleStates is keyed "movie:<tmdb>" / "tv:<tmdb>".
 	reqTitleStates = map[string]*reqTitleState{}
@@ -119,11 +129,13 @@ func reqTitleKey(mediaType string, tmdbID int) string {
 	return "movie:" + strconv.Itoa(tmdbID)
 }
 
-// reqLockedPendingCount counts pending rows. Caller holds reqMu.
+// reqLockedPendingCount counts the pending rows awaiting a HUMAN decision —
+// server-owned author-import parks are excluded exactly like the approval
+// queue and the badge. Caller holds reqMu.
 func reqLockedPendingCount() int {
 	n := 0
 	for _, row := range reqLog {
-		if row.Status == statusPending {
+		if row.Status == statusPending && row.ParkReason != reqParkReasonAuthorImport {
 			n++
 		}
 	}
@@ -147,6 +159,80 @@ func reqNormalizeBookFormat(v string) string {
 		return v
 	}
 	return bookFormatBoth
+}
+
+// ─── Author-import parks ("waiting for library") ────────
+//
+// Wire vocabulary mirrored from the real server: park_reason marks a pending
+// row the server owns and retries; the add_failure_reason values record how a
+// wait ended (or that a metadata lookup failed), which decides the admin verbs.
+
+const (
+	reqParkReasonAuthorImport = "author_import"
+
+	reqAddFailureMetadataUnresolved = "metadata_unresolved"
+	reqAddFailureImportAbandoned    = "import_abandoned"
+	reqAddFailureImportFailed       = "import_failed"
+	reqAddFailureImportCancelled    = "import_cancelled"
+)
+
+// Requester/admin copy, verbatim from the real server.
+const (
+	reqBookAuthorImportingMessage = "This book's author is still being added to the library. Your request will finish automatically once that completes."
+	reqBookWaitExtendedMessage    = "Waiting resumed: the library is importing this author again, and the request completes automatically when it lands."
+	reqErrAuthorPendingImport     = "the book's author is still being imported by the library's metadata service"
+)
+
+// reqIsImportAddFailure reports whether reason is an ended author-import wait
+// (the demotion lanes whose queue card offers "Try again" alongside deny).
+func reqIsImportAddFailure(reason string) bool {
+	switch reason {
+	case reqAddFailureImportAbandoned, reqAddFailureImportFailed, reqAddFailureImportCancelled:
+		return true
+	}
+	return false
+}
+
+// reqParkRetryInterval is the real park-maintenance sweep cadence; the demo
+// keeps a virtual clock on it so last_attempt_at ages the way the real one
+// does.
+const reqParkRetryInterval = 5 * time.Minute
+
+// reqParkSweepEpoch is this process's start — the demo's stand-in for the real
+// server's startedAt/lastParkSweep pair.
+var reqParkSweepEpoch = time.Now()
+
+// reqParkLastAttempt mirrors Service.bookFormatWaitFor's timestamp: the most
+// recent virtual sweep tick, or the request's own accepted-at when that add is
+// newer (the failed add itself was an attempt this process can vouch for). Nil
+// before the first tick for rows older than the process — "unknown", never
+// "never tried".
+func reqParkLastAttempt(requestedAt time.Time) *time.Time {
+	var last time.Time
+	if ticks := time.Since(reqParkSweepEpoch) / reqParkRetryInterval; ticks >= 1 {
+		last = reqParkSweepEpoch.Add(ticks * reqParkRetryInterval)
+	}
+	if requested := requestedAt.UTC(); !requested.Before(reqParkSweepEpoch.UTC()) && requested.After(last) {
+		last = requested
+	}
+	if last.IsZero() {
+		return nil
+	}
+	utc := last.UTC()
+	return &utc
+}
+
+// reqBookWaitJSON renders one BookFormatWait object ({reason, waiting_since,
+// last_attempt_at?}) for a server-owned author-import park.
+func reqBookWaitJSON(requestedAt time.Time) map[string]any {
+	wait := map[string]any{
+		"reason":        reqParkReasonAuthorImport,
+		"waiting_since": requestedAt.UTC(),
+	}
+	if last := reqParkLastAttempt(requestedAt); last != nil {
+		wait["last_attempt_at"] = *last
+	}
+	return wait
 }
 
 // ─── Seed data ──────────────────────────────────────────
@@ -194,6 +280,35 @@ func init() {
 			Title: "The Cabinet of Dr. Caligari", Status: statusPending,
 			RequestedAt: time.Date(2026, 7, 29, 21, 17, 0, 0, time.UTC),
 			Waiters:     map[int]string{},
+		},
+		// One SERVER-OWNED author-import park ("waiting for library"): the
+		// author's metadata import is still pending in the fake Chaptarr
+		// (chapAuthorImportState), so the row is hidden from the approval
+		// queue/badge, listed on GET /api/admin/requests/waiting, and reads
+		// "requested" + book_format_wait to the requester.
+		&reqLogRow{
+			ID: 6, UserID: 2, ForeignID: "60401", BookFormat: bookFormatEbook,
+			InstanceID: instChaptarr, MediaType: mediaTypeBook,
+			Title: "The Lighthouse at Wintermere", Status: statusPending,
+			SearchTerm: "lighthouse at wintermere foxcroft",
+			ParkReason: reqParkReasonAuthorImport,
+			// Young on purpose: the real server flags a >24h park as a
+			// system-health stall, which the demo does not stage.
+			RequestedAt: time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Second),
+			Waiters:     map[int]string{},
+		},
+		// One ENDED wait: Chaptarr declared this author's import terminally
+		// failed, so the park was demoted back to the approval queue with the
+		// add_failure_reason that makes the card offer "Try again"
+		// (POST /api/admin/requests/{id}/wait) alongside deny.
+		&reqLogRow{
+			ID: 7, UserID: 2, ForeignID: "60544", BookFormat: bookFormatBoth,
+			InstanceID: instChaptarr, MediaType: mediaTypeBook,
+			Title: "The Clockwork Ferryman", Status: statusPending,
+			SearchTerm:       "clockwork ferryman thistlewood",
+			AddFailureReason: reqAddFailureImportFailed,
+			RequestedAt:      time.Now().UTC().Add(-49 * time.Hour).Truncate(time.Second),
+			Waiters:          map[int]string{},
 		},
 	)
 

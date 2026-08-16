@@ -104,7 +104,24 @@ var (
 	// (drives GET wanted/cutoff). Moby-Dick's PDF ebook wants an EPUB.
 	chapCutoffUnmet = map[int]bool{3: true}
 
+	// chapAuthorImportState marks authors the fake Chaptarr's metadata service
+	// has a queued import for, keyed by author foreignAuthorId. Any add for one
+	// of their books is refused with the author-pending-import answer (the
+	// request domain parks those requests server-side). Neither import ever
+	// lands in the demo: "pending" keeps retrying forever, "failed" is the
+	// declared-terminal verdict behind the demoted approval-queue row.
+	chapAuthorImportState = map[string]string{
+		"9931": chapAuthorImportPendingState,
+		"9954": chapAuthorImportFailedState,
+	}
+
 	chapSeedTime = time.Now()
+)
+
+// Author-import states for chapAuthorImportState.
+const (
+	chapAuthorImportPendingState = "pending"
+	chapAuthorImportFailedState  = "failed"
 )
 
 // ─── Seeding ────────────────────────────────────────────
@@ -313,6 +330,33 @@ func init() {
 		chapFormatSeed{Format: bookFormatAudiobook, BookID: 15, Quality: "M4B"},
 	)
 
+	// Invented authors behind the author-import park demo (see
+	// chapAuthorImportState): lookup-able metadata records whose library
+	// imports never conclude, so any add for their books parks server-side.
+	foxcroft := chapSeedAuthor(9, "Wilhelmina Foxcroft", "9931", "wilhelmina-foxcroft",
+		"Victorian novelist of fog-bound coastal mysteries, remembered for the Wintermere trilogy.",
+		[]string{"Gothic", "Mystery"}, false)
+	thistlewood := chapSeedAuthor(10, "Barnaby Thistlewood", "9954", "barnaby-thistlewood",
+		"Serial adventure writer of the river towns; every novel ships with a fold-out map.",
+		[]string{"Adventure", "Classics"}, false)
+
+	// Wilhelmina Foxcroft's import is still pending — her book backs the
+	// seeded "waiting for library" request.
+	chapSeedTitle(foxcroft, "The Lighthouse at Wintermere", "60401", "the-lighthouse-at-wintermere",
+		"A keeper's daughter charts the wrecks that only ever happen while the lamp is lit.",
+		"1889-10-03", 356, []string{"Gothic", "Mystery"},
+		chapFormatSeed{Format: bookFormatEbook, BookID: 16, Quality: "EPUB"},
+		chapFormatSeed{Format: bookFormatAudiobook, BookID: 17, Quality: "M4B"},
+	)
+	// Barnaby Thistlewood's import was declared failed — his book backs the
+	// demoted approval-queue row whose verbs are "Try again" and deny.
+	chapSeedTitle(thistlewood, "The Clockwork Ferryman", "60544", "the-clockwork-ferryman",
+		"A mechanical ferryman remembers every crossing but one, and a stowaway means to find it.",
+		"1894-04-12", 288, []string{"Adventure", "Classics"},
+		chapFormatSeed{Format: bookFormatEbook, BookID: 18, Quality: "EPUB"},
+		chapFormatSeed{Format: bookFormatAudiobook, BookID: 19, Quality: "M4B"},
+	)
+
 	// History: a grabbed+imported pair per downloaded file, staggered into the
 	// past, plus one failed audiobook attempt (Treasure Island).
 	for i, bookID := range []int{1, 2, 3, 4, 5, 7, 9, 10, 11, 12} {
@@ -347,6 +391,21 @@ func allBooks() []*DemoBook {
 	out := make([]*DemoBook, len(chapBooks))
 	copy(out, chapBooks)
 	return out
+}
+
+// bookAuthorImportPending reports whether an add for this book would be
+// refused because the library's metadata service still owes its author an
+// import (pending or declared failed — either way the author is absent and a
+// replayed add re-queues the import rather than completing). The request
+// domain parks such requests server-side instead of executing them.
+func bookAuthorImportPending(foreignID string) bool {
+	chapMu.Lock()
+	defer chapMu.Unlock()
+	b := chapBooksByFID[foreignID]
+	if b == nil {
+		return false
+	}
+	return chapAuthorImportState[b.AuthorForeignID] != ""
 }
 
 func chapExpandFormats(format string) []string {

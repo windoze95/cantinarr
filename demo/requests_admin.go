@@ -16,86 +16,132 @@ import (
 
 func registerRequestsAdmin(r chi.Router) {
 	r.With(requireAdmin).Get("/admin/requests", reqAdminQueueHandler)
+	// Static segment, so it wins over /admin/requests/{id}/… in chi's router.
+	r.With(requireAdmin).Get("/admin/requests/waiting", reqAdminWaitingHandler)
 	r.With(requireAdmin).Post("/admin/requests/{id}/approve", reqAdminApproveHandler)
 	r.With(requireAdmin).Post("/admin/requests/{id}/deny", reqAdminDenyHandler)
+	// "Try again" on a demoted author-import book request: resume the watch
+	// instead of deciding it.
+	r.With(requireAdmin).Post("/admin/requests/{id}/wait", reqAdminWaitHandler)
 	r.With(requireAdmin).Get("/admin/request-settings", reqAdminSettingsGetHandler)
 	r.With(requireAdmin).Put("/admin/request-settings", reqAdminSettingsPutHandler)
 	r.With(requireAdmin).Get("/admin/users/{userID}/request-settings", reqAdminUserSettingsGetHandler)
 	r.With(requireAdmin).Put("/admin/users/{userID}/request-settings", reqAdminUserSettingsPutHandler)
 }
 
-// ─── GET /api/admin/requests ────────────────────────────
+// ─── GET /api/admin/requests (+ /waiting) ───────────────
 
-func reqAdminQueueHandler(w http.ResponseWriter, _ *http.Request) {
-	type queueEntry struct {
-		row         reqLogRow
-		waiterCount int
-	}
-	entries := []queueEntry{}
+// reqAdminPendingEntry is one snapshot of a pending row plus its waiter count.
+type reqAdminPendingEntry struct {
+	row         reqLogRow
+	waiterCount int
+}
+
+// reqAdminScanPending snapshots one side of the pending set, oldest first.
+// parked selects the server-owned author-import rows (the waiting list)
+// instead of the human-decision rows; the two filters are exact complements,
+// so every pending row lands in exactly one of them.
+func reqAdminScanPending(parked bool) []reqAdminPendingEntry {
+	entries := []reqAdminPendingEntry{}
 	reqMu.Lock()
 	for _, row := range reqLog {
 		if row.Status != statusPending {
 			continue
 		}
-		entries = append(entries, queueEntry{row: *row, waiterCount: len(row.Waiters)})
+		if (row.ParkReason == reqParkReasonAuthorImport) != parked {
+			continue
+		}
+		entries = append(entries, reqAdminPendingEntry{row: *row, waiterCount: len(row.Waiters)})
 	}
 	reqMu.Unlock()
-	// Oldest first.
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].row.RequestedAt.Equal(entries[j].row.RequestedAt) {
 			return entries[i].row.ID < entries[j].row.ID
 		}
 		return entries[i].row.RequestedAt.Before(entries[j].row.RequestedAt)
 	})
+	return entries
+}
+
+// reqAdminPendingRowJSON renders one PendingRequest row (shared by the
+// approval queue and the waiting list, which differ only in the wait fields).
+func reqAdminPendingRowJSON(e reqAdminPendingEntry) map[string]any {
+	row := e.row
+	username := ""
+	if u := userByID(row.UserID); u != nil {
+		username = u.Username
+	}
+	posterPath := ""
+	tvdbID := row.TvdbID
+	switch row.MediaType {
+	case mediaTypeMovie:
+		if m, ok := findMovie(row.TmdbID); ok {
+			posterPath = m.PosterPath
+		}
+	case mediaTypeTV:
+		if s, ok := findShow(row.TmdbID); ok {
+			posterPath = s.PosterPath
+			if tvdbID == 0 {
+				tvdbID = s.TvdbID
+			}
+		}
+	}
+	m := map[string]any{
+		"id":                 row.ID,
+		"user_id":            row.UserID,
+		"username":           username,
+		"tmdb_id":            row.TmdbID,
+		"tvdb_id":            tvdbID,
+		"media_type":         row.MediaType,
+		"title":              row.Title,
+		"book_format":        reqNormalizeBookFormat(row.BookFormat),
+		"requester_count":    1 + e.waiterCount,
+		"season_scope":       row.SeasonScope,
+		"quality_profile_id": row.QualityProfileID,
+		"requested_at":       row.RequestedAt,
+	}
+	if row.ForeignID != "" {
+		m["foreign_id"] = row.ForeignID
+	}
+	if posterPath != "" {
+		m["poster_path"] = posterPath
+	}
+	if row.InstanceID != "" {
+		m["instance_id"] = row.InstanceID
+		if inst := instanceByID(row.InstanceID); inst != nil {
+			m["instance_name"] = inst.Name
+		}
+	}
+	if row.ParkReason != "" {
+		m["wait_reason"] = row.ParkReason
+		if last := reqParkLastAttempt(row.RequestedAt); last != nil {
+			m["last_attempt_at"] = *last
+		}
+	}
+	if row.AddFailureReason != "" {
+		m["add_failure_reason"] = row.AddFailureReason
+	}
+	return m
+}
+
+func reqAdminQueueHandler(w http.ResponseWriter, _ *http.Request) {
+	entries := reqAdminScanPending(false)
 	out := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
-		row := e.row
-		username := ""
-		if u := userByID(row.UserID); u != nil {
-			username = u.Username
-		}
-		posterPath := ""
-		tvdbID := row.TvdbID
-		switch row.MediaType {
-		case mediaTypeMovie:
-			if m, ok := findMovie(row.TmdbID); ok {
-				posterPath = m.PosterPath
-			}
-		case mediaTypeTV:
-			if s, ok := findShow(row.TmdbID); ok {
-				posterPath = s.PosterPath
-				if tvdbID == 0 {
-					tvdbID = s.TvdbID
-				}
-			}
-		}
-		m := map[string]any{
-			"id":                 row.ID,
-			"user_id":            row.UserID,
-			"username":           username,
-			"tmdb_id":            row.TmdbID,
-			"tvdb_id":            tvdbID,
-			"media_type":         row.MediaType,
-			"title":              row.Title,
-			"book_format":        reqNormalizeBookFormat(row.BookFormat),
-			"requester_count":    1 + e.waiterCount,
-			"season_scope":       row.SeasonScope,
-			"quality_profile_id": row.QualityProfileID,
-			"requested_at":       row.RequestedAt,
-		}
-		if row.ForeignID != "" {
-			m["foreign_id"] = row.ForeignID
-		}
-		if posterPath != "" {
-			m["poster_path"] = posterPath
-		}
-		if row.InstanceID != "" {
-			m["instance_id"] = row.InstanceID
-			if inst := instanceByID(row.InstanceID); inst != nil {
-				m["instance_name"] = inst.Name
-			}
-		}
-		out = append(out, m)
+		out = append(out, reqAdminPendingRowJSON(e))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// reqAdminWaitingHandler serves the mirror image of the approval queue: the
+// pending rows the server owns and retries itself. Informational only — these
+// rows carry no decision, which is why they are served apart from the queue
+// (and excluded from the badge/pending_count) rather than mixed into it.
+func reqAdminWaitingHandler(w http.ResponseWriter, _ *http.Request) {
+	entries := reqAdminScanPending(true)
+	out := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, reqAdminPendingRowJSON(e))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -226,7 +272,20 @@ func reqAdminApproveBook(w http.ResponseWriter, target *reqLogRow, snapshot *req
 	book, found := bookByForeignID(snapshot.ForeignID)
 	if !found {
 		// Leaves the row pending for retry (or deny + re-request).
-		writeErr(w, http.StatusBadRequest, "book not found in the library")
+		writeErr(w, http.StatusBadRequest, "book not found for foreign id — add this book in the library first, then approve")
+		return
+	}
+	if bookAuthorImportPending(snapshot.ForeignID) {
+		// The add is refused while the library still owes the author an
+		// import. Who watches next depends on whether the sweep still owns
+		// the row, so the error names the honest plan for each.
+		if snapshot.ParkReason == reqParkReasonAuthorImport {
+			writeErr(w, http.StatusBadRequest, reqErrAuthorPendingImport+
+				" — the request stays queued and completes automatically once the import lands")
+		} else {
+			writeErr(w, http.StatusBadRequest, reqErrAuthorPendingImport+
+				" — the wait on this request ended; choose Try again to resume watching it, or close the request")
+		}
 		return
 	}
 	formats := bookConcreteFormats(reqNormalizeBookFormat(snapshot.BookFormat))
@@ -303,8 +362,77 @@ func reqAdminApproveBook(w http.ResponseWriter, target *reqLogRow, snapshot *req
 	})
 }
 
+// ─── POST /api/admin/requests/{id}/wait ─────────────────
+
+// reqAdminWaitHandler is the admin's "try again" on a demoted author-import
+// row — the opposite verb to closing it. It replays the add once: the replay
+// either completes the request on the spot because the author landed since
+// the demotion, or — on the still-importing refusal — re-parks the row so the
+// watch covers it again (a declared-failed import is also asked to reopen,
+// which in the demo simply resumes).
+func reqAdminWaitHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request id")
+		return
+	}
+	var target *reqLogRow
+	var snapshot reqLogRow
+	reqMu.Lock()
+	for _, row := range reqLog {
+		if row.ID == id {
+			target = row
+			break
+		}
+	}
+	if target != nil {
+		snapshot = *target
+	}
+	reqMu.Unlock()
+	if target == nil {
+		writeErr(w, http.StatusBadRequest, "request not found")
+		return
+	}
+	if snapshot.MediaType != mediaTypeBook || snapshot.Status != statusPending {
+		writeErr(w, http.StatusBadRequest, "only a pending book request can keep waiting")
+		return
+	}
+	if snapshot.ParkReason != "" {
+		writeErr(w, http.StatusBadRequest, "this request is already being watched")
+		return
+	}
+	if !reqIsImportAddFailure(snapshot.AddFailureReason) {
+		writeErr(w, http.StatusBadRequest, "this request is not waiting on an author import")
+		return
+	}
+	if !bookAuthorImportPending(snapshot.ForeignID) {
+		// The author landed since the demotion; the replayed add completes
+		// the request outright — the same execution an approval runs.
+		reqAdminApproveBook(w, target, &snapshot)
+		return
+	}
+	// Still-importing refusal: back under the server's own watch.
+	reqMu.Lock()
+	if target.Status != statusPending || target.ParkReason != "" {
+		reqMu.Unlock()
+		writeErr(w, http.StatusBadRequest, "request was decided concurrently")
+		return
+	}
+	target.ParkReason = reqParkReasonAuthorImport
+	target.AddFailureReason = ""
+	reqMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true, "status": statusRequested, "title": "",
+		"message": reqBookWaitExtendedMessage,
+	})
+}
+
 // ─── POST /api/admin/requests/{id}/deny ─────────────────
 
+// reqAdminDenyHandler denies a pending row — including a parked or demoted
+// author-import wait, whose queued arr import the real server also cancels
+// (sibling-guarded, best-effort; the demo's fake import state has no visible
+// queue to cancel, so the denial itself is the whole observable effect).
 func reqAdminDenyHandler(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {

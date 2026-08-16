@@ -1,13 +1,18 @@
 // remediation.go — admin remediation settings, the agent-action approval
-// queue, run audit timelines, and standing auto-approval rules (srv-issues
-// §5–§7, app-admin §12). Store, renderers, and seeds live in data_issues.go.
+// queue, run audit timelines, standing auto-approval rules, the rule-candidate
+// catalog with arm-from-catalog, and the agent digest scoreboard (srv-issues
+// §5–§7, app-admin §12). Store, renderers, and seeds live in data_issues.go;
+// the decorations this file adds on top of those shared renderers (approval-
+// card identity, prior attempts, pause metadata) live here.
 package main
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -20,6 +25,8 @@ func registerRemediation(r chi.Router) {
 	r.With(requireAdmin).Get("/admin/remediation-settings", issHandleGetSettings)
 	r.With(requireAdmin).Put("/admin/remediation-settings", issHandlePutSettings)
 
+	r.With(requireAdmin).Get("/admin/agent-digest", issHandleAgentDigest)
+
 	r.With(requireAdmin).Get("/admin/agent-actions", issHandleListActions)
 	r.With(requireAdmin).Post("/admin/agent-actions/approve-batch", issHandleApproveBatch)
 	r.With(requireAdmin).Get("/admin/agent-actions/{id}", issHandleGetAction)
@@ -29,6 +36,8 @@ func registerRemediation(r chi.Router) {
 	r.With(requireAdmin).Get("/admin/agent-runs/{id}", issHandleGetRun)
 
 	r.With(requireAdmin).Get("/admin/agent-approval-rules", issHandleListRules)
+	r.With(requireAdmin).Post("/admin/agent-approval-rules", issHandleArmRule)
+	r.With(requireAdmin).Get("/admin/agent-approval-rules/candidates", issHandleListRuleCandidates)
 	r.With(requireAdmin).Post("/admin/agent-approval-rules/{id}/pause", issHandlePauseRule)
 	r.With(requireAdmin).Post("/admin/agent-approval-rules/{id}/resume", issHandleResumeRule)
 	r.With(requireAdmin).Delete("/admin/agent-approval-rules/{id}", issHandleDeleteRule)
@@ -148,7 +157,241 @@ func issHandlePutSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
+// ─── Agent digest (the scoreboard) ──────────────────────
+
+// issDigestBase is the fictional background week the tiny seeded store cannot
+// carry on its own: work the digest attributes to a wider history whose closed
+// issues have already aged out of the bounded closed list. The live store's
+// own contribution is computed per request and ADDED to these, so a fix the
+// reviewer approves during the tour moves the scoreboard exactly like the real
+// server's would. Numbers are chosen so the outcome arithmetic the app renders
+// always balances: resolved lanes (by agent / by rules / by admin) partition
+// issues_resolved, and the "on their own" remainder equals self_cleared.
+var issDigestBase = struct {
+	IssuesOpened    int
+	IssuesResolved  int // real work: 1 by agent + 1 by rules + 1 by admin
+	SelfCleared     int
+	ResolvedByAgent int
+	ResolvedByAdmin int
+	ClosedNoFix     int
+	Dismissed       int
+	ZeroTouch       int
+	ActionsExecuted int
+	RuleApproved    int
+	ReporterClosed  int
+	TokensIn        int
+	TokensOut       int
+}{
+	IssuesOpened: 4, IssuesResolved: 3, SelfCleared: 2,
+	ResolvedByAgent: 1, ResolvedByAdmin: 1,
+	ClosedNoFix: 1, Dismissed: 1,
+	ZeroTouch: 1, ActionsExecuted: 2, RuleApproved: 1, ReporterClosed: 1,
+	TokensIn: 49500, TokensOut: 6400,
+}
+
+// issHandleAgentDigest serves GET /api/admin/agent-digest?days=7 — the agent
+// scoreboard (outcome-first "resolved" with disjoint attribution lanes; the
+// needs-a-human / pending / paused numbers are state NOW, not window facts).
+// The window numbers are issDigestBase plus whatever the live store actually
+// did inside the requested cutoff; the base itself always tells the trailing-
+// week story whatever `days` says, which only ever diverges for hand-crafted
+// query strings (the app requests days=7).
+func issHandleAgentDigest(w http.ResponseWriter, r *http.Request) {
+	days := queryInt(r, "days", 7)
+	if days <= 0 {
+		days = 7
+	}
+	if days > 90 {
+		days = 90
+	}
+	now := time.Now().UTC()
+	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour)
+
+	issMu.Lock()
+	var (
+		opened, resolved, byAgent, byAdmin  int
+		closedNoFix, dismissed              int
+		reporterClosed, executed, zeroTouch int
+		ruleApproved                        int
+		tokensIn, tokensOut                 int
+		needsAdmin, pausedRules             int
+	)
+	for _, i := range issIssues {
+		if i.CreatedAt.After(cutoff) {
+			opened++
+		}
+		if i.ClosedAt == nil {
+			if i.Status == "needs_admin" {
+				needsAdmin++
+			}
+			continue
+		}
+		if !i.ClosedAt.After(cutoff) {
+			continue
+		}
+		if i.ResolutionKind == "reporter_confirmed" {
+			reporterClosed++
+		}
+		switch i.Status {
+		case "resolved":
+			resolved++
+			hasExecuted, humanDecided, ruleCarried := false, false, false
+			for _, a := range issActions {
+				if a.IssueID != i.ID {
+					continue
+				}
+				// Zero-touch means no human decided ANY action on the issue
+				// (a denial counts as touching it), matching the real query.
+				if a.DecidedBy != 0 {
+					humanDecided = true
+				}
+				if a.Status != "executed" {
+					continue
+				}
+				hasExecuted = true
+				if a.AutoRuleID != 0 && a.DecidedBy == 0 {
+					ruleCarried = true
+				}
+			}
+			switch {
+			case ruleCarried:
+				ruleApproved++
+			case hasExecuted:
+				byAgent++
+			case i.ResolutionKind == "admin_completed":
+				byAdmin++
+			}
+			if hasExecuted && !humanDecided {
+				zeroTouch++
+			}
+		case "wont_fix":
+			closedNoFix++
+		case "dismissed":
+			dismissed++
+		}
+	}
+	for _, a := range issActions {
+		if a.Status == "executed" && a.ExecutedAt != nil && a.ExecutedAt.After(cutoff) {
+			executed++
+		}
+	}
+	for _, run := range issRuns {
+		if run.StartedAt.After(cutoff) {
+			tokensIn += run.InputTokens
+			tokensOut += run.OutputTokens
+		}
+	}
+	for _, rule := range issRules {
+		if rule.Status == "paused" {
+			pausedRules++
+		}
+	}
+	pendingProposals := issLockedPendingCount()
+	// The one background rule execution this week belongs to seeded rule 1; the
+	// real query joins the live rules table, so a deleted rule drops out of the
+	// per-rule breakdown (its executions stay in the totals).
+	ruleCounts := make([]map[string]any, 0, 1)
+	if rule := issRules[1]; rule != nil {
+		ruleCounts = append(ruleCounts, map[string]any{
+			"label": issRuleLabel(rule.ProblemKind, rule.ActionKind, rule.ActionFacet),
+			"count": issDigestBase.RuleApproved,
+		})
+	}
+	issMu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days":              days,
+		"issues_opened":     issDigestBase.IssuesOpened + opened,
+		"issues_resolved":   issDigestBase.IssuesResolved + resolved,
+		"self_cleared":      issDigestBase.SelfCleared,
+		"resolved_by_agent": issDigestBase.ResolvedByAgent + byAgent,
+		"resolved_by_admin": issDigestBase.ResolvedByAdmin + byAdmin,
+		"closed_no_fix":     issDigestBase.ClosedNoFix + closedNoFix,
+		"dismissed":         issDigestBase.Dismissed + dismissed,
+		"zero_touch":        issDigestBase.ZeroTouch + zeroTouch,
+		"actions_executed":  issDigestBase.ActionsExecuted + executed,
+		"rule_approved":     issDigestBase.RuleApproved + ruleApproved,
+		"reporter_closed":   issDigestBase.ReporterClosed + reporterClosed,
+		"tokens_in":         issDigestBase.TokensIn + tokensIn,
+		"tokens_out":        issDigestBase.TokensOut + tokensOut,
+		"needs_admin_open":  needsAdmin,
+		"pending_proposals": pendingProposals,
+		"paused_rules":      pausedRules,
+		"rule_counts":       ruleCounts,
+		"generated_at":      now,
+	})
+}
+
 // ─── Agent actions ──────────────────────────────────────
+
+// issLockedActionJSONFull decorates the shared action renderer
+// (data_issues.go) with the approval-card fields the current app parses on
+// this file's surfaces: the joined issue identity (poster key + exact
+// season/episode scope + recurrence count) and, on decidable proposals only,
+// the prior-attempts memory. Call with issMu held.
+func issLockedActionJSONFull(a *issAction) map[string]any {
+	m := issLockedActionJSON(a)
+	tmdbID, season, episode, occurrences := 0, 0, 0, 0
+	if issue := issIssues[a.IssueID]; issue != nil {
+		tmdbID = issue.TmdbID
+		season = issue.SeasonNumber
+		episode = issue.EpisodeNumber
+		occurrences = issue.Occurrences
+	}
+	m["issue_tmdb_id"] = tmdbID
+	m["issue_season"] = season
+	m["issue_episode"] = episode
+	m["issue_occurrences"] = occurrences
+	// prior_attempts mirrors the real omitempty decoration: present only on a
+	// decidable proposal whose issue already saw executed fixes.
+	if can, _ := issLockedCanDecide(a); can {
+		if attempts := issLockedPriorAttempts(a); len(attempts) > 0 {
+			m["prior_attempts"] = attempts
+		}
+	}
+	return m
+}
+
+// issLockedPriorAttempts renders the executed sibling fixes on the same issue,
+// oldest first — the record the approving human reads so they never decide
+// with less evidence than the model. The demo's executions always hold, so
+// recurred (the arr re-added the SAME download after the fix ran) stays false.
+// Call with issMu held.
+func issLockedPriorAttempts(a *issAction) []map[string]any {
+	type attempt struct {
+		kind, facet string
+		at          time.Time
+	}
+	var prior []attempt
+	for _, sib := range issActions {
+		if sib.IssueID != a.IssueID || sib.ID == a.ID || sib.Status != "executed" || sib.ExecutedAt == nil {
+			continue
+		}
+		params := sib.ApprovedParams
+		if params == nil {
+			params = sib.Params
+		}
+		facet, ok := issActionFacet(sib.Kind, params)
+		if !ok {
+			continue
+		}
+		prior = append(prior, attempt{kind: sib.Kind, facet: facet, at: *sib.ExecutedAt})
+	}
+	sort.Slice(prior, func(i, j int) bool { return prior[i].at.Before(prior[j].at) })
+	out := make([]map[string]any, 0, len(prior))
+	for _, p := range prior {
+		item := map[string]any{
+			"kind":        p.kind,
+			"executed_at": p.at,
+			"recurred":    false,
+		}
+		if p.facet != "" {
+			item["facet"] = p.facet
+		}
+		out = append(out, item)
+	}
+	return out
+}
 
 func issHandleListActions(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
@@ -168,7 +411,7 @@ func issHandleListActions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		out = append(out, issLockedActionJSON(a))
+		out = append(out, issLockedActionJSONFull(a))
 	}
 	issMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"actions": out})
@@ -187,7 +430,7 @@ func issHandleGetAction(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "action not found")
 		return
 	}
-	payload := issLockedActionJSON(a)
+	payload := issLockedActionJSONFull(a)
 	issMu.Unlock()
 	writeJSON(w, http.StatusOK, payload)
 }
@@ -256,8 +499,11 @@ func issResolutionText(kind string) string {
 }
 
 // issLockedArmRule creates (or reactivates) the standing auto-approval rule
-// for a triple after an approve-with-remember. Call with issMu held.
-func issLockedArmRule(adminID, seedActionID int, problemKind, actionKind, facet string) {
+// for a triple — approve-with-remember and arm-from-catalog share it, exactly
+// like the real createOrReactivateApprovalRule. An existing (possibly paused)
+// triple only re-arms: creator, seed, and counters survive pause/resume
+// cycles. Returns the armed rule's id. Call with issMu held.
+func issLockedArmRule(adminID, seedActionID int, problemKind, actionKind, facet string) int {
 	now := time.Now().UTC()
 	for _, rule := range issRules {
 		if rule.ProblemKind == problemKind && rule.ActionKind == actionKind && rule.ActionFacet == facet {
@@ -266,8 +512,11 @@ func issLockedArmRule(adminID, seedActionID int, problemKind, actionKind, facet 
 				rule.PausedReason = ""
 				rule.PausedAt = nil
 				rule.UpdatedAt = now
+				// The seeded since-pause tally belongs to the seeded pause; a
+				// later runtime pause starts a fresh (empty) count.
+				delete(issRuleApprovedSincePause, rule.ID)
 			}
-			return
+			return rule.ID
 		}
 	}
 	adminName := ""
@@ -282,6 +531,7 @@ func issLockedArmRule(adminID, seedActionID int, problemKind, actionKind, facet 
 	}
 	issNextRuleID++
 	issRules[rule.ID] = rule
+	return rule.ID
 }
 
 // issDecideApprove is the single-approve core, shared with approve-batch. It
@@ -299,7 +549,7 @@ func issDecideApprove(adminID, actionID int, override map[string]any, remember b
 	}
 	switch a.Status {
 	case "executing", "executed", "failed", "outcome_unknown":
-		payload := issLockedActionJSON(a)
+		payload := issLockedActionJSONFull(a)
 		issMu.Unlock()
 		return payload, nil
 	case "denied", "superseded":
@@ -371,7 +621,7 @@ func issDecideApprove(adminID, actionID int, override map[string]any, remember b
 	}
 
 	pending := issLockedPendingCount()
-	payload := issLockedActionJSON(a)
+	payload := issLockedActionJSONFull(a)
 	issueID := a.IssueID
 	issMu.Unlock()
 
@@ -497,7 +747,7 @@ func issHandleDenyAction(w http.ResponseWriter, r *http.Request) {
 	switch a.Status {
 	case "denied":
 		// Idempotent: denying an already-denied action returns it unchanged.
-		payload := issLockedActionJSON(a)
+		payload := issLockedActionJSONFull(a)
 		issMu.Unlock()
 		writeJSON(w, http.StatusOK, payload)
 		return
@@ -545,7 +795,7 @@ func issHandleDenyAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	pending := issLockedPendingCount()
-	payload := issLockedActionJSON(a)
+	payload := issLockedActionJSONFull(a)
 	issMu.Unlock()
 
 	wsToAdmins(evtAgentActionDecided, map[string]any{
@@ -584,11 +834,193 @@ func issHandleGetRun(w http.ResponseWriter, r *http.Request) {
 
 // ─── Standing auto-approval rules ───────────────────────
 
+// issRuleApprovedSincePause seeds the paused rules' "you keep doing this by
+// hand" nudge: manual approvals of the exact triple since the pause, which the
+// real server recomputes per read. Seeded rule 2 ("Waiting to import" ×
+// manual import) paused five days ago and the admin hand-approved the same
+// fix twice since — 2 of the 3 hand-approvals its catalog candidate carries.
+// Runtime hand-repeats cannot occur (each demo issue holds at most one
+// decidable proposal and no new ones spawn), so the map stays authoritative.
+var issRuleApprovedSincePause = map[int]int{2: 2}
+
+// issLockedRuleJSONFull decorates the shared rule renderer (data_issues.go)
+// with the pause-metadata fields the current app parses. Call with issMu held.
+func issLockedRuleJSONFull(rule *issRule) map[string]any {
+	m := issLockedRuleJSON(rule)
+	// The demo's pauses are seeded or admin-initiated; the real server records
+	// an issue link only on automatic failure pauses, so this stays null.
+	m["paused_by_issue_id"] = nil
+	count := 0
+	if rule.Status == "paused" && rule.PausedAt != nil {
+		count = issRuleApprovedSincePause[rule.ID]
+	}
+	m["approved_since_pause"] = count
+	return m
+}
+
+// issCandidateSeed is one fictional-background triple the admin has approved
+// by hand and could automate (the "Ready to automate" catalog).
+type issCandidateSeed struct {
+	ProblemKind   string
+	ActionKind    string
+	ActionFacet   string
+	ApprovedCount int
+	LastApproved  time.Time
+}
+
+// issCandidateSeeds carries the background week's hand-approved triples. The
+// first shares seeded PAUSED rule 2's exact triple — the real catalog keeps
+// paused triples listed, and arming from it reactivates the rule, same as
+// remember. The second has no rule yet. Live hand-approvals made during the
+// tour join these at read time (issLockedRuleCandidates).
+var issCandidateSeeds []issCandidateSeed
+
+func init() {
+	now := time.Now().UTC()
+	issCandidateSeeds = []issCandidateSeed{
+		{ProblemKind: "Waiting to import", ActionKind: "manual_import", ActionFacet: "",
+			ApprovedCount: 3, LastApproved: now.Add(-48 * time.Hour)},
+		{ProblemKind: "Download failed", ActionKind: "trigger_search", ActionFacet: "",
+			ApprovedCount: 2, LastApproved: now.Add(-5 * 24 * time.Hour)},
+	}
+}
+
+// issLockedRuleCandidates aggregates every triple with at least one
+// hand-approved execution — seeded background plus the live store's own
+// human-decided executed actions — minus triples an ACTIVE rule already
+// covers (paused ones stay listed; arming reactivates). Mirrors the real
+// ListRuleCandidates: most-approved first. Call with issMu held.
+func issLockedRuleCandidates() []map[string]any {
+	type agg struct {
+		problemKind, actionKind, actionFacet string
+		count                                int
+		last                                 *time.Time
+	}
+	key := func(problemKind, actionKind, facet string) string {
+		return problemKind + "\x00" + actionKind + "\x00" + facet
+	}
+	byKey := map[string]*agg{}
+	note := func(problemKind, actionKind, facet string, n int, last *time.Time) {
+		k := key(problemKind, actionKind, facet)
+		c := byKey[k]
+		if c == nil {
+			c = &agg{problemKind: problemKind, actionKind: actionKind, actionFacet: facet}
+			byKey[k] = c
+		}
+		c.count += n
+		if last != nil && (c.last == nil || last.After(*c.last)) {
+			t := *last
+			c.last = &t
+		}
+	}
+	for i := range issCandidateSeeds {
+		s := &issCandidateSeeds[i]
+		t := s.LastApproved
+		note(s.ProblemKind, s.ActionKind, s.ActionFacet, s.ApprovedCount, &t)
+	}
+	for _, a := range issActions {
+		if a.Status != "executed" || a.DecidedBy == 0 || a.ExecutedAt == nil {
+			continue
+		}
+		issue := issIssues[a.IssueID]
+		if issue == nil || issue.ProblemKind == "" {
+			continue
+		}
+		params := a.ApprovedParams
+		if params == nil {
+			params = a.Params
+		}
+		facet, ok := issActionFacet(a.Kind, params)
+		if !ok {
+			continue
+		}
+		note(issue.ProblemKind, a.Kind, facet, 1, a.DecidedAt)
+	}
+	for _, rule := range issRules {
+		if rule.Status == "active" {
+			delete(byKey, key(rule.ProblemKind, rule.ActionKind, rule.ActionFacet))
+		}
+	}
+	candidates := make([]*agg, 0, len(byKey))
+	for _, c := range byKey {
+		candidates = append(candidates, c)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].count != candidates[j].count {
+			return candidates[i].count > candidates[j].count
+		}
+		return issRuleLabel(candidates[i].problemKind, candidates[i].actionKind, candidates[i].actionFacet) <
+			issRuleLabel(candidates[j].problemKind, candidates[j].actionKind, candidates[j].actionFacet)
+	})
+	out := make([]map[string]any, 0, len(candidates))
+	for _, c := range candidates {
+		var last any
+		if c.last != nil {
+			last = c.last.UTC()
+		}
+		out = append(out, map[string]any{
+			"problem_kind":     c.problemKind,
+			"action_kind":      c.actionKind,
+			"action_facet":     c.actionFacet,
+			"label":            issRuleLabel(c.problemKind, c.actionKind, c.actionFacet),
+			"approved_count":   c.count,
+			"last_approved_at": last,
+		})
+	}
+	return out
+}
+
+// issHandleListRuleCandidates serves GET /admin/agent-approval-rules/candidates.
+func issHandleListRuleCandidates(w http.ResponseWriter, _ *http.Request) {
+	issMu.Lock()
+	out := issLockedRuleCandidates()
+	issMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"candidates": out})
+}
+
+type issArmRuleBody struct {
+	ProblemKind string `json:"problem_kind"`
+	ActionKind  string `json:"action_kind"`
+	ActionFacet string `json:"action_facet"`
+}
+
+// issHandleArmRule serves POST /admin/agent-approval-rules — arm a standing
+// rule from the catalog. Grounded server-side like the real handler: only a
+// triple the catalog currently lists (hand-approved, no active rule) can be
+// armed, whatever the client claimed.
+func issHandleArmRule(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	var body issArmRuleBody
+	// The real handler decodes leniently (unknown fields tolerated).
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	issMu.Lock()
+	grounded := false
+	for _, c := range issLockedRuleCandidates() {
+		if c["problem_kind"] == body.ProblemKind && c["action_kind"] == body.ActionKind &&
+			c["action_facet"] == body.ActionFacet {
+			grounded = true
+			break
+		}
+	}
+	if !grounded {
+		issMu.Unlock()
+		writeErr(w, http.StatusConflict,
+			"this exact fix has never been approved by hand; approve it once on a real proposal first")
+		return
+	}
+	ruleID := issLockedArmRule(u.ID, 0, body.ProblemKind, body.ActionKind, body.ActionFacet)
+	issMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"rule_id": ruleID})
+}
+
 func issHandleListRules(w http.ResponseWriter, _ *http.Request) {
 	issMu.Lock()
 	out := make([]map[string]any, 0, len(issRules))
 	for _, rule := range issLockedRulesSorted() {
-		out = append(out, issLockedRuleJSON(rule))
+		out = append(out, issLockedRuleJSONFull(rule))
 	}
 	issMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"rules": out})
@@ -625,7 +1057,7 @@ func issHandlePauseRule(w http.ResponseWriter, r *http.Request) {
 		rule.PausedAt = &paused
 		rule.UpdatedAt = now
 	}
-	payload := issLockedRuleJSON(rule)
+	payload := issLockedRuleJSONFull(rule)
 	issMu.Unlock()
 	writeJSON(w, http.StatusOK, payload)
 }
@@ -642,8 +1074,11 @@ func issHandleResumeRule(w http.ResponseWriter, r *http.Request) {
 		rule.PausedReason = ""
 		rule.PausedAt = nil
 		rule.UpdatedAt = time.Now().UTC()
+		// The seeded since-pause tally belongs to the seeded pause; a later
+		// runtime pause starts a fresh (empty) count.
+		delete(issRuleApprovedSincePause, rule.ID)
 	}
-	payload := issLockedRuleJSON(rule)
+	payload := issLockedRuleJSONFull(rule)
 	issMu.Unlock()
 	writeJSON(w, http.StatusOK, payload)
 }

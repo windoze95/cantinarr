@@ -181,6 +181,7 @@ func registerInstances(r chi.Router) {
 	admin.Get("/instances/{instanceID}/users", instMgmtHandleGetUsers)
 	admin.Put("/instances/{instanceID}/users", instMgmtHandlePutUsers)
 	admin.Post("/instances/{instanceID}/webhook", instMgmtHandleWebhook)
+	admin.Get("/instances/{instanceID}/webhook", instMgmtHandleWebhookStatus)
 
 	// The proxy dispatcher — ANY method, any deeper path. Authorization
 	// (admin full access vs non-admin GET-only allowlist bound to the
@@ -505,6 +506,27 @@ func instMgmtHandleWebhook(w http.ResponseWriter, r *http.Request) {
 	instMgmtWebhookSet[inst.ID] = true
 	instMgmtMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "configured", "action": action})
+}
+
+// instMgmtHandleWebhookStatus answers the live instant-updates state. The real
+// server derives this from the arr's Connect list on every call; the demo's
+// arr instances were "created" by this server, which auto-installs the
+// webhook, so they always read ok.
+func instMgmtHandleWebhookStatus(w http.ResponseWriter, r *http.Request) {
+	inst := instMgmtResolve(chi.URLParam(r, "instanceID"))
+	if inst == nil {
+		writeErr(w, http.StatusNotFound, "instance not found")
+		return
+	}
+	if !instMgmtIsArrType(inst.ServiceType) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"supported": false, "configured": false, "state": "unsupported",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"supported": true, "configured": true, "state": "ok",
+	})
 }
 
 // ─── Arr-proxy dispatcher ───────────────────────────────
