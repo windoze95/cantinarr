@@ -76,6 +76,7 @@ func TestInteractiveProviderToolCallsCarryTrustedTurnProvenance(t *testing.T) {
 					anthropic.ToolUseBlock{ID: "tool-anthropic", Name: "get_disk_space"},
 					chatCtx,
 					StreamCallbacks{},
+					&carouselWatch{},
 				)
 				return err
 			},
@@ -94,6 +95,7 @@ func TestInteractiveProviderToolCallsCarryTrustedTurnProvenance(t *testing.T) {
 					},
 					chatCtx,
 					StreamCallbacks{},
+					&carouselWatch{},
 				)
 				return err
 			},
@@ -106,6 +108,7 @@ func TestInteractiveProviderToolCallsCarryTrustedTurnProvenance(t *testing.T) {
 					&genai.FunctionCall{ID: "tool-gemini", Name: "get_disk_space", Args: map[string]any{}},
 					chatCtx,
 					StreamCallbacks{},
+					&carouselWatch{},
 				)
 				return err
 			},

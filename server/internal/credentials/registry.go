@@ -293,6 +293,10 @@ type Registry struct {
 	// fallback contract as the TMDB token above.
 	defaultTraktClientID string
 
+	// tmdbBaseURL overrides the TMDB API root for lazily built clients.
+	// Test-only; empty in production.
+	tmdbBaseURL string
+
 	mu          sync.RWMutex
 	cachedTMDB  *tmdb.Client
 	cachedTrakt *trakt.Client
@@ -315,6 +319,12 @@ func WithDefaultTMDBToken(token string) Option {
 // so registries built in tests stay Trakt-less unless a test opts in.
 func WithDefaultTraktClientID(clientID string) Option {
 	return func(r *Registry) { r.defaultTraktClientID = clientID }
+}
+
+// WithTMDBBaseURL points lazily built TMDB clients at an alternate API root.
+// Test-only: production always talks to api.themoviedb.org.
+func WithTMDBBaseURL(baseURL string) Option {
+	return func(r *Registry) { r.tmdbBaseURL = baseURL }
 }
 
 // NewRegistry creates a new credentials registry.
@@ -582,12 +592,16 @@ func (r *Registry) Invalidate() {
 func (r *Registry) load() {
 	r.loaded = true
 
+	newTMDB := tmdb.NewClient
+	if r.tmdbBaseURL != "" {
+		newTMDB = func(token string) *tmdb.Client { return tmdb.NewClientWithBaseURL(token, r.tmdbBaseURL) }
+	}
 	if token := r.getSettingLocked(KeyTMDBAccessToken); token != "" {
-		r.cachedTMDB = tmdb.NewClient(token)
+		r.cachedTMDB = newTMDB(token)
 	} else if r.defaultTMDBToken != "" {
 		// No admin token stored (or it failed to decrypt): run on the built-in
 		// public token so discovery works without any TMDB signup.
-		r.cachedTMDB = tmdb.NewClient(r.defaultTMDBToken)
+		r.cachedTMDB = newTMDB(r.defaultTMDBToken)
 	}
 	if clientID := r.getSettingLocked(KeyTraktClientID); clientID != "" {
 		r.cachedTrakt = trakt.NewClient(clientID)

@@ -235,7 +235,7 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "display_media",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Display specific movies, TV shows, or books in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Prefer TMDB IDs (movies/TV) or foreign_book_ids (books) copied from prior tool results; if you only have exact title/year values for a movie/show, omit tmdb_id and the server will resolve and verify them.",
+		Description: "Display specific movies, TV shows, or books in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Call it before or while writing your prose so the results appear early, never repeat an already-written list afterwards, and never mention the carousel or its position in your reply. Prefer TMDB IDs (movies/TV) or foreign_book_ids (books) copied from prior tool results; if you only have exact title/year values for a movie/show, omit tmdb_id and the server will resolve and verify them.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -936,7 +936,7 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Displaying %d media item(s) in the carousel.", len(items))
+	fmt.Fprintf(&sb, "Displaying %d media item(s). The app renders them itself; never mention the carousel or where it appears in your reply.", len(items))
 	if len(failures) > 0 {
 		fmt.Fprintf(&sb, " Rejected or failed %d item(s): %s. If the user expects these items, call display_media again with exact titles, years, media types, and TMDB IDs from search/tool results when available.", len(failures), strings.Join(failures, "; "))
 	}
