@@ -29,6 +29,7 @@ func registerAuth(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(requireAuth)
 			r.Get("/me", authMeHandler)
+			r.Post("/logout", authLogoutHandler)
 			r.Post("/password", authPasswordHandler)
 			r.Post("/plex-email", authPlexEmailHandler)
 			r.Get("/passkeys", authListPasskeysHandler)
@@ -123,6 +124,22 @@ func authConnectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	d := deviceUpsert(u.ID, req.HardwareID, req.DeviceName, req.Platform)
 	writeJSON(w, http.StatusOK, issueSession(u, d))
+}
+
+// POST /api/auth/logout — self-serve sign-out: revokes the calling device's
+// own session, mirroring the real server (idempotent; an already-gone device
+// is the goal state; 401 without a device claim). requireAuth stores only the
+// user in the context, so the device id is re-read from the bearer token it
+// already validated.
+func authLogoutHandler(w http.ResponseWriter, r *http.Request) {
+	claims, err := parseAccessClaims(
+		strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	if err != nil || claims.DeviceID == "" {
+		writeErr(w, http.StatusUnauthorized, "no device session")
+		return
+	}
+	revokeDevice(claims.DeviceID)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "signed_out"})
 }
 
 // POST /api/auth/setup — the demo reports needs_setup:false, so setup always
