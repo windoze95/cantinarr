@@ -49,7 +49,7 @@ Full parity with the current Cantinarr API surface:
 | `types.go` | Shared enums/constants (statuses, media/service types, WS event names), JSON helpers |
 | `state.go` | In-memory store: users, devices, tokens, instances, sessions; seeds and accessors |
 | `ws.go` | WebSocket hub: auth, broadcast/admin/user scopes, envelope, pings |
-| `auth.go` | `/api/auth/*` — status, login, refresh, connect, me, password, plex-email, passkey stubs |
+| `auth.go` | `/api/auth/*` — status, login, refresh, connect, me, logout, password, plex-email, passkey stubs |
 | `config.go` | `/api/config` (per-user visibility), `/api/admin/setup-status`, `/api/admin/update-status` |
 | `users_admin.go` | Admin users, devices, connect tokens, test-push, Plex invites, default instances, per-user request settings |
 | `plex.go` | `/api/admin/plex/*` — link PIN simulation, servers, libraries, settings |
