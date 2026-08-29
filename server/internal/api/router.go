@@ -19,7 +19,6 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
-	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
@@ -54,8 +53,6 @@ func NewRouter(
 	toolServer *mcp.ToolServer,
 	pushHandler *push.Handler,
 	webhookHandler *webhooks.Handler,
-	plexHandler *plex.Handler,
-	plexService *plex.Service,
 	mediaAccessHandler *mediaaccess.Handler,
 	updateChecker *update.Checker,
 	serverSettings *serversettings.Service,
@@ -185,7 +182,7 @@ func NewRouter(
 
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
-			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, plexService, serverSettings, remediationService))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, serverSettings, remediationService))
 
 			// Update availability + the admin-configured management-portal URL the
 			// app's version warnings link to. GET returns both; PUT sets the
@@ -198,21 +195,9 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/discovery-settings", discoverySettingsHandler(serverSettings, creds))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/discovery-settings", updateDiscoverySettingsHandler(serverSettings, creds))
 
-			// Plex integration: link the admin's Plex account (PIN flow), pick
-			// the server/libraries invites share, and send one-tap invites for
-			// a user's shared Plex email.
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex/status", plexHandler.Status)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/plex/link/begin", plexHandler.BeginLink)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/plex/link/check", plexHandler.CheckLink)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/plex/link", plexHandler.Unlink)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex/servers", plexHandler.Servers)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex/servers/{machineID}/libraries", plexHandler.Libraries)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/plex/settings", plexHandler.UpdateSettings)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/plex-invite", plexHandler.InviteUser)
-
-			// Media-server accounts (Jellyfin, Emby): the linked-account rows the
-			// Users screen tags, the server's own account list for the link
-			// picker, and link/unlink. Access itself is the instance grant.
+			// Media-server accounts (Jellyfin, Emby, Plex): the linked-account
+			// rows the Users screen tags, the server's own account list for the
+			// link picker, and link/unlink. Access itself is the instance grant.
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/accounts", mediaAccessHandler.ListAccounts)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/{instanceID}/users", mediaAccessHandler.RemoteUsers)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.LinkAccount)
@@ -486,6 +471,12 @@ func NewRouter(
 				// Libraries a media server reports, for the shared-libraries
 				// picker; same candidate body and credential fallback as /test.
 				r.Post("/instances/media-server/libraries", instanceHandler.MediaServerLibraries)
+				// Plex: the PIN link that yields an instance's token (held
+				// server-side, referenced by pin id on save) and the linked
+				// account's owned servers for the editor's server picker.
+				r.Post("/instances/plex/link/begin", instanceHandler.PlexLinkBegin)
+				r.Post("/instances/plex/link/check", instanceHandler.PlexLinkCheck)
+				r.Post("/instances/plex/servers", instanceHandler.PlexServers)
 				r.Put("/instances/{instanceID}", instanceHandler.Update)
 				r.Delete("/instances/{instanceID}", instanceHandler.Delete)
 				// Instance-centric view of user_default_instances (the static
@@ -681,9 +672,16 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		}
 
 		instances := []instanceInfo{}
+		// plexRequestable tells a user who holds no Plex grant that there is a
+		// Plex server to ask for: the guide offers "share your Plex email" and
+		// admins hear about it. Nothing else about the instance is revealed.
+		plexRequestable := false
 		allInstances, err := store.ListAll()
 		if err == nil {
 			for _, inst := range allInstances {
+				if inst.ServiceType == "plex" {
+					plexRequestable = true
+				}
 				if !isAdmin && !visible[inst.ServiceType][inst.ID] {
 					continue
 				}
@@ -751,7 +749,9 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"instances":       instances,
 			"issues_enabled":  remSettings.Enabled,
 			"allow_reporting": remSettings.AllowReporting,
+			// True when a Plex server exists at all, so a user without the
+			// grant can still ask for access from the guide.
+			"plex_access_requestable": plexRequestable,
 		})
 	}
 }
-

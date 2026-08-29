@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
@@ -33,9 +34,10 @@ var allowedServiceTypes = map[string]bool{
 	"tautulli":     true,
 	"jellyfin":     true,
 	"emby":         true,
+	"plex":         true,
 }
 
-const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin', 'emby'"}`
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin', 'emby', 'plex'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
 // Download clients and Tautulli are admin surfaces with no per-user routing,
@@ -47,6 +49,7 @@ var grantableServiceTypes = map[string]bool{
 	"chaptarr": true,
 	"jellyfin": true,
 	"emby":     true,
+	"plex":     true,
 }
 
 // instanceResponse is the JSON shape returned to clients. All credentials are
@@ -72,6 +75,10 @@ type instanceRequest struct {
 	MediaPathMappings *[]mediapath.Mapping `json:"media_path_mappings"`
 	// Same omitted-vs-cleared distinction for the media-server settings.
 	MediaServerConfig *MediaServerConfig `json:"media_server_config"`
+	// PlexLinkPin names an approved PIN link (PlexLinkBegin/PlexLinkCheck)
+	// whose token this Plex instance should use. The token itself never
+	// travels through the app.
+	PlexLinkPin int64 `json:"plex_link_pin"`
 }
 
 func (h *Handler) toResponse(inst *Instance) instanceResponse {
@@ -91,7 +98,7 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 		MediaPathMappings: mappings,
 	}
 	if IsMediaServerType(inst.ServiceType) {
-		cfg := inst.MediaServerConfig.clone()
+		cfg := inst.MediaServerConfig.public()
 		resp.MediaServerConfig = &cfg
 	}
 	return resp
@@ -109,11 +116,15 @@ type Handler struct {
 	// sharedLibrariesObserver is told when a media server's shared-library
 	// selection changes, so existing accounts follow the new set.
 	sharedLibrariesObserver SharedLibrariesObserver
+	// plexLinks holds approved PIN links until the admin saves the instance;
+	// plexBaseURL is where the link flow talks to (plex.tv, or a test).
+	plexLinks   *plexLinks
+	plexBaseURL string
 }
 
 // NewHandler creates a new instance handler.
 func NewHandler(store *Store, registry *Registry, arrCallbackURL ...string) *Handler {
-	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex)}
+	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex), plexLinks: newPlexLinks(), plexBaseURL: plex.BaseURL}
 	if len(arrCallbackURL) > 0 {
 		h.arrCallbackURL = strings.TrimRight(arrCallbackURL[0], "/")
 	}
@@ -216,6 +227,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, serviceTypeListError, http.StatusBadRequest)
 		return
 	}
+	plexClientID, err := h.applyPlexLink(&inst, request.PlexLinkPin, nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
 	if err := validateRequiredFields(&inst); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
@@ -225,6 +241,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.applyMediaServerConfig(&inst, request.MediaServerConfig, nil); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	if err := applyPlexConfig(&inst, plexClientID); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -282,6 +302,11 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if inst.Password == "" {
 		inst.Password = existing.Password
 	}
+	plexClientID, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
 
 	if err := validateRequiredFields(&inst); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
@@ -292,6 +317,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.applyMediaServerConfig(&inst, request.MediaServerConfig, existing); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	if err := applyPlexConfig(&inst, plexClientID); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -346,14 +375,17 @@ func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
 // credential fallback and the shared validation. It writes the error response
 // itself and returns ok=false when the request cannot proceed.
 func (h *Handler) resolveTestInstance(w http.ResponseWriter, r *http.Request) (*Instance, bool) {
-	var inst Instance
-	if err := json.NewDecoder(r.Body).Decode(&inst); err != nil {
+	var request instanceRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return nil, false
 	}
+	inst := request.Instance
 
+	var existing *Instance
 	if inst.ID != "" {
-		existing, err := h.store.Get(inst.ID)
+		var err error
+		existing, err = h.store.Get(inst.ID)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
 			return nil, false
@@ -372,11 +404,26 @@ func (h *Handler) resolveTestInstance(w http.ResponseWriter, r *http.Request) (*
 		if inst.Password == "" {
 			inst.Password = existing.Password
 		}
+		inst.MediaServerConfig = existing.MediaServerConfig.clone()
 	}
 
 	if !allowedServiceTypes[inst.ServiceType] {
 		http.Error(w, serviceTypeListError, http.StatusBadRequest)
 		return nil, false
+	}
+	// A Plex test needs the server the candidate names (the machine
+	// identifier rides in the config); the token comes from the link or the
+	// stored instance.
+	if request.MediaServerConfig != nil {
+		inst.MediaServerConfig.MachineIdentifier = strings.TrimSpace(request.MediaServerConfig.MachineIdentifier)
+	}
+	plexClientID, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return nil, false
+	}
+	if inst.ServiceType == "plex" {
+		inst.MediaServerConfig.ClientID = plexClientID
 	}
 	// The test doesn't need a name; default it so the shared validation only
 	// enforces the URL and credentials.
@@ -737,6 +784,10 @@ func validateRequiredFields(inst *Instance) error {
 		}
 	case "transmission":
 		// Username/password are optional: Transmission RPC may run without auth.
+	case "plex":
+		if inst.APIKey == "" {
+			return fmt.Errorf("link a Plex account first")
+		}
 	default: // radarr, sonarr, chaptarr, sabnzbd, tautulli
 		if inst.APIKey == "" {
 			return fmt.Errorf("name, url, and api_key are required")

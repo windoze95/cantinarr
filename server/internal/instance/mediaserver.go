@@ -14,12 +14,18 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/emby"
 	"github.com/windoze95/cantinarr-server/internal/jellyfin"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 )
 
 // mediaServerTypes are the service types that are media servers Cantinarr
-// provisions user accounts on. They follow the Chaptarr rule: never a global
-// default, granted per user, invisible to arr routing.
-var mediaServerTypes = []string{"jellyfin", "emby"}
+// manages user access on. They follow the Chaptarr rule: never a global
+// default, granted per user, invisible to arr routing. Jellyfin and Emby
+// hold accounts Cantinarr creates; Plex holds shares Cantinarr sends.
+var mediaServerTypes = []string{"jellyfin", "emby", "plex"}
+
+// PlexPublicAddress is where anyone signs in to any Plex server, so it is the
+// sign-in address a Plex instance shows unless the admin typed another.
+const PlexPublicAddress = "https://app.plex.tv"
 
 // IsMediaServerType reports whether serviceType is a media server.
 func IsMediaServerType(serviceType string) bool {
@@ -62,6 +68,11 @@ type MediaServerConfig struct {
 	// and sends their invite at once, instead of waiting for an admin to
 	// grant them. Off unless an admin switches it on.
 	AutoApprove bool `json:"auto_approve,omitempty"`
+	// ClientID (Plex) is the X-Plex-Client-Identifier the instance's token
+	// was minted under; plex.tv ties a token to the device that linked it.
+	// Server-managed: set by the PIN link, never taken from a request, and
+	// never served.
+	ClientID string `json:"client_id,omitempty"`
 }
 
 func (c MediaServerConfig) clone() MediaServerConfig {
@@ -70,7 +81,16 @@ func (c MediaServerConfig) clone() MediaServerConfig {
 		LibraryIDs:        append([]string{}, c.LibraryIDs...),
 		MachineIdentifier: c.MachineIdentifier,
 		AutoApprove:       c.AutoApprove,
+		ClientID:          c.ClientID,
 	}
+}
+
+// public is the config as served to clients: everything but the
+// server-managed client id.
+func (c MediaServerConfig) public() MediaServerConfig {
+	out := c.clone()
+	out.ClientID = ""
+	return out
 }
 
 // NewMediaServerProvider builds the client for a media-server instance. It is
@@ -82,6 +102,9 @@ func NewMediaServerProvider(inst *Instance) (mediaserver.Provider, error) {
 		return jellyfin.NewClient(inst.URL, inst.APIKey), nil
 	case "emby":
 		return emby.NewClient(inst.URL, inst.APIKey), nil
+	case "plex":
+		cfg := inst.MediaServerConfig
+		return plex.NewProvider(plex.NewClientAt(inst.URL), cfg.ClientID, inst.APIKey, cfg.MachineIdentifier), nil
 	default:
 		return nil, fmt.Errorf("not a media server instance: %s", inst.ServiceType)
 	}
@@ -99,6 +122,9 @@ func normalizeMediaServerConfig(inst *Instance) {
 	inst.MediaServerConfig.PublicAddress = strings.TrimRight(strings.TrimSpace(inst.MediaServerConfig.PublicAddress), "/")
 	inst.MediaServerConfig.LibraryIDs = tidyLibraryIDs(inst.MediaServerConfig.LibraryIDs)
 	inst.MediaServerConfig.MachineIdentifier = strings.TrimSpace(inst.MediaServerConfig.MachineIdentifier)
+	if inst.ServiceType == "plex" && inst.MediaServerConfig.PublicAddress == "" {
+		inst.MediaServerConfig.PublicAddress = PlexPublicAddress
+	}
 }
 
 // tidyLibraryIDs trims, drops empties, de-duplicates, and sorts, so equal
@@ -198,6 +224,10 @@ func (h *Handler) applyMediaServerConfig(inst *Instance, provided *MediaServerCo
 	normalized, err := validateMediaServerConfig(*provided)
 	if err != nil {
 		return fmt.Errorf("invalid media_server_config: %w", err)
+	}
+	if existing != nil {
+		// Server-managed; a request can neither set nor clear it.
+		normalized.ClientID = existing.MediaServerConfig.ClientID
 	}
 	inst.MediaServerConfig = normalized
 	inst.MediaServerConfigInvalid = false

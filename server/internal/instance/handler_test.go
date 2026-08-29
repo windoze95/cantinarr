@@ -576,6 +576,7 @@ func TestValidateConnectionDoesNotFollowServiceRedirects(t *testing.T) {
 		"tautulli",
 		"jellyfin",
 		"emby",
+		"plex",
 	}
 
 	for _, serviceType := range serviceTypes {

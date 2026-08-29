@@ -8,9 +8,8 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/instance"
-	"github.com/windoze95/cantinarr-server/internal/plex"
-	"github.com/windoze95/cantinarr-server/internal/serversettings"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
+	"github.com/windoze95/cantinarr-server/internal/serversettings"
 )
 
 // setupItem is one entry in the admin setup checklist. The list is DERIVED
@@ -42,7 +41,6 @@ type setupFacts struct {
 	Trakt             bool
 	AI                bool
 	Push              bool
-	PlexInvites       bool
 	// RemediationDecided is whether an admin has ever saved remediation
 	// settings; like discovery, on and off are both correct answers and the
 	// checklist only asks that the decision was made.
@@ -113,16 +111,9 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Optional:    true,
 		},
 		{
-			Key:         "plex_invites",
-			Title:       "Plex invites",
-			Description: "Link a Plex account to send server invites with one tap — or automatically.",
-			Configured:  f.PlexInvites,
-			Optional:    true,
-		},
-		{
 			Key:         "media_servers",
-			Title:       "Media server accounts",
-			Description: "Connect Jellyfin or Emby so users can create their own accounts from the app.",
+			Title:       "Media server access",
+			Description: "Connect Plex, Jellyfin, or Emby so users can get access from the app: a Plex invite, or an account they create themselves.",
 			Configured:  f.HasMediaServer,
 			Optional:    true,
 		},
@@ -187,7 +178,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 
 // setupStatusHandler answers the admin setup checklist: which features are
 // configured right now. Everything is re-derived per request.
-func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, plexService *plex.Service, serverSettings *serversettings.Service, remediationSvc *remediation.Service) http.HandlerFunc {
+func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, serverSettings *serversettings.Service, remediationSvc *remediation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var facts setupFacts
 		if instances, err := store.ListAll(); err == nil {
@@ -224,7 +215,6 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 			facts.AI = aiHandler.ProviderConfigured()
 		}
 		facts.Push = cfg.PushGatewayURL != ""
-		facts.PlexInvites = plexService.Status().Configured
 		if serverSettings != nil {
 			facts.DiscoveryChosen = serverSettings.DiscoveryChosen()
 			facts.DiscoverySource = serverSettings.Get().DiscoverySource

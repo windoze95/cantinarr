@@ -109,6 +109,8 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	createConfigInstance(t, store, "jellyfin", "Other Jellyfin", false)
 	denEmby := createConfigInstance(t, store, "emby", "Den Emby", false)
 	createConfigInstance(t, store, "emby", "Other Emby", false)
+	cantinaPlex := createConfigInstance(t, store, "plex", "Cantina Plex", false)
+	createConfigInstance(t, store, "plex", "Other Plex", false)
 
 	if err := store.SetUserDefault(userID, "radarr", fourKRadarr.ID); err != nil {
 		t.Fatalf("pin radarr: %v", err)
@@ -118,7 +120,7 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	}
 	// Media servers are grant-only: the granted one is listed so the app can
 	// offer the account guide, the other never falls back into view.
-	if err := store.SetUserGrants(userID, map[string][]string{"jellyfin": {homeJellyfin.ID}, "emby": {denEmby.ID}}); err != nil {
+	if err := store.SetUserGrants(userID, map[string][]string{"jellyfin": {homeJellyfin.ID}, "emby": {denEmby.ID}, "plex": {cantinaPlex.ID}}); err != nil {
 		t.Fatalf("grant media servers: %v", err)
 	}
 
@@ -134,6 +136,10 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 		books.ID:        "chaptarr",
 		homeJellyfin.ID: "jellyfin",
 		denEmby.ID:      "emby",
+		cantinaPlex.ID:  "plex",
+	}
+	if !resp.PlexAccessRequestable {
+		t.Fatal("a server with a Plex instance must say Plex access can be asked for")
 	}
 	if len(resp.Instances) != len(want) {
 		t.Fatalf("instances = %#v, want %d visible instances", resp.Instances, len(want))
@@ -520,6 +526,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			assertExactMapKeys(t, payload,
 				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
+				"plex_access_requestable",
 			)
 
 			var services map[string]bool
@@ -579,9 +586,10 @@ func assertExactMapKeys[V any](t *testing.T, got map[string]V, want ...string) {
 }
 
 type configHandlerResponse struct {
-	MinAppVersion string          `json:"min_app_version"`
-	Services      map[string]bool `json:"services"`
-	Instances     []struct {
+	MinAppVersion         string          `json:"min_app_version"`
+	Services              map[string]bool `json:"services"`
+	PlexAccessRequestable bool            `json:"plex_access_requestable"`
+	Instances             []struct {
 		ID             string `json:"id"`
 		ServiceType    string `json:"service_type"`
 		Name           string `json:"name"`
@@ -684,4 +692,25 @@ func requestConfig(
 		t.Fatalf("Decode() error = %v", err)
 	}
 	return resp
+}
+
+// A user with no Plex grant still learns that a Plex server exists — the
+// guide offers "share your Plex email" on that alone — and learns nothing
+// else about it. A server without Plex says so.
+func TestConfigHandlerPlexAccessRequestable(t *testing.T) {
+	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
+	claims := &auth.Claims{UserID: userID, Username: "alice", Role: auth.RoleUser}
+	if resp := requestConfig(t, store, creds, remediationSvc, claims); resp.PlexAccessRequestable {
+		t.Fatal("no Plex instance, yet requestable")
+	}
+	plex := createConfigInstance(t, store, "plex", "Cantina Plex", false)
+	resp := requestConfig(t, store, creds, remediationSvc, claims)
+	if !resp.PlexAccessRequestable {
+		t.Fatal("a Plex instance exists, yet not requestable")
+	}
+	for _, inst := range resp.Instances {
+		if inst.ID == plex.ID {
+			t.Fatal("an ungranted Plex instance was listed")
+		}
+	}
 }

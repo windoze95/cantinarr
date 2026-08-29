@@ -28,7 +28,6 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
-	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
@@ -140,6 +139,12 @@ func main() {
 	// Media-server accounts (Jellyfin, Emby): a granted user creates their own
 	// account from the app; grant changes and user deletion switch accounts
 	// off and on through the two hooks below.
+	// The pre-instance Plex integration (a linked account in the settings
+	// table) becomes a Plex instance on first boot, with everyone it had
+	// invited granted; idempotent, marker-guarded.
+	if err := instance.MigratePlexSingleton(database, cipher, logger); err != nil {
+		log.Fatalf("Failed to migrate the Plex integration: %v", err)
+	}
 	mediaAccessService := mediaaccess.NewService(database, instanceStore, instance.NewMediaServerProvider, logger)
 	mediaAccessHandler := mediaaccess.NewHandler(mediaAccessService, logger)
 	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
@@ -200,17 +205,12 @@ func main() {
 	} else {
 		notifier = push.NewComposite(wsHub)
 	}
-	// Plex integration: linked-account invites (one-tap and auto). The auth
-	// handler's access-request hook routes "user shared their Plex email"
-	// through the plex service, which auto-invites when configured and
-	// notifies admins with the outcome; wired late because the composite
-	// needs the hub.
-	plexService := plex.NewService(database, cipher, plex.NewClient(), notifier, logger)
-	plexHandler := plex.NewHandler(plexService, logger)
-	authHandler.SetAccessRequestHook(plexService.OnAccessRequest)
-	// Media-server invites (Plex) push "check your email" through the same
-	// composite; wired here for the same reason.
+	// Media-server invites (Plex): "user shared their Plex email" goes through
+	// the media-access service, which sends the invites their grants owe (or
+	// auto-approves them) and tells admins the outcome; the invite pushes ride
+	// the same composite. Wired late because the composite needs the hub.
 	mediaAccessService.SetNotifier(notifier)
+	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
 	requestHandler := request.NewHandler(requestService)
 
@@ -340,7 +340,7 @@ func main() {
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService, mediaAccessHandler, updateChecker, serverSettings)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
