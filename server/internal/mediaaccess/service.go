@@ -508,7 +508,9 @@ func (s *Service) RequestInvite(ctx context.Context, userID int64, instanceID, e
 		}
 		return CreatedAccount{}, ErrNotAvailable
 	}
-	if created {
+	// "Check your email" only when there is an email to check: plex.tv
+	// accepts a share at once for an account still connected to the owner.
+	if created && remote.Pending {
 		s.notifyUser(userID, eventInviteSent)
 	}
 	return CreatedAccount{Username: name, PublicAddress: inst.MediaServerConfig.PublicAddress, Pending: remote.Pending}, nil
@@ -1064,14 +1066,19 @@ func (s *Service) reconcileMissingShare(ctx context.Context, provider mediaserve
 	if !row.DisabledAt.Valid {
 		return
 	}
-	if _, err := provider.CreateUser(ctx, row.RemoteUserID, "", inst.MediaServerConfig.LibraryIDs); err != nil {
+	remote, err := provider.CreateUser(ctx, row.RemoteUserID, "", inst.MediaServerConfig.LibraryIDs)
+	if err != nil {
 		s.logger.Error("mediaaccess: reconcile: re-invite", "err", err, "user_id", row.UserID, "instance_id", row.InstanceID)
 		return
 	}
 	if err := s.setDisabledAt(row.UserID, row.InstanceID, false); err != nil {
 		s.logger.Error("mediaaccess: reconcile: stamp", "err", err, "user_id", row.UserID, "instance_id", row.InstanceID)
 	}
-	s.notifyUser(row.UserID, eventInviteSent)
+	// An account plex.tv still knows gets the share back accepted at once;
+	// only a real invite is worth a "check your email".
+	if remote.Pending {
+		s.notifyUser(row.UserID, eventInviteSent)
+	}
 }
 
 // BeforeUserDelete is the auth handler's delete hook. Called before the

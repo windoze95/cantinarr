@@ -25,6 +25,9 @@ type fakeInviteProvider struct {
 	createErr      error
 	libraryWrites  []libraryWrite
 	lastLibraryIDs []string
+	// acceptAtOnce mimics plex.tv sharing with an account still connected
+	// to the owner: the share comes back accepted, no invite to open.
+	acceptAtOnce bool
 }
 
 func newFakeInviteProvider() *fakeInviteProvider {
@@ -112,7 +115,7 @@ func (f *fakeInviteProvider) CreateUser(_ context.Context, identity, password st
 	}
 	f.invites++
 	f.lastLibraryIDs = append([]string(nil), libraryIDs...)
-	f.shares[id] = &mediaserver.RemoteUser{ID: id, Name: strings.SplitN(id, "@", 2)[0], Pending: true}
+	f.shares[id] = &mediaserver.RemoteUser{ID: id, Name: strings.SplitN(id, "@", 2)[0], Pending: !f.acceptAtOnce}
 	return *f.shares[id], nil
 }
 
@@ -639,5 +642,35 @@ func TestSharedLibrariesChangeRescopesInviteSharesAndUserDeleteRemovesThem(t *te
 	commit()
 	if fake.has("alice@example.com") {
 		t.Fatal("deleting the user left the share in place")
+	}
+}
+
+// Seen live: plex.tv hands an account it still knows the share back accepted
+// at once. No email went out, so no "check your email" push may either.
+func TestNoCheckYourEmailPushWhenPlexAcceptsAtOnce(t *testing.T) {
+	e := newEnv(t)
+	pushes := e.notifier()
+	alice := e.user("alice")
+	plex, fake := e.inviteServer("Den Plex", instance.MediaServerConfig{})
+	e.grant(alice, plex)
+	fake.acceptAtOnce = true
+
+	created, err := e.svc.RequestInvite(context.Background(), alice, plex, "alice@example.com")
+	if err != nil || created.Pending {
+		t.Fatalf("created = %+v, %v", created, err)
+	}
+	if pushes.userEvents(alice, eventInviteSent) != 0 {
+		t.Fatal("an accepted-at-once share pushed 'check your email'")
+	}
+
+	e.grant(alice)
+	e.svc.OnGrantsChanged([]int64{alice})
+	e.grant(alice, plex)
+	e.svc.OnGrantsChanged([]int64{alice})
+	if !fake.has("alice@example.com") || e.row(alice, plex).DisabledAt.Valid {
+		t.Fatal("re-grant did not re-share")
+	}
+	if pushes.userEvents(alice, eventInviteSent) != 0 {
+		t.Fatal("a re-share plex.tv accepted at once pushed 'check your email'")
 	}
 }
