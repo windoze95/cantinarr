@@ -1,14 +1,45 @@
 // Package mediaserver defines the provider-neutral contract Cantinarr uses to
-// manage user accounts on a media server (Jellyfin and Emby). It is a
-// leaf package: value types, sentinel errors, and the Provider interface the
+// manage user access on a media server (Jellyfin, Emby, Plex). It is a leaf
+// package: value types, sentinel errors, and the Provider interface the
 // per-server clients implement. Nothing here dials anything.
 package mediaserver
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"unicode"
 )
+
+// Kind is how a media server grants access.
+type Kind string
+
+const (
+	// KindAccount servers (Jellyfin, Emby) hold local accounts: Cantinarr
+	// creates one named after the Cantinarr user, with a password the user
+	// picks, and switches it off and on with the grant.
+	KindAccount Kind = "account"
+	// KindInvite servers (Plex) hold no accounts of Cantinarr's. Access is a
+	// share the server's owner extends to an identity the user supplies
+	// (their Plex email), which the person accepts on the server's side. The
+	// share is the account: revoking removes it, re-granting sends a new
+	// invite the person has to accept again.
+	KindInvite Kind = "invite"
+)
+
+// Kinded is implemented by providers that are not KindAccount. KindOf reads
+// it; a provider that does not implement it is an account server.
+type Kinded interface {
+	Kind() Kind
+}
+
+// KindOf reports how a provider grants access.
+func KindOf(p Provider) Kind {
+	if k, ok := p.(Kinded); ok {
+		return k.Kind()
+	}
+	return KindAccount
+}
 
 // SystemInfo identifies a media server; the connection test reads it.
 type SystemInfo struct {
@@ -26,12 +57,17 @@ type Library struct {
 	CollectionType string
 }
 
-// RemoteUser is the subset of a media-server account Cantinarr acts on.
+// RemoteUser is the subset of a media-server account Cantinarr acts on. On an
+// invite server it is a share: ID is the canonical identity the invite went
+// to (CanonicalEmail), Pending reports an invite the person has not accepted
+// yet, and IsDisabled is never set — a share that is gone is absence
+// (ErrUserNotFound), not a disabled account.
 type RemoteUser struct {
 	ID              string
 	Name            string
 	IsAdministrator bool
 	IsDisabled      bool
+	Pending         bool
 }
 
 var (
@@ -47,6 +83,25 @@ var (
 // Provider is what a media-server client must offer. Implementations keep
 // hosts and credentials out of every error they return: these errors can
 // reach requesters.
+//
+// Invite servers (KindInvite) implement the same interface with these
+// meanings, chosen so the callers' self-heal paths work unchanged:
+//   - CreateUser(ctx, identity, "", libraryIDs) sends the share invite to
+//     identity; the password must be empty. A server that reports the
+//     identity as already shared answers with the existing share rather
+//     than an error — the caller's pre-check makes that a race, never the
+//     normal path.
+//   - GetUser(identity) answers ErrUserNotFound when there is neither an
+//     accepted share nor a pending invite. Absence is absence, exactly as
+//     for a deleted account.
+//   - SetDisabled(ctx, identity, true) removes the share or cancels the
+//     pending invite; SetDisabled(ctx, identity, false) is a no-op — access
+//     comes back as a new invite, which the caller sends with CreateUser.
+//   - Users lists accepted shares and pending invites; every ID is the
+//     canonical identity and matching is case-insensitive.
+//   - SetLibraries re-scopes an existing share and does nothing for an
+//     identity that has none.
+//   - DeleteUser is SetDisabled(true).
 type Provider interface {
 	SystemInfo(ctx context.Context) (SystemInfo, error)
 	Libraries(ctx context.Context) ([]Library, error)
@@ -92,4 +147,23 @@ func ValidUsername(name string) bool {
 		}
 	}
 	return true
+}
+
+// ValidEmail is the shape check for an invite identity, not RFC validation:
+// something@something with no whitespace, short enough for a users-table
+// column. The server's own answer is the real validation; this only keeps
+// obvious typos from becoming an invite nobody receives.
+func ValidEmail(email string) bool {
+	if email == "" || len(email) > 254 || strings.ContainsAny(email, " \t\r\n") {
+		return false
+	}
+	at := strings.Index(email, "@")
+	return at > 0 && at < len(email)-1
+}
+
+// CanonicalEmail is the one spelling an invite identity is stored and
+// compared under: trimmed and lower-cased, so the same address typed twice
+// with different capitals is one share, not two.
+func CanonicalEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }

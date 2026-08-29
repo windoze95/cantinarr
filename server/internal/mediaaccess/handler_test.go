@@ -251,3 +251,55 @@ func TestAdminRoutesStatusMapping(t *testing.T) {
 		t.Fatalf("accounts after unlink = %s, want []", body)
 	}
 }
+
+func TestRequestInviteStatusMapping(t *testing.T) {
+	e, router := newHandlerEnv(t)
+	alice, bob := e.user("alice"), e.user("bob")
+	plex, fake := e.inviteServer("Den Plex", instance.MediaServerConfig{PublicAddress: "https://app.plex.tv"})
+	jf := e.jellyfin("Home", instance.MediaServerConfig{})
+	e.grant(alice, plex, jf)
+	e.grant(bob, plex)
+
+	for name, body := range map[string]string{
+		"both":          `{"password":"alice-pass-1","email":"alice@example.com"}`,
+		"invalid email": `{"email":"nope"}`,
+		"password here": `{"password":"alice-pass-1"}`,
+	} {
+		if rec := serve(router, "POST", "/api/media-servers/"+plex+"/account", alice, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d %s, want 400", name, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := serve(router, "POST", "/api/media-servers/"+jf+"/account", alice, `{"email":"alice@example.com"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "wrong_kind") {
+		t.Fatalf("email on an account server = %d %s", rec.Code, rec.Body.String())
+	}
+	if fake.invites != 0 {
+		t.Fatalf("refusals sent %d invites", fake.invites)
+	}
+
+	rec := serve(router, "POST", "/api/media-servers/"+plex+"/account", alice, `{"email":" Alice@Example.com "}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("request invite = %d %s", rec.Code, rec.Body.String())
+	}
+	var created CreatedAccount
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !created.Pending || created.Username != "alice" || created.PublicAddress != "https://app.plex.tv" {
+		t.Fatalf("created = %+v", created)
+	}
+	if rec := serve(router, "POST", "/api/media-servers/"+plex+"/account", alice, `{"email":"alice@example.com"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "account_exists") {
+		t.Fatalf("second request = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := serve(router, "POST", "/api/media-servers/"+plex+"/account", bob, `{"email":"alice@example.com"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "name_taken") {
+		t.Fatalf("someone else's email = %d %s", rec.Code, rec.Body.String())
+	}
+
+	list := serve(router, "GET", "/api/media-servers", alice, "")
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"kind":"invite"`) || !strings.Contains(list.Body.String(), `"pending":true`) {
+		t.Fatalf("list = %d %s", list.Code, list.Body.String())
+	}
+	users := serve(router, "GET", "/api/admin/media-servers/"+plex+"/users", alice, "")
+	if users.Code != http.StatusOK || !strings.Contains(users.Body.String(), `"pending":true`) {
+		t.Fatalf("remote users = %d %s", users.Code, users.Body.String())
+	}
+}

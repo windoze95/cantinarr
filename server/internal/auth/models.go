@@ -13,10 +13,12 @@ type User struct {
 	// new users so the default sign-in is a connect link.
 	PasswordEnabled bool `json:"password_enabled"`
 	PasskeyEnabled  bool `json:"passkey_enabled"`
-	// PlexEmail is the email the user shared so an admin can invite them to
-	// the Plex server. Empty until the user submits one. PlexInvitedAt is
-	// when Cantinarr last sent their invite (one-tap or auto) — a record of
-	// our action, not a claim about current access in Plex.
+	// PlexEmail is the email the user shared for their Plex invite (the
+	// identity the media-access service keys Plex shares by). Empty until
+	// the user submits one. PlexInvitedAt is derived from their live Plex
+	// account row — when the invite went out — and kept for apps that still
+	// read it; the account rows are the record of our action, never a claim
+	// about current access in Plex.
 	PlexEmail     string     `json:"plex_email"`
 	PlexInvitedAt *time.Time `json:"plex_invited_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`

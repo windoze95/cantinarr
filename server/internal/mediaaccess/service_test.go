@@ -163,7 +163,7 @@ type env struct {
 	store     *instance.Store
 	svc       *Service
 	provider  *fakeProvider
-	providers map[string]*fakeProvider // per instance id; falls back to provider
+	providers map[string]mediaserver.Provider // per instance id; falls back to provider
 	logs      *bytes.Buffer
 }
 
@@ -178,7 +178,7 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, db: database, store: instance.NewStore(database, cipher), provider: newFakeProvider(), providers: map[string]*fakeProvider{}, logs: &bytes.Buffer{}}
+	e := &env{t: t, db: database, store: instance.NewStore(database, cipher), provider: newFakeProvider(), providers: map[string]mediaserver.Provider{}, logs: &bytes.Buffer{}}
 	logger := slog.New(slog.NewTextHandler(e.logs, nil))
 	e.svc = NewService(database, e.store, func(inst *instance.Instance) (mediaserver.Provider, error) {
 		if p, ok := e.providers[inst.ID]; ok {
@@ -186,6 +186,9 @@ func newEnv(t *testing.T) *env {
 		}
 		return e.provider, nil
 	}, logger)
+	// Invite passes run off the request in production; here they run inline
+	// so a test can assert right after the call that triggered them.
+	e.svc.background = func(fn func()) { fn() }
 	return e
 }
 
@@ -769,7 +772,8 @@ func TestSharedLibrariesChangeRescopesOnlyAccountsCantinarrCreated(t *testing.T)
 	bob := e.user("bob")
 	jf := e.jellyfin("Home", instance.MediaServerConfig{LibraryIDs: []string{"lib-movies", "lib-shows"}})
 	other := e.jellyfin("Cabin", instance.MediaServerConfig{LibraryIDs: []string{"lib-movies"}})
-	e.providers[other] = newFakeProvider()
+	otherFake := newFakeProvider()
+	e.providers[other] = otherFake
 	e.grant(alice, jf)
 	e.grant(bob, jf)
 	if _, err := e.svc.CreateAccount(context.Background(), alice, jf, "alice-pass-1"); err != nil {
@@ -795,7 +799,7 @@ func TestSharedLibrariesChangeRescopesOnlyAccountsCantinarrCreated(t *testing.T)
 	if !reflect.DeepEqual(write.libraryIDs, []string{"lib-movies"}) {
 		t.Fatalf("re-scoped to %v, want the new selection", write.libraryIDs)
 	}
-	if writes := e.providers[other].libraryWrites; len(writes) != 0 {
+	if writes := otherFake.libraryWrites; len(writes) != 0 {
 		t.Fatalf("another instance was re-scoped: %+v", writes)
 	}
 }

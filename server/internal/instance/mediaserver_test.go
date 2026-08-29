@@ -449,3 +449,35 @@ func TestUpdateFiresSharedLibrariesObserverOnlyOnChange(t *testing.T) {
 		t.Fatalf("clearing update calls = %+v", calls)
 	}
 }
+
+// The Plex fields ride along with the two original ones through every path
+// that rebuilds the config: an update that omits the config keeps them, one
+// that sends them stores them trimmed, and the response carries them.
+func TestMediaServerConfigCarriesPlexFields(t *testing.T) {
+	h := NewHandler(newTestStore(t), nil)
+
+	created := &Instance{ServiceType: "jellyfin"}
+	if err := h.applyMediaServerConfig(created, &MediaServerConfig{MachineIdentifier: " machine-1 ", AutoApprove: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if created.MediaServerConfig.MachineIdentifier != "machine-1" || !created.MediaServerConfig.AutoApprove {
+		t.Fatalf("stored config = %+v", created.MediaServerConfig)
+	}
+
+	updated := &Instance{ServiceType: "jellyfin"}
+	if err := h.applyMediaServerConfig(updated, nil, created); err != nil {
+		t.Fatal(err)
+	}
+	if updated.MediaServerConfig.MachineIdentifier != "machine-1" || !updated.MediaServerConfig.AutoApprove {
+		t.Fatalf("omitted config dropped the plex fields: %+v", updated.MediaServerConfig)
+	}
+	if resp := h.toResponse(created); resp.MediaServerConfig.MachineIdentifier != "machine-1" || !resp.MediaServerConfig.AutoApprove {
+		t.Fatalf("response dropped the plex fields: %+v", resp.MediaServerConfig)
+	}
+
+	for name, bad := range map[string]string{"whitespace": "mach ine", "too long": strings.Repeat("m", 129)} {
+		if err := h.applyMediaServerConfig(&Instance{ServiceType: "jellyfin"}, &MediaServerConfig{MachineIdentifier: bad}, nil); err == nil {
+			t.Errorf("%s machine identifier accepted", name)
+		}
+	}
+}

@@ -208,6 +208,9 @@ func main() {
 	plexService := plex.NewService(database, cipher, plex.NewClient(), notifier, logger)
 	plexHandler := plex.NewHandler(plexService, logger)
 	authHandler.SetAccessRequestHook(plexService.OnAccessRequest)
+	// Media-server invites (Plex) push "check your email" through the same
+	// composite; wired here for the same reason.
+	mediaAccessService.SetNotifier(notifier)
 	requestService := request.NewService(database, registry, bridge, notifier)
 	requestHandler := request.NewHandler(requestService)
 

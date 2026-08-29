@@ -55,12 +55,21 @@ func mediaServerTypeList() string {
 type MediaServerConfig struct {
 	PublicAddress string   `json:"public_address"`
 	LibraryIDs    []string `json:"library_ids"`
+	// MachineIdentifier names the Plex Media Server whose shares the instance
+	// manages (plex.tv's machineIdentifier). Empty for every other type.
+	MachineIdentifier string `json:"machine_identifier,omitempty"`
+	// AutoApprove (Plex) grants this server to anyone who shares a Plex email
+	// and sends their invite at once, instead of waiting for an admin to
+	// grant them. Off unless an admin switches it on.
+	AutoApprove bool `json:"auto_approve,omitempty"`
 }
 
 func (c MediaServerConfig) clone() MediaServerConfig {
 	return MediaServerConfig{
-		PublicAddress: c.PublicAddress,
-		LibraryIDs:    append([]string{}, c.LibraryIDs...),
+		PublicAddress:     c.PublicAddress,
+		LibraryIDs:        append([]string{}, c.LibraryIDs...),
+		MachineIdentifier: c.MachineIdentifier,
+		AutoApprove:       c.AutoApprove,
 	}
 }
 
@@ -89,6 +98,7 @@ func normalizeMediaServerConfig(inst *Instance) {
 	}
 	inst.MediaServerConfig.PublicAddress = strings.TrimRight(strings.TrimSpace(inst.MediaServerConfig.PublicAddress), "/")
 	inst.MediaServerConfig.LibraryIDs = tidyLibraryIDs(inst.MediaServerConfig.LibraryIDs)
+	inst.MediaServerConfig.MachineIdentifier = strings.TrimSpace(inst.MediaServerConfig.MachineIdentifier)
 }
 
 // tidyLibraryIDs trims, drops empties, de-duplicates, and sorts, so equal
@@ -150,6 +160,17 @@ func validateMediaServerConfig(cfg MediaServerConfig) (MediaServerConfig, error)
 		}
 	}
 	out.LibraryIDs = tidyLibraryIDs(cfg.LibraryIDs)
+	machine := strings.TrimSpace(cfg.MachineIdentifier)
+	if len(machine) > 128 {
+		return out, fmt.Errorf("machine identifier is too long")
+	}
+	for _, r := range machine {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return out, fmt.Errorf("machine identifier contains invalid characters")
+		}
+	}
+	out.MachineIdentifier = machine
+	out.AutoApprove = cfg.AutoApprove
 	return out, nil
 }
 

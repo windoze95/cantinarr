@@ -11,9 +11,10 @@ import (
 )
 
 // AccessRequestHook runs after a user shares a new or changed Plex email.
-// Wired by main to the plex service, which auto-invites when configured and
-// notifies admins with the outcome either way. A hook (not a notifier) so
-// auth stays free of both push and plex dependencies.
+// Wired by main to the media-access service, which sends the invites the
+// user's grants owe (or auto-approves them) and notifies admins with the
+// outcome either way. A hook (not a notifier) so auth stays free of both
+// push and media-server dependencies.
 type AccessRequestHook func(userID int64, username string)
 
 // UserDeleteHook is asked, before a user is deleted, to prepare whatever must
@@ -35,8 +36,8 @@ func NewHandler(service *Service) *Handler {
 }
 
 // SetAccessRequestHook wires the Plex access-request side effect after
-// construction: the plex service is built later in startup than the auth
-// handler (it needs the notifier composite, which needs the WebSocket hub).
+// construction: the media-access service gets its notifier later in startup
+// than the auth handler (the composite needs the WebSocket hub).
 func (h *Handler) SetAccessRequestHook(hook AccessRequestHook) {
 	h.accessRequestHook = hook
 }

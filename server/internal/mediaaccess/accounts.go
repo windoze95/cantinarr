@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/instance"
 )
 
 // accountRow is one user_media_server_accounts row: what Cantinarr did on a
@@ -221,4 +223,92 @@ func (s *Service) listAccountsCreatedOn(instanceID string) ([]accountRow, error)
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// identityClaimed reports whether another user's row on the instance already
+// holds this remote identity. Invite servers key rows by email, so this is
+// what keeps two Cantinarr users from claiming one share.
+func (s *Service) identityClaimed(instanceID, remoteUserID string, userID int64) (bool, error) {
+	var one int
+	err := s.db.QueryRow(
+		"SELECT 1 FROM user_media_server_accounts WHERE instance_id = ? AND remote_user_id = ? AND user_id != ?",
+		instanceID, remoteUserID, userID,
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check media server identity: %w", err)
+	}
+	return true, nil
+}
+
+// plexEmail is the invite identity the user shared, canonical, or "".
+func (s *Service) plexEmail(userID int64) (string, error) {
+	var email string
+	if err := s.db.QueryRow("SELECT plex_email FROM users WHERE id = ?", userID).Scan(&email); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrUserNotFound
+		}
+		return "", fmt.Errorf("load user: %w", err)
+	}
+	return strings.ToLower(strings.TrimSpace(email)), nil
+}
+
+// rememberEmail stores the address a user asked their invite sent to, so a
+// grant that arrives later knows where to send it.
+func (s *Service) rememberEmail(userID int64, email string) error {
+	res, err := s.db.Exec("UPDATE users SET plex_email = ? WHERE id = ?", email, userID)
+	if err != nil {
+		return fmt.Errorf("remember invite email: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// listUninvitedGrantedUsers returns the users who shared an invite email and
+// hold a grant on some media server they have no row on: the invites a grant
+// still owes. Account servers appear here too (a Jellyfin user may well have
+// a Plex email); inviteGranted skips them without dialing anything.
+func (s *Service) listUninvitedGrantedUsers() ([]int64, error) {
+	rows, err := s.db.Query(
+		`SELECT DISTINCT g.user_id
+		 FROM user_instance_grants g
+		 JOIN users u ON u.id = g.user_id
+		 JOIN service_instances si ON si.id = g.instance_id
+		 LEFT JOIN user_media_server_accounts a
+		   ON a.user_id = g.user_id AND a.instance_id = g.instance_id
+		 WHERE u.plex_email != '' AND a.instance_id IS NULL AND si.service_type IN (`+mediaServerTypePlaceholders()+`)
+		 ORDER BY g.user_id`,
+		mediaServerTypeArgs()...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list owed invites: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			return nil, fmt.Errorf("scan owed invite: %w", err)
+		}
+		out = append(out, userID)
+	}
+	return out, rows.Err()
+}
+
+func mediaServerTypePlaceholders() string {
+	types := instance.MediaServerTypes()
+	return strings.TrimSuffix(strings.Repeat("?,", len(types)), ",")
+}
+
+func mediaServerTypeArgs() []any {
+	types := instance.MediaServerTypes()
+	args := make([]any, 0, len(types))
+	for _, t := range types {
+		args = append(args, t)
+	}
+	return args
 }
