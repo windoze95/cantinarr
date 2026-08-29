@@ -204,33 +204,23 @@ void main() {
 
   _mainMergedCardTests();
 
-  testWidgets('hides the row while a search is active', (tester) async {
-    tester.view.physicalSize = const Size(900, 1400);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-
-    await _pumpBooksTab(tester, items: _twoFormatsOfOneTitle());
-    expect(find.text('Recently Added'), findsOneWidget);
-
-    await tester.enterText(find.byType(TextField), 'dune');
-    await tester.pumpAndSettle(const Duration(milliseconds: 600));
-    expect(find.text('Recently Added'), findsNothing);
-    expect(find.text('No books found. Try a different search.'), findsOneWidget);
-
-    // Clearing the query brings the row back.
-    await tester.enterText(find.byType(TextField), '');
-    await tester.pumpAndSettle(const Duration(milliseconds: 600));
-    expect(find.text('Recently Added'), findsOneWidget);
-  });
+  // "hides the row while a search is active" was removed in Phase 3 (TAB-01):
+  // DashboardBooksTab no longer has a search field of its own — search moved
+  // to the shell toolbar, an entirely separate widget this file's harness
+  // never pumps — so there is no in-widget "search active" state left for
+  // this row to hide behind. The old idle gate that hid the row is gone with
+  // it. Proof that the row is now covered by the shell's overlay instead of
+  // being removed lives in app/test/dashboard/dashboard_books_tab_test.dart's
+  // 'the browse rows stay in the tree underneath an active book-search overlay'
+  // case — the only harness in this phase that pumps the real AppShell and
+  // can see the overlay at all.
 
   testWidgets('stays silent when the user has no book access', (tester) async {
     await _pumpBooksTab(tester, recentStatus: 403);
 
     expect(find.text('Recently Added'), findsNothing);
-    // A missing row must not look like a failure, and search must still work.
+    // A missing row must not look like a failure.
     expect(find.textContaining('access'), findsNothing);
-    expect(find.byType(TextField), findsOneWidget);
   });
 
   testWidgets('hides the row when nothing has landed', (tester) async {
@@ -465,8 +455,6 @@ void main() {
     expect(find.byType(MediaCard), findsNothing);
     expect(find.textContaining('error'), findsNothing);
     expect(find.textContaining('Error'), findsNothing);
-    // The rest of the tab must be unaffected — the failure stays invisible.
-    expect(find.byType(TextField), findsOneWidget);
   });
 
   testWidgets(

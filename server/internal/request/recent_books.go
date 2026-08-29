@@ -177,6 +177,11 @@ func buildRecentBooks(books []chaptarr.Book, filesByBook map[int][]chaptarr.Book
 	type group struct {
 		item    RecentBook
 		formats map[string]struct{}
+		// coverFrom is the arrival time of the record g.item.Cover came from,
+		// so a later record can only replace it by being *older* — see the
+		// cover selection below.
+		coverFrom time.Time
+		coverID   int
 	}
 	groups := make(map[string]*group, len(books))
 	order := make([]string, 0, len(books))
@@ -220,10 +225,30 @@ func buildRecentBooks(books []chaptarr.Book, filesByBook map[int][]chaptarr.Book
 		if g.item.ForeignBookID == "" {
 			g.item.ForeignBookID = book.ForeignBookID
 		}
-		// Both records of a title carry the same art, so the first usable
-		// cover wins rather than preferring one record over the other.
-		if g.item.Cover == "" {
-			g.item.Cover = clientReachableCover(book)
+		// Cover selection, deliberately not "first usable in library order".
+		//
+		// Chaptarr emits /MediaCover/Books/{id}/cover.jpg for a record whether
+		// or not the art behind it has been downloaded, so a path being present
+		// is not evidence it resolves — and nothing here can tell the two apart.
+		// A record created minutes ago is the one most likely to have art that
+		// does not exist yet.
+		//
+		// So prefer the art of the *established* record: the one whose files
+		// landed earliest. When a second format merges into a title, the card
+		// then keeps the cover it was already rendering instead of adopting the
+		// new arrival's possibly-empty one and losing its art for good (the
+		// arrival's own path never becomes correct on a later refresh, so this
+		// was permanent). Ties break on the lower record id to stay stable
+		// across fetches.
+		if cover := clientReachableCover(book); cover != "" {
+			better := g.item.Cover == "" ||
+				newest.Before(g.coverFrom) ||
+				(newest.Equal(g.coverFrom) && book.ID < g.coverID)
+			if better {
+				g.item.Cover = cover
+				g.coverFrom = newest
+				g.coverID = book.ID
+			}
 		}
 	}
 

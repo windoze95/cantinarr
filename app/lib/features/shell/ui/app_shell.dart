@@ -21,6 +21,7 @@ import '../../ai_assistant/logic/ai_chat_provider.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/logic/search_library_status.dart';
+import '../../discover/ui/book_search_results_view.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../media_access/data/media_access_service.dart';
@@ -32,6 +33,7 @@ import '../../settings/logic/plex_invites_provider.dart';
 import '../../settings/logic/setup_status_provider.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
+import '../logic/shell_book_search_provider.dart';
 import '../logic/shell_search_provider.dart';
 
 /// The root shell widget with persistent search bar and navigation chrome.
@@ -129,6 +131,21 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path != null && path != _searchBarPath) {
       _searchBarPath = path;
       _searchBarAnim.forward();
+
+      // SEARCH-04: a query must not outlive the discovery tab that produced
+      // it. Clear the controller synchronously (no onChanged fires from a
+      // programmatic clear, so this alone triggers no search) and cancel any
+      // pending Ask AI idle timer. Both search notifiers are reset on the
+      // next frame regardless of which tab is being entered or left, so no
+      // stale debounce from the outgoing context can fire into the
+      // incoming one.
+      _searchController.clear();
+      _cancelAskAiIdle();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.read(shellSearchProvider.notifier).updateSearch('');
+        ref.read(shellBookSearchProvider.notifier).reset();
+      });
     }
   }
 
@@ -270,15 +287,56 @@ class _AppShellState extends ConsumerState<AppShell>
   void _exitAiMode() {
     _searchController.clear();
     ref.read(shellSearchProvider.notifier).exitAiMode();
+    // GAP-SC1 desync: reset the book notifier too, so a book result hidden
+    // by an AI-mode entry can never reappear stale after a clear.
+    ref.read(shellBookSearchProvider.notifier).reset();
     _dismissKeyboard();
   }
 
   /// Explicit entry into AI mode from the search bar's "Ask AI" pill.
   void _enterAiMode() {
+    // Reset unconditionally (not only on the Books tab): on other tabs the
+    // book notifier is already at its default, so this is a no-op there,
+    // and unconditional is what makes "at most one notifier ever holds a
+    // live query" true by construction. On the Books tab this cancels the
+    // pending debounce and drops any in-flight lookup via the generation
+    // bump, so no Chaptarr request is issued for a query the user just
+    // converted into an AI question.
+    ref.read(shellBookSearchProvider.notifier).reset();
     ref.read(shellSearchProvider.notifier).enterAiMode();
     // The pill sits in a TextFieldTapRegion so tapping it doesn't blur the
     // field; re-assert focus anyway so typing can continue immediately.
     _searchFocusNode.requestFocus();
+  }
+
+  /// Fixed framing prepended to a Books-tab AI hand-off's wire payload only
+  /// — never shown in the chat bubble. This is a compile-time literal with
+  /// nothing interpolated into it: the only user-controlled text in the
+  /// outgoing message stays the trimmed question appended after it
+  /// (threat T-04-01).
+  static const String _booksAiHandoffPrefix = 'Context: this question was '
+      'asked from the Books tab of Cantinarr, which searches the user\'s '
+      'book library. Treat it as a question about books, authors and '
+      'reading.\n\n';
+
+  /// Shows the books of an author the library does not hold, by running the
+  /// search the user could have typed themselves.
+  ///
+  /// A metadata-only author has no detail screen to open — Cantinarr's author
+  /// page renders *library* titles with ownership pills — so their books, in
+  /// this same overlay, are the useful destination: each row is already a
+  /// requestable book. Setting the field programmatically does not fire
+  /// `onChanged` (see `_exitAiMode`), so the notifier is fed explicitly.
+  void _searchAuthorBooks(String authorName) {
+    final term = authorName.trim();
+    if (term.isEmpty) return;
+    _searchController.text = term;
+    _searchController.selection =
+        TextSelection.collapsed(offset: term.length);
+    // Treat it as a fresh keystroke: the Ask AI pill's idle timer restarts
+    // rather than firing off the tap that just happened.
+    _resetAskAiIdle();
+    ref.read(shellBookSearchProvider.notifier).updateSearch(term);
   }
 
   /// Submit top-bar input through the full-screen assistant route.
@@ -286,11 +344,18 @@ class _AppShellState extends ConsumerState<AppShell>
     final text = _searchController.text.trim();
     if (text.isEmpty) return;
 
+    // Captured before `_exitAiMode()`/the route push change `currentPath` —
+    // reading it from inside the post-frame callback below would ask "which
+    // tab am I on?" of the assistant route and always answer "not Books".
+    final wireContent = _isBooksTab(widget.currentPath)
+        ? '$_booksAiHandoffPrefix$text'
+        : null;
+
     _exitAiMode();
     context.push('/assistant');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(aiChatProvider).sendMessage(text);
+      ref.read(aiChatProvider).sendMessage(text, wireContent: wireContent);
     });
   }
 
@@ -317,6 +382,15 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/tautulli')) return ModuleType.tautulli;
     return null;
   }
+
+  /// True on the Books discovery tab, where the toolbar searches Chaptarr
+  /// books instead of TMDB. Requires the same route-boundary check
+  /// `_isWithinRoute` uses in `app_router.dart` — a bare prefix match would
+  /// let a future sibling route sharing the `/dashboard/books` prefix
+  /// silently impersonate the Books tab and have its query rerouted to
+  /// Chaptarr (WR-01).
+  static bool _isBooksTab(String path) =>
+      path == '/dashboard/books' || path.startsWith('/dashboard/books/');
 
   bool _handleScrollNotification(ScrollNotification notification) {
     // Side-scrolling shelves (poster rows, chip strips) bubble their
@@ -399,11 +473,32 @@ class _AppShellState extends ConsumerState<AppShell>
         _initLibraries();
       }
     });
+    // BOOK-07: an instance switch re-runs the currently typed book search
+    // against the new Chaptarr instance rather than stranding it against the
+    // old one. Tells the *existing* notifier instance to redo its work —
+    // does not `ref.watch(instanceProvider...)` inside the provider's own
+    // definition, which would tear down and rebuild the notifier and drop
+    // the query under stale-looking typed text.
+    ref.listen(
+      instanceProvider.select((state) => state.activeChaptarrInstance?.id),
+      (previous, next) {
+        if (previous == next) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ref.read(shellBookSearchProvider.notifier).rerunForInstance();
+        });
+      },
+    );
 
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);
+    final bookSearchState = ref.watch(shellBookSearchProvider);
+    final bookSearchNotifier = ref.read(shellBookSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
+    final hasChaptarrService =
+        ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
+            false;
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
@@ -447,6 +542,39 @@ class _AppShellState extends ConsumerState<AppShell>
     );
 
     final isAiReady = searchState.searchMode == SearchMode.aiReady;
+    // Single resolution point for the route decision (was five scattered
+    // `_isBooksTab(widget.currentPath)` call sites) — every gate below reads
+    // this local rather than re-deriving it.
+    final booksTab = _isBooksTab(widget.currentPath);
+    // The prefix badge's glyph: the sparkle while the bar is actually in AI
+    // mode, otherwise the active discovery tab's own icon (read from the
+    // same `modulePagesFor` table the drawer already uses — no second icon
+    // map). Gated on `ModuleType.dashboard` specifically, not on
+    // `showGlobalSearch`: Radarr/Sonarr/Chaptarr/Downloads/Tautulli get no
+    // context of their own this phase (SEARCH-06, deferred) and keep the
+    // generic search glyph. A dashboard path matching no tab (a bare
+    // `/dashboard`, or `/dashboard/books` without the Chaptarr grant) also
+    // keeps the generic glyph rather than borrowing another tab's icon —
+    // the shell must not assert a context it has not determined.
+    IconData contextIcon = Icons.search_rounded;
+    if (isAiReady) {
+      contextIcon = Icons.auto_awesome_rounded;
+    } else if (_moduleTypeForPath(widget.currentPath) == ModuleType.dashboard) {
+      final dashboardPages = modulePagesFor(ModuleType.dashboard,
+          includeBooks: hasChaptarrService);
+      for (final page in dashboardPages) {
+        if (page.route == widget.currentPath) {
+          contextIcon = page.activeIcon;
+          break;
+        }
+      }
+    }
+    // Books-aware "a search is active" predicate: on the Books tab this
+    // reads the Chaptarr notifier, never the TMDB one, so the overlay and
+    // scroll gates cannot be driven by a notifier that no longer receives
+    // Books-tab keystrokes.
+    final searchOverlayActive =
+        booksTab ? bookSearchState.isSearching : searchState.isSearching;
 
     final searchBar = Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 24 : 6, 12, desktop ? 24 : 12, 10),
@@ -469,18 +597,58 @@ class _AppShellState extends ConsumerState<AppShell>
           focusNode: _searchFocusNode,
           hintText: isAiReady
               ? 'Ask the AI anything...'
-              : (hasAi
-                  ? 'Search or ask AI...'
-                  : 'Search by title or person...'),
+              : (booksTab
+                  ? 'Search books or authors...'
+                  : (hasAi
+                      ? 'Search or ask AI...'
+                      : 'Search by title or person...')),
           aiEnabled: hasAi,
+          contextIcon: contextIcon,
           onSubmitted: _submitSearchBar,
           onSend: isAiReady ? _submitSearchBarToAi : null,
           onChanged: (q) {
             _resetAskAiIdle();
-            searchNotifier.updateSearch(q);
+            // Exclusive dispatch: exactly one notifier is ever fed by a
+            // keystroke, chosen by the active discovery tab. While AI mode
+            // is active on the Books tab, neither notifier is fed a non-empty
+            // query — `_manualAiMode` keeps `searchMode` sticky without a
+            // feed, the book overlay is suppressed anyway, and
+            // `_submitSearchBarToAi` reads `_searchController.text`, not
+            // provider state.
+            if (booksTab) {
+              if (!isAiReady) {
+                bookSearchNotifier.updateSearch(q);
+              } else if (q.trim().isEmpty) {
+                // The one exception, for parity with every other discovery
+                // tab: emptying the field by typing leaves AI mode. Only
+                // `ShellSearchNotifier.updateSearch('')` clears
+                // `_manualAiMode`, so without this the Books tab could be
+                // left only via the explicit clear button. The empty string
+                // cannot reopen the escalation path exclusive dispatch
+                // closed: `updateSearch` short-circuits on empty — it resets
+                // `searchMode` to `search` and returns before
+                // `_executeSearch`, so neither `isAiPromptQuery` nor the
+                // empty-results auto-escalation is ever consulted.
+                searchNotifier.updateSearch('');
+              }
+            } else {
+              searchNotifier.updateSearch(q);
+            }
           },
-          onClear:
-              isAiReady ? _exitAiMode : () => searchNotifier.updateSearch(''),
+          onClear: isAiReady
+              ? _exitAiMode
+              : () {
+                  // Clear means "nothing is being searched anywhere" — both
+                  // notifiers are reset in both directions so a stale query
+                  // can never linger in the one that wasn't being fed.
+                  if (booksTab) {
+                    ref.read(shellBookSearchProvider.notifier).reset();
+                    searchNotifier.updateSearch('');
+                  } else {
+                    searchNotifier.updateSearch('');
+                    ref.read(shellBookSearchProvider.notifier).reset();
+                  }
+                },
         ),
       ),
     );
@@ -644,7 +812,7 @@ class _AppShellState extends ConsumerState<AppShell>
                     children: [
                       NotificationListener<ScrollNotification>(
                         onNotification:
-                            mobile && !searchState.isSearching && !isAiReady
+                            mobile && !searchOverlayActive && !isAiReady
                                 ? _handleScrollNotification
                                 : null,
                         child: widget.child,
@@ -668,7 +836,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                       ),
                                       const SizedBox(height: 8),
                                       Text(
-                                        searchState.isSearching
+                                        _searchController.text.trim().isNotEmpty
                                             ? 'Press send to ask AI'
                                             : 'Type anything, then press send',
                                         style: const TextStyle(
@@ -699,21 +867,42 @@ class _AppShellState extends ConsumerState<AppShell>
                         ),
                       // Search lives in the same measured content region as
                       // the module, so it always begins below the actual top
-                      // bar height (including text scaling).
-                      if (showGlobalSearch &&
-                          searchState.searchMode == SearchMode.search &&
-                          searchState.isSearching)
+                      // bar height (including text scaling). On the Books tab
+                      // this slot renders Chaptarr book results instead of
+                      // TMDB results — one overlay, chosen by route. The
+                      // gate itself is books-aware (`searchOverlayActive`)
+                      // rather than reading the TMDB notifier's `searchMode`,
+                      // so a completed Chaptarr search can never be
+                      // suppressed by an AI-mode flip the Books tab no
+                      // longer feeds. `!isAiReady` is equivalent to the old
+                      // `searchMode == SearchMode.search` comparison
+                      // (exactly two members), so Movies/TV/Releases
+                      // behavior is bit-identical.
+                      if (showGlobalSearch && !isAiReady && searchOverlayActive)
                         Positioned.fill(
                           child: ColoredBox(
                             color: AppTheme.background.withValues(alpha: 0.97),
-                            child: SearchResultsView(
-                              results: searchState.searchResults,
-                              isLoading: searchState.isLoadingSearch,
-                              query: searchState.searchQuery,
-                              onLoadMore: searchNotifier.loadMoreSearch,
-                              libraryStatus: libraryStatus,
-                              onResultTap: _dismissKeyboard,
-                            ),
+                            child: booksTab
+                                ? BookSearchResultsView(
+                                    results: bookSearchState.results,
+                                    authors: bookSearchState.authors,
+                                    query: bookSearchState.searchQuery,
+                                    isLoading: bookSearchState.isLoadingSearch,
+                                    searched: bookSearchState.searched,
+                                    error: bookSearchState.error,
+                                    authorsUnavailable:
+                                        bookSearchState.authorsUnavailable,
+                                    onResultTap: _dismissKeyboard,
+                                    onAuthorDrillDown: _searchAuthorBooks,
+                                  )
+                                : SearchResultsView(
+                                    results: searchState.searchResults,
+                                    isLoading: searchState.isLoadingSearch,
+                                    query: searchState.searchQuery,
+                                    onLoadMore: searchNotifier.loadMoreSearch,
+                                    libraryStatus: libraryStatus,
+                                    onResultTap: _dismissKeyboard,
+                                  ),
                           ),
                         ),
                       // Floating "Ask AI" pill: the explicit door into AI
@@ -753,9 +942,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                       final visible =
                                           _searchFocusNode.hasFocus &&
                                               _searchIdle &&
-                                              _searchController.text
-                                                  .trim()
-                                                  .isNotEmpty;
+                                              _searchController.text.trim().isNotEmpty;
                                       final duration = reduceMotion
                                           ? Duration.zero
                                           : AppTheme.motionFast;

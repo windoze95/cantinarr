@@ -162,7 +162,11 @@ class AiChatNotifier extends ChangeNotifier {
   }
 
   /// Send a user message and stream the AI response.
-  Future<void> sendMessage(String text) async {
+  ///
+  /// [wireContent], when supplied, is sent to the server in place of [text]
+  /// while the chat bubble still renders [text] unchanged (e.g. a hand-off
+  /// that frames the question with the tab it was asked from).
+  Future<void> sendMessage(String text, {String? wireContent}) async {
     if (_disposed) return;
     if (text.trim().isEmpty) return;
     // One turn at a time: a second concurrent stream would corrupt chat
@@ -174,6 +178,7 @@ class AiChatNotifier extends ChangeNotifier {
       id: _uuid.v4(),
       role: ChatRole.user,
       content: text,
+      wireContent: wireContent,
       timestamp: DateTime.now(),
     ));
 
@@ -303,10 +308,12 @@ class AiChatNotifier extends ChangeNotifier {
     final messages = List<ChatMessage>.from(state.messages);
     final lastUserIdx = messages.lastIndexWhere((m) => m.role == ChatRole.user);
     if (lastUserIdx < 0) return;
-    final text = messages[lastUserIdx].content;
+    final lastUserMessage = messages[lastUserIdx];
+    final text = lastUserMessage.content;
+    final wireContent = lastUserMessage.wireContent;
     messages.removeRange(lastUserIdx, messages.length);
     state = state.copyWith(messages: messages);
-    await sendMessage(text);
+    await sendMessage(text, wireContent: wireContent);
   }
 
   /// Conversation transcript to send to the server: skips display-only

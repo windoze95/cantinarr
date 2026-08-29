@@ -326,3 +326,116 @@ func TestGetBookRecentRequiresAuthentication(t *testing.T) {
 		t.Fatalf("status = %d, want 401", resp.Code)
 	}
 }
+
+// TestBuildRecentBooksMergeTakesNewArtWhenEstablishedRecordHasNone guards the
+// other direction of the age preference: preferring the established record must
+// not mean discarding the only art the title has.
+func TestBuildRecentBooksMergeTakesNewArtWhenEstablishedRecordHasNone(t *testing.T) {
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	older := now.Add(-72 * time.Hour)
+	newArt := chaptarr.Image{CoverType: "cover", URL: "/MediaCover/Books/12/cover.jpg"}
+
+	books := []chaptarr.Book{
+		recentBook(11, "fb-y", "Art Only On The New One", "ebook"),
+		recentBook(12, "fb-y", "Art Only On The New One", "audiobook", newArt),
+	}
+	files := map[int][]chaptarr.BookFile{
+		11: {{BookID: 11, DateAdded: &older}},
+		12: {{BookID: 12, DateAdded: &now}},
+	}
+	items := buildRecentBooks(books, files, recentBooksMaxItems)
+	if len(items) != 1 {
+		t.Fatalf("expected one merged card, got %d", len(items))
+	}
+	if items[0].Cover != newArt.URL {
+		t.Errorf("cover = %q, want %q — the age preference must not drop the only art available",
+			items[0].Cover, newArt.URL)
+	}
+}
+
+// TestBuildRecentBooksMergeKeepsAUsableCover is the consolidation defect: a
+// title whose cover rendered fine as a single-format card lost its art the
+// moment a second format arrived and merged into it.
+//
+// A newly created Chaptarr record is emitted with a /MediaCover path before the
+// cover file behind it exists, and it may carry no usable image at all. The
+// merge used to take the first NON-EMPTY cover in library order, so whichever
+// record happened to come first decided the card — and once that was the new,
+// art-less arrival, the sibling's perfectly good cover was never consulted
+// again on any refresh. The card is dated by the newest arrival, but its art
+// must come from whichever record actually has some.
+func TestBuildRecentBooksMergeKeepsAUsableCover(t *testing.T) {
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	older := now.Add(-72 * time.Hour)
+
+	good := chaptarr.Image{CoverType: "cover", URL: "/MediaCover/Books/11/cover.jpg"}
+
+	cases := []struct {
+		name  string
+		books []chaptarr.Book
+	}{
+		{
+			// The new audiobook record sorts first and has no art at all.
+			name: "art-less new arrival listed first",
+			books: []chaptarr.Book{
+				recentBook(12, "fb-x", "Consolidated Title", "audiobook"),
+				recentBook(11, "fb-x", "Consolidated Title", "ebook", good),
+			},
+		},
+		{
+			name: "art-less new arrival listed last",
+			books: []chaptarr.Book{
+				recentBook(11, "fb-x", "Consolidated Title", "ebook", good),
+				recentBook(12, "fb-x", "Consolidated Title", "audiobook"),
+			},
+		},
+		{
+			// The new record carries an image the client may not dereference,
+			// so clientReachableImage yields "" for it — the sibling must win.
+			name: "new arrival carries an unusable arr-origin image",
+			books: []chaptarr.Book{
+				recentBook(12, "fb-x", "Consolidated Title", "audiobook",
+					chaptarr.Image{CoverType: "cover", URL: "http://chaptarr:8787/MediaCover/Books/12/cover.jpg"}),
+				recentBook(11, "fb-x", "Consolidated Title", "ebook", good),
+			},
+		},
+		{
+			// THE REPORTED CASE. The new arrival carries a perfectly
+			// well-formed /MediaCover path whose file does not exist, because
+			// Chaptarr emits the path for every record regardless. Nothing here
+			// can tell it from a live one, so the established record's art has
+			// to win on age — otherwise the card silently swaps good art for a
+			// permanent placeholder the moment a second format lands.
+			name: "new arrival carries a well-formed path to art that does not exist",
+			books: []chaptarr.Book{
+				recentBook(12, "fb-x", "Consolidated Title", "audiobook",
+					chaptarr.Image{CoverType: "cover", URL: "/MediaCover/Books/12/cover.jpg"}),
+				recentBook(11, "fb-x", "Consolidated Title", "ebook", good),
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			files := map[int][]chaptarr.BookFile{
+				11: {{BookID: 11, DateAdded: &older}},
+				12: {{BookID: 12, DateAdded: &now}},
+			}
+			items := buildRecentBooks(c.books, files, recentBooksMaxItems)
+			if len(items) != 1 {
+				t.Fatalf("expected the two formats to merge into one card, got %d", len(items))
+			}
+			if items[0].Cover != good.URL {
+				t.Errorf("cover = %q, want %q — the merged card must keep the art one of its records actually has",
+					items[0].Cover, good.URL)
+			}
+			// The card is still dated and identified by the newest arrival.
+			if !items[0].ImportedAt.Equal(now) {
+				t.Errorf("importedAt = %v, want %v", items[0].ImportedAt, now)
+			}
+			if items[0].BookID != 12 {
+				t.Errorf("bookID = %d, want 12 (the newest arrival)", items[0].BookID)
+			}
+		})
+	}
+}

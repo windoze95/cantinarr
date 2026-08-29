@@ -27,6 +27,12 @@ class CantinarrSearchBar extends StatelessWidget {
   /// Driven by the parent's animation controller.
   final double glowIntensity;
 
+  /// The glyph the prefix badge renders, chosen by the caller from the
+  /// context the bar is about to search. `null` keeps the widget's own
+  /// default. Read only by [_buildPrefixIcon] — it never affects the
+  /// border glow or the send-button tint, which stay bound to [aiEnabled].
+  final IconData? contextIcon;
+
   const CantinarrSearchBar({
     super.key,
     required this.controller,
@@ -40,6 +46,7 @@ class CantinarrSearchBar extends StatelessWidget {
     this.onSend,
     this.maxLines,
     this.glowIntensity = 0.0,
+    this.contextIcon,
   });
 
   @override
@@ -152,7 +159,8 @@ class CantinarrSearchBar extends StatelessWidget {
           border: Border.all(color: color.withValues(alpha: 0.18)),
         ),
         child: Icon(
-          aiEnabled ? Icons.auto_awesome_rounded : Icons.search_rounded,
+          contextIcon ??
+              (aiEnabled ? Icons.auto_awesome_rounded : Icons.search_rounded),
           size: 18,
           color: color,
         ),
