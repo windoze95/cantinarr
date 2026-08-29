@@ -350,6 +350,34 @@ func TestRequestInviteRefusesAnEmailAnotherUserHolds(t *testing.T) {
 	}
 }
 
+// Found live: asking with an address another user holds used to tear down
+// the caller's own share and row before the refusal.
+func TestRequestInviteRefusesAClaimedAddressWithoutTouchingTheOldShare(t *testing.T) {
+	e := newEnv(t)
+	alice, bob := e.user("alice"), e.user("bob")
+	plex, fake := e.inviteServer("Den Plex", instance.MediaServerConfig{})
+	e.grant(alice, plex)
+	e.grant(bob, plex)
+	if _, err := e.svc.RequestInvite(context.Background(), bob, plex, "bob@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.RequestInvite(context.Background(), alice, plex, "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.RequestInvite(context.Background(), alice, plex, "bob@example.com"); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("err = %v, want ErrNameTaken", err)
+	}
+	if !fake.has("alice@example.com") || fake.removals != 0 {
+		t.Fatalf("the refusal removed alice's own share: has=%v removals=%d", fake.has("alice@example.com"), fake.removals)
+	}
+	if row := e.row(alice, plex); row == nil || row.RemoteUserID != "alice@example.com" {
+		t.Fatalf("alice's row = %+v, want untouched", row)
+	}
+	if e.email(alice) != "alice@example.com" {
+		t.Fatalf("alice's remembered email = %q, want untouched", e.email(alice))
+	}
+}
+
 func TestRequestInviteWithANewAddressReplacesTheShare(t *testing.T) {
 	e := newEnv(t)
 	alice := e.user("alice")

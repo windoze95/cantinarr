@@ -420,6 +420,15 @@ func (s *Service) RequestInvite(ctx context.Context, userID int64, instanceID, e
 	if !mediaserver.ValidEmail(email) {
 		return CreatedAccount{}, ErrInvalidEmail
 	}
+	// An address another user's row holds is refused before anything else
+	// moves: the caller's own share and row stay exactly as they were.
+	claimed, err := s.identityClaimed(instanceID, email, userID)
+	if err != nil {
+		return CreatedAccount{}, err
+	}
+	if claimed {
+		return CreatedAccount{}, ErrNameTaken
+	}
 
 	if row, err := s.getAccount(userID, instanceID); err != nil {
 		return CreatedAccount{}, err
@@ -452,13 +461,6 @@ func (s *Service) RequestInvite(ctx context.Context, userID int64, instanceID, e
 		}
 	}
 
-	claimed, err := s.identityClaimed(instanceID, email, userID)
-	if err != nil {
-		return CreatedAccount{}, err
-	}
-	if claimed {
-		return CreatedAccount{}, ErrNameTaken
-	}
 	if err := s.rememberEmail(userID, email); err != nil {
 		return CreatedAccount{}, err
 	}
