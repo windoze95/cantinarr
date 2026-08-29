@@ -7,7 +7,6 @@ import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
-import 'package:cantinarr/features/settings/data/plex_admin_service.dart';
 import 'package:cantinarr/features/settings/ui/users_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -30,7 +29,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -74,7 +72,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -119,7 +116,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -166,7 +162,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -206,7 +201,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -275,7 +269,6 @@ Future<_MediaAdapter> _pumpWithMediaServer(
         authProvider
             .overrideWith(() => _FakeAuthNotifier(instances: instances)),
         backendClientProvider.overrideWithValue(dio),
-        plexInviteConfiguredProvider.overrideWith((_) async => false),
       ],
       child: MaterialApp(theme: AppTheme.dark, home: const UsersScreen()),
     ),

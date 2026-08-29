@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
@@ -13,7 +12,6 @@ import '../../auth/logic/auth_provider.dart';
 import '../../media_access/data/media_access_service.dart';
 import '../../media_access/ui/media_server_link_sheet.dart';
 import '../../notifications/push_service.dart';
-import '../data/plex_admin_service.dart';
 import '../data/credentials_service.dart';
 import '../data/request_settings_service.dart';
 import '../logic/plex_invites_provider.dart';
@@ -80,7 +78,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         }
       }
       // Keep the drawer's "Plex invites" badge in step with what this
-      // screen just learned (e.g. an invite sent here clears the count).
+      // screen just learned (e.g. a grant given here clears the count).
       ref.read(plexInvitesWaitingProvider.notifier).refresh();
       setState(() {
         _users = users;
@@ -94,48 +92,6 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         _isLoading = false;
       });
     }
-  }
-
-  /// One-tap invite through the linked Plex account: the server shares the
-  /// configured libraries with the user's email and stamps the invite.
-  Future<void> _sendPlexInvite(UserSummary user) async {
-    try {
-      final status =
-          await ref.read(plexAdminServiceProvider).inviteUser(user.id);
-      await _loadUsers();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(status == 'already_shared'
-            ? '${user.plexEmail} already has access on Plex'
-            : 'Plex invite sent to ${user.plexEmail}'),
-      ));
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content:
-              Text('Plex invite failed — check the Plex Invites settings')));
-    }
-  }
-
-  /// Copies the user's Plex email and opens Plex's Manage Library Access page,
-  /// where the admin pastes it into Grant Library Access. The fallback when no
-  /// Plex account is linked (Plex offers no way to prefill the invite).
-  Future<void> _inviteInPlex(UserSummary user) async {
-    await Clipboard.setData(ClipboardData(text: user.plexEmail));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Copied ${user.plexEmail} — paste it into Grant Library Access',
-          ),
-        ),
-      );
-    }
-    await launchUrl(
-      Uri.parse(
-          'https://app.plex.tv/desktop/#!/settings/manage-library-access'),
-      mode: LaunchMode.externalApplication,
-    );
   }
 
   Future<void> _changeRole(UserSummary user, String newRole) async {
@@ -654,8 +610,6 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     }
 
     final currentUserId = ref.read(authProvider).valueOrNull?.user?.id;
-    final plexConfigured =
-        ref.watch(plexInviteConfiguredProvider).valueOrNull ?? false;
     final mediaServers =
         ref.watch(authProvider).valueOrNull?.connection?.mediaServerInstances ??
             const <ServiceInstance>[];
@@ -685,7 +639,6 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           return _UserTile(
             user: user,
             isSelf: user.id == currentUserId,
-            plexInviteConfigured: plexConfigured,
             mediaServers: mediaServers,
             mediaAccounts: {
               for (final row in _mediaAccounts)
@@ -700,8 +653,6 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
             onDelete: () => _deleteUser(user),
             onResendInvite: () => _resendInvite(user),
             onSendTestPush: () => _sendTestPush(user),
-            onSendPlexInvite: () => _sendPlexInvite(user),
-            onInviteInPlex: () => _inviteInPlex(user),
             onRequestSettings: () => context.push(
               '/settings/users/${user.id}/request-settings',
               extra: user.username,
@@ -726,7 +677,6 @@ class _UserTile extends StatelessWidget {
   const _UserTile({
     required this.user,
     required this.isSelf,
-    required this.plexInviteConfigured,
     required this.mediaServers,
     required this.mediaAccounts,
     required this.onLinkMediaAccount,
@@ -736,8 +686,6 @@ class _UserTile extends StatelessWidget {
     required this.onDelete,
     required this.onResendInvite,
     required this.onSendTestPush,
-    required this.onSendPlexInvite,
-    required this.onInviteInPlex,
     required this.onSetAuthMethods,
     required this.onRequestSettings,
     required this.onSetSharedAiAccess,
@@ -747,8 +695,6 @@ class _UserTile extends StatelessWidget {
 
   final UserSummary user;
   final bool isSelf;
-  final bool plexInviteConfigured;
-
   /// Every media server the admin's config lists, and this user's linked
   /// account on each (by instance id; absent = no account linked).
   final List<ServiceInstance> mediaServers;
@@ -761,8 +707,6 @@ class _UserTile extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onResendInvite;
   final VoidCallback onSendTestPush;
-  final VoidCallback onSendPlexInvite;
-  final VoidCallback onInviteInPlex;
   final void Function({bool? passwordEnabled, bool? passkeyEnabled})
       onSetAuthMethods;
   final VoidCallback onRequestSettings;
@@ -835,10 +779,14 @@ class _UserTile extends StatelessWidget {
               const _Tag(label: 'AI included', color: AppTheme.signal),
             if (user.plexEmail.isNotEmpty)
               _Tag(label: user.plexEmail, color: AppTheme.textSecondary),
+            // The invite state is derived from their live Plex share: sent
+            // when one exists, waiting when they shared an email and no
+            // grant has sent one yet (the grant toggle below is the tap).
             if (user.plexInvitedAt != null)
               const _Tag(label: 'Plex invite sent', color: AppTheme.available)
             else if (user.plexEmail.isNotEmpty)
-              const _Tag(label: 'Needs Plex invite', color: AppTheme.requested),
+              const _Tag(
+                  label: 'Asked for Plex access', color: AppTheme.requested),
             // One tag per linked media-server account: the server's name
             // alone when the account name matches the Cantinarr username,
             // the remote name otherwise, and ": off" while access is off.
@@ -898,12 +846,6 @@ class _UserTile extends StatelessWidget {
             break;
           case 'test_push':
             onSendTestPush();
-            break;
-          case 'send_plex_invite':
-            onSendPlexInvite();
-            break;
-          case 'invite_in_plex':
-            onInviteInPlex();
             break;
           case 'request_settings':
             onRequestSettings();
@@ -979,28 +921,6 @@ class _UserTile extends StatelessWidget {
                     ? 'New invite link'
                     : (_needsInvite ? 'Re-invite' : 'Issue device link'),
               ),
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-        // The user shared their Plex email. With a linked Plex account the
-        // invite is one tap; otherwise fall back to copy-email-and-open-Plex.
-        if (user.plexEmail.isNotEmpty && plexInviteConfigured)
-          PopupMenuItem(
-            value: 'send_plex_invite',
-            child: ListTile(
-              leading: const Icon(Icons.send_outlined),
-              title: Text(user.plexInvitedAt != null
-                  ? 'Resend Plex invite'
-                  : 'Send Plex invite'),
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-        if (user.plexEmail.isNotEmpty && !plexInviteConfigured)
-          const PopupMenuItem(
-            value: 'invite_in_plex',
-            child: ListTile(
-              leading: Icon(Icons.play_circle_outline),
-              title: Text('Invite in Plex…'),
               contentPadding: EdgeInsets.zero,
             ),
           ),

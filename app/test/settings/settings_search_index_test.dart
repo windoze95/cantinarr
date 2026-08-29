@@ -178,10 +178,10 @@ void main() {
     test('registry order is preserved within a tier', () {
       final results = searchSettingsIndex('plex', _adminGates);
       final ids = results.map((e) => e.id).toList();
-      final screenTile = ids.indexOf('screen.plex-invites');
-      final autoInvite = ids.indexOf('plex.auto-invite');
-      expect(screenTile, isNot(-1));
-      expect(autoInvite, isNot(-1));
+      final guide = ids.indexOf('screen.media-servers');
+      final accessRequests = ids.indexOf('notifications.plex-access-requests');
+      expect(guide, isNot(-1));
+      expect(accessRequests, isNot(-1));
     });
   });
 }

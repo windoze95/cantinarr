@@ -207,6 +207,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
             const [],
         issuesEnabled: meta['issues_enabled'] as bool? ?? false,
         allowReporting: meta['allow_reporting'] as bool? ?? false,
+        plexAccessRequestable:
+            meta['plex_access_requestable'] as bool? ?? false,
       );
       return AuthState(
           connection: connection, user: user, isReconnecting: true);
@@ -281,6 +283,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           instances: config.instances,
           issuesEnabled: config.issuesEnabled,
           allowReporting: config.allowReporting,
+          plexAccessRequestable: config.plexAccessRequestable,
         );
         await _persistSession(connection, authResp.user);
       } catch (e) {
@@ -361,6 +364,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
+          plexAccessRequestable: config.plexAccessRequestable,
       );
       await _persistSession(connection, authResp.user);
       _registerForPush();
@@ -497,6 +501,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
+          plexAccessRequestable: config.plexAccessRequestable,
       );
 
       await _persistSession(connection, authResp.user);
@@ -549,6 +554,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
+          plexAccessRequestable: config.plexAccessRequestable,
       );
 
       final offerPasskey =
@@ -660,6 +666,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       instances: config.instances,
       issuesEnabled: config.issuesEnabled,
       allowReporting: config.allowReporting,
+          plexAccessRequestable: config.plexAccessRequestable,
     );
 
     await _persistSession(connection, authResp.user);
@@ -700,6 +707,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       instances: config.instances,
       issuesEnabled: config.issuesEnabled,
       allowReporting: config.allowReporting,
+          plexAccessRequestable: config.plexAccessRequestable,
     );
     final user = current.user;
     if (user != null) await _persistSession(updatedConn, user);
@@ -920,6 +928,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
+          plexAccessRequestable: config.plexAccessRequestable,
       );
 
       await _persistSession(connection, authResp.user);

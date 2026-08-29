@@ -6,14 +6,18 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/media_access_service.dart';
+import 'media_server_email_sheet.dart';
 import 'media_server_password_sheet.dart';
 
-/// Requester-focused guide for the media servers (Jellyfin, Emby) shared with this
-/// account: create the account with a password only they know, see where to
-/// sign in, install the app, start watching. Everything here is re-read from
-/// the server on every open and on pull-to-refresh: the rows behind it are an
+/// Requester-focused guide for the media servers (Plex, Jellyfin, Emby)
+/// shared with this account: create the account with a password only they
+/// know, or share the Plex email their invite goes to; see where to sign in,
+/// install the app, start watching. Everything here is re-read from the
+/// server on every open and on pull-to-refresh: the rows behind it are an
 /// action log and the media server is the truth, which is also why an
 /// unconfirmed account is said to be unconfirmed rather than shown as fact.
+/// A user with no Plex grant on a server that has Plex sees one card to ask
+/// for it: sharing their email tells the admin where to send the invite.
 class MediaAccessGuide extends ConsumerStatefulWidget {
   const MediaAccessGuide({super.key});
 
@@ -76,6 +80,123 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
     await _load();
   }
 
+  Future<void> _requestInvite(MediaServerAccess server, String email) async {
+    final outcome = await showMediaServerEmailSheet(
+      context,
+      server: server,
+      initialEmail: email,
+    );
+    if (!mounted || outcome == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(switch (outcome) {
+        MediaServerEmailSheetOutcome.requested =>
+          'Invite sent. Check your email, then accept it.',
+        MediaServerEmailSheetOutcome.accountExists =>
+          'You already have access here.',
+      }),
+    ));
+    // The profile's email changed too; the ask card reads it from there.
+    ref.read(authProvider.notifier).refreshUser();
+    await _load();
+  }
+
+  /// Shares the email an admin should send the Plex invite to, for a user
+  /// who holds no Plex grant yet. The server tells the admins; with
+  /// auto-approve on it grants and invites right away.
+  Future<void> _askForPlexAccess(String current) async {
+    final controller = TextEditingController(text: current);
+    String? errorText;
+    var saving = false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Future<void> submit() async {
+            final email = controller.text.trim();
+            if (!looksLikeEmail(email)) {
+              setDialogState(() => errorText = 'Enter a valid email address');
+              return;
+            }
+            setDialogState(() {
+              saving = true;
+              errorText = null;
+            });
+            try {
+              await ref.read(authProvider.notifier).setPlexEmail(email);
+              if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+              if (!mounted) return;
+              ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(
+                content: Text('Thanks! Your admin has been notified.'),
+              ));
+              // With auto-approve the grant and invite land within seconds:
+              // re-read so the card flips to the invite.
+              Future.delayed(const Duration(seconds: 3), () {
+                if (!mounted) return;
+                ref.read(authProvider.notifier).refreshConfig();
+                _load();
+              });
+            } catch (_) {
+              setDialogState(() {
+                saving = false;
+                errorText = "Couldn't send. Check your connection";
+              });
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('Your Plex email'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Enter the email of your Plex account. Your admin sends the '
+                  'invite there.',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  enabled: !saving,
+                  autofocus: true,
+                  keyboardType: TextInputType.emailAddress,
+                  autocorrect: false,
+                  textInputAction: TextInputAction.done,
+                  decoration: InputDecoration(
+                    labelText: 'Email',
+                    hintText: 'you@example.com',
+                    prefixIcon: const Icon(Icons.mail_outline),
+                    errorText: errorText,
+                  ),
+                  onSubmitted: (_) => submit(),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed:
+                    saving ? null : () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: saving ? null : submit,
+                child: saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Send'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    // The dialog's field still references the controller while the close
+    // animation runs, so it is left to the garbage collector, as the text
+    // fields in ad-hoc dialogs elsewhere are.
+  }
+
   Future<void> _copy(String text, String confirmation) async {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
@@ -95,13 +216,21 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
     final auth = ref.watch(authProvider).valueOrNull;
     final user = auth?.user;
     final servers = _servers;
+    // A Plex server the user is not granted yet still gets a card (ask for
+    // access), so it counts toward the title and the guide's product set.
+    final plexRequestable = auth?.connection?.plexAccessRequestable ?? false;
     // Until the live list arrives, the granted set from /api/config names
     // the same servers, so the title never flashes a placeholder.
-    final types = (servers != null
-            ? servers.map((server) => server.serviceType)
-            : (auth?.connection?.mediaServerInstances ?? const [])
-                .map((instance) => instance.serviceType))
-        .toSet();
+    final types = {
+      ...(servers != null
+          ? servers.map((server) => server.serviceType)
+          : (auth?.connection?.mediaServerInstances ?? const [])
+              .map((instance) => instance.serviceType)),
+      if (plexRequestable) 'plex',
+    };
+    final askForPlex = plexRequestable &&
+        servers != null &&
+        !servers.any((server) => server.serviceType == 'plex');
 
     return Scaffold(
       appBar: AppBar(title: Text(mediaServerGuideTitle(types))),
@@ -112,12 +241,14 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
                 onRefresh: _load,
                 child: ListView(
                   padding: const EdgeInsets.all(24),
-                  children: servers.isEmpty
+                  children: servers.isEmpty && !askForPlex
                       ? [_buildEmpty(isAdmin: user?.isAdmin == true)]
                       : _buildGuide(
                           servers,
                           username: user?.username ?? '',
+                          plexEmail: user?.plexEmail ?? '',
                           types: types,
+                          askForPlex: askForPlex,
                         ),
                 ),
               ),
@@ -175,19 +306,33 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
   List<Widget> _buildGuide(
     List<MediaServerAccess> servers, {
     required String username,
+    required String plexEmail,
     required Set<String> types,
+    required bool askForPlex,
   }) {
     final labels = mediaServerTypeLabels(types);
     final single = labels.length == 1;
-    // "Jellyfin", "Emby", or "Jellyfin or Emby": the granted set decides.
+    // "Plex", "Jellyfin", or "Plex or Jellyfin": the granted set decides.
     final names = mediaServerNamesPhrase(types);
     final where = single ? labels.single : 'your media server';
     final whereOpening = single ? labels.single : 'Your media server';
     final includesEmby = types.contains('emby');
+    final includesPlex = types.contains('plex');
+    final onlyPlex = single && includesPlex;
+    final hasAccountServer = types.any((type) => type != 'plex');
     return [
       Text(
-        'Cantinarr is where you request. $whereOpening is where you watch. '
-        'Create your account once, then sign in on any device.',
+        onlyPlex
+            ? 'Cantinarr is where you request. Plex is where you watch. '
+                'Share the email of your Plex account once, accept the '
+                'invite, then sign in on any device.'
+            : includesPlex
+                ? 'Cantinarr is where you request. $whereOpening is where '
+                    'you watch. Set up your access once, then sign in on '
+                    'any device.'
+                : 'Cantinarr is where you request. $whereOpening is where '
+                    'you watch. Create your account once, then sign in on '
+                    'any device.',
         style: const TextStyle(
           color: AppTheme.textSecondary,
           fontSize: 14,
@@ -195,22 +340,29 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         ),
       ),
       const SizedBox(height: 24),
-      const _SectionHeader(number: 1, title: 'Your account'),
+      _SectionHeader(number: 1, title: onlyPlex ? 'Your invite' : 'Your account'),
       const SizedBox(height: 12),
       for (final server in servers)
         Padding(
           padding: const EdgeInsets.only(left: 44, bottom: 12),
-          child: _buildAccountCard(server, username),
+          child: server.isInvite
+              ? _buildInviteCard(server, plexEmail)
+              : _buildAccountCard(server, username),
+        ),
+      if (askForPlex)
+        Padding(
+          padding: const EdgeInsets.only(left: 44, bottom: 12),
+          child: _buildAskForPlexCard(plexEmail),
         ),
       const SizedBox(height: 12),
       _GuideSection(
         number: 2,
         title: 'Install the $names app',
         steps: [
-          // Jellyfin's apps are free; Emby's are free to install but ask for
-          // an unlock or Premiere to play video on phones and tablets, so
-          // "free" is said only for a Jellyfin-only set.
-          if (single && !includesEmby)
+          // Jellyfin's and Plex's apps are free; Emby's are free to install
+          // but ask for an unlock or Premiere to play video on phones and
+          // tablets, so "free" is said only when Emby is not in the set.
+          if (!includesEmby)
             'Download the free $names app from the App Store or Google Play'
           else
             'Download the $names app from the App Store or Google Play',
@@ -223,20 +375,34 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
           if (includesEmby)
             'On a phone or tablet, Emby may ask for a one-time unlock or Emby '
                 'Premiere before it plays video.',
-          'On a computer there is nothing to install: open the sign-in '
-              'address in your browser',
+          if (onlyPlex)
+            'On a computer there is nothing to install: open app.plex.tv in '
+                'your browser'
+          else
+            'On a computer there is nothing to install: open the sign-in '
+                'address in your browser',
         ],
       ),
       const SizedBox(height: 24),
-      const _GuideSection(
+      _GuideSection(
         number: 3,
-        title: 'Sign in',
+        title: includesPlex && !hasAccountServer
+            ? 'Accept your invite and sign in'
+            : 'Sign in',
         steps: [
-          'Open the app and enter the sign-in address from your account '
-              'card above',
-          'Sign in with your username and the password you chose when you '
-              'created the account',
-          'Forgot the password? Your admin can reset it on the server',
+          if (includesPlex) ...[
+            'Your Plex invite arrives by email from Plex: open it and accept. '
+                'Pending invites are also under the bell icon at app.plex.tv',
+            'Sign in to the Plex app with the same Plex account, and the '
+                'shared libraries appear',
+          ],
+          if (hasAccountServer) ...[
+            'Open the app and enter the sign-in address from your account '
+                'card above',
+            'Sign in with your username and the password you chose when you '
+                'created the account',
+            'Forgot the password? Your admin can reset it on the server',
+          ],
         ],
       ),
       const SizedBox(height: 24),
@@ -256,6 +422,233 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
             'ready to play on your server.',
       ),
     ];
+  }
+
+  /// A Plex server's share state: nothing yet (share your email), an invite
+  /// waiting to be accepted, or an accepted share (where to sign in).
+  Widget _buildInviteCard(MediaServerAccess server, String plexEmail) {
+    final account = server.account;
+    final Widget body;
+    if (account == null) {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'You have access to ${server.name}. Share the email of your Plex '
+            'account and your invite is on its way.',
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 14,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: () => _requestInvite(server, plexEmail),
+            icon: const Icon(Icons.mail_outline, size: 18),
+            label: const Text('Share my Plex email'),
+          ),
+        ],
+      );
+    } else if (account.pending) {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 1),
+                child: Icon(Icons.mark_email_unread_outlined,
+                    color: AppTheme.requested, size: 18),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Invite sent to ${account.username}. Accept it from the '
+                  'email Plex sent you, or under the bell icon at '
+                  'app.plex.tv, and ${server.name} appears in Plex.',
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 14,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          TextButton(
+            onPressed: () => _requestInvite(server, plexEmail),
+            style: TextButton.styleFrom(
+              padding: EdgeInsets.zero,
+              minimumSize: const Size(0, 32),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('Wrong email?'),
+          ),
+          if (!account.verified) _buildUnconfirmed(),
+        ],
+      );
+    } else {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.check_circle,
+                  color: AppTheme.available, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${server.name} is shared with ${account.username}',
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (server.publicAddress.isNotEmpty) ...[
+            Text(
+              'Sign in at ${server.publicAddress}',
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: () =>
+                      _copy(server.publicAddress, 'Address copied'),
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('Copy address'),
+                ),
+                TextButton.icon(
+                  onPressed: () => _open(server.publicAddress),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('Open'),
+                ),
+              ],
+            ),
+          ],
+          if (!account.verified) _buildUnconfirmed(),
+        ],
+      );
+    }
+    return _card(body);
+  }
+
+  /// A Plex server exists but this user holds no grant on it: sharing the
+  /// email tells the admin where to send the invite (and, with auto-approve
+  /// on, sends it at once).
+  Widget _buildAskForPlexCard(String plexEmail) {
+    final Widget body = plexEmail.isEmpty
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This server has Plex. Share the email of your Plex account '
+                'to ask for access; your admin gets a notification with it.',
+                style: TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 14,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton.icon(
+                onPressed: () => _askForPlexAccess(plexEmail),
+                icon: const Icon(Icons.mail_outline, size: 18),
+                label: const Text('Ask for Plex access'),
+              ),
+            ],
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.hourglass_top,
+                      color: AppTheme.requested, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      plexEmail,
+                      style: const TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Your admin has been notified. Once they grant you Plex, '
+                'the invite goes to this address.',
+                style: TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+              TextButton(
+                onPressed: () => _askForPlexAccess(plexEmail),
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('Change email'),
+              ),
+            ],
+          );
+    return _card(body);
+  }
+
+  Widget _buildUnconfirmed() {
+    return const Padding(
+      padding: EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(Icons.info_outline, color: AppTheme.warning, size: 16),
+          ),
+          SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              "We couldn't confirm this with the server just now. It should "
+              'still work.',
+              style: TextStyle(
+                color: AppTheme.warning,
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _card(Widget body) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.2)),
+      ),
+      child: body,
+    );
   }
 
   /// One server's account state: nothing yet (create it), turned off (ask

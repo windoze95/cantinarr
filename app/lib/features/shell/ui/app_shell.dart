@@ -862,7 +862,6 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/agent-')) return 'Agent workspace';
     if (path.startsWith('/assistant')) return 'AI assistant';
     if (path.startsWith('/setup')) return 'Setup';
-    if (path.startsWith('/plex-guide')) return 'Watch on Plex';
     if (path.startsWith('/media-servers')) return 'Media server access';
     return 'Cantinarr';
   }
@@ -878,13 +877,13 @@ class _AppShellState extends ConsumerState<AppShell>
         ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
             false;
     // The backend lists a media server only for users an admin granted it,
-    // so its presence alone decides whether the access guide is offered.
-    final mediaServerInstances = ref
-            .watch(authProvider)
-            .valueOrNull
-            ?.connection
-            ?.mediaServerInstances ??
-        const <ServiceInstance>[];
+    // so its presence alone decides whether the access guide is offered —
+    // plus a Plex server the user can still ask for.
+    final connection = ref.watch(authProvider).valueOrNull?.connection;
+    final mediaAccessGuideVisible =
+        connection?.mediaAccessGuideVisible ?? false;
+    final mediaAccessGuideTypes =
+        connection?.mediaAccessGuideTypes ?? const <String>{};
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
     final approvalsStale = ref.watch(pendingApprovalsStaleProvider);
     final openIssues = ref.watch(openIssuesProvider);
@@ -1196,22 +1195,10 @@ class _AppShellState extends ConsumerState<AppShell>
                 context.push('/assistant');
               },
             ),
-          if (ref.watch(plexGuideEnabledProvider))
-            _DrawerItem(
-              icon: Icons.play_circle_outline,
-              title: 'Watch on Plex',
-              semanticsIdentifier: 'nav-action-watch-on-plex',
-              onTap: () {
-                if (isOverlay) Navigator.pop(context);
-                context.push('/plex-guide');
-              },
-            ),
-          if (mediaServerInstances.isNotEmpty)
+          if (mediaAccessGuideVisible)
             _DrawerItem(
               icon: Icons.live_tv_outlined,
-              title: mediaServerGuideTitle(
-                mediaServerInstances.map((i) => i.serviceType),
-              ),
+              title: mediaServerGuideTitle(mediaAccessGuideTypes),
               semanticsIdentifier: 'nav-action-media-servers',
               onTap: () {
                 if (isOverlay) Navigator.pop(context);

@@ -49,8 +49,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'trakt':
       case 'discovery_prefs':
         return '/settings/discovery';
-      case 'plex_invites':
-        return '/settings/plex';
       case 'remediation':
         return '/settings/ai-remediation';
       default:
@@ -78,8 +76,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.monitor_heart_outlined;
       case 'push':
         return Icons.notifications_outlined;
-      case 'plex_invites':
-        return Icons.play_circle_outline;
       case 'media_servers':
         return Icons.live_tv_outlined;
       case 'books':
@@ -108,7 +104,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'books':
         return {'service_type': 'chaptarr'};
       case 'media_servers':
-        return {'service_type': 'jellyfin'};
+        return {'service_type_prompt': 'Select a media server'};
       case 'download_client':
         return {'service_type_prompt': 'Select a download client'};
       default:

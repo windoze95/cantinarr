@@ -80,7 +80,7 @@ void main() {
       expect(mediaServerGuideTitle(const ['emby', 'jellyfin']),
           'Watch on Jellyfin or Emby');
       expect(mediaServerGuideTitle(const ['plex', 'emby', 'jellyfin']),
-          'Watch on Jellyfin, Emby, or Plex');
+          'Watch on Plex, Jellyfin, or Emby');
     });
 
     test('type labels are product names', () {

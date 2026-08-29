@@ -63,6 +63,19 @@ class _FakeAdapter implements HttpClientAdapter {
     } else if (options.method == 'POST' && path == '/api/instances/test') {
       return ResponseBody.fromString('', 204, headers: {});
     } else if (options.method == 'POST' &&
+        path == '/api/instances/plex/link/begin') {
+      response = {'pin_id': 42, 'code': 'ABCD', 'url': 'https://app.plex.tv/auth#?code=ABCD'};
+    } else if (options.method == 'POST' &&
+        path == '/api/instances/plex/link/check') {
+      response = {'linked': true, 'account': 'cantina-owner'};
+    } else if (options.method == 'POST' && path == '/api/instances/plex/servers') {
+      response = {
+        'servers': [
+          {'name': 'Cantina', 'machine_identifier': 'm1'},
+          {'name': 'Den', 'machine_identifier': 'm2'},
+        ],
+      };
+    } else if (options.method == 'POST' &&
         path == '/api/instances/media-server/libraries') {
       final error = librariesError;
       if (error != null) {
@@ -527,5 +540,95 @@ void main() {
           .where((r) => r.method == 'POST' && r.path == '/api/instances'),
       isEmpty,
     );
+  });
+
+  testWidgets(
+      'Plex links an account by PIN, picks a server, and saves with the pin '
+      'and no URL or key', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      screen: const InstanceEditScreen(initialServiceType: 'plex'),
+    );
+
+    // No URL, no API key: the credential is the link.
+    expect(find.widgetWithText(TextField, 'URL'), findsNothing);
+    expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.text('Plex account'), findsOneWidget);
+    expect(find.text('Not linked'), findsOneWidget);
+    expect(
+        find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
+    expect(find.text('User Access'), findsOneWidget);
+    expect(find.textContaining('get a Plex invite to the shared libraries'),
+        findsOneWidget);
+    // The sign-in address is prefilled with where everyone signs in to Plex.
+    expect(find.text('https://app.plex.tv'), findsOneWidget);
+
+    // Saving before linking is refused locally.
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Cantina');
+    await _tapSave(tester, 'Add Instance');
+    expect(find.text('Link a Plex account first'), findsOneWidget);
+    expect(
+      adapter.requests
+          .where((r) => r.method == 'POST' && r.path == '/api/instances'),
+      isEmpty,
+    );
+
+    final link = find.widgetWithText(OutlinedButton, 'Link Plex account');
+    await tester.ensureVisible(link);
+    await tester.tap(link);
+    await tester.pumpAndSettle();
+    expect(adapter.requests.any((r) => r.path == '/api/instances/plex/link/begin'),
+        isTrue);
+    // The form polls every few seconds; the fake approves on the first
+    // check, so the poll may already have landed. Either way the "check
+    // now" button gets there.
+    final check = find.widgetWithText(OutlinedButton, "I've approved, check now");
+    if (check.evaluate().isNotEmpty) {
+      expect(find.textContaining('Waiting for approval'), findsOneWidget);
+      await tester.ensureVisible(check);
+      await tester.tap(check);
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Linked'), findsOneWidget);
+    expect(find.textContaining('Linked as cantina-owner'), findsOneWidget);
+    expect(find.text('Server to share'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Cantina'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Den'), findsOneWidget);
+    final serversCall = adapter.requests
+        .singleWhere((r) => r.path == '/api/instances/plex/servers');
+    expect(serversCall.body['plex_link_pin'], 42);
+    expect(serversCall.body['api_key'], '');
+
+    // Two servers: nothing is picked for the admin; picking one reads its
+    // libraries through the pin and the machine identifier.
+    expect(_libraryProbes(adapter), isEmpty);
+    await tester.tap(find.text('Den'));
+    await tester.pumpAndSettle();
+    final probe = _libraryProbes(adapter).single;
+    expect(probe.body['plex_link_pin'], 42);
+    expect(probe.body['media_server_config'], {'machine_identifier': 'm2'});
+    expect(find.text('Films'), findsOneWidget);
+
+    final auto = find.widgetWithText(SwitchListTile, 'Auto-approve access requests');
+    await tester.ensureVisible(auto);
+    await tester.tap(auto);
+    await tester.pumpAndSettle();
+
+    await _tapSave(tester, 'Add Instance');
+    final create = adapter.requests.singleWhere(
+        (r) => r.method == 'POST' && r.path == '/api/instances');
+    expect(create.body['service_type'], 'plex');
+    expect(create.body['plex_link_pin'], 42);
+    expect(create.body['api_key'], '');
+    expect(create.body['url'], '');
+    expect(create.body['is_default'], isFalse);
+    expect(create.body['media_server_config'], {
+      'public_address': 'https://app.plex.tv',
+      'library_ids': <String>[],
+      'machine_identifier': 'm2',
+      'auto_approve': true,
+    });
   });
 }

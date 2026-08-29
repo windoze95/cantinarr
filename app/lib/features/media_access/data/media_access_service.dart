@@ -7,15 +7,18 @@ import '../../../core/network/backend_client.dart';
 /// The live state of one user's account on a media server, as the server
 /// answered just now. [verified] is false when the backend could not reach
 /// the media server and fell back to what it last recorded: blindness, not
-/// absence, and the guide says so.
+/// absence, and the guide says so. [pending] is an invite (Plex) the person
+/// has not accepted yet.
 class MediaServerAccountStatus {
   final String username;
   final bool disabled;
+  final bool pending;
   final bool verified;
 
   const MediaServerAccountStatus({
     required this.username,
     this.disabled = false,
+    this.pending = false,
     this.verified = true,
   });
 
@@ -23,9 +26,15 @@ class MediaServerAccountStatus {
       MediaServerAccountStatus(
         username: json['username'] as String? ?? '',
         disabled: json['disabled'] as bool? ?? false,
+        pending: json['pending'] as bool? ?? false,
         verified: json['verified'] as bool? ?? true,
       );
 }
+
+/// How a media server grants access: an account Cantinarr creates with a
+/// password the user picks (Jellyfin, Emby), or an invite sent to the email
+/// the user shares (Plex).
+enum MediaServerKind { account, invite }
 
 /// One media server the signed-in user was granted, with their account on it
 /// (null = no account yet). Carries the admin-typed sign-in address only,
@@ -34,6 +43,7 @@ class MediaServerAccess {
   final String instanceId;
   final String serviceType;
   final String name;
+  final MediaServerKind kind;
   final String publicAddress;
   final MediaServerAccountStatus? account;
 
@@ -41,16 +51,27 @@ class MediaServerAccess {
     required this.instanceId,
     required this.serviceType,
     required this.name,
+    this.kind = MediaServerKind.account,
     this.publicAddress = '',
     this.account,
   });
 
+  bool get isInvite => kind == MediaServerKind.invite;
+
   factory MediaServerAccess.fromJson(Map<String, dynamic> json) {
     final rawAccount = json['account'];
+    final serviceType = json['service_type'] as String? ?? '';
+    final rawKind = json['kind'] as String?;
     return MediaServerAccess(
       instanceId: json['instance_id'] as String? ?? '',
-      serviceType: json['service_type'] as String? ?? '',
+      serviceType: serviceType,
       name: json['name'] as String? ?? '',
+      // The server says which; an older server that does not is read from
+      // the type, since Plex is the only invite server.
+      kind: (rawKind ?? (serviceType == 'plex' ? 'invite' : 'account')) ==
+              'invite'
+          ? MediaServerKind.invite
+          : MediaServerKind.account,
       publicAddress: json['public_address'] as String? ?? '',
       account: rawAccount is Map
           ? MediaServerAccountStatus.fromJson(
@@ -61,20 +82,24 @@ class MediaServerAccess {
   }
 }
 
-/// What the server answers once an account has been created.
+/// What the server answers once an account has been created or an invite
+/// sent ([pending] true: the person still has to accept it).
 class MediaServerAccountCreated {
   final String username;
   final String publicAddress;
+  final bool pending;
 
   const MediaServerAccountCreated({
     required this.username,
     this.publicAddress = '',
+    this.pending = false,
   });
 
   factory MediaServerAccountCreated.fromJson(Map<String, dynamic> json) =>
       MediaServerAccountCreated(
         username: json['username'] as String? ?? '',
         publicAddress: json['public_address'] as String? ?? '',
+        pending: json['pending'] as bool? ?? false,
       );
 }
 
@@ -121,18 +146,22 @@ class MediaServerAccountRow {
 }
 
 /// One account as the media server itself lists it, for the admin link
-/// picker. Administrators are listed by the server but never linkable.
+/// picker. Administrators are listed by the server but never linkable. On
+/// Plex the rows are shares, keyed by email, and [pending] marks an invite
+/// nobody has accepted yet.
 class RemoteMediaServerUser {
   final String id;
   final String name;
   final bool isAdministrator;
   final bool isDisabled;
+  final bool pending;
 
   const RemoteMediaServerUser({
     required this.id,
     required this.name,
     this.isAdministrator = false,
     this.isDisabled = false,
+    this.pending = false,
   });
 
   factory RemoteMediaServerUser.fromJson(Map<String, dynamic> json) =>
@@ -141,6 +170,7 @@ class RemoteMediaServerUser {
         name: json['name'] as String? ?? '',
         isAdministrator: json['is_administrator'] as bool? ?? false,
         isDisabled: json['is_disabled'] as bool? ?? false,
+        pending: json['pending'] as bool? ?? false,
       );
 }
 
@@ -239,6 +269,26 @@ class MediaAccessService {
     }
   }
 
+  /// Asks for the user's Plex invite on [instanceId]: the server records the
+  /// email and sends the share invite (or adopts a share that already exists
+  /// for that address). Throws [MediaAccessException] with the server's
+  /// `code` (`account_exists`, `name_taken`, `invalid_email`, `wrong_kind`)
+  /// on refusal.
+  Future<MediaServerAccountCreated> requestInvite(
+    String instanceId,
+    String email,
+  ) async {
+    try {
+      final resp = await _dio.post(
+        '/api/media-servers/$instanceId/account',
+        data: {'email': email},
+      );
+      return MediaServerAccountCreated.fromJson(_map(resp.data));
+    } on DioException catch (e) {
+      throw MediaAccessException.fromDio(e);
+    }
+  }
+
   /// Every linked account across all media servers (admin).
   Future<List<MediaServerAccountRow>> listAccounts() async {
     final resp = await _dio.get('/api/admin/media-servers/accounts');
@@ -317,6 +367,8 @@ final mediaAccessServiceProvider = Provider<MediaAccessService>(
 /// The product name for a media-server service type ('jellyfin' -> Jellyfin).
 String mediaServerTypeLabel(String serviceType) {
   switch (serviceType) {
+    case 'plex':
+      return 'Plex';
     case 'jellyfin':
       return 'Jellyfin';
     case 'emby':
@@ -328,9 +380,9 @@ String mediaServerTypeLabel(String serviceType) {
 }
 
 /// The product names of the granted media-server types, distinct and in a
-/// fixed order: Jellyfin, then Emby, then anything unknown as typed.
+/// fixed order: Plex, Jellyfin, then Emby, then anything unknown as typed.
 List<String> mediaServerTypeLabels(Iterable<String> serviceTypes) {
-  const order = ['jellyfin', 'emby'];
+  const order = ['plex', 'jellyfin', 'emby'];
   final distinct = serviceTypes.toSet();
   return [
     for (final type in order)
@@ -339,8 +391,8 @@ List<String> mediaServerTypeLabels(Iterable<String> serviceTypes) {
   ];
 }
 
-/// The granted servers as one phrase: "Jellyfin", "Jellyfin or Emby",
-/// "Jellyfin, Emby, or Other". Empty when nothing is granted.
+/// The granted servers as one phrase: "Plex", "Plex or Jellyfin",
+/// "Plex, Jellyfin, or Emby". Empty when nothing is granted.
 String mediaServerNamesPhrase(Iterable<String> serviceTypes) {
   final labels = mediaServerTypeLabels(serviceTypes);
   switch (labels.length) {

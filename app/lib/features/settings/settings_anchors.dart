@@ -10,7 +10,6 @@
 abstract final class SettingsAnchors {
   // /settings (root)
   static const rootRequestUpdates = 'root.request-updates';
-  static const rootShowPlexGuide = 'root.show-plex-guide';
   static const rootAttentionApprovals = 'root.attention-approvals';
   static const rootAttentionIssues = 'root.attention-issues';
   static const rootAttentionAgentFixes = 'root.attention-agent-fixes';
@@ -58,9 +57,6 @@ abstract final class SettingsAnchors {
   static const remediationDailyCap = 'remediation.daily-cap';
   static const remediationUserWait = 'remediation.user-wait';
   static const remediationBreakerGiveups = 'remediation.breaker-giveups';
-
-  // /settings/plex
-  static const plexAutoInvite = 'plex.auto-invite';
 
   // /settings/credentials
   static const credentialsAiModel = 'credentials.ai-model';

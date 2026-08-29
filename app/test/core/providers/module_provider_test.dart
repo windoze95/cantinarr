@@ -35,6 +35,8 @@ void main() {
     expect(_labels(modules), isNot(contains('Home Jellyfin')));
     expect(_labels(modules), isNot(contains('Emby')));
     expect(_labels(modules), isNot(contains('Den Emby')));
+    expect(_labels(modules), isNot(contains('Plex')));
+    expect(_labels(modules), isNot(contains('Cantina Plex')));
   });
 
   test('admin module navigation is one row per app type', () async {
@@ -76,6 +78,8 @@ void main() {
     expect(_labels(modules), isNot(contains('Home Jellyfin')));
     expect(_labels(modules), isNot(contains('Emby')));
     expect(_labels(modules), isNot(contains('Den Emby')));
+    expect(_labels(modules), isNot(contains('Plex')));
+    expect(_labels(modules), isNot(contains('Cantina Plex')));
   });
 }
 
@@ -131,6 +135,11 @@ AuthState _authState({required bool isAdmin}) {
           id: 'em-a',
           serviceType: 'emby',
           name: 'Den Emby',
+        ),
+        ServiceInstance(
+          id: 'px-a',
+          serviceType: 'plex',
+          name: 'Cantina Plex',
         ),
       ],
     ),

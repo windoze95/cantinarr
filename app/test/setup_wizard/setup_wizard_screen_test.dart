@@ -75,7 +75,7 @@ void main() {
       'sonarr': {'service_type': 'sonarr'},
       'tautulli': {'service_type': 'tautulli'},
       'books': {'service_type': 'chaptarr'},
-      'media_servers': {'service_type': 'jellyfin'},
+      'media_servers': {'service_type_prompt': 'Select a media server'},
       'download_client': {'service_type_prompt': 'Select a download client'},
     };
 

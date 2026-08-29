@@ -78,10 +78,18 @@ class _JsonAdapter implements HttpClientAdapter {
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier({required this.user, this.instances = const []});
+  _FakeAuthNotifier({
+    required this.user,
+    this.instances = const [],
+    this.plexAccessRequestable = false,
+  });
 
   final UserProfile user;
   final List<ServiceInstance> instances;
+  final bool plexAccessRequestable;
+
+  /// The emails shared through the ask-for-access card.
+  final List<String> sharedEmails = [];
 
   @override
   Future<AuthState> build() async => AuthState(
@@ -90,9 +98,27 @@ class _FakeAuthNotifier extends AuthNotifier {
           accessToken: 'access',
           refreshToken: 'refresh',
           instances: instances,
+          plexAccessRequestable: plexAccessRequestable,
         ),
         user: user,
       );
+
+  @override
+  Future<void> setPlexEmail(String email) async {
+    sharedEmails.add(email);
+    final current = state.valueOrNull;
+    if (current?.user != null) {
+      state = AsyncData(current!.copyWith(
+        user: current.user!.copyWith(plexEmail: email.trim()),
+      ));
+    }
+  }
+
+  @override
+  Future<void> refreshUser() async {}
+
+  @override
+  Future<void> refreshConfig() async {}
 }
 
 const _alice = UserProfile(id: 2, username: 'alice', role: 'user');
@@ -107,6 +133,32 @@ const _emby = ServiceInstance(
   serviceType: 'emby',
   name: 'Den Emby',
 );
+const _plex = ServiceInstance(
+  id: 'px-a',
+  serviceType: 'plex',
+  name: 'Cantina Plex',
+);
+
+Map<String, dynamic> _plexServer({Map<String, dynamic>? account}) => {
+      'instance_id': 'px-a',
+      'service_type': 'plex',
+      'name': 'Cantina Plex',
+      'kind': 'invite',
+      'public_address': 'https://app.plex.tv',
+      'account': account,
+    };
+
+Map<String, dynamic> _share({
+  String username = 'alice@example.com',
+  bool pending = true,
+  bool verified = true,
+}) =>
+    {
+      'username': username,
+      'disabled': false,
+      'pending': pending,
+      'verified': verified,
+    };
 
 Map<String, dynamic> _embyServer({Map<String, dynamic>? account}) => {
       'instance_id': 'em-a',
@@ -135,11 +187,14 @@ Map<String, dynamic> _account({
 }) =>
     {'username': username, 'disabled': disabled, 'verified': verified};
 
+_FakeAuthNotifier? _lastAuth;
+
 Future<_JsonAdapter> _pumpGuide(
   WidgetTester tester, {
   required Map<String, _Reply Function(dynamic body, int callsSoFar)> handlers,
   UserProfile user = _alice,
   List<ServiceInstance> instances = const [_jellyfin],
+  bool plexAccessRequestable = false,
   List<String>? logs,
 }) async {
   tester.view.physicalSize = const Size(800, 1600);
@@ -155,8 +210,10 @@ Future<_JsonAdapter> _pumpGuide(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        authProvider.overrideWith(
-            () => _FakeAuthNotifier(user: user, instances: instances)),
+        authProvider.overrideWith(() => _lastAuth = _FakeAuthNotifier(
+            user: user,
+            instances: instances,
+            plexAccessRequestable: plexAccessRequestable)),
         backendClientProvider.overrideWithValue(dio),
       ],
       child: const MaterialApp(theme: null, home: MediaAccessGuide()),
@@ -582,6 +639,150 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
+    expect(find.text('Sign in at https://jf.example.com'), findsOneWidget);
+  });
+
+  testWidgets(
+      'a Plex server asks for an email, posts it once, and shows the pending '
+      'invite', (tester) async {
+    var requested = false;
+    final adapter = await _pumpGuide(
+      tester,
+      instances: const [_plex],
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [
+              _plexServer(account: requested ? _share() : null),
+            ]),
+        'POST /api/media-servers/px-a/account': (_, __) {
+          requested = true;
+          return const _Reply(201, {
+            'username': 'alice@example.com',
+            'public_address': 'https://app.plex.tv',
+            'pending': true,
+          });
+        },
+      },
+    );
+
+    expect(find.text('Watch on Plex'), findsOneWidget);
+    expect(find.text('Your invite'), findsOneWidget);
+    expect(
+      find.textContaining('Share the email of your Plex account and your '
+          'invite is on its way.'),
+      findsOneWidget,
+    );
+    expect(find.text('Install the Plex app'), findsOneWidget);
+    expect(
+      find.text('Download the free Plex app from the App Store or Google Play'),
+      findsOneWidget,
+    );
+    expect(find.text('Accept your invite and sign in'), findsOneWidget);
+    expect(find.textContaining('open it and accept'), findsOneWidget);
+    expect(find.textContaining('shows up in Plex once it is Available'),
+        findsOneWidget);
+    // Nothing about passwords or a sign-in address to type on a Plex-only set.
+    expect(find.textContaining('password you chose'), findsNothing);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Share my Plex email'));
+    await tester.pumpAndSettle();
+    expect(find.text('Your Plex email'), findsOneWidget);
+
+    await tester.enterText(find.widgetWithText(TextField, 'Email'), 'nope');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Send my invite'));
+    await tester.pumpAndSettle();
+    expect(find.text('Enter a valid email address.'), findsOneWidget);
+    expect(adapter.calls('POST', '/api/media-servers/px-a/account'), 0);
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Email'), ' Alice@Example.com ');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Send my invite'));
+    await tester.pumpAndSettle();
+    final post = adapter.requests.singleWhere((r) => r.method == 'POST');
+    expect(post.body, {'email': 'Alice@Example.com'});
+    expect(find.text('Invite sent. Check your email, then accept it.'),
+        findsOneWidget);
+    expect(find.textContaining('Invite sent to alice@example.com'),
+        findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Share my Plex email'),
+        findsNothing);
+    expect(find.widgetWithText(TextButton, 'Wrong email?'), findsOneWidget);
+  });
+
+  testWidgets('an accepted Plex share shows where to sign in', (tester) async {
+    await _pumpGuide(
+      tester,
+      instances: const [_plex],
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [
+              _plexServer(account: _share(pending: false, verified: false)),
+            ]),
+      },
+    );
+    expect(find.text('Cantina Plex is shared with alice@example.com'),
+        findsOneWidget);
+    expect(find.text('Sign in at https://app.plex.tv'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
+    expect(find.textContaining("couldn't confirm this"), findsOneWidget);
+  });
+
+  testWidgets(
+      'a Plex server the user is not granted offers to ask for access',
+      (tester) async {
+    await _pumpGuide(
+      tester,
+      instances: const [],
+      plexAccessRequestable: true,
+      handlers: {
+        'GET /api/media-servers': (_, __) => const _Reply(200, []),
+      },
+    );
+    expect(find.text('Watch on Plex'), findsOneWidget);
+    expect(find.textContaining('No media server is shared with you'),
+        findsNothing);
+    expect(
+      find.textContaining('Share the email of your Plex account to ask for '
+          'access'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Ask for Plex access'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Email'), 'alice@example.com');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Send'));
+    await tester.pumpAndSettle();
+
+    expect(_lastAuth!.sharedEmails, ['alice@example.com']);
+    expect(find.text('Thanks! Your admin has been notified.'), findsOneWidget);
+    expect(find.text('alice@example.com'), findsOneWidget);
+    expect(find.textContaining('Your admin has been notified. Once they grant'),
+        findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Change email'), findsOneWidget);
+    // The delayed re-read fires and finds nothing new; no pending timers.
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a mixed Plex and Jellyfin set keeps both flows apart',
+      (tester) async {
+    await _pumpGuide(
+      tester,
+      instances: const [_jellyfin, _plex],
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [
+              _server(account: _account()),
+              _plexServer(),
+            ]),
+      },
+    );
+    expect(find.text('Watch on Plex or Jellyfin'), findsOneWidget);
+    expect(find.text('Your account'), findsOneWidget);
+    expect(find.text('Install the Plex or Jellyfin app'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Share my Plex email'),
+        findsOneWidget);
+    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.textContaining('open it and accept'), findsOneWidget);
+    expect(find.textContaining('password you chose'), findsOneWidget);
     expect(find.text('Sign in at https://jf.example.com'), findsOneWidget);
   });
 }

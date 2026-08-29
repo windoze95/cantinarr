@@ -52,14 +52,12 @@ import '../features/settings/ui/ai_tools_screen.dart';
 import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/discovery_settings_screen.dart';
-import '../features/settings/ui/plex_settings_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
 import '../features/settings/ui/user_request_settings_screen.dart';
 import '../features/settings/ui/users_screen.dart';
-import '../features/setup_wizard/ui/plex_watch_guide.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
 import '../features/shell/ui/app_shell.dart';
 import '../features/sonarr/ui/sonarr_calendar_screen.dart';
@@ -633,11 +631,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             builder: (_, __) =>
                 const AppAmbientBackground(child: DevicesScreen()),
           ),
+          // Plex lives in the instance editor now; the old Plex Invites
+          // address opens a new Plex instance so shared links keep working.
           GoRoute(
             path: '/settings/plex',
-            builder: (_, state) => AppAmbientBackground(
-                child:
-                    PlexSettingsScreen(highlightId: _highlightParam(state))),
+            builder: (_, __) => const AppAmbientBackground(
+                child: InstanceEditScreen(initialServiceType: 'plex')),
           ),
           GoRoute(
             path: '/settings/notifications',
@@ -698,10 +697,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             builder: (_, __) =>
                 const AppAmbientBackground(child: SetupWizardScreen()),
           ),
+          // The old static Plex guide is the media-server guide now.
           GoRoute(
             path: '/plex-guide',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: PlexWatchGuide()),
+            redirect: (_, __) => '/media-servers',
           ),
           GoRoute(
             path: '/media-servers',

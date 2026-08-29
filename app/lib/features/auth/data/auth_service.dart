@@ -488,7 +488,8 @@ class UserSummary {
   final bool sharedAiEnabled;
 
   /// The email this user shared for their Plex server invite ('' = none yet),
-  /// and when Cantinarr last sent their invite (null = never).
+  /// and when their invite went out (null = no Plex share yet; derived by
+  /// the server from the user's live Plex account row).
   final String plexEmail;
   final String? plexInvitedAt;
 
@@ -549,6 +550,9 @@ class ServerConfig {
   /// Whether users may see the "Report a problem" affordance.
   final bool allowReporting;
 
+  /// Whether a Plex server exists that an ungranted user can ask access to.
+  final bool plexAccessRequestable;
+
   const ServerConfig({
     required this.serverName,
     this.serverVersion,
@@ -557,6 +561,7 @@ class ServerConfig {
     this.instances = const [],
     this.issuesEnabled = false,
     this.allowReporting = false,
+    this.plexAccessRequestable = false,
   });
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) {
@@ -574,6 +579,7 @@ class ServerConfig {
       instances: instancesList,
       issuesEnabled: json['issues_enabled'] as bool? ?? false,
       allowReporting: json['allow_reporting'] as bool? ?? false,
+      plexAccessRequestable: json['plex_access_requestable'] as bool? ?? false,
     );
   }
 }

@@ -286,7 +286,7 @@ void main() {
     await _dragSettingsUntilFound(tester, find.text('Media server access'));
     expect(find.text('Media server access'), findsOneWidget);
     expect(
-      find.text('Create your account and see where to sign in'),
+      find.text('Get your access and see where to sign in'),
       findsOneWidget,
     );
   });
@@ -297,7 +297,8 @@ void main() {
 
     // Guides sits right above About; reaching GitHub means it was built.
     await _dragSettingsUntilFound(tester, find.text('GitHub'));
-    expect(find.text('Watch on Plex'), findsOneWidget);
+    expect(find.text('Watch on Plex'), findsNothing);
+    expect(find.text('Guides'), findsNothing);
     expect(find.text('Media server access'), findsNothing);
   });
 

@@ -117,7 +117,7 @@ void main() {
       ],
     );
 
-    expect(mediaServerServiceTypes, containsAll(['jellyfin', 'emby']));
+    expect(mediaServerServiceTypes, containsAll(['jellyfin', 'emby', 'plex']));
     expect(
       connection.mediaServerInstances.map((i) => i.id).toList(),
       ['jf-a', 'jf-b', 'em-a'],
@@ -155,5 +155,38 @@ void main() {
     expect(connection.mediaDownloadsEnabledFor('radarr-main'), isTrue);
     expect(connection.mediaDownloadsEnabledFor('missing'), isTrue);
     expect(connection.mediaDownloadsEnabledFor(null), isTrue);
+  });
+
+  test('the access guide shows for a granted server or an askable Plex', () {
+    const none = BackendConnection(
+      serverUrl: 'http://localhost',
+      accessToken: 'a',
+      refreshToken: 'r',
+    );
+    expect(none.mediaAccessGuideVisible, isFalse);
+    expect(none.mediaAccessGuideTypes, isEmpty);
+
+    const askable = BackendConnection(
+      serverUrl: 'http://localhost',
+      accessToken: 'a',
+      refreshToken: 'r',
+      plexAccessRequestable: true,
+    );
+    expect(askable.mediaAccessGuideVisible, isTrue);
+    expect(askable.mediaAccessGuideTypes, {'plex'});
+
+    const granted = BackendConnection(
+      serverUrl: 'http://localhost',
+      accessToken: 'a',
+      refreshToken: 'r',
+      instances: [
+        ServiceInstance(id: 'jf-a', serviceType: 'jellyfin', name: 'Home'),
+        ServiceInstance(id: 'px-a', serviceType: 'plex', name: 'Cantina'),
+      ],
+    );
+    expect(granted.mediaAccessGuideVisible, isTrue);
+    expect(granted.mediaAccessGuideTypes, {'jellyfin', 'plex'});
+    expect(granted.copyWith(plexAccessRequestable: true).mediaAccessGuideTypes,
+        {'jellyfin', 'plex'});
   });
 }

@@ -77,8 +77,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final externalAddress = ref.watch(externalAddressProvider);
     final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
     final appVersion = ref.watch(appVersionProvider).valueOrNull;
-    final mediaServersVisible =
-        connection?.mediaServerInstances.isNotEmpty ?? false;
+    final mediaServersVisible = connection?.mediaAccessGuideVisible ?? false;
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
@@ -264,7 +263,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               const SizedBox(height: 16),
               const _SectionHeader(title: 'Admin'),
               // People and access first: invite, manage, their devices,
-              // their Plex — then the AI/config stack.
+              // then the AI/config stack.
               _SettingsTile(
                 icon: Icons.link,
                 title: 'Generate Connect Link',
@@ -291,12 +290,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Connected Devices',
                 subtitle: 'Manage all connected devices',
                 onTap: () => context.push('/settings/devices'),
-              ),
-              _SettingsTile(
-                icon: Icons.play_circle_outline,
-                title: 'Plex Invites',
-                subtitle: 'Link Plex for one-tap and automatic invites',
-                onTap: () => context.push('/settings/plex'),
               ),
               _SettingsTile(
                 icon: Icons.key_outlined,
@@ -417,42 +410,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
             const SizedBox(height: 16),
 
-            // Guides
-            const _SectionHeader(title: 'Guides'),
-            // The row opens the guide; its switch governs the menu entry.
-            SettingsHighlight(
-              anchorId: SettingsAnchors.rootShowPlexGuide,
-              highlightId: _activeHighlight,
-              child: ListTile(
-                leading: const Icon(Icons.play_circle_outline,
-                    color: AppTheme.textSecondary),
-                title: const Text('Watch on Plex',
-                    style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w500)),
-                subtitle: const Text('Show the guide in the menu',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-                trailing: Switch(
-                  value: ref.watch(plexGuideEnabledProvider),
-                  onChanged: (v) =>
-                      ref.read(plexGuideEnabledProvider.notifier).set(v),
-                  activeThumbColor: AppTheme.accent,
-                ),
-                onTap: () => context.push('/plex-guide'),
-              ),
-            ),
-            // Only while a media server is shared with this account: the
-            // guide's content comes from the server, so without one there
-            // is nothing to open (no hide switch, unlike the static Plex
-            // guide above).
-            if (mediaServersVisible)
+            // Guides. Only while a media server is shared with this account
+            // (or a Plex server can be asked for): the guide's content comes
+            // from the server, so without one there is nothing to open.
+            if (mediaServersVisible) ...[
+              const _SectionHeader(title: 'Guides'),
               _SettingsTile(
                 icon: Icons.live_tv_outlined,
                 title: 'Media server access',
-                subtitle: 'Create your account and see where to sign in',
+                subtitle: 'Get your access and see where to sign in',
                 onTap: () => context.push('/media-servers'),
               ),
+            ],
 
             const SizedBox(height: 16),
 

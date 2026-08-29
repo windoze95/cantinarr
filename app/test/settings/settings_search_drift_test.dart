@@ -14,7 +14,6 @@ import 'package:cantinarr/features/settings/data/settings_search_index.dart';
 import 'package:cantinarr/features/settings/ui/ai_tools_screen.dart';
 import 'package:cantinarr/features/settings/ui/credentials_screen.dart';
 import 'package:cantinarr/features/settings/ui/discovery_settings_screen.dart';
-import 'package:cantinarr/features/settings/ui/plex_settings_screen.dart';
 import 'package:cantinarr/features/settings/ui/request_settings_screen.dart';
 import 'package:cantinarr/features/settings/ui/settings_screen.dart';
 import 'package:dio/dio.dart';
@@ -347,18 +346,6 @@ void main() {
     );
     await _assertTitles(
         tester, _controlsFor('/settings/credentials'), _adminGates);
-  });
-
-  testWidgets('plex invite controls', (tester) async {
-    await _pumpScreen(
-      tester,
-      const PlexSettingsScreen(),
-      dio: _dioFor(const {
-        '/api/admin/plex/status': {'linked': true},
-        '/api/admin/plex/servers': {'servers': <dynamic>[]},
-      }),
-    );
-    await _assertTitles(tester, _controlsFor('/settings/plex'), _adminGates);
   });
 
   testWidgets('discovery controls', (tester) async {
