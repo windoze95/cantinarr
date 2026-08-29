@@ -16,7 +16,7 @@ live service, it belongs in the live-lab or manual layers described in
 
 Cantinarr's integration credentials are not environment variables. Radarr,
 Sonarr, Chaptarr, download clients, Tautulli, TMDB, Trakt, AI provider
-keys, and the Plex account link are all entered through the admin UI at
+keys, and the Plex account link (a Plex instance) are all entered through the admin UI at
 runtime and stored AES-256-GCM encrypted in the SQLite database
 (`service_instances` rows and the settings KV). Environment variables only
 tune boot and deployment (port, public URL, push gateway, passkey

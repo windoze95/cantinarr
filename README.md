@@ -56,8 +56,7 @@ Discover and request movies, TV shows, and books. Get push notifications. Manage
 - **Flexible requests** -- request a whole title in one tap, or pick exactly which **seasons** (or book **formats**) you want; partially-available shows surface per-season availability and a one-tap path to request the rest.
 - **Always in sync** -- availability is computed live from the arrs (never from a stale snapshot), and server-managed Radarr/Sonarr/Chaptarr webhooks -- installed automatically the moment you add an instance -- push manual imports, deletes, and adds into the app the moment they happen without exposing callback credentials to a device. Books gain the most: an ebook can finish downloading between two polls, so instant updates are what make its "ready to read" alert reliable.
 - **Push notifications** -- APNs (iOS) and FCM (Android) via a self-hosted push gateway with zero-config auto-enrollment: new-content alerts for movies, episodes, and books, approval/issue alerts for admins, per-user preference toggles, deep links into the right screen.
-- **Plex onboarding** -- new users request access right from the in-app guide with their Plex email. Link your Plex account once and the server invite is one tap from the Users screen -- or fully automatic, with the user pushed a "check your inbox" the moment it's sent.
-- **Jellyfin and Emby accounts** -- connect a Jellyfin or Emby server and choose which users get access. Each of them creates their own account from the app with a password only they know, sees the libraries you picked, and is shown the address to sign in at. Take access away and the account is switched off rather than deleted, so watch history survives.
+- **Plex, Jellyfin, and Emby access** -- connect your media server and choose which users get access. On Jellyfin or Emby each of them creates their own account from the app with a password only they know; on Plex they share the email of their Plex account and the invite goes out the moment you grant them (or on its own, with auto-approve). Everyone sees the libraries you picked and the address to sign in at, and the app shows the live state: invite pending, accepted, or switched off. Take access away and a Jellyfin or Emby account is switched off rather than deleted, so watch history survives, and a Plex share is removed; grant again and it comes back.
 - **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
 - **Secrets encrypted at rest** -- arr API keys, download-client passwords, webhook tokens, shared and personal AI credentials, and OpenAI/xAI OAuth authorizations are AES-256-GCM encrypted in the database.
 - **Household-friendly** -- Connect links, passwordless by default, role-based access, per-user default instances. Admins manage services; users just browse and request.
@@ -211,7 +210,7 @@ Included AI is an explicit per-user entitlement for new accounts; the initial ad
 | Chaptarr instance | Admin UI | Books module; grant access per user from the instance editor or user settings -- full walkthrough in [`docs/books-setup.md`](docs/books-setup.md) |
 | SABnzbd/qBittorrent/NZBGet/Transmission | Admin UI | Download client modules (queue, history, speeds) |
 | Tautulli instance | Admin UI | Plex activity, watch history, stats |
-| Jellyfin or Emby instance | Admin UI | Media server accounts: per-user access, shared libraries, and the sign-in address users see |
+| Plex, Jellyfin, or Emby instance | Admin UI | Media server access: per-user grants, shared libraries, and the sign-in address users see; Plex links a plex.tv account with a PIN and picks the server to share |
 | Anthropic/OpenAI/Gemini/xAI API key | Admin UI | Enables shared API-key-backed AI chat and autonomous remediation |
 | OpenAI reasoning effort | Admin UI | Optional; pins `reasoning_effort` for the shared OpenAI provider (none/minimal/low/medium/high). Auto sends no effort field; endpoints that reject the field fall back automatically |
 | Local (OpenAI-compatible) | Admin UI | First-class shared provider for self-hosted OpenAI-compatible servers: required base URL and model ID, optional key/token, own reasoning-effort pin. Shared profile only -- never selectable as a personal provider |
@@ -275,11 +274,11 @@ Connect links embed a server address. Set **Settings > External Address** to the
 5. Watch download progress live and get push notifications
 6. Something wrong with a file? Tap "Report a problem"; Cantinarr quietly watches for an in-flight Radarr/Sonarr recovery, then investigates only if the problem persists
 7. Ask the AI assistant for recommendations or to make requests for you. Use the included server provider when granted, or choose your own provider under **Settings > AI Access**
-8. Sharing a Jellyfin or Emby server? Open **Watch on Jellyfin** (or **Watch on Emby**) in the menu, create your account, and sign in at the address shown
+8. Sharing a media server? Open **Watch on Plex** / **Watch on Jellyfin** / **Watch on Emby** in the menu: create your account (Jellyfin, Emby) or share your Plex email and accept the invite (Plex), then sign in at the address shown
 
 ### For Admins
 1. Deploy the container and complete the setup wizard
-2. Add your shared API credentials and service instances from Settings; for included AI, either add an Anthropic/OpenAI/Gemini/xAI key or link a shared OpenAI (OAuth) or xAI Grok (OAuth) account; a Jellyfin or Emby instance also chooses which users may create their own account there
+2. Add your shared API credentials and service instances from Settings; for included AI, either add an Anthropic/OpenAI/Gemini/xAI key or link a shared OpenAI (OAuth) or xAI Grok (OAuth) account; a Plex, Jellyfin, or Emby instance also chooses which users get access there
 3. Generate connect links for your household (set **Settings > External Address** first so links work away from home), grant included AI access where wanted, and pin per-user default instances if you run several
 4. Optionally require approval for requests -- pending ones arrive as push notifications
 5. Instant updates come on by themselves: adding a Radarr/Sonarr/Chaptarr instance installs the server's authenticated webhook automatically (books need it most -- an ebook can finish downloading between two polls). Each instance's edit screen shows the live state and a **Configure instant updates** button to repair it -- e.g. after changing `CANTINARR_ARR_CALLBACK_URL`
