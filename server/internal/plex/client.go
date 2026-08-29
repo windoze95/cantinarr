@@ -269,9 +269,11 @@ type Share struct {
 }
 
 // Invite is a share invitation plex.tv is still holding for someone who has
-// not accepted it (or has no account yet), from the owner's sent list.
+// not accepted it (or has no account yet), from the owner's sent list. ID is
+// whatever plex.tv keyed the invite by: a numeric user id for a registered
+// account, the invited email itself for someone with no account yet.
 type Invite struct {
-	ID       int64
+	ID       string
 	Username string
 	Email    string
 	// Machines names the servers the invite covers, when plex.tv says.
@@ -358,7 +360,7 @@ func (c *Client) ListShares(ctx context.Context, clientID, token, machineID stri
 func (c *Client) ListInvites(ctx context.Context, clientID, token string) ([]Invite, error) {
 	var container struct {
 		Invites []struct {
-			ID       int64  `xml:"id,attr"`
+			ID       string `xml:"id,attr"`
 			Username string `xml:"username,attr"`
 			Email    string `xml:"email,attr"`
 			Server   string `xml:"server,attr"`
@@ -420,8 +422,8 @@ func (c *Client) RemoveShare(ctx context.Context, clientID, token, machineID str
 // CancelInvite withdraws a share invitation nobody has accepted. Only the
 // server share is withdrawn (server=1); a friend or home invite that rode
 // along stays.
-func (c *Client) CancelInvite(ctx context.Context, clientID, token string, inviteID int64) error {
-	path := fmt.Sprintf("/api/invites/requested/%d?friend=0&home=0&server=1", inviteID)
+func (c *Client) CancelInvite(ctx context.Context, clientID, token string, inviteID string) error {
+	path := "/api/invites/requested/" + url.PathEscape(inviteID) + "?friend=0&home=0&server=1"
 	if err := c.doJSON(ctx, http.MethodDelete, path, clientID, token, nil, nil); err != nil {
 		return fmt.Errorf("cancel invite: %w", err)
 	}

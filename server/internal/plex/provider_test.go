@@ -137,7 +137,8 @@ func (f *fakePlexTV) count() int {
 const (
 	acceptedShare = `<SharedServer id="501" username="bob" email="Bob@Example.com" userID="77" acceptedAt="1700000000" invitedAt="1699999999"><Section id="101" key="1" title="Movies" type="movie" shared="1"/><Section id="102" key="2" title="TV Shows" type="show" shared="0"/></SharedServer>`
 	pendingShare  = `<SharedServer id="502" username="carol" email="carol@example.com" userID="78" accepted="0" invitedAt="1700000100"/>`
-	sentInvite    = `<Invite id="900" createdAt="1700000200" friend="0" home="0" server="1" username="" email="Dave@Example.com" friendlyName="dave"><Server name="Cantina" machineIdentifier="m1" numLibraries="2"/></Invite>`
+	// plex.tv keys an invite to someone with no account by the email itself.
+	sentInvite    = `<Invite id="Dave@Example.com" createdAt="1700000200" friend="0" home="0" server="1" username="" email="Dave@Example.com" friendlyName="dave"><Server name="Cantina" machineIdentifier="m1" numLibraries="2"/></Invite>`
 	otherInvite   = `<Invite id="901" createdAt="1700000300" friend="0" home="0" server="1" email="erin@example.com"><Server name="Other" machineIdentifier="m2" numLibraries="1"/></Invite>`
 	friendRequest = `<Invite id="902" createdAt="1700000400" friend="1" home="0" server="0" email="frank@example.com"/>`
 )
@@ -286,7 +287,7 @@ func TestProviderSetDisabledRemovesShareOrCancelsInvite(t *testing.T) {
 	if err := p.SetDisabled(context.Background(), "dave@example.com", true); err != nil {
 		t.Fatal(err)
 	}
-	if !f.saw("DELETE /api/invites/requested/900?friend=0&home=0&server=1") {
+	if !f.saw("DELETE /api/invites/requested/Dave@Example.com?friend=0&home=0&server=1") {
 		t.Fatalf("invite not cancelled: %v", f.requests)
 	}
 	if err := p.SetDisabled(context.Background(), "nobody@example.com", true); !errors.Is(err, mediaserver.ErrUserNotFound) {

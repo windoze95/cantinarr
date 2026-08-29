@@ -63,8 +63,8 @@ func (p *Provider) Libraries(ctx context.Context) ([]mediaserver.Library, error)
 // entry is one share or pending invite, looked up by identity.
 type entry struct {
 	user     mediaserver.RemoteUser
-	shareID  int64 // set for a share
-	inviteID int64 // set for a pending invite that is not yet a share
+	shareID  int64  // set for a share
+	inviteID string // set for a pending invite that is not yet a share
 }
 
 func (e entry) matches(identity string) bool {
