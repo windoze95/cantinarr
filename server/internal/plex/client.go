@@ -34,12 +34,22 @@ type Client struct {
 }
 
 func NewClient() *Client {
+	return NewClientAt(BaseURL)
+}
+
+// BaseURL is where plex.tv lives. A Plex instance's url field carries it so
+// a lab can put a proxy in front of plex.tv; production never changes it.
+const BaseURL = "https://plex.tv"
+
+// NewClientAt is NewClient against another base URL (a lab proxy, a test
+// server). The PIN approval page (AuthURL) still points at the real plex.tv.
+func NewClientAt(baseURL string) *Client {
 	return &Client{
 		http: &http.Client{
 			Timeout:       15 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		baseURL: "https://plex.tv",
+		baseURL: strings.TrimRight(baseURL, "/"),
 		product: "Cantinarr",
 	}
 }
@@ -129,38 +139,13 @@ func (c *Client) ListServers(ctx context.Context, clientID, token string) ([]Ser
 }
 
 // ListLibraries returns a server's library sections with their plex.tv-global
-// ids. This is the one v1/XML endpoint: /api/servers/{machineID} is where the
+// ids. This is a v1/XML endpoint: /api/servers/{machineID} is where the
 // global section ids live (the JSON APIs only expose server-local keys).
 func (c *Client) ListLibraries(ctx context.Context, clientID, token, machineID string) ([]Library, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/servers/"+url.PathEscape(machineID), nil)
-	if err != nil {
-		return nil, err
-	}
-	c.setHeaders(req, clientID, token)
-	req.Header.Set("Accept", "application/xml")
-
-	resp, err := c.http.Do(req)
+	container, err := c.getServer(ctx, clientID, token, machineID)
 	if err != nil {
 		return nil, fmt.Errorf("list libraries: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("list libraries: plex.tv answered %d", resp.StatusCode)
-	}
-
-	var container struct {
-		Servers []struct {
-			Sections []struct {
-				ID    int64  `xml:"id,attr"`
-				Title string `xml:"title,attr"`
-				Type  string `xml:"type,attr"`
-			} `xml:"Section"`
-		} `xml:"Server"`
-	}
-	if err := xml.NewDecoder(resp.Body).Decode(&container); err != nil {
-		return nil, fmt.Errorf("list libraries: decode: %w", err)
-	}
-
 	var libs []Library
 	for _, srv := range container.Servers {
 		for _, sec := range srv.Sections {
@@ -261,6 +246,210 @@ func (c *Client) doJSON(ctx context.Context, method, path, clientID, token strin
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
+	}
+	return nil
+}
+
+// ServerInfo identifies an owned Plex Media Server as plex.tv knows it.
+type ServerInfo struct {
+	Name              string
+	Version           string
+	MachineIdentifier string
+}
+
+// Share is one account a server is shared with, as plex.tv lists it. ID is
+// the share's own id (what an update or removal addresses), not the user's.
+type Share struct {
+	ID         int64
+	UserID     int64
+	Username   string
+	Email      string
+	Accepted   bool
+	SectionIDs []int64
+}
+
+// Invite is a share invitation plex.tv is still holding for someone who has
+// not accepted it (or has no account yet), from the owner's sent list.
+type Invite struct {
+	ID       int64
+	Username string
+	Email    string
+	// Machines names the servers the invite covers, when plex.tv says.
+	Machines []string
+	// Servers names them when only the name is given.
+	Servers []string
+}
+
+// serverContainer is the XML plex.tv answers for /api/servers/{machineID}:
+// the server's identity and its sections with their global ids.
+type serverContainer struct {
+	Servers []struct {
+		Name              string `xml:"name,attr"`
+		Version           string `xml:"version,attr"`
+		MachineIdentifier string `xml:"machineIdentifier,attr"`
+		Sections          []struct {
+			ID    int64  `xml:"id,attr"`
+			Title string `xml:"title,attr"`
+			Type  string `xml:"type,attr"`
+		} `xml:"Section"`
+	} `xml:"Server"`
+}
+
+func (c *Client) getServer(ctx context.Context, clientID, token, machineID string) (*serverContainer, error) {
+	var container serverContainer
+	if err := c.doXML(ctx, http.MethodGet, "/api/servers/"+url.PathEscape(machineID), clientID, token, &container); err != nil {
+		return nil, err
+	}
+	return &container, nil
+}
+
+// GetServer reads an owned server's identity: the connection test for a Plex
+// instance, which proves both the token and that the account owns the server.
+func (c *Client) GetServer(ctx context.Context, clientID, token, machineID string) (*ServerInfo, error) {
+	container, err := c.getServer(ctx, clientID, token, machineID)
+	if err != nil {
+		return nil, fmt.Errorf("get server: %w", err)
+	}
+	for _, srv := range container.Servers {
+		if srv.MachineIdentifier == "" || srv.MachineIdentifier == machineID {
+			return &ServerInfo{Name: srv.Name, Version: srv.Version, MachineIdentifier: machineID}, nil
+		}
+	}
+	return nil, fmt.Errorf("get server: plex.tv lists no server %s for this account", machineID)
+}
+
+// ListShares lists the accounts a server is shared with.
+func (c *Client) ListShares(ctx context.Context, clientID, token, machineID string) ([]Share, error) {
+	var container struct {
+		Shares []struct {
+			ID         int64  `xml:"id,attr"`
+			UserID     int64  `xml:"userID,attr"`
+			Username   string `xml:"username,attr"`
+			Email      string `xml:"email,attr"`
+			Accepted   string `xml:"accepted,attr"`
+			AcceptedAt string `xml:"acceptedAt,attr"`
+			Sections   []struct {
+				ID     int64  `xml:"id,attr"`
+				Shared string `xml:"shared,attr"`
+			} `xml:"Section"`
+		} `xml:"SharedServer"`
+	}
+	if err := c.doXML(ctx, http.MethodGet, "/api/servers/"+url.PathEscape(machineID)+"/shared_servers", clientID, token, &container); err != nil {
+		return nil, fmt.Errorf("list shares: %w", err)
+	}
+	shares := make([]Share, 0, len(container.Shares))
+	for _, s := range container.Shares {
+		share := Share{ID: s.ID, UserID: s.UserID, Username: s.Username, Email: s.Email}
+		// plex.tv has said "accepted" two ways over the years; either counts.
+		share.Accepted = s.Accepted == "1" || s.Accepted == "true" ||
+			(s.Accepted == "" && s.AcceptedAt != "" && s.AcceptedAt != "0")
+		for _, sec := range s.Sections {
+			if sec.Shared == "" || sec.Shared == "1" || sec.Shared == "true" {
+				share.SectionIDs = append(share.SectionIDs, sec.ID)
+			}
+		}
+		shares = append(shares, share)
+	}
+	return shares, nil
+}
+
+// ListInvites lists the share invitations the account has sent that nobody
+// has accepted yet. plex.tv keeps these apart from the shares themselves.
+func (c *Client) ListInvites(ctx context.Context, clientID, token string) ([]Invite, error) {
+	var container struct {
+		Invites []struct {
+			ID       int64  `xml:"id,attr"`
+			Username string `xml:"username,attr"`
+			Email    string `xml:"email,attr"`
+			Server   string `xml:"server,attr"`
+			Servers  []struct {
+				Name              string `xml:"name,attr"`
+				MachineIdentifier string `xml:"machineIdentifier,attr"`
+			} `xml:"Server"`
+		} `xml:"Invite"`
+	}
+	if err := c.doXML(ctx, http.MethodGet, "/api/invites/requested", clientID, token, &container); err != nil {
+		return nil, fmt.Errorf("list invites: %w", err)
+	}
+	invites := make([]Invite, 0, len(container.Invites))
+	for _, i := range container.Invites {
+		if i.Server == "0" || i.Server == "false" {
+			continue // a friend request, not a share
+		}
+		inv := Invite{ID: i.ID, Username: i.Username, Email: i.Email}
+		for _, srv := range i.Servers {
+			if srv.MachineIdentifier != "" {
+				inv.Machines = append(inv.Machines, srv.MachineIdentifier)
+			}
+			if srv.Name != "" {
+				inv.Servers = append(inv.Servers, srv.Name)
+			}
+		}
+		invites = append(invites, inv)
+	}
+	return invites, nil
+}
+
+// UpdateShare replaces the libraries an existing share covers. An empty list
+// shares every library, as on invite.
+func (c *Client) UpdateShare(ctx context.Context, clientID, token, machineID string, shareID int64, sectionIDs []int64) error {
+	if sectionIDs == nil {
+		sectionIDs = []int64{}
+	}
+	body := map[string]any{
+		"server_id":     machineID,
+		"shared_server": map[string]any{"library_section_ids": sectionIDs},
+	}
+	path := fmt.Sprintf("/api/servers/%s/shared_servers/%d", url.PathEscape(machineID), shareID)
+	if err := c.doJSON(ctx, http.MethodPut, path, clientID, token, body, nil); err != nil {
+		return fmt.Errorf("update share: %w", err)
+	}
+	return nil
+}
+
+// RemoveShare takes a server away from an account. The friendship, if any,
+// is untouched; plex.tv treats the two separately.
+func (c *Client) RemoveShare(ctx context.Context, clientID, token, machineID string, shareID int64) error {
+	path := fmt.Sprintf("/api/servers/%s/shared_servers/%d", url.PathEscape(machineID), shareID)
+	if err := c.doJSON(ctx, http.MethodDelete, path, clientID, token, nil, nil); err != nil {
+		return fmt.Errorf("remove share: %w", err)
+	}
+	return nil
+}
+
+// CancelInvite withdraws a share invitation nobody has accepted. Only the
+// server share is withdrawn (server=1); a friend or home invite that rode
+// along stays.
+func (c *Client) CancelInvite(ctx context.Context, clientID, token string, inviteID int64) error {
+	path := fmt.Sprintf("/api/invites/requested/%d?friend=0&home=0&server=1", inviteID)
+	if err := c.doJSON(ctx, http.MethodDelete, path, clientID, token, nil, nil); err != nil {
+		return fmt.Errorf("cancel invite: %w", err)
+	}
+	return nil
+}
+
+// doXML is the v1 transport: the older plex.tv endpoints answer XML.
+func (c *Client) doXML(ctx context.Context, method, path, clientID, token string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	c.setHeaders(req, clientID, token)
+	req.Header.Set("Accept", "application/xml")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return &apiError{status: resp.StatusCode}
+	}
+	if out == nil {
+		return nil
+	}
+	if err := xml.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(out); err != nil {
+		return fmt.Errorf("decode: %w", err)
 	}
 	return nil
 }
