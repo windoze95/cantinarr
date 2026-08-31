@@ -201,8 +201,8 @@ type DemoInstance struct {
 | `withInstance(id, fn func(*DemoInstance)) bool` | Mutate instance fields under the state lock |
 | `visibleInstances(u) []*DemoInstance` | Admin: all. User: every access-granted instance PLUS their effective default, across `grantableServiceTypes()`, in registry order. Grants are additive, so a user's list can hold several instances of a type — renderers mark `is_default` with `effectiveInstanceIDFor`, never blanket-true |
 | `grantableServiceTypes() []string` | radarr, sonarr, chaptarr, jellyfin, emby, plex |
-| `effectiveInstanceFor(u, serviceType) *DemoInstance` · `effectiveInstanceIDFor(u, st) string` | Per-user pin → for chaptarr AND every media-server type the first grant with **no** global fallback → otherwise global default → first of type |
-| `grantedInstanceIDs(u, st) []string` | Explicit grants plus the pin, registry order; never nil |
+| `effectiveInstanceFor(u, serviceType) *DemoInstance` · `effectiveInstanceIDFor(u, st) string` | Per-user pin → for chaptarr AND every media-server type the first grant with **no** global fallback → otherwise global default → first of type. **A pin is never media-server eligibility** (mirrors the server's `grantedMediaServers`); chaptarr is the opposite — its pin IS the grant |
+| `grantedInstanceIDs(u, st) []string` | Explicit grants, plus the pin for every type EXCEPT the media servers; registry order; never nil |
 | `visibleInstanceIDs(u, st) []string` | `grantedInstanceIDs` ∪ the effective default; never nil |
 | `userCanSeeInstance(u, id) bool` | Admin: any live instance. User: the instance is in their visible set for its type |
 | `userInstanceGrants(u) map[string][]string` | Copy of the grant map, empty types omitted; never nil |

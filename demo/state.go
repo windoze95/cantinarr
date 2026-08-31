@@ -936,7 +936,10 @@ func effectiveInstanceIDFor(u *DemoUser, serviceType string) string {
 }
 
 func lockedEffectiveInstanceID(u *DemoUser, serviceType string) string {
-	if u != nil {
+	// A pin is never media-server eligibility — access to a media server is
+	// the grant and nothing else. Chaptarr is the opposite: its pin IS the
+	// grant. Both rules mirror the server exactly.
+	if u != nil && !isMediaServerType(serviceType) {
 		if pinned, ok := u.DefaultInstances[serviceType]; ok && pinned != "" {
 			if inst := lockedInstanceByID(pinned); inst != nil && inst.ServiceType == serviceType {
 				return inst.ID
@@ -999,7 +1002,11 @@ func lockedGrantedInstanceIDs(u *DemoUser, serviceType string) []string {
 	for _, id := range u.InstanceGrants[serviceType] {
 		add(id)
 	}
-	add(u.DefaultInstances[serviceType])
+	if !isMediaServerType(serviceType) {
+		// Same rule: a media-server pin confers nothing, so it must not leak
+		// into the visible set either.
+		add(u.DefaultInstances[serviceType])
+	}
 	return out
 }
 

@@ -24,6 +24,9 @@ var uaValidServiceTypes = map[string]bool{
 	serviceNzbget:       true,
 	serviceTransmission: true,
 	serviceTautulli:     true,
+	serviceJellyfin:     true,
+	serviceEmby:         true,
+	servicePlex:         true,
 }
 
 // registerUsersAdmin mounts the admin user/device management surface. Every
