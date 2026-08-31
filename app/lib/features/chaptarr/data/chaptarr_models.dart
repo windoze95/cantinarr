@@ -172,6 +172,46 @@ class ChaptarrAuthor {
 
   String? get coverUrl => _pickCoverUrl(images);
 
+  /// The author's portrait, for a search result or a browse card.
+  ///
+  /// Deliberately not [coverUrl]: that reads `url` only, which on a *lookup*
+  /// author is a `/MediaCoverProxy/...` path this fork cannot serve (the same
+  /// reason not-yet-owned book rows stay iconic). Author art is offered as an
+  /// absolute metadata-CDN `remoteUrl`, which loads directly, so prefer it and
+  /// fall back to `url` for a library record whose art is a relative
+  /// `/MediaCover/...` path — [chaptarrImageSource] proxies that one.
+  ///
+  /// Mirrors `RadarrMovie.posterUrl`'s cover-type-then-remoteUrl shape.
+  String? get portraitUrl {
+    final poster = images.where((i) => i.coverType == 'poster');
+    for (final image in [...poster, ...images]) {
+      final remote = image.remoteUrl?.trim();
+      if (remote != null && remote.isNotEmpty) return remote;
+      final local = image.url?.trim();
+      if (local != null && local.isNotEmpty) return local;
+    }
+    return null;
+  }
+
+  /// What the library holds by this author, in requester vocabulary — or the
+  /// empty string when this record makes no such claim.
+  ///
+  /// A lookup-only author carries no `statistics`, and an author the library
+  /// tracks but holds no files for counts zero. Neither may render as
+  /// "0 books": that asserts an empty shelf where the truth is that nothing
+  /// was counted. Unlike [bookCountLabel], this one stays silent instead.
+  String get libraryCountLabel {
+    final s = statistics;
+    if (s == null) return '';
+    final total = s.bookCount;
+    if (total <= 0) return '';
+    final books = total == 1 ? 'book' : 'books';
+    final have = s.bookFileCount;
+    if (have <= 0) return '$total $books';
+    if (have >= total) return '$total $books · all available';
+    return '$have of $total $books available';
+  }
+
   double get percentComplete {
     if (statistics == null || statistics!.bookCount == 0) return 0;
     return statistics!.bookFileCount / statistics!.bookCount;

@@ -8,6 +8,7 @@ import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/category_row.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/data/sonarr_models.dart';
@@ -33,6 +34,11 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
   List<SonarrSeries> _recentlyDownloaded = [];
   List<SonarrSeries> _airingNext = [];
   bool _isLoadingLibrary = false;
+
+  /// The full Sonarr library, retained so Discover browse-row posters can be
+  /// badged Available/Partial/Requested from the same fetch this
+  /// tab already makes — no second Sonarr call.
+  List<SonarrSeries> _librarySeries = [];
 
   @override
   void initState() {
@@ -84,6 +90,11 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
     }
     if (!mounted) return;
 
+    // Retained before the history/calendar follow-up fetches: those two can
+    // each fail independently, and browse-row badges must survive either
+    // outage since the series list they depend on already arrived.
+    setState(() => _librarySeries = series);
+
     try {
       final imports = await service.getHistory(
         pageSize: _importHistoryPageSize,
@@ -128,6 +139,17 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
   @override
   Widget build(BuildContext context) {
     final discover = ref.watch(tvDiscoverProvider);
+    // Unlike the Movies tab, searchResults is load-bearing here: the TV
+    // branch of buildSearchLibraryStatus looks each result up by tmdbId
+    // (falling back to a title+year match), so it needs the browse-row items
+    // to key against. The whole featured list is passed, not `.skip(1)` —
+    // the hero's extra entry is one unread map key, and keeping the lists
+    // aligned avoids an off-by-one.
+    final libraryStatus = buildSearchLibraryStatus(
+      searchResults: [...discover.featured, ...discover.anticipated],
+      movies: const [],
+      series: _librarySeries,
+    );
 
     return RefreshIndicator(
       onRefresh: _onRefresh,
@@ -147,12 +169,16 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
             title: discover.featuredTitle,
             items: discover.featured.skip(1).toList(growable: false),
             isLoading: discover.isLoadingFeatured,
+            isTvRow: true,
+            libraryStatus: libraryStatus,
           ),
           if (discover.anticipated.isNotEmpty)
             CategoryRow(
               title: 'Most Anticipated',
               items: discover.anticipated,
               isLoading: discover.isLoadingAnticipated,
+              isTvRow: true,
+              libraryStatus: libraryStatus,
             ),
 
           // Sonarr library rows (same style as discovery)
@@ -208,7 +234,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
           HorizontalItemRow<SonarrSeries>(
             items: items,
             isLoading: _isLoadingLibrary,
-            height: cardWidth * 1.5 + 68,
+            height: cardWidth * 1.5 + MediaCard.subtitleRowExtraHeight,
             itemBuilder: (series) => MediaCard(
               id: series.id,
               title: series.title,

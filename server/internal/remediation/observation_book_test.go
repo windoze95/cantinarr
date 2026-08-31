@@ -83,11 +83,20 @@ func setupBookObservationService(t *testing.T, state *bookFileState) (*Service, 
 	return NewService(database, instance.NewRegistry(store), nil, notifier), notifier
 }
 
-// setupBookReportService is setupBookObservationService plus a seeded reporter.
+// setupBookReportService is setupBookObservationService plus a seeded reporter
+// holding the chaptarr assignment that IS the books access model — reports are
+// scoped to libraries the reporter can see.
 func setupBookReportService(t *testing.T, state *bookFileState) (*Service, int64) {
 	t.Helper()
 	svc, _ := setupBookObservationService(t, state)
-	return svc, seedUser(t, svc.db, "book-reporter")
+	reporterID := seedUser(t, svc.db, "book-reporter")
+	if _, err := svc.db.Exec(
+		"INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, 'chaptarr', 'chaptarr-observe')",
+		reporterID,
+	); err != nil {
+		t.Fatalf("assign chaptarr instance: %v", err)
+	}
+	return svc, reporterID
 }
 
 func observedBookProblem(downloadID string, queueID int) arr.QueueObservation {

@@ -12,6 +12,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// The counted headers use non-breaking spaces so a wrapped header never
@@ -53,6 +54,76 @@ void main() {
     final done = tester.widget<Text>(find.text('ESSENTIALS$_nb· DONE'));
     final suffix = (done.textSpan! as TextSpan).children!.last as TextSpan;
     expect(suffix.style?.color, AppTheme.available);
+  });
+
+  // _pumpWizard mounts the wizard in a plain MaterialApp with no router, so
+  // this variant gives it one whose instance route is a recorder: the
+  // destination never matters here, only the extra each row sends along.
+  testWidgets('instance rows hand the add-instance form its extras',
+      (tester) async {
+    // Tall enough that every row is on screen without scrolling.
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // What each row must send: the service type when the row names one.
+    // The download-client row names a category of four services, so it sends
+    // a selection prompt instead of guessing a member the admin would then
+    // have to correct — the same correction the Radarr default used to force.
+    const expectedExtras = <String, Map<String, dynamic>>{
+      'radarr': {'service_type': 'radarr'},
+      'sonarr': {'service_type': 'sonarr'},
+      'tautulli': {'service_type': 'tautulli'},
+      'books': {'service_type': 'chaptarr'},
+      'media_servers': {'service_type_prompt': 'Select a media server'},
+      'download_client': {'service_type_prompt': 'Select a download client'},
+    };
+
+    Object? capturedExtra;
+    final router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(path: '/', builder: (_, __) => const SetupWizardScreen()),
+        GoRoute(
+          path: '/settings/instance/new',
+          builder: (_, state) {
+            capturedExtra = state.extra;
+            return const Scaffold(body: SizedBox());
+          },
+        ),
+      ],
+    );
+
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = _WizardAdapter([
+        for (final key in expectedExtras.keys) (key, false, false),
+      ]);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(_AdminAuthNotifier.new),
+          backendClientProvider.overrideWithValue(dio),
+        ],
+        child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final entry in expectedExtras.entries) {
+      capturedExtra = null;
+      final row = find.text(entry.key);
+      await tester.ensureVisible(row);
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+
+      expect(capturedExtra, entry.value,
+          reason: 'the ${entry.key} row must announce itself to the form');
+
+      // Pop back so the next tap starts from the checklist again; this also
+      // exercises the return path's status refresh.
+      router.pop();
+      await tester.pumpAndSettle();
+    }
   });
 
   group('row emphasis', _rowEmphasisTests);

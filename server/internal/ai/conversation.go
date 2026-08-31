@@ -23,6 +23,14 @@ const (
 	maxStoredToolResultBytes = 32 << 10
 	maxStoredToolInputBytes  = 16 << 10
 	maxStoredIdentifierBytes = 512
+	// maxStoredToolRecordsPerTurn bounds how many tool_use/tool_result pairs
+	// one codex turn contributes to the stored transcript. Each pair is two
+	// messages, so a turn that used the whole dynamic tool budget must not be
+	// allowed to crowd out its own final answer under maxStoredMessages —
+	// trimHistory would then find no valid suffix and keep only the user
+	// question. The earliest records carry the broad library sweeps that
+	// ground follow-up turns; later refinements are the ones dropped.
+	maxStoredToolRecordsPerTurn = 24
 	// Signed provider continuation blocks cannot be truncated or redacted
 	// without invalidating their signatures. Drop the containing provider turn
 	// when its opaque state exceeds the ordinary per-block text budget.

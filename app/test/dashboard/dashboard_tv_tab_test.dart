@@ -4,9 +4,12 @@ import 'dart:typed_data';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/horizontal_item_row.dart';
+import 'package:cantinarr/core/widgets/media_card.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_tv_tab.dart';
+import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/sonarr/data/sonarr_models.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -99,6 +102,125 @@ void main() {
     // claim the app cannot support.
     expect(find.text('Recently Downloaded'), findsNothing);
   });
+
+  testWidgets(
+      'TV Discover browse rows badge Partial/Requested from the Sonarr library',
+      (tester) async {
+    final adapter = _SonarrAdapter(
+      series: [
+        _series(
+          id: 201,
+          title: 'Partial Series',
+          files: 18,
+          episodes: 18,
+          totalEpisodeCount: 24,
+        ),
+        _series(
+          id: 202,
+          title: 'Requested Series',
+          files: 0,
+          episodes: 0,
+          totalEpisodeCount: 10,
+        ),
+        _series(
+          id: 203,
+          title: 'Unmonitored Empty Series',
+          files: 0,
+          episodes: 0,
+          totalEpisodeCount: 10,
+          monitored: false,
+        ),
+      ],
+      history: const [],
+      calendar: const [],
+      featured: [
+        _tvFeatured(id: 200, name: 'Hero Series'),
+        _tvFeatured(id: 201, name: 'Partial Series'),
+        _tvFeatured(id: 202, name: 'Requested Series'),
+        _tvFeatured(id: 203, name: 'Unmonitored Empty Series'),
+        _tvFeatured(id: 204, name: 'No Match Series'),
+      ],
+    );
+
+    await _pumpTvTab(tester, adapter);
+
+    final byTitle = {for (final c in _browseRowCards(tester)) c.title: c};
+
+    expect(byTitle['Partial Series']?.statusLabel, 'Partial');
+    expect(byTitle['Partial Series']?.statusColor, AppTheme.requested);
+    expect(byTitle['Partial Series']?.subtitle, '18/24 eps');
+
+    expect(byTitle['Requested Series']?.statusLabel, 'Requested');
+    expect(byTitle['Requested Series']?.statusColor, AppTheme.requested);
+    expect(byTitle['Requested Series']?.subtitle, isNull);
+
+    expect(byTitle['Unmonitored Empty Series']?.statusLabel, isNull);
+    expect(byTitle['Unmonitored Empty Series']?.subtitle, isNull);
+    expect(byTitle['No Match Series']?.statusLabel, isNull);
+
+    // D-01: the hero is a different widget entirely, never a MediaCard.
+    expect(byTitle.containsKey('Hero Series'), isFalse);
+
+    // The browse row reserves the same taller height the Sonarr library row
+    // already uses for its subtitle-bearing MediaCard row — both now read
+    // MediaCard.subtitleRowExtraHeight, so this pins the shared constant
+    // rather than a literal that could drift from dashboard_tv_tab.dart's
+    // own _buildRow.
+    const cardWidth = 108.0; // 390px test viewport: width < 600.
+    final browseRows = tester.widgetList<HorizontalItemRow<MediaItem>>(
+      find.byType(HorizontalItemRow<MediaItem>),
+    );
+    for (final row in browseRows) {
+      expect(row.height, cardWidth * 1.5 + MediaCard.subtitleRowExtraHeight);
+    }
+  });
+
+  testWidgets(
+      'TV Discover browse-row badges survive a history-fetch outage',
+      (tester) async {
+    final adapter = _SonarrAdapter(
+      series: [
+        _series(
+          id: 202,
+          title: 'Requested Series',
+          files: 0,
+          episodes: 0,
+          totalEpisodeCount: 10,
+        ),
+      ],
+      history: const [],
+      calendar: const [],
+      failHistory: true,
+      featured: [
+        _tvFeatured(id: 200, name: 'Hero Series'),
+        _tvFeatured(id: 202, name: 'Requested Series'),
+      ],
+    );
+
+    await _pumpTvTab(tester, adapter);
+
+    final badged =
+        _browseRowCards(tester).where((c) => c.statusLabel != null);
+    expect(badged, isNotEmpty);
+  });
+}
+
+/// The MediaCards rendered by Discover browse rows (CategoryRow), as opposed
+/// to the dashboard's own Sonarr library rows — both use MediaCard, but only
+/// the browse rows are this plan's concern, and both can carry the same
+/// series title with a different (correct, out-of-scope) badge.
+List<MediaCard> _browseRowCards(WidgetTester tester) {
+  final rows = find.byType(HorizontalItemRow<MediaItem>);
+  final cards = <MediaCard>[];
+  for (final element in tester.elementList(rows)) {
+    cards.addAll(tester
+        .widgetList<MediaCard>(find.descendant(
+          of: find.byWidget(element.widget),
+          matching: find.byType(MediaCard),
+        ))
+        .toList());
+  }
+  return cards;
 }
 
 /// The items of the tab's only Sonarr row. Each test leaves exactly one of the
@@ -159,14 +281,31 @@ Map<String, dynamic> _series({
   required String title,
   required int files,
   required int episodes,
+  bool monitored = true,
+  int? totalEpisodeCount,
 }) =>
     {
       'id': id,
       'title': title,
       'tmdbId': id,
+      'monitored': monitored,
       // No images: a null poster keeps the cards off the network.
       'images': <Object>[],
-      'statistics': {'episodeFileCount': files, 'episodeCount': episodes},
+      'statistics': {
+        'episodeFileCount': files,
+        'episodeCount': episodes,
+        if (totalEpisodeCount != null) 'totalEpisodeCount': totalEpisodeCount,
+      },
+    };
+
+/// A TV Discover browse-row featured result. Every field a card could touch
+/// the network for is left null so no test hits it.
+Map<String, dynamic> _tvFeatured({required int id, required String name}) => {
+      'id': id,
+      'name': name,
+      'poster_path': null,
+      'first_air_date': null,
+      'vote_average': 0,
     };
 
 Map<String, dynamic> _import({required int seriesId, required String date}) => {
@@ -197,12 +336,17 @@ class _SonarrAdapter implements HttpClientAdapter {
     required this.history,
     required this.calendar,
     this.failHistory = false,
+    this.featured = const [],
   });
 
   final List<Map<String, dynamic>> series;
   final List<Map<String, dynamic>> history;
   final List<Map<String, dynamic>> calendar;
   final bool failHistory;
+
+  /// TV Discover's headline feed. Defaults empty so the existing library-row
+  /// tests, which don't care about Discover at all, keep working unchanged.
+  final List<Map<String, dynamic>> featured;
   Map<String, dynamic> historyQuery = const {};
 
   static const _base = '/api/instances/tv/api/v3';
@@ -227,6 +371,14 @@ class _SonarrAdapter implements HttpClientAdapter {
       body = {'records': history, 'totalRecords': history.length};
     } else if (options.path == '$_base/calendar') {
       body = calendar;
+    } else if (options.path == '/api/discover/tv/featured') {
+      body = {
+        'source': 'tmdb_trending',
+        'page': 1,
+        'results': featured,
+        'total_pages': 1,
+        'total_results': featured.length,
+      };
     } else {
       // Discovery rows: empty is enough, and every fetch there is guarded.
       body = {

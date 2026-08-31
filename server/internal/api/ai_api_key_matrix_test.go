@@ -26,12 +26,16 @@ func TestAIAPIKeyProviderScopeRoleGrantMatrix(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", upstream.URL)
 	t.Setenv("OPENAI_BASE_URL", upstream.URL)
 	t.Setenv("GOOGLE_GEMINI_BASE_URL", upstream.URL)
+	// Grok speaks the OpenAI wire format; a distinct path prefix lets the
+	// shared upstream attribute its requests to the right provider.
+	t.Setenv("XAI_BASE_URL", upstream.URL+"/xai")
 
 	harness := newRBACRouterHarness(t, false)
 	providers := []string{
 		credentials.AIProviderAnthropic,
 		credentials.AIProviderOpenAI,
 		credentials.AIProviderGemini,
+		credentials.AIProviderGrok,
 	}
 	actors := []struct {
 		name  string
@@ -128,6 +132,9 @@ func newAIProviderMatrixUpstream(t *testing.T) (*httptest.Server, <-chan aiProvi
 			apiKey = r.Header.Get("X-Api-Key")
 		case strings.Contains(r.URL.Path, "chat/completions"):
 			provider = credentials.AIProviderOpenAI
+			if strings.HasPrefix(r.URL.Path, "/xai/") {
+				provider = credentials.AIProviderGrok
+			}
 			apiKey = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		case strings.Contains(r.URL.Path, "streamGenerateContent"):
 			provider = credentials.AIProviderGemini
@@ -160,7 +167,7 @@ func newAIProviderMatrixUpstream(t *testing.T) (*httptest.Server, <-chan aiProvi
 			fmt.Fprint(w, `data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`+"\n\n")
 			fmt.Fprint(w, "event: message_stop\n")
 			fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
-		case credentials.AIProviderOpenAI:
+		case credentials.AIProviderOpenAI, credentials.AIProviderGrok:
 			fmt.Fprint(w, `data: {"id":"chatcmpl-matrix","object":"chat.completion.chunk","created":1,"model":"gpt-4.1-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"MATRIX_OK"},"finish_reason":null}]}`+"\n\n")
 			fmt.Fprint(w, `data: {"id":"chatcmpl-matrix","object":"chat.completion.chunk","created":1,"model":"gpt-4.1-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n")
 			fmt.Fprint(w, "data: [DONE]\n\n")
@@ -260,6 +267,8 @@ func matrixModel(provider string) string {
 		return "claude-test"
 	case credentials.AIProviderOpenAI:
 		return "gpt-4.1-mini"
+	case credentials.AIProviderGrok:
+		return "grok-test"
 	default:
 		return "gemini-test"
 	}
@@ -286,7 +295,7 @@ func matrixRequestToolNames(provider string, body map[string]any) []string {
 			if name, _ := tool["name"].(string); name != "" {
 				names = append(names, name)
 			}
-		case credentials.AIProviderOpenAI:
+		case credentials.AIProviderOpenAI, credentials.AIProviderGrok:
 			function, _ := tool["function"].(map[string]any)
 			if name, _ := function["name"].(string); name != "" {
 				names = append(names, name)

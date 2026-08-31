@@ -11,14 +11,24 @@ import (
 )
 
 // AccessRequestHook runs after a user shares a new or changed Plex email.
-// Wired by main to the plex service, which auto-invites when configured and
-// notifies admins with the outcome either way. A hook (not a notifier) so
-// auth stays free of both push and plex dependencies.
+// Wired by main to the media-access service, which sends the invites the
+// user's grants owe (or auto-approves them) and notifies admins with the
+// outcome either way. A hook (not a notifier) so auth stays free of both
+// push and media-server dependencies.
 type AccessRequestHook func(userID int64, username string)
+
+// UserDeleteHook is asked, before a user is deleted, to prepare whatever must
+// happen once they are gone (switching off their media-server accounts). It
+// returns the commit step, which the handler runs only after the delete
+// succeeded — the delete can still refuse (self-delete, last admin), and a
+// refused delete must leave the user untouched everywhere.
+type UserDeleteHook func(userID int64) (committed func())
 
 type Handler struct {
 	service           *Service
 	accessRequestHook AccessRequestHook
+	userDeleteHook    UserDeleteHook
+	externalURL       func() string
 }
 
 func NewHandler(service *Service) *Handler {
@@ -26,10 +36,35 @@ func NewHandler(service *Service) *Handler {
 }
 
 // SetAccessRequestHook wires the Plex access-request side effect after
-// construction: the plex service is built later in startup than the auth
-// handler (it needs the notifier composite, which needs the WebSocket hub).
+// construction: the media-access service gets its notifier later in startup
+// than the auth handler (the composite needs the WebSocket hub).
 func (h *Handler) SetAccessRequestHook(hook AccessRequestHook) {
 	h.accessRequestHook = hook
+}
+
+// SetUserDeleteHook wires the media-server side effect of deleting a user
+// (see UserDeleteHook). Same late-binding shape as SetAccessRequestHook.
+func (h *Handler) SetUserDeleteHook(hook UserDeleteHook) {
+	h.userDeleteHook = hook
+}
+
+// SetExternalURLSource wires the admin-configured external address after
+// construction (the settings service is built later in startup, mirroring
+// SetAccessRequestHook). When it returns a non-empty origin, outward links —
+// connect invites and passkey setup links — are built from it instead of the
+// requesting client's own address, so links work for invitees who cannot
+// reach the admin's LAN.
+func (h *Handler) SetExternalURLSource(source func() string) {
+	h.externalURL = source
+}
+
+// resolvedExternalURL returns the configured external address, or "" when
+// unset or unwired.
+func (h *Handler) resolvedExternalURL() string {
+	if h.externalURL == nil {
+		return ""
+	}
+	return h.externalURL()
 }
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
@@ -104,16 +139,29 @@ func (h *Handler) HandleCreateConnectToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if req.Name == "" || req.ServerURL == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and server_url required"})
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"})
 		return
 	}
 
-	resp, err := h.service.CreateConnectToken(claims.UserID, req.Name, req.ServerURL)
+	// The admin-configured external address wins over the client-sent URL:
+	// the client can only offer the address its own connection uses, which on
+	// a LAN is unreachable for the invitee this link is for.
+	serverURL, originSource := req.ServerURL, originSourceApp
+	if ext := h.resolvedExternalURL(); ext != "" {
+		serverURL, originSource = ext, originSourceExternalAddress
+	}
+	if serverURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_url required"})
+		return
+	}
+
+	resp, err := h.service.CreateConnectToken(claims.UserID, req.Name, serverURL)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create connect token"})
 		return
 	}
+	resp.OriginSource = originSource
 
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -175,6 +223,24 @@ func (h *Handler) HandleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+// HandleLogout is the self-serve counterpart to HandleRevokeDevice: it revokes
+// only the calling device's own session, identified by the token's device
+// claim. Idempotent — an already-revoked or missing device is the goal state.
+func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r.Context())
+	if claims == nil || claims.DeviceID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "no device session"})
+		return
+	}
+
+	if err := h.service.RevokeDevice(claims.DeviceID); err != nil && !errors.Is(err, ErrDeviceNotFound) {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to sign out"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "signed_out"})
 }
 
 func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
@@ -293,6 +359,13 @@ func (h *Handler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Snapshot what the delete must switch off while the rows still exist;
+	// nothing is touched until the delete has actually gone through.
+	var committed func()
+	if h.userDeleteHook != nil {
+		committed = h.userDeleteHook(userID)
+	}
+
 	if err := h.service.DeleteUser(claims.UserID, userID); err != nil {
 		switch {
 		case errors.Is(err, ErrUserNotFound):
@@ -305,6 +378,9 @@ func (h *Handler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete user"})
 		}
 		return
+	}
+	if committed != nil {
+		committed()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})

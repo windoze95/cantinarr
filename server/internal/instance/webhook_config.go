@@ -106,8 +106,10 @@ const (
 	webhookStateMissing           = "missing"
 	webhookStateStale             = "stale"
 	webhookStateCredentialMissing = "credential_missing"
-	webhookStateNoPublicURL       = "no_public_url"
-	webhookStateUnsupported       = "unsupported"
+	// The wire value predates the env var's rename to
+	// CANTINARR_ARR_CALLBACK_URL and stays as-is: shipped apps match on it.
+	webhookStateNoPublicURL = "no_public_url"
+	webhookStateUnsupported = "unsupported"
 )
 
 // WebhookStatus reports whether instant updates are actually on for this
@@ -188,11 +190,11 @@ func writeWebhookStatus(w http.ResponseWriter, configured bool, state string) {
 }
 
 func (h *Handler) arrWebhookCallbackURL(r *http.Request, instanceID string) (string, error) {
-	if h.publicURL != "" {
-		base, err := url.Parse(h.publicURL)
+	if h.arrCallbackURL != "" {
+		base, err := url.Parse(h.arrCallbackURL)
 		if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" ||
 			base.User != nil || base.RawQuery != "" || base.Fragment != "" || (base.Path != "" && base.Path != "/") {
-			return "", fmt.Errorf("invalid configured public URL")
+			return "", fmt.Errorf("invalid configured arr callback URL")
 		}
 		base.Path = "/api/webhooks/arr/" + url.PathEscape(instanceID)
 		return base.String(), nil

@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/backend_client.dart';
+import '../../../core/network/long_request_options.dart';
 
 const _oauthValidationReceiveTimeout = Duration(seconds: 75);
 
@@ -215,7 +216,7 @@ class CodexOAuthService {
     try {
       final response = await _dio.get(
         '$_basePath/device/$safeFlowId',
-        options: Options(receiveTimeout: _oauthValidationReceiveTimeout),
+        options: longRequestOptions(timeout: _oauthValidationReceiveTimeout),
       );
       return CodexDeviceFlowResult.fromJson(
         response.data as Map<String, dynamic>,

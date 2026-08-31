@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -77,8 +78,14 @@ func (rl *RateLimiter) Allow(ip string) bool {
 // Middleware returns an HTTP middleware that rate-limits requests by IP.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// chi's RealIP middleware puts the proxy-reported address into
+		// RemoteAddr on its own; a direct connection leaves "ip:port" there,
+		// and the port changes with every connection, so it must go or the
+		// limit is per connection rather than per IP.
 		ip := r.RemoteAddr
-		// chi's RealIP middleware sets X-Real-IP or X-Forwarded-For into RemoteAddr
+		if host, _, err := net.SplitHostPort(ip); err == nil {
+			ip = host
+		}
 		if !rl.Allow(ip) {
 			w.Header().Set("Retry-After", "60")
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{

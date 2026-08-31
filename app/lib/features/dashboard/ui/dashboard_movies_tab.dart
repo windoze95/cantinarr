@@ -8,6 +8,7 @@ import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/category_row.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/data/radarr_models.dart';
@@ -28,6 +29,11 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
   List<RadarrMovie> _downloadingSoon = [];
   Set<int> _downloadingMovieIds = {};
   bool _isLoadingLibrary = false;
+
+  /// The full Radarr library, retained so Discover browse-row posters can be
+  /// badged Available/Requested from the same fetch this tab already makes —
+  /// no second Radarr call.
+  List<RadarrMovie> _libraryMovies = [];
 
   @override
   void initState() {
@@ -73,6 +79,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
 
       setState(() {
         _recentlyDownloaded = recentlyDownloadedMovies(movies);
+        _libraryMovies = movies;
       });
     } catch (_) {
       // Movie fetch failed; leave _recentlyDownloaded empty.
@@ -124,6 +131,18 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
   @override
   Widget build(BuildContext context) {
     final discover = ref.watch(movieDiscoverProvider);
+    // searchResults is genuinely unused here: buildSearchLibraryStatus keys
+    // movies straight off the Radarr list and returns early when series is
+    // empty, so passing the browse-row items would build a list for nothing.
+    // Computed inline rather than cached — build() fires on provider/state
+    // change, not per scroll frame (ListView/HorizontalItemRow rebuild their
+    // children through their own item builders), following app_shell.dart's
+    // precedent for this same computation.
+    final libraryStatus = buildSearchLibraryStatus(
+      searchResults: const [],
+      movies: _libraryMovies,
+      series: const [],
+    );
 
     return RefreshIndicator(
       onRefresh: _onRefresh,
@@ -144,24 +163,32 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
             title: discover.featuredTitle,
             items: discover.featured.skip(1).toList(growable: false),
             isLoading: discover.isLoadingFeatured,
+            isTvRow: false,
+            libraryStatus: libraryStatus,
           ),
           if (discover.topRated.isNotEmpty)
             CategoryRow(
               title: 'Top Rated',
               items: discover.topRated,
               isLoading: discover.isLoadingTopRated,
+              isTvRow: false,
+              libraryStatus: libraryStatus,
             ),
           if (discover.upcoming.isNotEmpty)
             CategoryRow(
               title: 'Coming Soon',
               items: discover.upcoming,
               isLoading: discover.isLoadingUpcoming,
+              isTvRow: false,
+              libraryStatus: libraryStatus,
             ),
           if (discover.anticipated.isNotEmpty)
             CategoryRow(
               title: 'Most Anticipated',
               items: discover.anticipated,
               isLoading: discover.isLoadingAnticipated,
+              isTvRow: false,
+              libraryStatus: libraryStatus,
             ),
 
           // Radarr library rows (same style as discovery)
@@ -209,7 +236,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
           HorizontalItemRow<RadarrMovie>(
             items: items,
             isLoading: _isLoadingLibrary,
-            height: cardWidth * 1.5 + 54,
+            height: cardWidth * 1.5 + MediaCard.plainRowExtraHeight,
             itemBuilder: (movie) {
               final badge = badgeBuilder(movie);
               return MediaCard(

@@ -583,11 +583,11 @@ func TestNotifierDisabledClientIsNoop(t *testing.T) {
 	n := NewNotifier(database, nil, nil)
 	n.NotifyUser(1, "request_decision", map[string]interface{}{"decision": "approved", "title": "X"})
 	n.NotifyAdmins("request_pending", map[string]interface{}{"title": "X"})
-	n.NotifyNewMovie("The Matrix", 603)
-	n.NotifyNewEpisode("Severance", 95396)
+	n.NotifyNewMovie("The Matrix", 603, "")
+	n.NotifyNewEpisode("Severance", 95396, "")
 	n.NotifyNewBook("Ahsoka", "29749107", "books-a", "ebook")
-	n.NotifyUpgradedMovie("The Matrix", 603)
-	n.NotifyUpgradedEpisode("Severance", 95396)
+	n.NotifyUpgradedMovie("The Matrix", 603, "")
+	n.NotifyUpgradedEpisode("Severance", 95396, "")
 	n.NotifyUpgradedBook("Ahsoka", "29749107", "books-a", "ebook")
 }
 
@@ -602,17 +602,26 @@ func TestNotifyUpgradedClaimsBroadcastKeyEvenWithNilClient(t *testing.T) {
 	}
 	n := NewNotifier(database, nil, nil)
 
-	n.NotifyUpgradedMovie("The Matrix", 603)
+	n.NotifyUpgradedMovie("The Matrix", 603, "")
 	if n.claimContentAlert(CategoryNewMovie, "movie", "603", "The Matrix") {
 		t.Error("the broadcast key was not silently claimed, so the poller would page everyone")
 	}
-	n.NotifyUpgradedEpisode("Severance", 95396)
+	n.NotifyUpgradedEpisode("Severance", 95396, "")
 	if n.claimContentAlert(CategoryNewEpisode, "tv", "95396", "Severance") {
 		t.Error("the episode broadcast key was not silently claimed")
 	}
 	n.NotifyUpgradedBook("Ahsoka", "29749107", "books-a", "ebook")
-	if n.claimContentAlert(CategoryNewBook, "book", "29749107|ebook", "Ahsoka") {
+	if n.claimContentAlert(CategoryNewBook, "book", contentClaimID("books-a", "29749107|ebook"), "Ahsoka") {
 		t.Error("the book broadcast key was not silently claimed")
+	}
+	// Library-scoped claims: an upgrade on one library silences the poller
+	// for THAT library only — a sibling's identical title still alerts.
+	n.NotifyUpgradedMovie("Dune", 438631, "radarr-4k")
+	if n.claimContentAlert(CategoryNewMovie, "movie", contentClaimID("radarr-4k", "438631"), "Dune") {
+		t.Error("the 4K broadcast key was not silently claimed")
+	}
+	if !n.claimContentAlert(CategoryNewMovie, "movie", contentClaimID("radarr-hd", "438631"), "Dune") {
+		t.Error("a sibling library's key must stay claimable")
 	}
 }
 
@@ -636,7 +645,7 @@ func TestNotifyUpgradedMovieReachesOptedInAdminsOnly(t *testing.T) {
 	mgr, cap := newNotifierTestGateway(t, database)
 	n := NewNotifier(database, mgr, nil)
 
-	n.NotifyUpgradedMovie("The Matrix", 603)
+	n.NotifyUpgradedMovie("The Matrix", 603, "")
 
 	body := cap.waitForNotification(t)
 	ids := userIDsOf(t, body)
@@ -714,7 +723,7 @@ func TestNotifyUpgradedBookIsAdminScopedNotInstanceScoped(t *testing.T) {
 	if opts["collapse_id"] != "content_upgraded:29749107:ebook" {
 		t.Errorf("collapse_id = %v, want content_upgraded:29749107:ebook", opts["collapse_id"])
 	}
-	if n.claimContentAlert(CategoryNewBook, "book", "29749107|ebook", "Ahsoka") {
+	if n.claimContentAlert(CategoryNewBook, "book", contentClaimID("books-a", "29749107|ebook"), "Ahsoka") {
 		t.Error("new_book key was claimable after the upgrade alert — the poller would double-page")
 	}
 }
@@ -734,7 +743,7 @@ func TestNotifyNewMovieReachesOptedInUsers(t *testing.T) {
 	mgr, cap := newNotifierTestGateway(t, database)
 	n := NewNotifier(database, mgr, nil)
 
-	n.NotifyNewMovie("The Matrix", 603)
+	n.NotifyNewMovie("The Matrix", 603, "")
 
 	body := cap.waitForNotification(t)
 	ids := userIDsOf(t, body)
@@ -779,7 +788,7 @@ func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
 	mgr, cap := newNotifierTestGateway(t, database)
 	n := NewNotifier(database, mgr, nil)
 
-	n.NotifyNewEpisode("Severance", 95396)
+	n.NotifyNewEpisode("Severance", 95396, "")
 
 	body := cap.waitForNotification(t)
 	ids := userIDsOf(t, body)
@@ -800,6 +809,47 @@ func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
 	opts, _ := body["options"].(map[string]any)
 	if opts["collapse_id"] != "new_episode:95396" {
 		t.Errorf("collapse_id = %v, want new_episode:95396", opts["collapse_id"])
+	}
+}
+
+// A library-scoped new_movie pages only the users who can see that library,
+// carries the library in the payload, and — because the dedupe claim is
+// per-library — the same title landing on the sibling inside the window still
+// alerts the sibling's own audience.
+func TestNotifyNewMovieScopesToLibraryAndAlertsSiblings(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key, is_default) VALUES ('radarr-hd', 'radarr', 'Movies', 'http://hd', 'k', 1)")
+	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key) VALUES ('radarr-4k', 'radarr', '4K Movies', 'http://4k', 'k')")
+	// alice(1): default library only. bob(2): pinned 4K.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'bob', '', 'user')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (2, 'radarr', 'radarr-4k')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyNewMovie("Dune", 438631, "radarr-hd")
+	body := cap.waitForNotification(t)
+	if ids := userIDsOf(t, body); len(ids) != 1 || ids[0] != "1" {
+		t.Errorf("HD recipients = %v, want alice(1) only", ids)
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["instance_id"] != "radarr-hd" {
+		t.Errorf("data.instance_id = %v, want radarr-hd", data["instance_id"])
+	}
+
+	// The same title importing on the 4K library moments later still alerts
+	// its own audience — one shared claim would have dropped it.
+	n.NotifyNewMovie("Dune", 438631, "radarr-4k")
+	body = cap.waitForNotification(t)
+	if ids := userIDsOf(t, body); len(ids) != 1 || ids[0] != "2" {
+		t.Errorf("4K recipients = %v, want bob(2) only", ids)
+	}
+	if data, _ := body["data"].(map[string]any); data["instance_id"] != "radarr-4k" {
+		t.Errorf("data.instance_id = %v, want radarr-4k", data["instance_id"])
 	}
 }
 
@@ -927,7 +977,7 @@ func TestNotifierPrunesDeadTokenOnPrunedResult(t *testing.T) {
 	n := NewNotifier(database, mgr, nil)
 
 	// new_movie is on by default, so user 1 is targeted and a send happens.
-	n.NotifyNewMovie("The Matrix", 603)
+	n.NotifyNewMovie("The Matrix", 603, "")
 
 	// The pruned token's local row must be deleted (fire-and-forget, so poll).
 	deadline := time.After(2 * time.Second)
@@ -959,7 +1009,7 @@ func TestNotifyNewContentNoRecipientsIsNoop(t *testing.T) {
 	mgr, cap := newNotifierTestGateway(t, database)
 	n := NewNotifier(database, mgr, nil)
 
-	n.NotifyNewMovie("The Matrix", 603)
+	n.NotifyNewMovie("The Matrix", 603, "")
 
 	select {
 	case <-cap.ch:

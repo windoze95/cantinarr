@@ -14,8 +14,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+const _homeJellyfin = ServiceInstance(
+  id: 'jf-a',
+  serviceType: 'jellyfin',
+  name: 'Home Jellyfin',
+);
 
 void main() {
   setUp(() {
@@ -192,6 +199,19 @@ void main() {
     expect(find.text('Donate'), findsNothing);
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
+  // A community link is not an external-payment link, so unlike Donate the
+  // Discord tile is deliberately ungated and ships into store review.
+  testWidgets('the Discord tile ships in the store binaries', (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    await _dragSettingsUntilFound(tester, find.text('Discord'));
+    expect(find.text('Discord'), findsOneWidget);
+    expect(
+      find.text('Questions, help, and news from other users'),
+      findsOneWidget,
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets('Donate appears outside the iOS/Android store binaries',
       (tester) async {
     await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
@@ -200,6 +220,130 @@ void main() {
     expect(find.text('Donate'), findsOneWidget);
     expect(find.text('Support Cantinarr on GitHub Sponsors'), findsOneWidget);
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('the phone-app tile never shows inside the phone apps',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    await _dragSettingsUntilFound(tester, find.text('GitHub'));
+    for (var i = 0; i < 3; i++) {
+      await tester.drag(find.byType(ListView).first, const Offset(0, -200));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Get the phone app'), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('the phone-app tile appears outside the store binaries',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    await _dragSettingsUntilFound(tester, find.text('Get the phone app'));
+    expect(find.text('Get the phone app'), findsOneWidget);
+    expect(
+      find.text('iPhone and Android, with push notifications'),
+      findsOneWidget,
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('Sign out is offered to non-admins and asks before acting',
+      (tester) async {
+    final container =
+        await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+    final notifier =
+        container.read(authProvider.notifier) as _FakeAuthNotifier;
+
+    // The tile sits in the Server section, above the fold for every role —
+    // this is the only way off a server, so it must not hide behind a gate.
+    expect(find.text('Sign out'), findsOneWidget);
+    expect(
+      find.text('Disconnect this device from the server'),
+      findsOneWidget,
+    );
+
+    // Cancelling the dialog must leave the session untouched.
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    expect(find.text('Sign Out'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(notifier.logoutCalls, 0);
+
+    // Confirming signs out.
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign out'));
+    await tester.pumpAndSettle();
+    expect(notifier.logoutCalls, 1);
+  });
+
+  testWidgets('the media server guide row appears with a shared server',
+      (tester) async {
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      instances: const [_homeJellyfin],
+    );
+    await _dragSettingsUntilFound(tester, find.text('Media server access'));
+    expect(find.text('Media server access'), findsOneWidget);
+    expect(
+      find.text('Get your access and see where to sign in'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('the media server guide row is absent without a shared server',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    // Guides sits right above About; reaching GitHub means it was built.
+    await _dragSettingsUntilFound(tester, find.text('GitHub'));
+    expect(find.text('Watch on Plex'), findsNothing);
+    expect(find.text('Guides'), findsNothing);
+    expect(find.text('Media server access'), findsNothing);
+  });
+
+  testWidgets("a requester's media server tile opens the guide",
+      (tester) async {
+    final router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(path: '/', builder: (_, __) => const SettingsScreen()),
+        GoRoute(
+          path: '/media-servers',
+          builder: (_, __) => const Scaffold(body: Text('Guide body')),
+        ),
+      ],
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _SettingsAdapter();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(() => _FakeAuthNotifier(
+                isAdmin: false,
+                instances: const [_homeJellyfin],
+              )),
+          aiSettingsProvider
+              .overrideWith((_) async => _settings(source: AiAccessSource.shared)),
+          backendClientProvider.overrideWithValue(dio),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _dragSettingsUntilFound(tester, find.text('Home Jellyfin'));
+    expect(find.text('Jellyfin'), findsOneWidget);
+    await tester.ensureVisible(find.text('Home Jellyfin'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Home Jellyfin'));
+    await tester.pumpAndSettle();
+
+    // An imperative push lands on the recorder route (the route information
+    // provider only reflects declarative navigation, so the page is the
+    // proof).
+    expect(find.text('Guide body'), findsOneWidget);
+  });
 
   group('Setup Checklist tile', _setupChecklistTileTests);
 }
@@ -290,12 +434,14 @@ Future<ProviderContainer> _pumpSettings(
   AiSettings settings, {
   bool isAdmin = false,
   Map<String, dynamic>? setupStatus,
+  List<ServiceInstance> instances = const [],
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _SettingsAdapter(setupStatus: setupStatus);
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(() => _FakeAuthNotifier(isAdmin: isAdmin)),
+      authProvider.overrideWith(
+          () => _FakeAuthNotifier(isAdmin: isAdmin, instances: instances)),
       aiSettingsProvider.overrideWith((_) async => settings),
       backendClientProvider.overrideWithValue(dio),
     ],
@@ -323,16 +469,18 @@ Future<void> _dragSettingsUntilFound(
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier({required this.isAdmin});
+  _FakeAuthNotifier({required this.isAdmin, this.instances = const []});
 
   final bool isAdmin;
+  final List<ServiceInstance> instances;
 
   @override
   Future<AuthState> build() async => AuthState(
-        connection: const BackendConnection(
+        connection: BackendConnection(
           serverUrl: 'http://localhost',
           accessToken: 'access',
           refreshToken: 'refresh',
+          instances: instances,
         ),
         user: UserProfile(
           id: 1,
@@ -344,6 +492,13 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   @override
   Future<void> refreshUser() async {}
+
+  int logoutCalls = 0;
+
+  @override
+  Future<void> logout() async {
+    logoutCalls++;
+  }
 }
 
 class _SettingsAdapter implements HttpClientAdapter {

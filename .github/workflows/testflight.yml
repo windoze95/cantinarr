@@ -46,6 +46,10 @@ jobs:
     needs: [gate]
     runs-on: macos-26
 
+    outputs:
+      version: ${{ steps.build_number.outputs.version }}
+      build_number: ${{ steps.build_number.outputs.build_number }}
+
     defaults:
       run:
         working-directory: app
@@ -166,3 +170,46 @@ jobs:
         if: always()
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
+
+  # The upload alone reaches nobody outside the team. The internal group was created with
+  # automatic distribution and picks every build up on its own; external groups never do, so
+  # without this job each build waits on someone opening App Store Connect to push it.
+  #
+  # It's a separate Linux job on purpose: fastlane can distribute inline, but only with
+  # `skip_waiting_for_build_processing: false`, which holds a 10x-billed macOS runner for the
+  # whole of Apple's processing. The tradeoff is that the `testflight-deploy` concurrency group
+  # now stays held while this waits, so the poll is capped rather than open-ended — a stalled
+  # Apple ingestion fails this job instead of blocking the next merge's build indefinitely.
+  distribute:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    env:
+      # The id addresses the group; the name is asserted against it before anything is
+      # distributed, so a rename or a recreated group fails loudly instead of shipping a build
+      # to an audience nobody chose.
+      BETA_GROUP_ID: c0601f06-139f-4d1d-b95a-210f717af8b7
+      BETA_GROUP_NAME: Public Beta
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: pip install --quiet "pyjwt[crypto]>=2.8"
+
+      - name: Distribute to external testers
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
+        run: |
+          python3 scripts/testflight_distribute.py \
+            --group-id "$BETA_GROUP_ID" \
+            --group-name "$BETA_GROUP_NAME" \
+            --app-version "${{ needs.deploy.outputs.version }}" \
+            --build-number "${{ needs.deploy.outputs.build_number }}" \
+            --timeout-minutes 45

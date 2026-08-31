@@ -19,6 +19,12 @@ func newUsersRouter(h *Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/instances/{instanceID}/users", h.GetInstanceUsers)
 	r.Put("/instances/{instanceID}/users", h.UpdateInstanceUsers)
+	r.Get("/instances/{instanceID}/grant-users", h.GetInstanceGrantUsers)
+	r.Put("/instances/{instanceID}/grant-users", h.UpdateInstanceGrantUsers)
+	r.Get("/users/{userID}/default-instances", h.GetUserDefaultInstances)
+	r.Put("/users/{userID}/default-instances", h.UpdateUserDefaultInstances)
+	r.Get("/users/{userID}/instance-grants", h.GetUserInstanceGrants)
+	r.Put("/users/{userID}/instance-grants", h.UpdateUserInstanceGrants)
 	return r
 }
 
@@ -116,6 +122,167 @@ func TestInstanceUsersEndpoints(t *testing.T) {
 func jsonInt(v int64) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+func TestUserDefaultInstancesEndpoints(t *testing.T) {
+	s := newTestStore(t)
+	h := NewHandler(s, nil)
+	router := newUsersRouter(h)
+	alice := createUser(t, s, "defaults-alice")
+	r1 := mkInstance(t, s, "radarr", "R1")
+
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	userPath := "/users/" + jsonInt(alice) + "/default-instances"
+
+	// No overrides yet: an empty JSON object, not null.
+	if rec := do("GET", userPath, ""); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "{}" {
+		t.Fatalf("GET empty = %d %q, want 200 {}", rec.Code, rec.Body.String())
+	}
+
+	// Pin, read back from the PUT response, clear with null.
+	rec := do("PUT", userPath, `{"radarr":"`+r1+`"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), r1) {
+		t.Fatalf("PUT pin = %d %q, want 200 with %s", rec.Code, rec.Body.String(), r1)
+	}
+	if rec := do("PUT", userPath, `{"radarr":null}`); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "{}" {
+		t.Fatalf("PUT clear = %d %q, want 200 {}", rec.Code, rec.Body.String())
+	}
+
+	// Unknown service type and mismatched instance are rejected.
+	if rec := do("PUT", userPath, `{"flixarr":"`+r1+`"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT unknown type = %d, want 400", rec.Code)
+	}
+	if rec := do("PUT", userPath, `{"sonarr":"`+r1+`"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT mismatched type = %d, want 400", rec.Code)
+	}
+	if rec := do("GET", "/users/nope/default-instances", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("GET bad user id = %d, want 400", rec.Code)
+	}
+}
+
+func TestUserInstanceGrantsEndpoints(t *testing.T) {
+	s := newTestStore(t)
+	h := NewHandler(s, nil)
+	router := newUsersRouter(h)
+	alice := createUser(t, s, "grants-alice")
+	hd := mkInstance(t, s, "radarr", "Movies")
+	uhd := mkInstance(t, s, "radarr", "4K Movies")
+
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	decodeGrants := func(rec *httptest.ResponseRecorder) map[string][]string {
+		t.Helper()
+		var grants map[string][]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &grants); err != nil {
+			t.Fatalf("decode %q: %v", rec.Body.String(), err)
+		}
+		return grants
+	}
+	userPath := "/users/" + jsonInt(alice) + "/instance-grants"
+
+	// No grants yet: an empty JSON object, not null.
+	if rec := do("GET", userPath, ""); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "{}" {
+		t.Fatalf("GET empty = %d %q, want 200 {}", rec.Code, rec.Body.String())
+	}
+
+	// Grant both radarr instances and read the map back.
+	rec := do("PUT", userPath, `{"radarr":["`+hd+`","`+uhd+`"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body.String())
+	}
+	if grants := decodeGrants(rec); len(grants["radarr"]) != 2 {
+		t.Fatalf("grants = %v, want 2 radarr entries", grants)
+	}
+
+	// A type absent from the body is untouched; an empty list clears.
+	if rec := do("PUT", userPath, `{"sonarr":[]}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT sonarr-only = %d %s", rec.Code, rec.Body.String())
+	} else if grants := decodeGrants(rec); len(grants["radarr"]) != 2 {
+		t.Fatalf("radarr grants lost by a sonarr-only PUT: %v", grants)
+	}
+	if rec := do("PUT", userPath, `{"radarr":null}`); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "{}" {
+		t.Fatalf("PUT clear = %d %q, want 200 {}", rec.Code, rec.Body.String())
+	}
+
+	// Grants accept only per-user-routable service types, and validate ids.
+	if rec := do("PUT", userPath, `{"sabnzbd":["`+hd+`"]}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT ungrantable type = %d, want 400", rec.Code)
+	}
+	if rec := do("PUT", userPath, `{"sonarr":["`+hd+`"]}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT mismatched type = %d, want 400", rec.Code)
+	}
+	if rec := do("PUT", userPath, `{"radarr":["nope-12345678"]}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT unknown instance = %d, want 400", rec.Code)
+	}
+	if rec := do("PUT", userPath, `not json`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT invalid body = %d, want 400", rec.Code)
+	}
+}
+
+func TestInstanceGrantUsersEndpoints(t *testing.T) {
+	s := newTestStore(t)
+	h := NewHandler(s, nil)
+	router := newUsersRouter(h)
+	alice := createUser(t, s, "ig-endpoint-alice")
+	bob := createUser(t, s, "ig-endpoint-bob")
+	uhd := mkInstance(t, s, "radarr", "4K Movies")
+	sab := mkInstance(t, s, "sabnzbd", "Downloads")
+
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// No grants yet: an empty JSON array, not null.
+	if rec := do("GET", "/instances/"+uhd+"/grant-users", ""); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("GET empty = %d %q, want 200 []", rec.Code, rec.Body.String())
+	}
+
+	// Grant to both, then revoke bob by omission.
+	rec := do("PUT", "/instances/"+uhd+"/grant-users", `{"user_ids":[`+jsonInt(alice)+`,`+jsonInt(bob)+`]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do("PUT", "/instances/"+uhd+"/grant-users", `{"user_ids":[`+jsonInt(alice)+`]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT revoke = %d %s", rec.Code, rec.Body.String())
+	}
+	var rows []struct {
+		UserID     int64  `json:"user_id"`
+		InstanceID string `json:"instance_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	if len(rows) != 1 || rows[0].UserID != alice || rows[0].InstanceID != uhd {
+		t.Fatalf("grants = %v, want only alice on %s", rows, uhd)
+	}
+
+	// Unknown instance → 404; ungrantable service type → 400; unknown user →
+	// 400 (FK).
+	if rec := do("GET", "/instances/radarr-missing/grant-users", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("GET unknown instance = %d, want 404", rec.Code)
+	}
+	if rec := do("PUT", "/instances/"+sab+"/grant-users", `{"user_ids":[]}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT ungrantable type = %d, want 400", rec.Code)
+	}
+	if rec := do("PUT", "/instances/"+uhd+"/grant-users", `{"user_ids":[999999]}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT unknown user = %d, want 400", rec.Code)
+	}
 }
 
 func TestPerInstanceMediaPathMappingsPreserveClearAndValidate(t *testing.T) {
@@ -407,6 +574,9 @@ func TestValidateConnectionDoesNotFollowServiceRedirects(t *testing.T) {
 		"nzbget",
 		"transmission",
 		"tautulli",
+		"jellyfin",
+		"emby",
+		"plex",
 	}
 
 	for _, serviceType := range serviceTypes {

@@ -8,9 +8,10 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/update"
 )
 
-// updateStatusResponse is the admin-only payload behind the "update available"
-// banner: the latest-release comparison plus the optional management-portal URL
-// an admin can point the banner's action button at.
+// updateStatusResponse is the admin-only update payload: the latest-release
+// comparison plus the optional management-portal URL an admin can point the
+// app's "update the server" warning at. The app renders no release-news
+// banner today, so the comparison surfaces only here.
 type updateStatusResponse struct {
 	Update        update.Status `json:"update"`
 	ManagementURL string        `json:"management_url"`

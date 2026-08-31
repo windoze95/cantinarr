@@ -19,10 +19,19 @@ var ErrAIStorage = errors.New("AI credential storage unavailable")
 // AIProfile is one coherent provider/model/credential snapshot. APIKey never
 // crosses the credentials package except to the request-scoped provider
 // runner. CredentialPresent distinguishes a missing key from storage failure.
+// BaseURL is the admin-set OpenAI-compatible endpoint override; it is only
+// ever populated for the shared openai profile (personal loads leave it
+// empty, so personal keys keep talking to api.openai.com). Empty means the
+// provider default.
 type AIProfile struct {
 	Config            AIConfig
 	APIKey            string
 	CredentialPresent bool
+	BaseURL           string
+	// ReasoningEffort is the admin-pinned reasoning_effort for the shared
+	// openai profile, with the same shared-only scoping as BaseURL. Empty
+	// means auto.
+	ReasoningEffort string
 }
 
 // LoadUserAIProfile resolves selection and matching key from one read
@@ -151,10 +160,35 @@ func (r *Registry) loadSharedAIProfileTx(tx *sql.Tx) (AIProfile, error) {
 		model = DefaultAIModel(provider)
 	}
 	profile := AIProfile{Config: AIConfig{Provider: provider, Model: model}}
+	// Endpoint/effort settings are provider-scoped so hosted openai and the
+	// local provider never fight over one slot. Reads fail closed: an
+	// unreadable override must not silently reroute shared traffic.
+	switch provider {
+	case AIProviderOpenAI:
+		effort, _, err := settingTx(tx, KeyOpenAIReasoningEffort)
+		if err != nil {
+			return profile, err
+		}
+		profile.ReasoningEffort = effort
+	case AIProviderLocalOpenAI:
+		baseURL, _, err := settingTx(tx, KeyLocalOpenAIBaseURL)
+		if err != nil {
+			return profile, err
+		}
+		profile.BaseURL = baseURL
+		effort, _, err := settingTx(tx, KeyLocalOpenAIReasoningEffort)
+		if err != nil {
+			return profile, err
+		}
+		profile.ReasoningEffort = effort
+	}
 	key := AIKeyCredentialKey(provider)
 	if key == "" {
 		return profile, nil
 	}
+	// Key-optional providers (local OpenAI-compatible servers) are complete
+	// without a stored key: the runner sends a placeholder bearer instead.
+	profile.CredentialPresent = AIProviderKeyOptional(provider)
 	var stored string
 	err = tx.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&stored)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -238,7 +272,7 @@ func (r *Registry) SetUserAIProfile(userID int64, provider, model, apiKey string
 	if model == "" {
 		model = DefaultAIModel(provider)
 	}
-	if provider == AIProviderCodex && apiKey != "" {
+	if IsOAuthAIProvider(provider) && apiKey != "" {
 		return fmt.Errorf("OAuth provider does not accept an API key")
 	}
 	var encrypted string

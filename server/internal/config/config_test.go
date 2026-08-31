@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,14 +51,14 @@ func TestLoadRejectsInvalidAndroidFingerprint(t *testing.T) {
 	}
 }
 
-func TestLoadValidatesPublicURL(t *testing.T) {
-	t.Setenv("CANTINARR_PUBLIC_URL", "https://cantinarr.example:8443/")
+func TestLoadValidatesArrCallbackURL(t *testing.T) {
+	t.Setenv("CANTINARR_ARR_CALLBACK_URL", "https://cantinarr.example:8443/")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PublicURL != "https://cantinarr.example:8443" {
-		t.Fatalf("PublicURL = %q", cfg.PublicURL)
+	if cfg.ArrCallbackURL != "https://cantinarr.example:8443" {
+		t.Fatalf("ArrCallbackURL = %q", cfg.ArrCallbackURL)
 	}
 
 	for _, invalid := range []string{
@@ -68,11 +69,45 @@ func TestLoadValidatesPublicURL(t *testing.T) {
 		"https://:443",
 	} {
 		t.Run(invalid, func(t *testing.T) {
-			t.Setenv("CANTINARR_PUBLIC_URL", invalid)
+			t.Setenv("CANTINARR_ARR_CALLBACK_URL", invalid)
 			if _, err := Load(); err == nil {
-				t.Fatal("Load() error = nil, want invalid public URL error")
+				t.Fatal("Load() error = nil, want invalid arr callback URL error")
 			}
 		})
+	}
+}
+
+// TestLoadAcceptsDeprecatedPublicURL pins the compat promise: every existing
+// deployment sets CANTINARR_PUBLIC_URL and must keep working untouched, and
+// an invalid legacy value must fail naming the variable the admin actually
+// set. The new name wins when both are present.
+func TestLoadAcceptsDeprecatedPublicURL(t *testing.T) {
+	t.Setenv("CANTINARR_PUBLIC_URL", "http://cantinarr:8585/")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ArrCallbackURL != "http://cantinarr:8585" {
+		t.Fatalf("ArrCallbackURL = %q, want the legacy variable's value", cfg.ArrCallbackURL)
+	}
+
+	t.Setenv("CANTINARR_ARR_CALLBACK_URL", "http://cantinarr-new:8585")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ArrCallbackURL != "http://cantinarr-new:8585" {
+		t.Fatalf("ArrCallbackURL = %q, want the new variable to win over the legacy one", cfg.ArrCallbackURL)
+	}
+
+	t.Setenv("CANTINARR_ARR_CALLBACK_URL", "")
+	t.Setenv("CANTINARR_PUBLIC_URL", "https://example.com/subpath")
+	_, err = Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid legacy value to fail")
+	}
+	if !strings.Contains(err.Error(), "CANTINARR_PUBLIC_URL") {
+		t.Fatalf("Load() error = %v, want it to name CANTINARR_PUBLIC_URL", err)
 	}
 }
 

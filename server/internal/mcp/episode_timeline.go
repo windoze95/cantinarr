@@ -25,9 +25,10 @@ import (
 // soap or an anime run, and the finding does not need every line to land.
 const timelineMaxEpisodeLines = 60
 
-func (s *ToolServer) getEpisodeTimeline(input json.RawMessage, instanceID string) (*ToolResult, error) {
+func (s *ToolServer) getEpisodeTimeline(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
 	var params struct {
 		MediaType    string `json:"media_type"`
+		InstanceID   string `json:"instance_id"`
 		TmdbID       int    `json:"tmdb_id"`
 		TvdbID       int    `json:"tvdb_id"`
 		SeasonNumber int    `json:"season_number"`
@@ -38,9 +39,9 @@ func (s *ToolServer) getEpisodeTimeline(input json.RawMessage, instanceID string
 	if params.MediaType != "" && params.MediaType != "tv" {
 		return &ToolResult{Text: "An episode timeline exists only for TV."}, nil
 	}
-	client := s.GetSonarrFor(instanceID)
+	client, _, refusal := s.sonarrTargetFor(params.InstanceID, callInstanceID)
 	if client == nil {
-		return &ToolResult{Text: "Sonarr is not configured."}, nil
+		return &ToolResult{Text: refusal}, nil
 	}
 	scope := mediaReadScope{TmdbID: params.TmdbID, TvdbID: params.TvdbID}
 	if !scope.hasTitleIdentity() {

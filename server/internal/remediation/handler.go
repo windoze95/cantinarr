@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 const maxRemediationRequestBytes = 64 << 10
@@ -69,7 +70,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.CreateUserIssue(claims.UserID, &req)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrInstanceForbidden) {
+			status = http.StatusForbidden
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -228,6 +233,15 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	// The same read boundary for the thread: every reporter-visible body is
+	// already redacted at its write site, and redacting again here means a
+	// future thread writer that forgets secrets.RedactText cannot leak a
+	// credential by default.
+	if !auth.HasPermission(claims.Role, auth.PermissionRemediationManage) {
+		for i := range thread {
+			thread[i].Body = secrets.RedactText(thread[i].Body)
+		}
 	}
 	writeJSON(w, http.StatusOK, IssueDetail{Issue: *issue, Thread: thread})
 }

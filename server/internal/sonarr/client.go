@@ -950,10 +950,21 @@ func (c *Client) TriggerRssSync() error {
 	return c.triggerCommand(map[string]any{"name": "RssSync"})
 }
 
+// libraryFetchClient allows the much longer round-trips of a full-library
+// fetch, whose serve time grows with library size (matching the app's 120s
+// ceiling for the same endpoint). The normal 30s client fails closed on
+// libraries big enough to matter.
+func libraryFetchClient() *http.Client {
+	return &http.Client{
+		Timeout:       120 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
 // GetAllSeries lists every series in the Sonarr library.
 func (c *Client) GetAllSeries() ([]Series, error) {
 	var series []Series
-	if err := c.do("GET", "/api/v3/series", nil, &series); err != nil {
+	if err := c.doWith(libraryFetchClient(), "GET", "/api/v3/series", nil, &series); err != nil {
 		return nil, fmt.Errorf("sonarr series list: %w", err)
 	}
 	return series, nil

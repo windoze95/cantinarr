@@ -161,8 +161,8 @@ class PushService {
         // invite actions.
         router.push('/settings/users');
       case 'plex_invite_sent':
-        // The user's invite went out — the guide's step 4 says what to do.
-        router.push('/plex-guide');
+        // The user's invite went out; the access guide says what to do.
+        router.push('/media-servers');
       case 'remediation_autodispatch_disabled':
         // The circuit breaker turned auto-dispatch off — open the settings the
         // admin uses to re-enable it.

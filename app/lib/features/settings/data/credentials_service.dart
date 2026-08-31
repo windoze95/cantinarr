@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/network/long_request_options.dart';
 import '../../ai_assistant/data/ai_provider_models.dart';
 
 export '../../ai_assistant/data/ai_provider_models.dart'
@@ -49,6 +50,15 @@ class CredentialsStatus {
 class AiCredentialConfig {
   final String provider;
   final String model;
+
+  /// Admin-pinned reasoning effort for the shared openai provider. Empty
+  /// means auto. Older servers never send it.
+  final String openaiReasoningEffort;
+
+  /// The local OpenAI-compatible provider's scoped endpoint pair. Same
+  /// contracts as the openai pair; older servers never send them.
+  final String localOpenaiBaseUrl;
+  final String localOpenaiReasoningEffort;
   final List<AiProviderOption> providers;
 
   /// Whether the shared provider is actually ready (credential stored, or the
@@ -63,6 +73,9 @@ class AiCredentialConfig {
   const AiCredentialConfig({
     required this.provider,
     required this.model,
+    this.openaiReasoningEffort = '',
+    this.localOpenaiBaseUrl = '',
+    this.localOpenaiReasoningEffort = '',
     required this.providers,
     this.sharedConfigured = true,
     required this.healthCheckEnabled,
@@ -95,6 +108,12 @@ class AiCredentialConfig {
           (selected?.models.isNotEmpty == true
               ? selected!.models.first.id
               : 'claude-opus-4-8'),
+      // Flat siblings of config in the server response: the config object is
+      // shared with non-admin payloads, which never carry endpoint settings.
+      openaiReasoningEffort: json['openai_reasoning_effort'] as String? ?? '',
+      localOpenaiBaseUrl: json['local_openai_base_url'] as String? ?? '',
+      localOpenaiReasoningEffort:
+          json['local_openai_reasoning_effort'] as String? ?? '',
       providers: providers,
       sharedConfigured: shared['configured'] as bool? ?? true,
       healthCheckEnabled: health['enabled'] as bool? ?? true,
@@ -119,12 +138,14 @@ class CredentialsService {
     return CredentialsStatus.fromJson(resp.data as Map<String, dynamic>);
   }
 
-  /// Updates one or more credentials. Only non-empty values are written.
+  /// Updates one or more credentials. Only non-empty values are written,
+  /// except the endpoint/effort settings keys, where an empty string is a
+  /// deliberate clear.
   Future<void> update(Map<String, String> credentials) async {
     await _dio.put(
       '/api/admin/credentials',
       data: credentials,
-      options: Options(receiveTimeout: _aiValidationReceiveTimeout),
+      options: longRequestOptions(timeout: _aiValidationReceiveTimeout),
     );
   }
 

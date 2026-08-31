@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -172,6 +173,7 @@ func newEnv(t *testing.T, configured bool) *env {
 	router := chi.NewRouter()
 	router.Get("/discover/trending", handler.Trending)
 	router.Get("/discover/movies", handler.DiscoverMovies)
+	router.Get("/discover/movies/upcoming", handler.UpcomingMovies)
 	router.Get("/discover/tv", handler.DiscoverTV)
 	router.Get("/discover/tv/popular", handler.PopularTV)
 	router.Get("/discover/tv/featured", handler.FeaturedTV)
@@ -424,6 +426,44 @@ func TestUnconfiguredCredentialsReturn503(t *testing.T) {
 	}
 	if e.upstream.hitCount() != 0 {
 		t.Fatalf("upstream hits = %d, want 0 without credentials", e.upstream.hitCount())
+	}
+}
+
+// TestUpcomingMoviesQueriesFutureWindow pins the Coming Soon contract: the row
+// is a discover query on the primary release date from today through three
+// months out, never TMDB's /movie/upcoming — whose any-country theatrical
+// matching kept surfacing movies already out (and decades-old re-releases).
+func TestUpcomingMoviesQueriesFutureWindow(t *testing.T) {
+	e := newEnv(t, true)
+
+	// Capture the window on both sides of the request so a midnight rollover
+	// mid-test cannot flake the date assertions.
+	windowAt := func(now time.Time) [2]string {
+		return [2]string{now.Format("2006-01-02"), now.AddDate(0, 3, 0).Format("2006-01-02")}
+	}
+	before := windowAt(time.Now())
+	e.doOK(t, "/discover/movies/upcoming?page=3")
+	after := windowAt(time.Now())
+
+	hit := e.upstream.hit(t, 0)
+	if hit.path != "/3/discover/movie" {
+		t.Errorf("upstream path = %s, want /3/discover/movie", hit.path)
+	}
+	if got := hit.query.Get("page"); got != "3" {
+		t.Errorf("upstream page = %q, want 3", got)
+	}
+	if got := hit.query.Get("sort_by"); got != "popularity.desc" {
+		t.Errorf("upstream sort_by = %q, want popularity.desc", got)
+	}
+	window := [2]string{hit.query.Get("primary_release_date.gte"), hit.query.Get("primary_release_date.lte")}
+	if window != before && window != after {
+		t.Errorf("upstream release window = %v, want %v (today through three months out)", window, before)
+	}
+
+	// Repeats within the TTL are cache hits.
+	e.doOK(t, "/discover/movies/upcoming?page=3")
+	if e.upstream.hitCount() != 1 {
+		t.Errorf("upstream hits after repeat = %d, want 1 (served from cache)", e.upstream.hitCount())
 	}
 }
 

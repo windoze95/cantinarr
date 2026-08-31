@@ -33,10 +33,20 @@ class SettingsSearchGates {
   /// Platform gate for the Donate tile (hidden in store binaries).
   final bool donateVisible;
 
+  /// Platform gate for the phone-app tile (the store binaries are the apps it
+  /// advertises, so they hide it).
+  final bool phoneAppsVisible;
+
+  /// `connection.mediaServerInstances.isNotEmpty` — a media server (Jellyfin, Emby)
+  /// is shared with this account, so the access guide has something to show.
+  final bool mediaServersVisible;
+
   const SettingsSearchGates({
     required this.user,
     this.chaptarrEnabled = false,
     this.donateVisible = false,
+    this.phoneAppsVisible = false,
+    this.mediaServersVisible = false,
   });
 }
 
@@ -54,6 +64,8 @@ bool gatePasskey(SettingsSearchGates g) => g.user?.canUsePasskey == true;
 bool gatePassword(SettingsSearchGates g) => g.user?.canUsePassword == true;
 bool gateChaptarr(SettingsSearchGates g) => g.chaptarrEnabled;
 bool gateDonate(SettingsSearchGates g) => g.donateVisible;
+bool gatePhoneApps(SettingsSearchGates g) => g.phoneAppsVisible;
+bool gateMediaServers(SettingsSearchGates g) => g.mediaServersVisible;
 
 /// One searchable setting.
 class SettingsSearchEntry {
@@ -151,6 +163,8 @@ const List<SettingsSearchEntry> _rootEntries = [
       'chatgpt',
       'codex',
       'oauth',
+      'grok',
+      'xai',
     ],
     gate: gateAiChat,
   ),
@@ -198,20 +212,29 @@ const List<SettingsSearchEntry> _rootEntries = [
       'chaptarr',
       'download client',
       'tautulli',
+      'jellyfin',
+      'emby',
+      'media server',
       'connect',
       'server',
     ],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
-    id: 'root.connect-link',
-    title: 'Generate Connect Link',
-    icon: Icons.link,
+    id: 'root.sign-out',
+    title: 'Sign out',
+    icon: Icons.logout,
     route: '/settings',
     screenTitle: 'Settings',
-    section: 'Admin',
-    keywords: ['invite', 'new user', 'share', 'token'],
-    gate: gateAdmin,
+    section: 'Server',
+    keywords: [
+      'log out',
+      'logout',
+      'disconnect',
+      'switch server',
+      'leave server',
+    ],
+    gate: gateEveryone,
   ),
   SettingsSearchEntry(
     id: 'screen.users',
@@ -220,7 +243,35 @@ const List<SettingsSearchEntry> _rootEntries = [
     route: '/settings/users',
     screenTitle: 'Settings',
     section: 'Admin',
-    keywords: ['accounts', 'roles', 'invites', 'permissions', 'access'],
+    // Inviting a new user lives on this screen, so the old Generate
+    // Connect Link vocabulary must land here.
+    keywords: [
+      'accounts',
+      'roles',
+      'invites',
+      'connect link',
+      'invite link',
+      'new user',
+      'add user',
+      'permissions',
+      'access',
+    ],
+    gate: gateAdmin,
+  ),
+  SettingsSearchEntry(
+    id: 'root.external-address',
+    title: 'External Address',
+    icon: Icons.public,
+    route: '/settings',
+    screenTitle: 'Settings',
+    section: 'Admin',
+    keywords: [
+      'public url',
+      'domain',
+      'reverse proxy',
+      'invite link',
+      'reachable',
+    ],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
@@ -231,16 +282,6 @@ const List<SettingsSearchEntry> _rootEntries = [
     screenTitle: 'Settings',
     section: 'Admin',
     keywords: ['sessions', 'sign out', 'revoke', 'phones'],
-    gate: gateAdmin,
-  ),
-  SettingsSearchEntry(
-    id: 'screen.plex-invites',
-    title: 'Plex Invites',
-    icon: Icons.play_circle_outline,
-    route: '/settings/plex',
-    screenTitle: 'Settings',
-    section: 'Admin',
-    keywords: ['plex account', 'link', 'libraries', 'auto invite', 'server'],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
@@ -255,6 +296,8 @@ const List<SettingsSearchEntry> _rootEntries = [
       'anthropic',
       'openai',
       'gemini',
+      'grok',
+      'xai',
       'ai provider',
       'model',
       'chatgpt',
@@ -318,7 +361,7 @@ const List<SettingsSearchEntry> _rootEntries = [
     route: '/settings',
     screenTitle: 'Settings',
     section: 'Admin',
-    keywords: ['container', 'banner', 'update link', 'unraid', 'portainer'],
+    keywords: ['container', 'update link', 'unraid', 'portainer'],
     gate: gateAdmin,
   ),
   // The attention rows double as each queue's stable doorway: the row opens
@@ -398,15 +441,26 @@ const List<SettingsSearchEntry> _rootEntries = [
     anchorId: SettingsAnchors.rootRequestUpdates,
   ),
   SettingsSearchEntry(
-    id: 'root.show-plex-guide',
-    title: 'Watch on Plex',
-    icon: Icons.play_circle_outline,
-    route: '/settings',
+    id: 'screen.media-servers',
+    title: 'Media server access',
+    icon: Icons.live_tv_outlined,
+    route: '/media-servers',
     screenTitle: 'Settings',
     section: 'Guides',
-    keywords: ['guide', 'install', 'plex app', 'menu', 'hide', 'show'],
-    gate: gateEveryone,
-    anchorId: SettingsAnchors.rootShowPlexGuide,
+    keywords: [
+      'plex',
+      'jellyfin',
+      'emby',
+      'media server',
+      'account',
+      'invite',
+      'email',
+      'sign in',
+      'password',
+      'watch',
+      'guide',
+    ],
+    gate: gateMediaServers,
   ),
   SettingsSearchEntry(
     id: 'root.about',
@@ -419,6 +473,25 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateEveryone,
   ),
   SettingsSearchEntry(
+    id: 'root.phone-apps',
+    title: 'Get the phone app',
+    icon: Icons.smartphone,
+    route: '/settings',
+    screenTitle: 'Settings',
+    section: 'About',
+    keywords: [
+      'iphone',
+      'ios',
+      'android',
+      'mobile',
+      'testflight',
+      'beta',
+      'push notifications',
+      'download app',
+    ],
+    gate: gatePhoneApps,
+  ),
+  SettingsSearchEntry(
     id: 'root.github',
     title: 'GitHub',
     icon: Icons.code,
@@ -426,6 +499,16 @@ const List<SettingsSearchEntry> _rootEntries = [
     screenTitle: 'Settings',
     section: 'About',
     keywords: ['source', 'releases', 'issues', 'code'],
+    gate: gateEveryone,
+  ),
+  SettingsSearchEntry(
+    id: 'root.discord',
+    title: 'Discord',
+    icon: Icons.forum_outlined,
+    route: '/settings',
+    screenTitle: 'Settings',
+    section: 'About',
+    keywords: ['community', 'chat', 'help', 'questions'],
     gate: gateEveryone,
   ),
   SettingsSearchEntry(
@@ -767,7 +850,7 @@ const List<SettingsSearchEntry> _notificationEntries = [
     icon: Icons.notifications_outlined,
     route: '/settings/notifications',
     screenTitle: 'Notification Preferences',
-    keywords: ['push', 'email', 'invite'],
+    keywords: ['push', 'email', 'invite', 'grant'],
     gate: gateAdmin,
     anchorId: SettingsAnchors.notificationsPlexAccessRequests,
   ),
@@ -841,9 +924,45 @@ const List<SettingsSearchEntry> _credentialsEntries = [
     icon: Icons.key_outlined,
     route: '/settings/credentials',
     screenTitle: 'Providers & Credentials',
-    keywords: ['provider', 'shared', 'included', 'chatgpt', 'codex', 'oauth'],
+    keywords: [
+      'provider',
+      'shared',
+      'included',
+      'chatgpt',
+      'codex',
+      'oauth',
+      'grok',
+      'xai',
+      // The Local (OpenAI-compatible) provider lives in this dropdown.
+      'local',
+      'self-hosted',
+      'base url',
+      'endpoint',
+      'ollama',
+      'llama.cpp',
+      'vllm',
+      'lm studio',
+      'openai compatible',
+    ],
     gate: gateAdmin,
     anchorId: SettingsAnchors.credentialsAiModel,
+  ),
+  SettingsSearchEntry(
+    id: SettingsAnchors.credentialsOpenAiReasoningEffort,
+    title: 'OpenAI reasoning effort',
+    icon: Icons.key_outlined,
+    route: '/settings/credentials',
+    screenTitle: 'Providers & Credentials',
+    keywords: [
+      'reasoning',
+      'effort',
+      'thinking',
+      'speed',
+      'latency',
+      'local model',
+    ],
+    gate: gateAdmin,
+    anchorId: SettingsAnchors.credentialsOpenAiReasoningEffort,
   ),
   SettingsSearchEntry(
     id: SettingsAnchors.credentialsHealthCheck,
@@ -885,20 +1004,15 @@ const List<SettingsSearchEntry> _credentialsEntries = [
     gate: gateAdmin,
     anchorId: SettingsAnchors.credentialsGemini,
   ),
-];
-
-// ── Plex Invites — /settings/plex ───────────────────────────────────────────
-const List<SettingsSearchEntry> _plexEntries = [
   SettingsSearchEntry(
-    id: SettingsAnchors.plexAutoInvite,
-    title: 'Auto-invite',
-    icon: Icons.play_circle_outline,
-    route: '/settings/plex',
-    screenTitle: 'Plex Invites',
-    section: 'Invites',
-    keywords: ['automatic', 'email', 'share'],
+    id: SettingsAnchors.credentialsGrok,
+    title: 'xAI Grok (AI)',
+    icon: Icons.key_outlined,
+    route: '/settings/credentials',
+    screenTitle: 'Providers & Credentials',
+    keywords: ['grok', 'xai', 'api key'],
     gate: gateAdmin,
-    anchorId: SettingsAnchors.plexAutoInvite,
+    anchorId: SettingsAnchors.credentialsGrok,
   ),
 ];
 
@@ -997,7 +1111,6 @@ const List<SettingsSearchEntry> settingsSearchIndex = [
   ..._aiRemediationEntries,
   ..._notificationEntries,
   ..._credentialsEntries,
-  ..._plexEntries,
   ..._discoveryEntries,
   ..._aiToolsEntries,
   ..._aiAccessEntries,

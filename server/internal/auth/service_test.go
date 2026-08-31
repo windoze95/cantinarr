@@ -576,11 +576,11 @@ func TestSetPassword_RequiresEnabled(t *testing.T) {
 	}
 }
 
-func TestSetPlexEmail_StoresTrimsAndReportsChange(t *testing.T) {
+func TestSetPlexEmail_StoresCanonicalAndReportsChange(t *testing.T) {
 	svc := setupTestService(t)
 	guestID := inviteGuest(t, svc)
 
-	changed, err := svc.SetPlexEmail(guestID, "  pirate@example.com ")
+	changed, err := svc.SetPlexEmail(guestID, "  Pirate@Example.com ")
 	if err != nil {
 		t.Fatalf("set plex email: %v", err)
 	}
@@ -592,12 +592,18 @@ func TestSetPlexEmail_StoresTrimsAndReportsChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
+	// Stored canonical: trimmed and lower-cased, the spelling the media-access
+	// service keys Plex shares by.
 	if user.PlexEmail != "pirate@example.com" {
-		t.Fatalf("expected trimmed email, got %q", user.PlexEmail)
+		t.Fatalf("expected canonical email, got %q", user.PlexEmail)
+	}
+	if user.PlexInvitedAt != nil {
+		t.Fatal("no Plex account row, so no invited stamp")
 	}
 
-	// Resubmitting the same address is a no-op so admins aren't re-notified.
-	changed, err = svc.SetPlexEmail(guestID, "pirate@example.com")
+	// Resubmitting the same address — in any capitalisation — is a no-op so
+	// admins aren't re-notified.
+	changed, err = svc.SetPlexEmail(guestID, "PIRATE@example.com")
 	if err != nil {
 		t.Fatalf("resubmit plex email: %v", err)
 	}
@@ -605,23 +611,10 @@ func TestSetPlexEmail_StoresTrimsAndReportsChange(t *testing.T) {
 		t.Fatal("identical resubmission should not report changed")
 	}
 
-	// Simulate an invite having been sent to the first address.
-	if _, err := svc.db.Exec("UPDATE users SET plex_invited_at = CURRENT_TIMESTAMP WHERE id = ?", guestID); err != nil {
-		t.Fatalf("stamp invited: %v", err)
-	}
-
-	// A different address is a change again, shows up in ListUsers, and
-	// clears the invited stamp (that invite went to the old email).
+	// A different address is a change again and shows up in ListUsers.
 	changed, err = svc.SetPlexEmail(guestID, "corsair@example.com")
 	if err != nil || !changed {
 		t.Fatalf("expected changed update, got changed=%v err=%v", changed, err)
-	}
-	user, err = svc.GetUser(guestID)
-	if err != nil {
-		t.Fatalf("get user after change: %v", err)
-	}
-	if user.PlexInvitedAt != nil {
-		t.Fatal("changing the email must clear plex_invited_at")
 	}
 	users, err := svc.ListUsers()
 	if err != nil {
@@ -638,6 +631,66 @@ func TestSetPlexEmail_StoresTrimsAndReportsChange(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("guest missing from ListUsers")
+	}
+}
+
+// The "invite sent" stamp older apps read is derived from the user's live
+// Plex account row, never from the retired users column.
+func TestPlexInvitedAtIsDerivedFromThePlexAccountRow(t *testing.T) {
+	svc := setupTestService(t)
+	guestID := inviteGuest(t, svc)
+	if _, err := svc.db.Exec("UPDATE users SET plex_invited_at = CURRENT_TIMESTAMP WHERE id = ?", guestID); err != nil {
+		t.Fatalf("stamp legacy column: %v", err)
+	}
+	user, err := svc.GetUser(guestID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if user.PlexInvitedAt != nil {
+		t.Fatal("the retired users.plex_invited_at column must not be served")
+	}
+
+	if _, err := svc.db.Exec(
+		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, media_server_config, created_at) VALUES ('plex-1', 'plex', 'Plex', 'https://plex.tv', '', '', '', 0, 0, 'disabled', '[]', '{}', CURRENT_TIMESTAMP)",
+	); err != nil {
+		t.Fatalf("insert plex instance: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		"INSERT INTO user_media_server_accounts (user_id, instance_id, remote_user_id, remote_username, created_by_cantinarr, created_at) VALUES (?, 'plex-1', 'pirate@example.com', 'pirate', 1, '2026-08-01 10:00:00')", guestID,
+	); err != nil {
+		t.Fatalf("insert account row: %v", err)
+	}
+	user, err = svc.GetUser(guestID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if user.PlexInvitedAt == nil || user.PlexInvitedAt.Year() != 2026 || user.PlexInvitedAt.Month() != 8 {
+		t.Fatalf("PlexInvitedAt = %v, want the row's created_at", user.PlexInvitedAt)
+	}
+	summary, err := svc.userSummaryByID(guestID)
+	if err != nil {
+		t.Fatalf("get summary: %v", err)
+	}
+	if summary.PlexInvitedAt == nil {
+		t.Fatal("summary lost the derived stamp")
+	}
+	users, err := svc.ListUsers()
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	for _, u := range users {
+		if u.ID == guestID && u.PlexInvitedAt == nil {
+			t.Fatal("ListUsers lost the derived stamp")
+		}
+	}
+
+	// A switched-off share is no invite.
+	if _, err := svc.db.Exec("UPDATE user_media_server_accounts SET disabled_at = CURRENT_TIMESTAMP WHERE user_id = ?", guestID); err != nil {
+		t.Fatal(err)
+	}
+	user, _ = svc.GetUser(guestID)
+	if user.PlexInvitedAt != nil {
+		t.Fatal("a switched-off share still reads as invited")
 	}
 }
 

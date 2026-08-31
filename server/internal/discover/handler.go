@@ -164,11 +164,25 @@ func (h *Handler) TopRatedMovies(w http.ResponseWriter, r *http.Request) {
 	h.cachedTMDBFeed(w, key, ttlTrending, "/movie/top_rated", params)
 }
 
+// UpcomingMovies backs the Coming Soon row. TMDB's /movie/upcoming matches any
+// country's theatrical window, so a title already streaming here — or a 1994
+// re-release — still counts as "upcoming" somewhere and lands in the row.
+// Discovering on the primary release date instead keeps the row to movies not
+// released anywhere yet, and the three-month cap leaves far-future titles to
+// the Most Anticipated row.
 func (h *Handler) UpcomingMovies(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
-	key := fmt.Sprintf("upcoming:%d", page)
-	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDBFeed(w, key, ttlTrending, "/movie/upcoming", params)
+	now := time.Now()
+	from := now.Format("2006-01-02")
+	to := now.AddDate(0, 3, 0).Format("2006-01-02")
+	key := fmt.Sprintf("upcoming:%s:%d", from, page)
+	params := url.Values{
+		"page":                     {strconv.Itoa(page)},
+		"sort_by":                  {"popularity.desc"},
+		"primary_release_date.gte": {from},
+		"primary_release_date.lte": {to},
+	}
+	h.cachedTMDBFeed(w, key, ttlTrending, "/discover/movie", params)
 }
 
 func (h *Handler) NowPlayingMovies(w http.ResponseWriter, r *http.Request) {

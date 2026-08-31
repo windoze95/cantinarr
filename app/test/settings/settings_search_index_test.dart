@@ -9,6 +9,8 @@ const _adminGates = SettingsSearchGates(
   user: _admin,
   chaptarrEnabled: true,
   donateVisible: true,
+  phoneAppsVisible: true,
+  mediaServersVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
@@ -38,6 +40,7 @@ const _routableSettingsPaths = {
   '/setup',
   '/issues',
   '/plex-guide',
+  '/media-servers',
   '/approvals',
   '/agent-actions',
 };
@@ -123,6 +126,30 @@ void main() {
       );
     });
 
+    test('a shared media server gates the access guide entry', () {
+      expect(
+        searchSettingsIndex('jellyfin', _adminGates).map((e) => e.id),
+        contains('screen.media-servers'),
+      );
+      const none = SettingsSearchGates(user: _admin);
+      expect(
+        searchSettingsIndex('jellyfin', none)
+            .map((e) => e.id)
+            .contains('screen.media-servers'),
+        isFalse,
+      );
+      // The guide is for everyone with a grant, not just admins.
+      const requester = SettingsSearchGates(
+        user: _user,
+        mediaServersVisible: true,
+      );
+      expect(
+        searchSettingsIndex('media server access', requester)
+            .map((e) => e.id),
+        contains('screen.media-servers'),
+      );
+    });
+
     test('title hits rank above keyword and context hits', () {
       final results = searchSettingsIndex('approval', _adminGates);
       final ids = results.map((e) => e.id).toList();
@@ -151,10 +178,10 @@ void main() {
     test('registry order is preserved within a tier', () {
       final results = searchSettingsIndex('plex', _adminGates);
       final ids = results.map((e) => e.id).toList();
-      final screenTile = ids.indexOf('screen.plex-invites');
-      final autoInvite = ids.indexOf('plex.auto-invite');
-      expect(screenTile, isNot(-1));
-      expect(autoInvite, isNot(-1));
+      final guide = ids.indexOf('screen.media-servers');
+      final accessRequests = ids.indexOf('notifications.plex-access-requests');
+      expect(guide, isNot(-1));
+      expect(accessRequests, isNot(-1));
     });
   });
 }

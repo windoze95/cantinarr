@@ -339,3 +339,38 @@ func configureResolverProfile(
 		t.Fatal(err)
 	}
 }
+
+func TestResolveAISharedCarriesBaseURLPersonalDoesNot(t *testing.T) {
+	h, registry, database, userID := newResolverTestHandler(t)
+	if _, err := database.Exec(`UPDATE users SET ai_shared_enabled = 1 WHERE id = ?`, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetAIConfig(credentials.AIProviderLocalOpenAI, "shared-model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetSetting(credentials.KeyLocalOpenAIBaseURL, "http://llm-host:8080/v1"); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved := h.resolveAI(context.Background(), userID)
+	if !resolved.Available || resolved.Source != aiSourceShared || resolved.BaseURL != "http://llm-host:8080/v1" {
+		t.Fatalf("shared resolution = %#v", resolved)
+	}
+	sharedOnly := h.resolveSharedAI(context.Background())
+	if !sharedOnly.Available || sharedOnly.BaseURL != "http://llm-host:8080/v1" {
+		t.Fatalf("shared-only resolution = %#v", sharedOnly)
+	}
+
+	// A personal openai selection must not inherit the shared endpoint: the
+	// user's own key keeps talking to api.openai.com.
+	if err := registry.SetUserAIConfig(userID, credentials.AIProviderOpenAI, "personal-model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetUserAICredential(userID, credentials.AIProviderOpenAI, "personal-secret"); err != nil {
+		t.Fatal(err)
+	}
+	resolved = h.resolveAI(context.Background(), userID)
+	if !resolved.Available || resolved.Source != aiSourcePersonal || resolved.BaseURL != "" {
+		t.Fatalf("personal resolution = %#v", resolved)
+	}
+}

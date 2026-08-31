@@ -14,8 +14,11 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"google.golang.org/genai"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/grokoauth"
+	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
@@ -126,6 +129,10 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 		return AIValidationFailureQuota
 	case errors.Is(err, codexapp.ErrBusy), errors.Is(err, codexapp.ErrUnavailable):
 		return AIValidationFailureTemporary
+	case errors.Is(err, grokoauth.ErrNotConnected), errors.Is(err, grokoauth.ErrReloginRequired):
+		return AIValidationFailureInvalidCredential
+	case errors.Is(err, grokoauth.ErrUnavailable), errors.Is(err, grokoauth.ErrStorage):
+		return AIValidationFailureTemporary
 	}
 	status := providerErrorStatus(err)
 	switch {
@@ -198,7 +205,9 @@ func (h *Handler) ValidateSharedAIModelOverride(ctx context.Context, model strin
 			Model:    strings.TrimSpace(model),
 		},
 		APIKey:            resolved.APIKey,
-		CredentialPresent: resolved.APIKey != "" || resolved.Provider == credentials.AIProviderCodex,
+		CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider) || credentials.AIProviderKeyOptional(resolved.Provider),
+		BaseURL:           resolved.BaseURL,
+		ReasoningEffort:   resolved.ReasoningEffort,
 	}
 	return resolved.Provider, h.ValidateSharedAISettings(ctx, profile)
 }
@@ -234,10 +243,33 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 		}
 		return nil
 	}
-	if strings.TrimSpace(profile.APIKey) == "" {
+	apiKey := strings.TrimSpace(profile.APIKey)
+	if profile.Config.Provider == credentials.AIProviderGrokOAuth {
+		// The probe authenticates with a live bearer token from the linked
+		// account, exercising the exact credential a chat turn would use.
+		if h.grok == nil || !h.grok.Available() {
+			return ErrAIValidation
+		}
+		token, err := h.grok.AccessToken(ctx, grokAccountFor(account))
+		if err != nil {
+			return newAIValidationFailure(err)
+		}
+		apiKey = token
+	} else if apiKey == "" && !credentials.AIProviderKeyOptional(profile.Config.Provider) {
+		// Key-optional providers (local OpenAI-compatible servers) probe with
+		// the placeholder bearer instead.
 		return ErrAIValidation
 	}
 
+	// The probe carries the full admin tool catalog — the largest payload an
+	// interactive chat serializes — so a provider that rejects any tool schema
+	// fails here at save time and in the daily reuse of this probe, not on a
+	// user's first real chat (#497). ForceNoTools still forbids calls, so the
+	// reply stays one short text turn.
+	var probeTools []mcp.Tool
+	if h.toolServer != nil {
+		probeTools = h.toolServer.GetToolsForRole(auth.RoleAdmin)
+	}
 	params := TurnParams{
 		System: aiValidationSystemPrompt,
 		History: Transcript{{
@@ -247,6 +279,7 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 				Text: aiValidationUserPrompt,
 			}},
 		}},
+		Tools:            probeTools,
 		ForceNoTools:     true,
 		DisableReasoning: true,
 		MaxTokens:        aiValidationMaxTokens,
@@ -254,11 +287,15 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 	var runner TurnRunner
 	switch profile.Config.Provider {
 	case credentials.AIProviderAnthropic:
-		runner = NewService(profile.APIKey, profile.Config.Model, h.toolServer)
+		runner = NewService(apiKey, profile.Config.Model, h.toolServer)
 	case credentials.AIProviderOpenAI:
-		runner = NewOpenAIService(profile.APIKey, profile.Config.Model, h.toolServer)
+		runner = NewOpenAIService(apiKey, profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, h.toolServer)
+	case credentials.AIProviderLocalOpenAI:
+		runner = NewOpenAIService(localOpenAICredential(apiKey), profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, h.toolServer)
 	case credentials.AIProviderGemini:
-		runner = NewGeminiService(profile.APIKey, profile.Config.Model, h.toolServer)
+		runner = NewGeminiService(apiKey, profile.Config.Model, h.toolServer)
+	case credentials.AIProviderGrok, credentials.AIProviderGrokOAuth:
+		runner = NewGrokService(apiKey, profile.Config.Model, h.toolServer)
 	default:
 		return ErrAIValidation
 	}
@@ -266,12 +303,26 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 	if err != nil {
 		return newAIValidationFailure(err)
 	}
-	for _, block := range result.Message.Content {
-		if block.Type == BlockText && strings.TrimSpace(block.Text) != "" {
-			return nil
-		}
+	if validationTurnProvedProvider(result) {
+		return nil
 	}
 	return newAIValidationFailure(nil)
+}
+
+// validationTurnProvedProvider reports whether the probe reply proves the
+// provider accepted the request. Text is the expected shape; a tool_use block
+// counts too, because a server that ignores the no-calls tool choice has still
+// round-tripped the full tool payload — which is what the probe exists to test.
+func validationTurnProvedProvider(result TurnResult) bool {
+	for _, block := range result.Message.Content {
+		if block.Type == BlockText && strings.TrimSpace(block.Text) != "" {
+			return true
+		}
+		if block.Type == BlockToolUse {
+			return true
+		}
+	}
+	return false
 }
 
 // SharedAISettingsValidated records a successful save-time probe and clears a
@@ -317,7 +368,9 @@ func (h *Handler) runSharedAIHealthCheck(ctx context.Context, now time.Time) {
 		probeErr = h.ValidateSharedAISettings(ctx, credentials.AIProfile{
 			Config:            config,
 			APIKey:            resolved.APIKey,
-			CredentialPresent: resolved.APIKey != "" || resolved.Provider == credentials.AIProviderCodex,
+			CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider) || credentials.AIProviderKeyOptional(resolved.Provider),
+			BaseURL:           resolved.BaseURL,
+			ReasoningEffort:   resolved.ReasoningEffort,
 		})
 	}
 	// Record both success and failure. A failing provider should create one

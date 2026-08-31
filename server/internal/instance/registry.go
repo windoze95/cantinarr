@@ -437,41 +437,48 @@ func (r *Registry) GetDefaultTautulliClient() (*tautulli.Client, string, error) 
 	return client, inst.ID, err
 }
 
-// GetUserDefaultRadarrClient returns the Radarr client for a user's per-user
-// default instance, falling back to the global default when the user has no
-// override. The second return is the resolved instance ID.
+// GetUserDefaultRadarrClient returns the Radarr client for a user's effective
+// default instance: their pin, else the global default when it is granted (or
+// nothing is), else their first granted instance. The second return is the
+// resolved instance ID.
 func (r *Registry) GetUserDefaultRadarrClient(userID int64) (*radarr.Client, string, error) {
-	if id, ok, err := r.store.GetUserDefault(userID, "radarr"); err != nil {
+	id, err := r.store.EffectiveDefaultInstanceID(userID, "radarr")
+	if err != nil {
 		return nil, "", fmt.Errorf("get user default radarr: %w", err)
-	} else if ok {
-		client, err := r.GetRadarrClient(id)
-		return client, id, err
 	}
-	return r.GetDefaultRadarrClient()
+	if id == "" {
+		return nil, "", nil
+	}
+	client, err := r.GetRadarrClient(id)
+	return client, id, err
 }
 
-// GetUserDefaultSonarrClient returns the Sonarr client for a user's per-user
-// default instance, falling back to the global default when the user has no
-// override. The second return is the resolved instance ID.
+// GetUserDefaultSonarrClient returns the Sonarr client for a user's effective
+// default instance: their pin, else the global default when it is granted (or
+// nothing is), else their first granted instance. The second return is the
+// resolved instance ID.
 func (r *Registry) GetUserDefaultSonarrClient(userID int64) (*sonarr.Client, string, error) {
-	if id, ok, err := r.store.GetUserDefault(userID, "sonarr"); err != nil {
+	id, err := r.store.EffectiveDefaultInstanceID(userID, "sonarr")
+	if err != nil {
 		return nil, "", fmt.Errorf("get user default sonarr: %w", err)
-	} else if ok {
-		client, err := r.GetSonarrClient(id)
-		return client, id, err
 	}
-	return r.GetDefaultSonarrClient()
+	if id == "" {
+		return nil, "", nil
+	}
+	client, err := r.GetSonarrClient(id)
+	return client, id, err
 }
 
-// GetUserChaptarrClient returns the Chaptarr client for a user's granted
-// instance. Chaptarr has NO global default: a user with no grant gets a nil
-// client and an empty ID, which callers surface as "no access / not configured".
+// GetUserChaptarrClient returns the Chaptarr client for a user's effective
+// granted instance (their pin, else their first grant). Chaptarr has NO
+// global default: a user with no explicit rows gets a nil client and an empty
+// ID, which callers surface as "no access / not configured".
 func (r *Registry) GetUserChaptarrClient(userID int64) (*chaptarr.Client, string, error) {
-	id, ok, err := r.store.GetUserDefault(userID, "chaptarr")
+	id, err := r.store.EffectiveDefaultInstanceID(userID, "chaptarr")
 	if err != nil {
 		return nil, "", fmt.Errorf("get user chaptarr: %w", err)
 	}
-	if !ok {
+	if id == "" {
 		return nil, "", nil
 	}
 	client, err := r.GetChaptarrClient(id)
@@ -492,6 +499,20 @@ func (r *Registry) GetDefaultChaptarrClient() (*chaptarr.Client, string, error) 
 	}
 	client, err := r.GetChaptarrClient(inst.ID)
 	return client, inst.ID, err
+}
+
+// EffectiveDefaultInstanceID exposes the store's per-user effective-default
+// resolution (pin → granted global default → first granted → global chain) to
+// services that need the id without constructing a client.
+func (r *Registry) EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error) {
+	return r.store.EffectiveDefaultInstanceID(userID, serviceType)
+}
+
+// VisibleInstanceIDs exposes the store's per-user visible set (explicit rows
+// plus the effective default, deterministic order) for callers that fan a
+// read across every library the user may see.
+func (r *Registry) VisibleInstanceIDs(userID int64, serviceType string) ([]string, error) {
+	return r.store.VisibleInstanceIDs(userID, serviceType)
 }
 
 // InvalidateClient removes a cached client, forcing recreation on next access.

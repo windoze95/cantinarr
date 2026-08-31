@@ -101,6 +101,26 @@ void main() {
     expect(find.text('Personal ChatGPT route'), findsOneWidget);
   });
 
+  testWidgets('personal xAI Grok can be connected while included AI is active',
+      (tester) async {
+    final service = _FakeAiSettingsService(_included());
+    await _pump(tester, service, withGrokRoute: true);
+
+    await tester.tap(find.text('Your provider'));
+    await tester.pumpAndSettle();
+
+    final grokChip = find.widgetWithText(ChoiceChip, 'xAI Grok (OAuth)');
+    await tester.ensureVisible(grokChip);
+    await tester.tap(grokChip);
+    await tester.pumpAndSettle();
+    final connect = find.text('Connect personal xAI Grok');
+    await tester.ensureVisible(connect);
+    await tester.tap(connect);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Personal Grok route'), findsOneWidget);
+  });
+
   testWidgets('server-advertised default preselects OpenAI OAuth with Luna',
       (tester) async {
     final service = _FakeAiSettingsService(_untouchedWithServerDefaults());
@@ -131,6 +151,7 @@ Future<void> _pump(
   WidgetTester tester,
   _FakeAiSettingsService service, {
   bool withChatGptRoute = false,
+  bool withGrokRoute = false,
 }) async {
   tester.view.physicalSize = const Size(900, 1500);
   tester.view.devicePixelRatio = 1;
@@ -148,6 +169,11 @@ Future<void> _pump(
           path: '/settings/chatgpt',
           builder: (_, __) =>
               const Scaffold(body: Text('Personal ChatGPT route')),
+        ),
+      if (withGrokRoute)
+        GoRoute(
+          path: '/settings/grok',
+          builder: (_, __) => const Scaffold(body: Text('Personal Grok route')),
         ),
     ],
   );
@@ -242,6 +268,18 @@ const _providers = [
     ],
   ),
   AiProviderOption(
+    id: 'grok',
+    label: 'xAI Grok',
+    credentialKey: 'grok_key',
+    models: [
+      AiModelOption(
+        id: 'grok-4.6',
+        label: 'Grok 4.6',
+        description: '',
+      ),
+    ],
+  ),
+  AiProviderOption(
     id: 'codex',
     label: 'OpenAI (OAuth)',
     credentialKey: '',
@@ -255,6 +293,19 @@ const _providers = [
       AiModelOption(
         id: 'gpt-5.6-luna',
         label: 'GPT-5.6 Luna',
+        description: '',
+      ),
+    ],
+  ),
+  AiProviderOption(
+    id: 'grok_oauth',
+    label: 'xAI Grok (OAuth)',
+    credentialKey: '',
+    authType: 'user_oauth',
+    models: [
+      AiModelOption(
+        id: 'grok-4.6',
+        label: 'Grok 4.6',
         description: '',
       ),
     ],

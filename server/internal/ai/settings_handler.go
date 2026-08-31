@@ -12,6 +12,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/grokoauth"
 )
 
 const (
@@ -63,13 +64,20 @@ func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
 		writeAISettingsError(w, http.StatusBadRequest, "invalid AI provider or model")
 		return
 	}
+	// Shared-only providers (the local OpenAI-compatible endpoint) never
+	// become personal selections: their endpoints can name cluster-internal
+	// hosts, which must never ride a non-admin path.
+	if credentials.IsSharedOnlyAIProvider(req.Provider) {
+		writeAISettingsError(w, http.StatusBadRequest, "this provider is available only as the server's shared profile")
+		return
+	}
 	if req.Model == "" {
 		req.Model = credentials.DefaultAIModel(req.Provider)
 	}
 	h.settingsMu.Lock()
 	defer h.settingsMu.Unlock()
 	profile := credentials.AIProfile{Config: credentials.AIConfig{Provider: req.Provider, Model: req.Model}}
-	if req.Provider == credentials.AIProviderCodex {
+	if credentials.IsOAuthAIProvider(req.Provider) {
 		if req.APIKey != "" {
 			writeAISettingsError(w, http.StatusBadRequest, "OAuth providers do not accept API keys")
 			return
@@ -124,7 +132,7 @@ func (h *Handler) UpdatePersonalAICredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
-	if credentials.AIKeyCredentialKey(provider) == "" {
+	if credentials.AIKeyCredentialKey(provider) == "" || credentials.IsSharedOnlyAIProvider(provider) {
 		writeAISettingsError(w, http.StatusBadRequest, "provider does not accept an API key")
 		return
 	}
@@ -200,7 +208,7 @@ func (h *Handler) DeletePersonalAICredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
-	if credentials.AIKeyCredentialKey(provider) == "" {
+	if credentials.AIKeyCredentialKey(provider) == "" || credentials.IsSharedOnlyAIProvider(provider) {
 		writeAISettingsError(w, http.StatusBadRequest, "provider does not accept an API key")
 		return
 	}
@@ -226,17 +234,19 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 		return
 	}
 	personalCredentials := map[string]bool{}
-	for _, provider := range []string{
-		credentials.AIProviderAnthropic,
-		credentials.AIProviderOpenAI,
-		credentials.AIProviderGemini,
-	} {
-		configured, err := h.creds.UserAICredentialConfigured(userID, provider)
+	// Personal payloads carry only personally selectable providers:
+	// shared-only entries stay admin-facing.
+	personalProviders := credentials.PersonalAIProviders()
+	for _, option := range personalProviders {
+		if option.CredentialKey == "" {
+			continue
+		}
+		configured, err := h.creds.UserAICredentialConfigured(userID, option.ID)
 		if err != nil {
 			writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
 			return
 		}
-		personalCredentials[provider] = configured
+		personalCredentials[option.ID] = configured
 	}
 	codexConnected := false
 	if h.codex != nil {
@@ -247,6 +257,15 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 		}
 	}
 	personalCredentials[credentials.AIProviderCodex] = codexConnected
+	grokConnected := false
+	if h.grok != nil {
+		grokConnected, err = h.grok.AccountExists(grokoauth.PersonalAccount(userID))
+		if err != nil {
+			writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
+			return
+		}
+	}
+	personalCredentials[credentials.AIProviderGrokOAuth] = grokConnected
 
 	sharedProfile, granted, err := h.creds.LoadSharedAIProfileForUser(r.Context(), userID)
 	sharedStorageOK := err == nil
@@ -261,13 +280,23 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 			}
 		}
 	}
+	if sharedProfile.Config.Provider == credentials.AIProviderGrokOAuth {
+		sharedConfigured = false
+		if h.grok != nil && h.grok.Available() {
+			sharedConfigured, err = h.grok.AccountExists(grokoauth.SharedAccount())
+			if err != nil {
+				writeAISettingsError(w, http.StatusInternalServerError, "failed to load shared AI settings")
+				return
+			}
+		}
+	}
 	resolved := h.resolveAI(r.Context(), userID)
 	var personalConfigJSON any
 	if selected {
 		personalConfigJSON = personalConfig
 	}
 	response := map[string]any{
-		"providers": credentials.AIProviders,
+		"providers": personalProviders,
 		// The zero-config pair the UI preselects when nothing is chosen yet.
 		"default_provider": credentials.DefaultAIProvider,
 		"default_model":    credentials.DefaultSharedAIModel,

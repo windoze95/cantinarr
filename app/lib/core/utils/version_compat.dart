@@ -7,7 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 /// The oldest server this app build fully supports ("0.0.0" = no floor).
 /// Server-side twin: MinAppVersion in server/internal/version/version.go —
 /// raise either only alongside the breaking change that forces it.
-const String minServerVersion = '0.0.0';
+///
+/// 0.6.0: the Plex instance editor's link routes and the guide's link-your-
+/// account and sign-in-with-Plex routes. On an older server those calls fall
+/// into the arr proxy's wildcard and answer 404, which the screens now name;
+/// the banner tells the admin before they get there.
+const String minServerVersion = '0.6.0';
 
 /// [minServerVersion] behind a provider so widget tests can raise the floor.
 final minServerVersionProvider = Provider<String>((_) => minServerVersion);

@@ -411,6 +411,27 @@ class RequestSettingsService {
         data: defaults);
   }
 
+  /// The user's additional instance access grants, keyed by service type.
+  /// Grants widen what the user may pick per request; they never move the
+  /// default above.
+  Future<Map<String, List<String>>> getUserInstanceGrants(int userId) async {
+    final resp = await _dio.get('/api/admin/users/$userId/instance-grants');
+    final data = resp.data as Map<String, dynamic>? ?? const {};
+    return {
+      for (final entry in data.entries)
+        entry.key: ((entry.value as List?) ?? const [])
+            .map((id) => id as String)
+            .toList(),
+    };
+  }
+
+  /// Replaces the user's grant rows for every service type present as a key;
+  /// an empty list clears that type's grants, an absent key leaves it alone.
+  Future<void> updateUserInstanceGrants(
+      int userId, Map<String, List<String>> grants) async {
+    await _dio.put('/api/admin/users/$userId/instance-grants', data: grants);
+  }
+
   Future<List<PendingRequestItem>> listPending() async {
     final resp = await _dio.get('/api/admin/requests');
     return ((resp.data as List?) ?? const [])

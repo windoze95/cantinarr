@@ -23,6 +23,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// the scene is flat theme surfaces plus Ahem text, so it sits far below the
 /// tolerant comparator threshold (see flutter_test_config.dart). Regenerate
 /// with `flutter test --update-goldens` from `app/`.
+///
+/// Both frames were re-baselined in Phase 4 (SEARCH-03). The only intended
+/// pixel change is the search bar's prefix badge glyph, which now carries
+/// the active discovery tab's `ModulePage.activeIcon` — `Icons.movie`, since
+/// both frames capture `/dashboard/movies` — instead of the previous generic
+/// search glyph. The badge's tint is unchanged, because `aiEnabled` still
+/// drives the colour and `_userState` configures no services. The change is
+/// visible whenever the bar is not in AI mode, including with an empty,
+/// unfocused field, which is why frames that type nothing still differ.
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});

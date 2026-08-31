@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
@@ -31,6 +32,24 @@ var allowedServiceTypes = map[string]bool{
 	"nzbget":       true,
 	"transmission": true,
 	"tautulli":     true,
+	"jellyfin":     true,
+	"emby":         true,
+	"plex":         true,
+}
+
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin', 'emby', 'plex'"}`
+
+// grantableServiceTypes is the subset a user can hold access-grant rows for.
+// Download clients and Tautulli are admin surfaces with no per-user routing,
+// so granting them would only invite confusion. For media servers a grant is
+// the eligibility to create an account there.
+var grantableServiceTypes = map[string]bool{
+	"radarr":   true,
+	"sonarr":   true,
+	"chaptarr": true,
+	"jellyfin": true,
+	"emby":     true,
+	"plex":     true,
 }
 
 // instanceResponse is the JSON shape returned to clients. All credentials are
@@ -45,6 +64,8 @@ type instanceResponse struct {
 	SortOrder         int                 `json:"sort_order"`
 	MediaDownloads    bool                `json:"media_downloads"`
 	MediaPathMappings []mediapath.Mapping `json:"media_path_mappings"`
+	// MediaServerConfig is present only for media-server instances.
+	MediaServerConfig *MediaServerConfig `json:"media_server_config,omitempty"`
 }
 
 type instanceRequest struct {
@@ -52,6 +73,12 @@ type instanceRequest struct {
 	// Pointer distinguishes an old client that omitted this new field from an
 	// admin explicitly sending [] to disable downloads on an existing instance.
 	MediaPathMappings *[]mediapath.Mapping `json:"media_path_mappings"`
+	// Same omitted-vs-cleared distinction for the media-server settings.
+	MediaServerConfig *MediaServerConfig `json:"media_server_config"`
+	// PlexLinkPin names an approved PIN link (PlexLinkBegin/PlexLinkCheck)
+	// whose token this Plex instance should use. The token itself never
+	// travels through the app.
+	PlexLinkPin int64 `json:"plex_link_pin"`
 }
 
 func (h *Handler) toResponse(inst *Instance) instanceResponse {
@@ -59,7 +86,7 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 	if mappings == nil {
 		mappings = []mediapath.Mapping{}
 	}
-	return instanceResponse{
+	resp := instanceResponse{
 		ID:                inst.ID,
 		ServiceType:       inst.ServiceType,
 		Name:              inst.Name,
@@ -70,23 +97,36 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 		MediaDownloads:    inst.MediaDownloadsConfigured(h.mediaRoots),
 		MediaPathMappings: mappings,
 	}
+	if IsMediaServerType(inst.ServiceType) {
+		cfg := inst.MediaServerConfig.public()
+		resp.MediaServerConfig = &cfg
+	}
+	return resp
 }
 
 // Handler provides REST endpoints for instance CRUD.
 type Handler struct {
-	store        *Store
-	registry     *Registry
-	webhookMu    sync.Mutex
-	webhookLocks map[string]*sync.Mutex
-	publicURL    string
-	mediaRoots   []string
+	store          *Store
+	registry       *Registry
+	webhookMu      sync.Mutex
+	webhookLocks   map[string]*sync.Mutex
+	arrCallbackURL string
+	mediaRoots     []string
+	grantObserver  GrantObserver
+	// sharedLibrariesObserver is told when a media server's shared-library
+	// selection changes, so existing accounts follow the new set.
+	sharedLibrariesObserver SharedLibrariesObserver
+	// plexLinks holds approved PIN links until the admin saves the instance;
+	// plexBaseURL is where the link flow talks to (plex.tv, or a test).
+	plexLinks   *plexLinks
+	plexBaseURL string
 }
 
 // NewHandler creates a new instance handler.
-func NewHandler(store *Store, registry *Registry, publicURL ...string) *Handler {
-	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex)}
-	if len(publicURL) > 0 {
-		h.publicURL = strings.TrimRight(publicURL[0], "/")
+func NewHandler(store *Store, registry *Registry, arrCallbackURL ...string) *Handler {
+	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex), plexLinks: newPlexLinks(), plexBaseURL: plex.BaseURL}
+	if len(arrCallbackURL) > 0 {
+		h.arrCallbackURL = strings.TrimRight(arrCallbackURL[0], "/")
 	}
 	return h
 }
@@ -184,7 +224,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	inst := request.Instance
 
 	if !allowedServiceTypes[inst.ServiceType] {
-		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"}`, http.StatusBadRequest)
+		http.Error(w, serviceTypeListError, http.StatusBadRequest)
+		return
+	}
+	plexCred, err := h.applyPlexLink(&inst, request.PlexLinkPin, nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
 	if err := validateRequiredFields(&inst); err != nil {
@@ -192,6 +237,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.applyMediaPathMappings(&inst, request.MediaPathMappings, nil); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	if err := h.applyMediaServerConfig(&inst, request.MediaServerConfig, nil); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	if err := applyPlexConfig(&inst, plexCred); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -249,12 +302,25 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if inst.Password == "" {
 		inst.Password = existing.Password
 	}
+	plexCred, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
 
 	if err := validateRequiredFields(&inst); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
 	if err := h.applyMediaPathMappings(&inst, request.MediaPathMappings, existing); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	if err := h.applyMediaServerConfig(&inst, request.MediaServerConfig, existing); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	if err := applyPlexConfig(&inst, plexCred); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -273,6 +339,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
 	h.registry.InvalidateClient(instanceID)
 
+	// The shared-library selection is access, not just a default for new
+	// accounts: when it changes, the accounts Cantinarr created here follow
+	// it. Only on a real change, so an unrelated save costs no policy writes.
+	if IsMediaServerType(inst.ServiceType) &&
+		!sameLibraryIDs(existing.MediaServerConfig.LibraryIDs, inst.MediaServerConfig.LibraryIDs) {
+		h.notifySharedLibrariesObserver(instanceID, inst.MediaServerConfig.LibraryIDs)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(h.toResponse(&inst))
 }
@@ -284,21 +358,41 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 // in the body), blank credentials fall back to the stored ones, mirroring
 // Update's write-only semantics.
 func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
-	var inst Instance
-	if err := json.NewDecoder(r.Body).Decode(&inst); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+	inst, ok := h.resolveTestInstance(w, r)
+	if !ok {
+		return
+	}
+	if err := validateConnection(inst); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"connection test failed: %s"}`, err), http.StatusBadRequest)
 		return
 	}
 
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// resolveTestInstance decodes a candidate configuration for the test-style
+// endpoints (TestConnection, MediaServerLibraries), applying the stored
+// credential fallback and the shared validation. It writes the error response
+// itself and returns ok=false when the request cannot proceed.
+func (h *Handler) resolveTestInstance(w http.ResponseWriter, r *http.Request) (*Instance, bool) {
+	var request instanceRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return nil, false
+	}
+	inst := request.Instance
+
+	var existing *Instance
 	if inst.ID != "" {
-		existing, err := h.store.Get(inst.ID)
+		var err error
+		existing, err = h.store.Get(inst.ID)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
-			return
+			return nil, false
 		}
 		if existing == nil {
 			http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
-			return
+			return nil, false
 		}
 		inst.ServiceType = existing.ServiceType
 		if inst.APIKey == "" {
@@ -310,11 +404,26 @@ func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
 		if inst.Password == "" {
 			inst.Password = existing.Password
 		}
+		inst.MediaServerConfig = existing.MediaServerConfig.clone()
 	}
 
 	if !allowedServiceTypes[inst.ServiceType] {
-		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"}`, http.StatusBadRequest)
-		return
+		http.Error(w, serviceTypeListError, http.StatusBadRequest)
+		return nil, false
+	}
+	// A Plex test needs the server the candidate names (the machine
+	// identifier rides in the config); the token comes from the link or the
+	// stored instance.
+	if request.MediaServerConfig != nil {
+		inst.MediaServerConfig.MachineIdentifier = strings.TrimSpace(request.MediaServerConfig.MachineIdentifier)
+	}
+	plexCred, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return nil, false
+	}
+	if inst.ServiceType == "plex" {
+		inst.MediaServerConfig.ClientID = plexCred.clientID
 	}
 	// The test doesn't need a name; default it so the shared validation only
 	// enforces the URL and credentials.
@@ -323,17 +432,11 @@ func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateRequiredFields(&inst); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
-		return
+		return nil, false
 	}
 
 	inst.URL = strings.TrimRight(inst.URL, "/")
-
-	if err := validateConnection(&inst); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"connection test failed: %s"}`, err), http.StatusBadRequest)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
+	return &inst, true
 }
 
 // Delete removes a service instance.
@@ -396,6 +499,11 @@ func (h *Handler) UpdateUserDefaultInstances(w http.ResponseWriter, r *http.Requ
 			http.Error(w, fmt.Sprintf(`{"error":"unknown service_type: %s"}`, serviceType), http.StatusBadRequest)
 			return
 		}
+		// A pin must never masquerade as media-server eligibility.
+		if IsMediaServerType(serviceType) {
+			http.Error(w, fmt.Sprintf(`{"error":"%s instances have no default; use access grants"}`, serviceType), http.StatusBadRequest)
+			return
+		}
 	}
 	for serviceType, instanceID := range body {
 		if instanceID == nil || *instanceID == "" {
@@ -420,6 +528,72 @@ func (h *Handler) UpdateUserDefaultInstances(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(defaults)
+}
+
+// GetUserInstanceGrants returns a user's access-grant rows as a
+// {service_type: [instance_ids]} map (admin-only). Grants are additive to the
+// user's default: they never move it, they widen what the user may select.
+func (h *Handler) GetUserInstanceGrants(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user id"}`, http.StatusBadRequest)
+		return
+	}
+	grants, err := h.store.ListUserGrants(userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if grants == nil {
+		grants = map[string][]string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(grants)
+}
+
+// UpdateUserInstanceGrants replaces a user's access-grant rows per service
+// type (admin-only). Body is a {service_type: [instance_id]|null} map; only
+// the listed service types are touched, and a null/empty list clears that
+// type's grants. Each instance id must exist and match its keyed service
+// type. Returns the updated map.
+func (h *Handler) UpdateUserInstanceGrants(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user id"}`, http.StatusBadRequest)
+		return
+	}
+	var body map[string][]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	// Reject unknown service types up front so a typo never partially applies.
+	for serviceType := range body {
+		if !grantableServiceTypes[serviceType] {
+			http.Error(w, fmt.Sprintf(`{"error":"unknown service_type: %s"}`, serviceType), http.StatusBadRequest)
+			return
+		}
+	}
+	if err := h.store.SetUserGrants(userID, body); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	for serviceType := range body {
+		if IsMediaServerType(serviceType) {
+			h.notifyGrantObserver([]int64{userID})
+			break
+		}
+	}
+	grants, err := h.store.ListUserGrants(userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if grants == nil {
+		grants = map[string][]string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(grants)
 }
 
 // instanceUserPin is one user's per-user default row within a service type,
@@ -478,6 +652,10 @@ func (h *Handler) UpdateInstanceUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
 		return
 	}
+	if IsMediaServerType(serviceType) {
+		http.Error(w, fmt.Sprintf(`{"error":"%s instances have no default; use access grants"}`, serviceType), http.StatusBadRequest)
+		return
+	}
 	var body struct {
 		UserIDs []int64 `json:"user_ids"`
 	}
@@ -491,6 +669,100 @@ func (h *Handler) UpdateInstanceUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeInstanceUsers(w, serviceType)
+}
+
+// instanceUserGrant is one user's access-grant row within a service type, as
+// served by the instance-centric grant endpoints. A user appears once per
+// granted instance.
+type instanceUserGrant struct {
+	UserID     int64  `json:"user_id"`
+	InstanceID string `json:"instance_id"`
+}
+
+// writeInstanceGrants responds with every access-grant row for the service
+// type — not just the addressed instance — so the admin UI can also show
+// which users hold a grant on a sibling instance.
+func (h *Handler) writeInstanceGrants(w http.ResponseWriter, serviceType string) {
+	grants, err := h.store.ListTypeUserGrants(serviceType)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	resp := make([]instanceUserGrant, 0)
+	for userID, instanceIDs := range grants {
+		for _, instanceID := range instanceIDs {
+			resp = append(resp, instanceUserGrant{UserID: userID, InstanceID: instanceID})
+		}
+	}
+	sort.Slice(resp, func(i, j int) bool {
+		if resp[i].UserID != resp[j].UserID {
+			return resp[i].UserID < resp[j].UserID
+		}
+		return resp[i].InstanceID < resp[j].InstanceID
+	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// GetInstanceGrantUsers returns the access-grant rows for the addressed
+// instance's service type (admin-only).
+func (h *Handler) GetInstanceGrantUsers(w http.ResponseWriter, r *http.Request) {
+	instanceID := chi.URLParam(r, "instanceID")
+	serviceType, err := h.store.ServiceTypeOf(instanceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if serviceType == "" {
+		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+		return
+	}
+	h.writeInstanceGrants(w, serviceType)
+}
+
+// UpdateInstanceGrantUsers grants the addressed instance to exactly the posted
+// user ids (admin-only). Users previously granted this instance but absent
+// from the list lose the grant; per-user default pins and grants on sibling
+// instances are untouched. Returns the updated grants for the service type.
+func (h *Handler) UpdateInstanceGrantUsers(w http.ResponseWriter, r *http.Request) {
+	instanceID := chi.URLParam(r, "instanceID")
+	serviceType, err := h.store.ServiceTypeOf(instanceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if serviceType == "" {
+		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+		return
+	}
+	if !grantableServiceTypes[serviceType] {
+		http.Error(w, fmt.Sprintf(`{"error":"service_type %s does not support grants"}`, serviceType), http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		UserIDs []int64 `json:"user_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	// Users losing the grant are known only before the replace-set write.
+	var affected []int64
+	if IsMediaServerType(serviceType) {
+		previous, err := h.store.ListTypeUserGrants(serviceType)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+			return
+		}
+		affected = append(usersGrantedInstance(previous, instanceID), body.UserIDs...)
+	}
+	if err := h.store.SetInstanceGrantUsers(instanceID, body.UserIDs); err != nil {
+		// Covers unknown user ids too (the user_id foreign key rejects them).
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	h.notifyGrantObserver(affected)
+	h.writeInstanceGrants(w, serviceType)
 }
 
 // validateRequiredFields enforces per-service-type required fields.
@@ -512,6 +784,10 @@ func validateRequiredFields(inst *Instance) error {
 		}
 	case "transmission":
 		// Username/password are optional: Transmission RPC may run without auth.
+	case "plex":
+		if inst.APIKey == "" {
+			return fmt.Errorf("link a Plex account first")
+		}
 	default: // radarr, sonarr, chaptarr, sabnzbd, tautulli
 		if inst.APIKey == "" {
 			return fmt.Errorf("name, url, and api_key are required")
@@ -548,6 +824,9 @@ func validateConnection(inst *Instance) error {
 		_, err := tautulli.NewClient(inst.URL, inst.APIKey).GetServerInfo()
 		return err
 	default:
+		if IsMediaServerType(inst.ServiceType) {
+			return validateMediaServerConnection(inst)
+		}
 		return fmt.Errorf("unknown service type: %s", inst.ServiceType)
 	}
 }

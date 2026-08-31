@@ -16,7 +16,7 @@ live service, it belongs in the live-lab or manual layers described in
 
 Cantinarr's integration credentials are not environment variables. Radarr,
 Sonarr, Chaptarr, download clients, Tautulli, TMDB, Trakt, AI provider
-keys, and the Plex account link are all entered through the admin UI at
+keys, and the Plex account link (a Plex instance) are all entered through the admin UI at
 runtime and stored AES-256-GCM encrypted in the SQLite database
 (`service_instances` rows and the settings KV). Environment variables only
 tune boot and deployment (port, public URL, push gateway, passkey
@@ -34,6 +34,10 @@ generated API key or local username/password:
 - Radarr, Sonarr, Chaptarr — local API key from each service's own settings
 - SABnzbd, NZBGet, qBittorrent, Transmission — local key or local credentials
 - Tautulli — local API key (meaningful data needs a Plex server feeding it)
+- Jellyfin — local API key minted under Dashboard > API Keys; the whole
+  integration is server-local, no jellyfin.org account
+- Emby — local API key minted under Settings > Advanced > API Keys; no
+  emby.media account (Emby Connect stays off)
 - Arr Connect webhooks — Cantinarr mints and installs its own per-instance
   tokens
 - Push gateway enrollment — account-free against any reachable gateway
@@ -51,10 +55,11 @@ the suites:
   themoviedb.org account.
 - **Trakt** (optional) — a Trakt account plus a registered app for the
   client ID.
-- **AI provider keys** — Anthropic/OpenAI/Gemini keys are validated with a
-  real model turn at save time, so dummy keys cannot be configured; the
-  Codex provider needs a real ChatGPT account and the pinned app-server
-  binary.
+- **AI provider keys** — Anthropic/OpenAI/Gemini/xAI keys are validated
+  with a real model turn at save time, so dummy keys cannot be configured;
+  the Codex provider needs a real ChatGPT account and the pinned app-server
+  binary, and the xAI Grok OAuth provider needs a real SuperGrok or
+  X Premium+ account.
 - **APNs/FCM delivery** — the push gateway holds the Apple and Google
   credentials; Cantinarr-side enrollment needs none, but a push reaching a
   device is Apple/Google-live.

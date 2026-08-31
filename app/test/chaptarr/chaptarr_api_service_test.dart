@@ -14,6 +14,7 @@ class _FakeAdapter implements HttpClientAdapter {
   final dynamic responseJson;
   String? lastPath;
   Map<String, dynamic> lastQuery = {};
+  RequestOptions? lastRequest;
 
   @override
   Future<ResponseBody> fetch(
@@ -23,6 +24,7 @@ class _FakeAdapter implements HttpClientAdapter {
   ) async {
     lastPath = options.uri.path;
     lastQuery = options.uri.queryParameters;
+    lastRequest = options;
     return ResponseBody.fromString(
       jsonEncode(responseJson),
       200,
@@ -37,12 +39,43 @@ class _FakeAdapter implements HttpClientAdapter {
 }
 
 ChaptarrApiService _service(_FakeAdapter adapter) {
-  final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+  final dio = Dio(BaseOptions(
+    baseUrl: 'http://localhost',
+    connectTimeout: const Duration(seconds: 15),
+    receiveTimeout: const Duration(seconds: 15),
+  ))
     ..httpClientAdapter = adapter;
   return ChaptarrApiService(backendDio: dio, instanceId: 'inst1');
 }
 
 void main() {
+  group('library fetches', () {
+    // Both endpoints return the whole library in one unpaginated response, so
+    // serve time grows with library size; the 15s default made large
+    // libraries permanently unloadable (issue #483). connectTimeout stays the
+    // base default on native: longRequestOptions passes null and
+    // Options.compose falls back to BaseOptions.
+    test('getAuthors uses the long-call receive timeout', () async {
+      final adapter = _FakeAdapter(<dynamic>[]);
+
+      await _service(adapter).getAuthors();
+
+      expect(adapter.lastPath, '/api/instances/inst1/api/v1/author');
+      expect(adapter.lastRequest?.receiveTimeout, const Duration(seconds: 120));
+      expect(adapter.lastRequest?.connectTimeout, const Duration(seconds: 15));
+    });
+
+    test('getBooks uses the long-call receive timeout', () async {
+      final adapter = _FakeAdapter(<dynamic>[]);
+
+      await _service(adapter).getBooks();
+
+      expect(adapter.lastPath, '/api/instances/inst1/api/v1/book');
+      expect(adapter.lastRequest?.receiveTimeout, const Duration(seconds: 120));
+      expect(adapter.lastRequest?.connectTimeout, const Duration(seconds: 15));
+    });
+  });
+
   group('getReleases', () {
     // The exact envelope this Chaptarr fork returns (captured from a live
     // instance): releases live under "releases", with hiddenReleases and
@@ -77,6 +110,10 @@ void main() {
 
       expect(adapter.lastPath, '/api/instances/inst1/api/v1/release');
       expect(adapter.lastQuery['bookId'], '359');
+      // Live indexer queries take 10-60s; the long-call options keep web from
+      // aborting at the base connect timeout before the first byte arrives.
+      expect(adapter.lastRequest?.receiveTimeout, const Duration(seconds: 120));
+      expect(adapter.lastRequest?.connectTimeout, const Duration(seconds: 15));
       expect(releases, hasLength(1));
       expect(releases.first.guid,
           'https://audiobookbay.lu/abss/dark-force-rising/');

@@ -373,21 +373,21 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "get_queue":
 		return s.getQueue(input, callCtx.InstanceID)
 	case "get_calendar":
-		return s.getCalendar(input)
+		return s.getCalendar(input, callCtx.InstanceID)
 	case "get_library":
 		return s.getLibrary(input, callCtx.InstanceID)
 	case "get_history":
 		return s.getHistory(input, callCtx.InstanceID)
 	case "trigger_search":
-		return s.triggerSearch(input)
+		return s.triggerSearch(input, callCtx.InstanceID)
 	case "search_releases":
 		return s.searchReleases(input, callCtx.InstanceID)
 	case "grab_release":
 		return s.grabRelease(input, callCtx.InstanceID)
 	case "remove_queue_item":
-		return s.removeQueueItem(input)
+		return s.removeQueueItem(input, callCtx.InstanceID)
 	case "get_disk_space":
-		return s.getDiskSpace()
+		return s.getDiskSpace(input, callCtx.InstanceID)
 	case "get_arr_health":
 		return s.getArrHealth(input, callCtx.InstanceID)
 	case "diagnose_queue":
@@ -403,11 +403,11 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "get_manual_import_candidates":
 		return s.getManualImportCandidates(input, callCtx.InstanceID)
 	case "execute_manual_import":
-		return s.executeManualImport(input)
+		return s.executeManualImport(input, callCtx.InstanceID)
 	case "remediate_queue_item":
-		return s.remediateQueueItem(input)
+		return s.remediateQueueItem(input, callCtx.InstanceID)
 	case "rescan_media":
-		return s.rescanMedia(input)
+		return s.rescanMedia(input, callCtx.InstanceID)
 	case "list_arr_instances":
 		return s.listArrInstances(input)
 	case "get_quality_profiles":

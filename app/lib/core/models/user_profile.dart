@@ -15,8 +15,8 @@ class UserProfile {
   final bool passkeyEnabled;
 
   /// The email this user shared for their Plex server invite. Empty until
-  /// they submit one (from the Watch on Plex guide). [plexInvitedAt] is set
-  /// once Cantinarr sent their invite (one-tap or auto).
+  /// they submit one (from the access guide). [plexInvitedAt] is when their
+  /// invite went out, derived by the server from their live Plex share.
   final String plexEmail;
   final String? plexInvitedAt;
 

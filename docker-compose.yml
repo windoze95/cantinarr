@@ -1,7 +1,7 @@
 services:
   cantinarr:
     # The published image carries a stamped build version, which is what the
-    # admin update banner compares against releases — `docker compose pull`
+    # server's update check compares against releases — `docker compose pull`
     # is the update path. To build from this checkout instead, layer
     # docker-compose.dev.yml on top (see that file).
     image: ghcr.io/windoze95/cantinarr:latest

@@ -12,11 +12,27 @@ class RequestState {
   /// in the library). Drives the interactive season table.
   final List<RequestSeasonStatus> seasons;
 
+  /// Theatrical/digital release dates for a movie already in the library, so
+  /// the detail screen can say a title is not out yet rather than leaving a
+  /// "Requested" badge looking like a stalled download.
+  ///
+  /// Never null — an absent payload is [MovieReleaseDates.none] — so a refetch
+  /// that no longer carries dates overwrites the old ones through [copyWith]
+  /// instead of leaving them stranded.
+  final MovieReleaseDates releases;
+
+  /// Per-granted-library status chips, keyed by instance id. Empty unless the
+  /// user holds more than one granted library for this media type — the
+  /// server omits the map for everyone else.
+  final Map<String, RequestStatus> instanceStatuses;
+
   const RequestState({
     this.status = RequestStatus.unavailable,
     this.isRequesting = false,
     this.error,
     this.seasons = const [],
+    this.releases = MovieReleaseDates.none,
+    this.instanceStatuses = const {},
   });
 
   RequestState copyWith({
@@ -24,12 +40,16 @@ class RequestState {
     bool? isRequesting,
     String? error,
     List<RequestSeasonStatus>? seasons,
+    MovieReleaseDates? releases,
+    Map<String, RequestStatus>? instanceStatuses,
   }) =>
       RequestState(
         status: status ?? this.status,
         isRequesting: isRequesting ?? this.isRequesting,
         error: error,
         seasons: seasons ?? this.seasons,
+        releases: releases ?? this.releases,
+        instanceStatuses: instanceStatuses ?? this.instanceStatuses,
       );
 }
 
@@ -46,6 +66,12 @@ class RequestNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The library this screen currently reads and requests against; null means
+  /// the user's default. Set by the detail screen when the user picks a
+  /// library chip or a Library option on the request sheet, so every
+  /// subsequent status check and submit follows the same selection.
+  String? instanceId;
+
   RequestNotifier({
     required RequestService service,
     required int tmdbId,
@@ -58,15 +84,26 @@ class RequestNotifier extends ChangeNotifier {
   /// for TV titles.
   Future<void> checkStatus() async {
     try {
-      final detail = await _service.checkStatusDetail(_tmdbId, _mediaType);
-      state = state.copyWith(status: detail.status, seasons: detail.seasons);
+      final detail = await _service.checkStatusDetail(
+        _tmdbId,
+        _mediaType,
+        instanceId: instanceId,
+      );
+      state = state.copyWith(
+        status: detail.status,
+        seasons: detail.seasons,
+        releases: detail.releases,
+        instanceStatuses: detail.instanceStatuses,
+      );
     } catch (e) {
       state = state.copyWith(error: 'Could not check status');
     }
   }
 
-  /// Fetch the option set the current user may choose for this item.
-  Future<RequestOptions?> fetchOptions() => _service.fetchOptions(_mediaType);
+  /// Fetch the option set the current user may choose for this item, scoped
+  /// to [libraryId] (defaults to the current selection).
+  Future<RequestOptions?> fetchOptions({String? libraryId}) =>
+      _service.fetchOptions(_mediaType, instanceId: libraryId ?? instanceId);
 
   /// Submit the request, optionally with chosen season scope / quality. The
   /// resulting status (which may be [RequestStatus.pending]) is reflected in
@@ -89,6 +126,7 @@ class RequestNotifier extends ChangeNotifier {
       seasonScope: seasonScope,
       seasons: seasons,
       qualityProfileId: qualityProfileId,
+      instanceId: instanceId,
     );
 
     if (status != null) {

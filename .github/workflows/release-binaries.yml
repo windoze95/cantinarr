@@ -1,0 +1,192 @@
+name: Attach Release Binaries
+
+# Native installs (the Proxmox VE Helper-Scripts LXC, bare-metal admins) need
+# the server as a plain binary, not an image. Rather than run a second,
+# subtly-different build, this extracts /usr/local/bin/cantinarr and the
+# pinned codex-app-server out of the same Dockerfile build the tag already
+# shipped — the buildx cache (scope=published) makes that a cache-hit
+# reassembly, so the tarballs are bit-for-bit the binaries inside the
+# published images.
+#
+# Runs on every v* tag push, and by hand for a tag that predates this file:
+# dispatch it from main with the tag name as input. Dispatch runs this file
+# from main but builds the tag's own source.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to build and attach binaries to"
+        type: string
+        required: true
+
+concurrency:
+  group: release-binaries-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      sha: ${{ steps.pick.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve target tag and commit
+        id: pick
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          case "$tag" in v*) ;; *) echo "::error::'$tag' is not a v* tag"; exit 1 ;; esac
+          sha=$(git rev-parse "refs/tags/${tag}^{commit}")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  # Same rule as every shipping workflow: nothing is attached to a Release
+  # until CI is green on the exact commit being shipped.
+  gate:
+    needs: [resolve]
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/require-ci-green.yml
+    with:
+      sha: ${{ needs.resolve.outputs.sha }}
+
+  binaries:
+    needs: [resolve, gate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tag source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          # Full history: the web build number is a commit count and the
+          # version comes from git describe, exactly as in docker.yml.
+          fetch-depth: 0
+
+      - name: Derive web build number
+        id: app_build
+        run: |
+          echo "number=$(git rev-list --count HEAD -- app)" >> "$GITHUB_OUTPUT"
+
+      - name: Derive build version
+        id: version
+        run: |
+          echo "version=$(git describe --tags --always --match 'v[0-9]*')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: cantinarr-binaries-amd64:${{ needs.resolve.outputs.sha }}
+          cache-from: type=gha,scope=published
+
+      - name: Build arm64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: cantinarr-binaries-arm64:${{ needs.resolve.outputs.sha }}
+          cache-from: type=gha,scope=published
+
+      - name: Extract binaries and package tarballs
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            stage="dist/cantinarr-linux-${arch}"
+            mkdir -p "$stage/licenses/codex-app-server"
+            cid=$(docker create --platform "linux/${arch}" "cantinarr-binaries-${arch}:${SHA}")
+            docker cp "$cid:/usr/local/bin/cantinarr" "$stage/cantinarr"
+            docker cp "$cid:/usr/local/bin/codex-app-server" "$stage/codex-app-server"
+            docker cp "$cid:/usr/share/licenses/codex-app-server/LICENSE" "$stage/licenses/codex-app-server/LICENSE"
+            docker cp "$cid:/usr/share/licenses/codex-app-server/NOTICE" "$stage/licenses/codex-app-server/NOTICE"
+            docker rm "$cid" >/dev/null
+            cp LICENSE "$stage/LICENSE"
+            chmod 0755 "$stage/cantinarr" "$stage/codex-app-server"
+            printf '%s\n' \
+              "Cantinarr server, linux/${arch}. The web app is embedded in the binary." \
+              "" \
+              "Quick start:" \
+              "  install -m 0755 cantinarr codex-app-server /usr/local/bin/" \
+              "  mkdir -p /config   # database + generated encryption key live here" \
+              "  cantinarr" \
+              "" \
+              "Listens on 8585 (CANTINARR_PORT overrides). codex-app-server is the" \
+              "optional ChatGPT-subscription runtime Cantinarr spawns from PATH." \
+              > "$stage/INSTALL.txt"
+            tar -czf "dist/cantinarr-linux-${arch}.tar.gz" --owner=0 --group=0 -C "$stage" .
+            (cd dist && sha256sum "cantinarr-linux-${arch}.tar.gz" > "cantinarr-linux-${arch}.tar.gz.sha256")
+          done
+          ls -la dist/*.tar.gz*
+
+      - name: Smoke test the amd64 binary
+        # The tarball must be self-sufficient on a plain filesystem: no image,
+        # no entrypoint, just /config and the binary serving its embedded web
+        # bundle. debian:stable-slim rather than scratch so the shell exists.
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/binsmoke
+          tar -xzf dist/cantinarr-linux-amd64.tar.gz -C /tmp/binsmoke
+          docker run --rm -d --name cantinarr-bin-smoke \
+            -v /tmp/binsmoke:/pkg:ro -p 18585:8585 \
+            debian:stable-slim sh -ec 'mkdir -p /config && exec /pkg/cantinarr'
+          ok=""
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:18585/api/health >/dev/null && { ok=1; break; }
+            sleep 1
+          done
+          [ -n "$ok" ] || { docker logs cantinarr-bin-smoke; docker rm -f cantinarr-bin-smoke; exit 1; }
+          curl -sf http://localhost:18585/version.json
+          docker rm -f cantinarr-bin-smoke
+
+      - name: Upload assets to the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # On a tag push this workflow races docker.yml, whose release job
+          # owns creating the Release (after the images publish). Wait for it
+          # rather than create a second owner; --clobber keeps re-runs safe.
+          for attempt in $(seq 1 30); do
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release upload "$TAG" dist/cantinarr-linux-*.tar.gz dist/cantinarr-linux-*.tar.gz.sha256 \
+                --clobber --repo "$GITHUB_REPOSITORY"
+              exit 0
+            fi
+            echo "Release $TAG not created yet (attempt ${attempt}/30); waiting 60s."
+            sleep 60
+          done
+          echo "::error::Release $TAG never appeared; docker.yml's release job owns creating it."
+          exit 1

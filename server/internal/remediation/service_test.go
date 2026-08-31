@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -65,6 +66,14 @@ func setupTestService(t *testing.T) (*Service, *fakeNotifier, int64) {
 		if err := store.Create(inst); err != nil {
 			t.Fatalf("create %s test instance: %v", inst.ServiceType, err)
 		}
+	}
+	// Reports are scoped to libraries the reporter can see; grant them every
+	// fixture instance so tests exercise reporting itself, not access.
+	if err := store.SetUserGrants(reporterID, map[string][]string{
+		"radarr": {testRadarrInstanceID, testRadarrInstanceID2},
+		"sonarr": {testSonarrInstanceID},
+	}); err != nil {
+		t.Fatalf("grant fixture instances: %v", err)
 	}
 	notif := &fakeNotifier{}
 	return NewService(database, instance.NewRegistry(store), nil, notif), notif, reporterID
@@ -320,7 +329,9 @@ func TestMovieIssueScopeNormalized(t *testing.T) {
 }
 
 // TestCreateUserIssueValidation rejects an unsupported media type and an unknown
-// category before any row is written.
+// category before any row is written; a non-admin's instance errors speak
+// requester vocabulary (no existence oracle), while an admin keeps the
+// precise diagnostics — the same shape request routing uses.
 func TestCreateUserIssueValidation(t *testing.T) {
 	svc, _, reporterID := setupTestService(t)
 
@@ -333,14 +344,40 @@ func TestCreateUserIssueValidation(t *testing.T) {
 	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{MediaType: "movie", TmdbID: 1, Category: CategoryOther}); err == nil || !strings.Contains(err.Error(), "instance_id is required") {
 		t.Fatalf("missing instance_id error = %v", err)
 	}
-	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: "missing", MediaType: "movie", TmdbID: 1, Category: CategoryOther}); err == nil || !strings.Contains(err.Error(), "instance not found") {
-		t.Fatalf("unknown instance_id error = %v", err)
+	// A non-admin's unknown or wrong-type instance reads as forbidden — the
+	// message must not confirm what exists outside their visible set.
+	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: "missing", MediaType: "movie", TmdbID: 1, Category: CategoryOther}); !errors.Is(err, ErrInstanceForbidden) {
+		t.Fatalf("unknown instance_id error = %v, want ErrInstanceForbidden", err)
 	}
-	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testSonarrInstanceID, MediaType: "movie", TmdbID: 1, Category: CategoryOther}); err == nil || !strings.Contains(err.Error(), "not a radarr") {
-		t.Fatalf("movie report with Sonarr instance error = %v", err)
+	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testSonarrInstanceID, MediaType: "movie", TmdbID: 1, Category: CategoryOther}); !errors.Is(err, ErrInstanceForbidden) {
+		t.Fatalf("movie report with Sonarr instance error = %v, want ErrInstanceForbidden", err)
 	}
-	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "tv", TmdbID: 1, Category: CategoryOther}); err == nil || !strings.Contains(err.Error(), "not a sonarr") {
-		t.Fatalf("TV report with Radarr instance error = %v", err)
+	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "tv", TmdbID: 1, Category: CategoryOther}); !errors.Is(err, ErrInstanceForbidden) {
+		t.Fatalf("TV report with Radarr instance error = %v, want ErrInstanceForbidden", err)
+	}
+	// A rowless user sees only the default-chain library; a sibling is
+	// forbidden even though it exists.
+	rowless := seedUser(t, svc.db, "rowless")
+	if _, err := svc.CreateUserIssue(rowless, &CreateIssueRequest{InstanceID: testRadarrInstanceID2, MediaType: "movie", TmdbID: 1, Category: CategoryOther}); !errors.Is(err, ErrInstanceForbidden) {
+		t.Fatalf("ungranted sibling report error = %v, want ErrInstanceForbidden", err)
+	}
+	if _, err := svc.CreateUserIssue(rowless, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "movie", TmdbID: 1, Category: CategoryOther}); err != nil {
+		t.Fatalf("default-library report should pass access: %v", err)
+	}
+
+	// Admins bypass the access check and keep the precise diagnostics.
+	adminID := seedUser(t, svc.db, "boss")
+	if _, err := svc.db.Exec("UPDATE users SET role = 'admin' WHERE id = ?", adminID); err != nil {
+		t.Fatalf("promote admin: %v", err)
+	}
+	if _, err := svc.CreateUserIssue(adminID, &CreateIssueRequest{InstanceID: "missing", MediaType: "movie", TmdbID: 1, Category: CategoryOther}); err == nil || !strings.Contains(err.Error(), "instance not found") {
+		t.Fatalf("admin unknown instance_id error = %v", err)
+	}
+	if _, err := svc.CreateUserIssue(adminID, &CreateIssueRequest{InstanceID: testSonarrInstanceID, MediaType: "movie", TmdbID: 1, Category: CategoryOther}); err == nil || !strings.Contains(err.Error(), "not a radarr") {
+		t.Fatalf("admin movie report with Sonarr instance error = %v", err)
+	}
+	if _, err := svc.CreateUserIssue(adminID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "tv", TmdbID: 1, Category: CategoryOther}); err == nil || !strings.Contains(err.Error(), "not a sonarr") {
+		t.Fatalf("admin TV report with Radarr instance error = %v", err)
 	}
 }
 

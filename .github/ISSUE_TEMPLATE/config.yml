@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and setup help
+    url: https://discord.gg/zAgRwGwmVB
+    about: Ask in the Cantinarr Discord. Bugs still belong here as issues.
+  - name: Feature requests
+    url: https://cantinarr.com/roadmap/
+    about: Post and vote on the public roadmap, no account needed.

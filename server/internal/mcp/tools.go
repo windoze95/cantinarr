@@ -165,6 +165,10 @@ var toolDefinitions = []Tool{
 					"type":        "string",
 					"description": "Book only: the foreign_book_id from search_books",
 				},
+				"instance_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional library instance to read (movie/tv: an id from get_request_options' libraries; book: a Chaptarr instance id). Omit for the user's default library.",
+				},
 			},
 			"required": []string{"media_type"},
 		},
@@ -172,7 +176,7 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "get_request_options",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Show whether the current user may choose request options and list the quality profiles available for a movie, TV, or book request",
+		Description: "Show whether the current user may choose request options and list the quality profiles available for a movie, TV, or book request. When the user holds more than one library for the media type, the response also lists their libraries (id, name, is_default) for request_media's instance_id.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -180,6 +184,10 @@ var toolDefinitions = []Tool{
 					"type":        "string",
 					"enum":        []string{"movie", "tv", "book"},
 					"description": "Whether the planned request is a movie, TV show, or book",
+				},
+				"instance_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional library instance whose quality profiles to list (profiles belong to a library; a sibling's ids are meaningless). Omit for the user's default library.",
 				},
 			},
 			"required": []string{"media_type"},
@@ -219,6 +227,10 @@ var toolDefinitions = []Tool{
 					"minimum":     1,
 					"description": "Optional Radarr/Sonarr quality profile ID (movie/tv only). Honored only when the requester is allowed to choose quality; otherwise their configured default is used.",
 				},
+				"instance_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional library instance to request on, from get_request_options' libraries — e.g. an HD vs 4K split. Only libraries granted to the user are accepted. Omit for their default library.",
+				},
 			},
 			"required": []string{"media_type"},
 		},
@@ -235,7 +247,7 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "display_media",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Display specific movies, TV shows, or books in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Prefer TMDB IDs (movies/TV) or foreign_book_ids (books) copied from prior tool results; if you only have exact title/year values for a movie/show, omit tmdb_id and the server will resolve and verify them.",
+		Description: "Display specific movies, TV shows, or books in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Call it before or while writing your prose so the results appear early, never repeat an already-written list afterwards, and never mention the carousel or its position in your reply. Prefer TMDB IDs (movies/TV) or foreign_book_ids (books) copied from prior tool results; if you only have exact title/year values for a movie/show, omit tmdb_id and the server will resolve and verify them.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -681,9 +693,10 @@ func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResu
 
 func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
-		TmdbID    int    `json:"tmdb_id"`
-		MediaType string `json:"media_type"`
-		ForeignID string `json:"foreign_id"`
+		TmdbID     int    `json:"tmdb_id"`
+		MediaType  string `json:"media_type"`
+		ForeignID  string `json:"foreign_id"`
+		InstanceID string `json:"instance_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -692,7 +705,7 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 		if strings.TrimSpace(params.ForeignID) == "" {
 			return &ToolResult{Text: "A book status check requires the foreign_id from search_books."}, nil
 		}
-		status, err := s.request.GetUserBookStatus(userID, params.ForeignID)
+		status, err := s.request.GetUserBookStatusForInstance(userID, params.ForeignID, params.InstanceID)
 		if err != nil {
 			return nil, err
 		}
@@ -702,7 +715,10 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 	if params.TmdbID <= 0 {
 		return &ToolResult{Text: "A movie/TV status check requires the tmdb_id from search results."}, nil
 	}
-	status, err := s.request.GetUserStatus(userID, params.TmdbID, params.MediaType)
+	// The selection is authorized by the request service; when the user holds
+	// more than one library the response's instance_statuses map carries each
+	// library's own state.
+	status, err := s.request.GetUserStatus(userID, params.TmdbID, params.MediaType, params.InstanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -712,7 +728,8 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 
 func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role string) (*ToolResult, error) {
 	var params struct {
-		MediaType string `json:"media_type"`
+		MediaType  string `json:"media_type"`
+		InstanceID string `json:"instance_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -720,12 +737,75 @@ func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role
 	if params.MediaType != "movie" && params.MediaType != "tv" && params.MediaType != "book" {
 		return &ToolResult{Text: "Request options require media_type movie, tv, or book."}, nil
 	}
-	opts, err := s.request.GetRequestOptions(userID, auth.HasPermission(role, auth.PermissionAdmin), params.MediaType)
+	opts, err := s.request.GetRequestOptions(userID, auth.HasPermission(role, auth.PermissionAdmin), params.MediaType, params.InstanceID)
 	if err != nil {
 		return nil, err
 	}
-	data, _ := json.Marshal(opts)
+	// When the caller holds more than one library for the media type, list
+	// them (id, name, is_default — names only, never hosts) so the model can
+	// route request_media's instance_id. Single-library users get exactly the
+	// old payload.
+	data, _ := json.Marshal(struct {
+		*request.RequestOptions
+		Libraries []toolLibrary `json:"libraries,omitempty"`
+	}{opts, s.visibleLibraries(userID, params.MediaType)})
 	return &ToolResult{Text: string(data)}, nil
+}
+
+// toolLibrary is one library a requester may aim a request at, as listed in
+// get_request_options' response.
+type toolLibrary struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IsDefault bool   `json:"is_default"`
+}
+
+// visibleLibraries returns the caller's visible libraries for a media type
+// when they hold more than one, or nil (single-library callers keep the
+// pre-libraries payload byte for byte).
+func (s *ToolServer) visibleLibraries(userID int64, mediaType string) []toolLibrary {
+	if s.registry == nil {
+		return nil
+	}
+	serviceType := ""
+	switch mediaType {
+	case "movie":
+		serviceType = "radarr"
+	case "tv":
+		serviceType = "sonarr"
+	case "book":
+		serviceType = "chaptarr"
+	default:
+		return nil
+	}
+	visible, err := s.registry.VisibleInstanceIDs(userID, serviceType)
+	if err != nil || len(visible) < 2 {
+		return nil
+	}
+	summaries, err := s.registry.ListInstanceSummaries(serviceType)
+	if err != nil {
+		return nil
+	}
+	defaultID, err := s.registry.EffectiveDefaultInstanceID(userID, serviceType)
+	if err != nil {
+		return nil
+	}
+	names := make(map[string]string, len(summaries))
+	for _, summary := range summaries {
+		names[summary.ID] = summary.Name
+	}
+	libraries := make([]toolLibrary, 0, len(visible))
+	for _, id := range visible {
+		name, ok := names[id]
+		if !ok {
+			continue
+		}
+		libraries = append(libraries, toolLibrary{ID: id, Name: name, IsDefault: id == defaultID})
+	}
+	if len(libraries) < 2 {
+		return nil
+	}
+	return libraries
 }
 
 func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
@@ -736,6 +816,7 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 		BookFormat       string `json:"book_format"`
 		Title            string `json:"title"`
 		QualityProfileID int    `json:"quality_profile_id"`
+		InstanceID       string `json:"instance_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -746,6 +827,8 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	if params.MediaType != "book" && params.TmdbID <= 0 {
 		return &ToolResult{Text: "A movie/TV request requires the tmdb_id from search results."}, nil
 	}
+	// The request service authorizes the selection; a library outside the
+	// user's granted set comes back as the benign "Request failed" text.
 	resp, err := s.request.CreateMediaRequest(userID, &request.CreateRequest{
 		TmdbID:           params.TmdbID,
 		MediaType:        params.MediaType,
@@ -753,6 +836,7 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 		BookFormat:       params.BookFormat,
 		Title:            params.Title,
 		QualityProfileID: params.QualityProfileID,
+		InstanceID:       params.InstanceID,
 	})
 	if err != nil {
 		return &ToolResult{Text: fmt.Sprintf("Request failed: %s", err.Error())}, nil
@@ -936,7 +1020,7 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Displaying %d media item(s) in the carousel.", len(items))
+	fmt.Fprintf(&sb, "Displaying %d media item(s). The app renders them itself; never mention the carousel or where it appears in your reply.", len(items))
 	if len(failures) > 0 {
 		fmt.Fprintf(&sb, " Rejected or failed %d item(s): %s. If the user expects these items, call display_media again with exact titles, years, media types, and TMDB IDs from search/tool results when available.", len(failures), strings.Join(failures, "; "))
 	}

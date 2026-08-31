@@ -109,4 +109,30 @@ void main() {
       '/…',
     );
   });
+
+  test('media-server routes keep their scope and drop every id', () {
+    // A user's own account route: the instance id is dynamic.
+    expect(
+      SafeHttpLogInterceptor.sanitizedPath(Uri.parse(
+        'https://example.test/api/media-servers/instance-secret/account'
+        '?password=query-secret',
+      )),
+      '/api/media-servers/…',
+    );
+    // The admin listing of a server's remote accounts.
+    expect(
+      SafeHttpLogInterceptor.sanitizedPath(Uri.parse(
+        'https://example.test/api/admin/media-servers/instance-secret/users',
+      )),
+      '/api/admin/media-servers/…',
+    );
+    // The per-user link route lives under users, so the ids past it vanish.
+    expect(
+      SafeHttpLogInterceptor.sanitizedPath(Uri.parse(
+        'https://example.test/api/admin/users/7/media-servers/instance-secret'
+        '/account',
+      )),
+      '/api/admin/users/…',
+    );
+  });
 }

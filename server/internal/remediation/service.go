@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -144,6 +145,21 @@ func validCategory(c string) bool {
 	return false
 }
 
+// ErrInstanceForbidden refuses a report against a library the reporter
+// cannot see. Requester vocabulary, host-free — the string reaches
+// non-admins.
+var ErrInstanceForbidden = errors.New("that library is not available to you")
+
+// reporterIsAdmin mirrors request.Service.userIsAdmin: role lookup, failing
+// closed to non-admin on any error.
+func (s *Service) reporterIsAdmin(userID int64) bool {
+	var role string
+	if err := s.db.QueryRow("SELECT role FROM users WHERE id = ?", userID).Scan(&role); err != nil {
+		return false
+	}
+	return role == "admin"
+}
+
 // CreateUserIssue records a user-reported problem. It validates the media type
 // and category, dedupes a duplicate open report from the same reporter+scope+
 // category (bumping occurrences rather than inserting a second row), inserts
@@ -162,6 +178,21 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	}
 	if s.registry == nil {
 		return nil, fmt.Errorf("instance registry unavailable")
+	}
+	// A report is scoped to a library the reporter can actually see. The app
+	// only offers those, so this guards hand-crafted requests — checked
+	// metadata-only (no credential decrypt) before any client construction,
+	// with the same visible-set rule request routing enforces. Admins may
+	// report against any configured instance.
+	if !s.reporterIsAdmin(reporterID) {
+		serviceType := map[string]string{"movie": "radarr", "tv": "sonarr", "book": "chaptarr"}[req.MediaType]
+		allowed, err := s.registry.UserCanAccessInstance(reporterID, instanceID, serviceType)
+		if err != nil {
+			return nil, fmt.Errorf("check %s access: %w", serviceType, err)
+		}
+		if !allowed {
+			return nil, ErrInstanceForbidden
+		}
 	}
 	var chaptarrClient *chaptarr.Client
 	var instanceErr error

@@ -304,7 +304,15 @@ BookSearchIdentity resolveBookSearchIdentity({
     // Only surface books the user actually has or is monitoring — not empty
     // library shells (all-missing, unmonitored duplicate records).
     if (!owned.ownership.anyOwned && owned.statusKnown) continue;
-    if (!titleMatchesQuery(query, owned.title)) continue;
+    // The author name matches too: Chaptarr's metadata search routinely
+    // returns nothing for a complete author name (verified live — "madeline
+    // miller" answers empty while "madeline mill" finds her), and when the
+    // lookup whiffs entirely there are no rows to bind, so the requester's own
+    // copies of that author's books would vanish from their own search.
+    if (!titleMatchesQuery(query, owned.title) &&
+        !titleMatchesQuery(query, owned.author)) {
+      continue;
+    }
     libraryRows.add(owned);
   }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,6 +13,11 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
+
+// toolBudgetRefusal answers every dynamic tool call past the per-turn budget.
+// The turn stays alive so the model can follow the instruction; tests match
+// this text to tell budget refusals apart from ordinary tool failures.
+const toolBudgetRefusal = "Tool call limit reached for this question. Do not call more tools. Answer the user now using only the information already gathered, and say what you could not check."
 
 type callbackSink struct {
 	mu      sync.Mutex
@@ -359,8 +365,10 @@ func (m *Manager) runWithAccount(
 	toolCalls := 0
 	seenCallIDs := make(map[string]struct{})
 	turnReady := make(chan struct{})
+	runDeadline, hasRunDeadline := runCtx.Deadline()
 	limitHit := make(chan struct{})
 	var limitOnce sync.Once
+	var softLimitOnce sync.Once
 	toolCaptured := make(chan struct{})
 	var capturedOnce sync.Once
 	outputLimitHit := make(chan struct{})
@@ -394,9 +402,22 @@ func (m *Manager) runWithAccount(
 			case <-time.After(50 * time.Millisecond):
 			}
 		}
-		if count > maxDynamicToolCalls {
-			limitOnce.Do(func() { close(limitHit) })
-			return dynamicToolResponse("Tool call limit reached.", false), nil
+		if count > maxDynamicToolCalls+dynamicToolCallGrace {
+			// Every grace refusal was ignored; the turn is unrecoverable.
+			limitOnce.Do(func() {
+				log.Printf("codexapp: aborting turn after %d dynamic tool calls (budget %d, grace %d)", count, maxDynamicToolCalls, dynamicToolCallGrace)
+				close(limitHit)
+			})
+			return dynamicToolResponse(toolBudgetRefusal, false), nil
+		}
+		if count > maxDynamicToolCalls || (hasRunDeadline && time.Until(runDeadline) < toolBudgetTimeReserve) {
+			// Budget or run deadline nearly spent: refuse the call but keep the
+			// turn alive so the model answers from what it already gathered,
+			// mirroring the forced-text final iteration of the HTTP providers.
+			softLimitOnce.Do(func() {
+				log.Printf("codexapp: dynamic tool budget spent (call %d, budget %d); steering model to answer from gathered data", count, maxDynamicToolCalls)
+			})
+			return dynamicToolResponse(toolBudgetRefusal, false), nil
 		}
 		if currentThread == "" || call.ThreadID != currentThread || currentTurn == "" || call.TurnID != currentTurn || !allowed[call.Tool] {
 			return dynamicToolResponse("This tool is not available.", false), nil
@@ -671,7 +692,7 @@ func (m *Manager) runWithAccount(
 			return runCtx.Err()
 		case <-limitHit:
 			interruptTurn(session, threadStart.Thread.ID, turnStart.Turn.ID)
-			return ErrProvider
+			return ErrToolBudget
 		case <-authorizationLost:
 			return mcp.ErrToolAuthorization
 		case <-toolCaptured:
@@ -679,6 +700,7 @@ func (m *Manager) runWithAccount(
 		case <-outputLimitHit:
 			return waitForInterruptedTurn()
 		case <-session.processDone:
+			log.Printf("codexapp: app-server exited mid-turn: %v", session.exitError())
 			return ErrProvider
 		case notification := <-session.notifications:
 			completed, err := handleNotification(notification, false)
@@ -776,6 +798,7 @@ func interruptTurn(session *appSession, threadID, turnID string) {
 
 func safeTurnError(complete turnCompleteParams) error {
 	if complete.Turn.Error == nil {
+		log.Printf("codexapp: turn ended with status %q and no error detail", complete.Turn.Status)
 		return ErrProvider
 	}
 	info := string(complete.Turn.Error.CodexErrorInfo)
@@ -785,6 +808,9 @@ func safeTurnError(complete turnCompleteParams) error {
 	case strings.Contains(info, "unauthorized"):
 		return ErrNotConnected
 	default:
+		// The raw upstream detail was already logged (and collapsed) by
+		// compactTurnError; info is the compacted classification.
+		log.Printf("codexapp: turn ended with status %q error=%s", complete.Turn.Status, boundedLogText(info))
 		return ErrProvider
 	}
 }

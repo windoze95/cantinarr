@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"io"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -115,10 +116,16 @@ func (h *Handler) proxyRequest(w http.ResponseWriter, r *http.Request, target *u
 			remapUpstreamRedirect(resp, target, stripPrefix)
 			return sanitizeProxyTransportResponse(resp)
 		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			// ModifyResponse errors are intentionally opaque: an upstream parse
 			// error must never reflect the response body (and any embedded secret)
-			// back to the client or into the default ReverseProxy error log.
+			// back to the client or into the default ReverseProxy error log. Known
+			// sanitizer sentinels carry no upstream content, so those (and only
+			// those) are logged — a rejection like the size cap was previously
+			// indistinguishable from any other 502 (#483).
+			if reason := sanitizeFailureReason(err); reason != "" {
+				log.Printf("instance proxy: %s %s: %s", r.Method, r.URL.Path, reason)
+			}
 			sanitizeResponseHeaders(w.Header())
 			w.Header().Set("Content-Type", "application/json")
 			enforcePrivateProxyCachePolicy(w.Header())

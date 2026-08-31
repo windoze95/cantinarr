@@ -17,8 +17,8 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
+	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
-	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
@@ -53,8 +53,7 @@ func NewRouter(
 	toolServer *mcp.ToolServer,
 	pushHandler *push.Handler,
 	webhookHandler *webhooks.Handler,
-	plexHandler *plex.Handler,
-	plexService *plex.Service,
+	mediaAccessHandler *mediaaccess.Handler,
 	updateChecker *update.Checker,
 	serverSettings *serversettings.Service,
 ) http.Handler {
@@ -73,12 +72,20 @@ func NewRouter(
 	r.Get("/.well-known/openid-configuration", oauthHandler.AuthorizationServerMetadata)
 	r.Get("/.well-known/apple-app-site-association", appleAppSiteAssociationHandler(cfg))
 	r.Get("/.well-known/assetlinks.json", androidAssetLinksHandler(cfg))
-	r.Post("/oauth/register", oauthHandler.RegisterClient)
+	// Rate limiter for the unauthenticated OAuth endpoints, matching the
+	// /api/auth posture. POST /oauth/authorize accepts a password, so leaving
+	// it unlimited would hand brute-forcers a second, uncapped login form; the
+	// register/token/passkey endpoints share the budget so unauthenticated
+	// callers cannot spam client registrations or grind at grants either. The
+	// metadata endpoints above and the GET authorize form stay unlimited —
+	// they attempt no credential and MCP client discovery depends on them.
+	oauthLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+	r.With(oauthLimiter.Middleware).Post("/oauth/register", oauthHandler.RegisterClient)
 	r.Get("/oauth/authorize", oauthHandler.Authorize)
-	r.Post("/oauth/authorize", oauthHandler.Authorize)
-	r.Post("/oauth/passkey/login/begin", oauthHandler.BeginOAuthPasskeyLogin)
-	r.Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
-	r.Post("/oauth/token", oauthHandler.Token)
+	r.With(oauthLimiter.Middleware).Post("/oauth/authorize", oauthHandler.Authorize)
+	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/begin", oauthHandler.BeginOAuthPasskeyLogin)
+	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
+	r.With(oauthLimiter.Middleware).Post("/oauth/token", oauthHandler.Token)
 	r.Get("/passkeys/setup", oauthHandler.PasskeySetup)
 	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
 
@@ -115,9 +122,10 @@ func NewRouter(
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
 		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)
-		// Keep authenticated ChatGPT device-flow churn from consuming the public
-		// password/passkey budget for everyone behind the same household proxy.
-		codexLoginLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+		// Keep authenticated ChatGPT/xAI device-flow churn from consuming the
+		// public password/passkey budget for everyone behind the same household
+		// proxy. Both OAuth providers share this begin-login budget.
+		oauthLoginLimiter := auth.NewRateLimiter(10, 1*time.Minute)
 
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
@@ -146,6 +154,9 @@ func NewRouter(
 				r.Post("/passkey/setup-link", authHandler.CreatePasskeySetupLink)
 				r.Get("/passkeys", authHandler.ListPasskeys)
 				r.Delete("/passkeys/{credentialID}", authHandler.DeletePasskey)
+
+				// Sign out: revoke the calling device's own session.
+				r.Post("/logout", authHandler.HandleLogout)
 			})
 		})
 
@@ -153,6 +164,10 @@ func NewRouter(
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/connect-token", authHandler.HandleCreateConnectToken)
+			// The origin invite/passkey links are built from. Lives beside
+			// connect-token because that is the surface it exists for.
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/external-address", externalAddressHandler(serverSettings))
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/external-address", updateExternalAddressHandler(serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/devices", authHandler.HandleListDevices)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/devices/{deviceID}", authHandler.HandleRevokeDevice)
 
@@ -167,10 +182,10 @@ func NewRouter(
 
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
-			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, plexService, serverSettings, remediationService))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, serverSettings, remediationService))
 
-			// Update availability + the admin-configured management-portal URL that
-			// backs the "update available" banner. GET returns both; PUT sets the
+			// Update availability + the admin-configured management-portal URL the
+			// app's version warnings link to. GET returns both; PUT sets the
 			// management URL.
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/update-status", updateStatusHandler(updateChecker, serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/update-status", updateServerSettingsHandler(updateChecker, serverSettings))
@@ -180,17 +195,16 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/discovery-settings", discoverySettingsHandler(serverSettings, creds))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/discovery-settings", updateDiscoverySettingsHandler(serverSettings, creds))
 
-			// Plex integration: link the admin's Plex account (PIN flow), pick
-			// the server/libraries invites share, and send one-tap invites for
-			// a user's shared Plex email.
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex/status", plexHandler.Status)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/plex/link/begin", plexHandler.BeginLink)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/plex/link/check", plexHandler.CheckLink)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/plex/link", plexHandler.Unlink)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex/servers", plexHandler.Servers)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex/servers/{machineID}/libraries", plexHandler.Libraries)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/plex/settings", plexHandler.UpdateSettings)
-			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/plex-invite", plexHandler.InviteUser)
+			// Media-server accounts (Jellyfin, Emby, Plex): the linked-account
+			// rows the Users screen tags, the server's own account list for the
+			// link picker, link/unlink, and the import that turns picked
+			// accounts into granted, linked Cantinarr users. Access itself is
+			// the instance grant.
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/accounts", mediaAccessHandler.ListAccounts)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/{instanceID}/users", mediaAccessHandler.RemoteUsers)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/media-servers/{instanceID}/import", mediaAccessHandler.Import)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.LinkAccount)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.UnlinkAccount)
 
 			// Per-user default *arr instance overrides (admin-managed). Pins which
 			// instance is a given user's default source per service type, and —
@@ -199,15 +213,26 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/default-instances", instanceHandler.GetUserDefaultInstances)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/default-instances", instanceHandler.UpdateUserDefaultInstances)
 
+			// Per-user instance access grants (admin-managed). Additive to the
+			// default: a granted instance appears alongside the user's default
+			// so they can choose a library per request.
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/instance-grants", instanceHandler.GetUserInstanceGrants)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/instance-grants", instanceHandler.UpdateUserInstanceGrants)
+
 			// Credential management
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/credentials", credHandler.Get)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/credentials", credHandler.Update)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/credentials/{key}", credHandler.Delete)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/codex/status", aiHandler.SharedCodexStatus)
-			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), codexLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginSharedCodexDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), oauthLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginSharedCodexDeviceLogin)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/codex/device/{flowID}", aiHandler.CheckSharedCodexDeviceLogin)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/codex/device/{flowID}", aiHandler.CancelSharedCodexDeviceLogin)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/codex", aiHandler.UnlinkSharedCodex)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/grok/status", aiHandler.SharedGrokStatus)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), oauthLoginLimiter.Middleware).Post("/ai/grok/device/begin", aiHandler.BeginSharedGrokDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/grok/device/{flowID}", aiHandler.CheckSharedGrokDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/grok/device/{flowID}", aiHandler.CancelSharedGrokDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/grok", aiHandler.UnlinkSharedGrok)
 
 			// AI tool toggles
 			aiToolsHandler := mcp.NewToolSettingsHandler(toolServer)
@@ -284,6 +309,25 @@ func NewRouter(
 			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService))
 		})
 
+		// Media-server accounts (authenticated, self-scoped): a granted user
+		// sees their media servers, asks where a title can be watched on them,
+		// creates their own account there, or links one that is already
+		// theirs (a password check against the server, or a plex.tv
+		// sign-in). The credential writes are rate-limited like
+		// the other self-service ones; the sign-in poll is not, since the
+		// app polls it every few seconds and a pin can only be polled by the
+		// user who began it. Eligibility is checked inside, with one answer
+		// for every "not for you" case.
+		r.Group(func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.Get("/media-servers", mediaAccessHandler.List)
+			r.Get("/media-servers/watch", mediaAccessHandler.Watch)
+			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account", mediaAccessHandler.CreateAccount)
+			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account/link", mediaAccessHandler.LinkOwnAccount)
+			r.With(authLimiter.Middleware).Post("/media-servers/plex/sign-in/begin", mediaAccessHandler.PlexSignInBegin)
+			r.Post("/media-servers/plex/sign-in/check", mediaAccessHandler.PlexSignInCheck)
+		})
+
 		// Completed-media ticket issuance (authenticated requester/admin). The
 		// handler additionally enforces the requester's exact effective instance
 		// and accepts only a live arr file ID, never a client-supplied path.
@@ -323,6 +367,10 @@ func NewRouter(
 			r.Get("/requests/book-status", requestHandler.GetBookStatus)
 			r.Get("/requests/book-library", requestHandler.GetBookLibrary)
 			r.Get("/requests/book-recent", requestHandler.GetBookRecent)
+			r.Get("/requests/book-authors", requestHandler.GetBookAuthors)
+			r.Get("/requests/book-author", requestHandler.GetBookAuthor)
+			r.Get("/requests/book-series", requestHandler.GetBookSeries)
+			r.Get("/requests/book-series-detail", requestHandler.GetBookSeriesDetail)
 			r.Get("/requests/{tmdb_id}/status", requestHandler.GetStatus)
 		})
 
@@ -397,6 +445,9 @@ func NewRouter(
 			r.Get("/ai/codex/status", aiHandler.CodexStatus)
 			r.Delete("/ai/codex", aiHandler.UnlinkCodex)
 			r.Delete("/ai/codex/device/{flowID}", aiHandler.CancelCodexDeviceLogin)
+			r.Get("/ai/grok/status", aiHandler.GrokStatus)
+			r.Delete("/ai/grok", aiHandler.UnlinkGrok)
+			r.Delete("/ai/grok/device/{flowID}", aiHandler.CancelGrokDeviceLogin)
 			r.Get("/ai/settings", aiHandler.AISettings)
 			r.Delete("/ai/settings", aiHandler.DeleteAISettings)
 			r.Delete("/ai/credentials/{provider}", aiHandler.DeletePersonalAICredential)
@@ -407,8 +458,10 @@ func NewRouter(
 				r.Get("/ai/available", aiHandler.Available)
 				r.Put("/ai/settings", aiHandler.UpdateAISettings)
 				r.Put("/ai/credentials/{provider}", aiHandler.UpdatePersonalAICredential)
-				r.With(codexLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginCodexDeviceLogin)
+				r.With(oauthLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginCodexDeviceLogin)
 				r.Get("/ai/codex/device/{flowID}", aiHandler.CheckCodexDeviceLogin)
+				r.With(oauthLoginLimiter.Middleware).Post("/ai/grok/device/begin", aiHandler.BeginGrokDeviceLogin)
+				r.Get("/ai/grok/device/{flowID}", aiHandler.CheckGrokDeviceLogin)
 			})
 		})
 
@@ -426,6 +479,15 @@ func NewRouter(
 				// actually dials instance URLs — so cluster-internal names the
 				// admin's device cannot resolve still test truthfully.
 				r.Post("/instances/test", instanceHandler.TestConnection)
+				// Libraries a media server reports, for the shared-libraries
+				// picker; same candidate body and credential fallback as /test.
+				r.Post("/instances/media-server/libraries", instanceHandler.MediaServerLibraries)
+				// Plex: the PIN link that yields an instance's token (held
+				// server-side, referenced by pin id on save) and the linked
+				// account's owned servers for the editor's server picker.
+				r.Post("/instances/plex/link/begin", instanceHandler.PlexLinkBegin)
+				r.Post("/instances/plex/link/check", instanceHandler.PlexLinkCheck)
+				r.Post("/instances/plex/servers", instanceHandler.PlexServers)
 				r.Put("/instances/{instanceID}", instanceHandler.Update)
 				r.Delete("/instances/{instanceID}", instanceHandler.Delete)
 				// Instance-centric view of user_default_instances (the static
@@ -434,6 +496,12 @@ func NewRouter(
 				// type, and (PUT) assign this instance to an exact set of users.
 				r.Get("/instances/{instanceID}/users", instanceHandler.GetInstanceUsers)
 				r.Put("/instances/{instanceID}/users", instanceHandler.UpdateInstanceUsers)
+				// Instance-centric view of user_instance_grants: which users
+				// hold an access grant on which instance of this service type,
+				// and (PUT) grant this instance to an exact set of users
+				// without moving anyone's default.
+				r.Get("/instances/{instanceID}/grant-users", instanceHandler.GetInstanceGrantUsers)
+				r.Put("/instances/{instanceID}/grant-users", instanceHandler.UpdateInstanceGrantUsers)
 				// Configure the server-managed Radarr/Sonarr Connect webhook
 				// without ever returning its callback credential to the app.
 				r.Post("/instances/{instanceID}/webhook", instanceHandler.ConfigureWebhook)
@@ -549,6 +617,8 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 type configInstanceStore interface {
 	ListAll() ([]instance.Instance, error)
 	ListUserDefaults(userID int64) (map[string]string, error)
+	VisibleInstanceIDs(userID int64, serviceType string) ([]string, error)
+	EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error)
 }
 
 func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service) http.HandlerFunc {
@@ -564,9 +634,12 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		}
 
 		// The config payload is per-user: admins see every instance, while
-		// regular users only see the effective default Radarr/Sonarr instances
-		// selected for them and any Chaptarr instance explicitly granted by an
-		// admin.
+		// regular users see their granted Radarr/Sonarr/Chaptarr set — every
+		// access-granted instance plus their effective default (the global
+		// default when nothing was granted; for chaptarr only explicit rows,
+		// never a fallback). is_default is rewritten per user to mark THEIR
+		// effective default, which is how older clients that expect a single
+		// instance keep picking the right one.
 		claims := auth.GetClaims(r.Context())
 		var userID int64
 		isAdmin := false
@@ -583,25 +656,54 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 				return
 			}
 		}
+		visible := map[string]map[string]bool{}
+		visibleDefault := map[string]string{}
+		if !isAdmin {
+			// Media servers are listed too so a granted user's app can offer
+			// the account guide; their grant-only rules make the visible set
+			// exactly the grants (see EffectiveDefaultInstanceID).
+			for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr"}, instance.MediaServerTypes()...) {
+				visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
+				if err != nil {
+					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+					return
+				}
+				defaultID, err := store.EffectiveDefaultInstanceID(userID, serviceType)
+				if err != nil {
+					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+					return
+				}
+				ids := map[string]bool{}
+				for _, id := range visibleIDs {
+					ids[id] = true
+				}
+				visible[serviceType] = ids
+				visibleDefault[serviceType] = defaultID
+			}
+		}
 
 		instances := []instanceInfo{}
+		// plexRequestable tells a user who holds no Plex grant that there is a
+		// Plex server to ask for: the guide offers "share your Plex email" and
+		// admins hear about it. Nothing else about the instance is revealed.
+		plexRequestable := false
 		allInstances, err := store.ListAll()
 		if err == nil {
-			visibleDefaults := map[string]string{}
-			if !isAdmin {
-				visibleDefaults = effectiveUserInstanceIDs(allInstances, overrides)
-			}
 			for _, inst := range allInstances {
-				if !isAdmin && visibleDefaults[inst.ServiceType] != inst.ID {
+				if inst.ServiceType == "plex" {
+					plexRequestable = true
+				}
+				if !isAdmin && !visible[inst.ServiceType][inst.ID] {
 					continue
 				}
-				// A requester's filtered entry is always its effective default,
-				// including the deterministic first-instance fallback when no row
-				// carries the global is_default flag. Admins retain the configured
-				// global flag unless their own per-user override selects a sibling.
+				// A requester's is_default always marks their effective
+				// default, including the deterministic first-instance fallback
+				// when no row carries the global flag. Admins retain the
+				// configured global flag unless their own per-user override
+				// selects a sibling.
 				isDefault := inst.IsDefault
 				if !isAdmin {
-					isDefault = visibleDefaults[inst.ServiceType] == inst.ID
+					isDefault = visibleDefault[inst.ServiceType] == inst.ID
 				} else if pinned, ok := overrides[inst.ServiceType]; ok {
 					isDefault = pinned == inst.ID
 				}
@@ -658,43 +760,9 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"instances":       instances,
 			"issues_enabled":  remSettings.Enabled,
 			"allow_reporting": remSettings.AllowReporting,
+			// True when a Plex server exists at all, so a user without the
+			// grant can still ask for access from the guide.
+			"plex_access_requestable": plexRequestable,
 		})
 	}
-}
-
-func effectiveUserInstanceIDs(instances []instance.Instance, overrides map[string]string) map[string]string {
-	first := map[string]string{}
-	globalDefault := map[string]string{}
-	for _, inst := range instances {
-		switch inst.ServiceType {
-		case "radarr", "sonarr":
-			if _, ok := first[inst.ServiceType]; !ok {
-				first[inst.ServiceType] = inst.ID
-			}
-			if inst.IsDefault {
-				if _, ok := globalDefault[inst.ServiceType]; !ok {
-					globalDefault[inst.ServiceType] = inst.ID
-				}
-			}
-		}
-	}
-
-	visible := map[string]string{}
-	for _, serviceType := range []string{"radarr", "sonarr"} {
-		if override, ok := overrides[serviceType]; ok {
-			visible[serviceType] = override
-			continue
-		}
-		if id, ok := globalDefault[serviceType]; ok {
-			visible[serviceType] = id
-			continue
-		}
-		if id, ok := first[serviceType]; ok {
-			visible[serviceType] = id
-		}
-	}
-	if chaptarrID, ok := overrides["chaptarr"]; ok {
-		visible["chaptarr"] = chaptarrID
-	}
-	return visible
 }

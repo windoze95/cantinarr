@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 type rpcErrorBody struct {
@@ -60,6 +63,62 @@ type serverRequestResult struct {
 	afterWrite func()
 }
 
+// tailBuffer keeps only the last capacity bytes written to it, so the
+// app-server's stderr can be quoted (redacted) when the process dies
+// unexpectedly without ever holding unbounded diagnostic output.
+type tailBuffer struct {
+	mu       sync.Mutex
+	capacity int
+	data     []byte
+}
+
+func newTailBuffer(capacity int) *tailBuffer {
+	return &tailBuffer{capacity: capacity}
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(p) >= b.capacity {
+		b.data = append(b.data[:0], p[len(p)-b.capacity:]...)
+		return len(p), nil
+	}
+	if overflow := len(b.data) + len(p) - b.capacity; overflow > 0 {
+		b.data = append(b.data[:0], b.data[overflow:]...)
+	}
+	b.data = append(b.data, p...)
+	return len(p), nil
+}
+
+func (b *tailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.data)
+}
+
+// boundedLogText makes already-redacted diagnostic text safe for a single
+// server log line. Redact before bounding: truncating first could split a
+// credential so its remainder no longer matches a redaction pattern.
+func boundedLogText(text string) string {
+	text = strings.TrimSpace(text)
+	if len(text) > maxLogDetailBytes {
+		text = text[:maxLogDetailBytes] + "...[truncated]"
+	}
+	return strings.ReplaceAll(text, "\n", "\\n")
+}
+
+func describeExit(err error, stderrTail string) string {
+	detail := "exit status 0"
+	if err != nil {
+		detail = err.Error()
+	}
+	tail := boundedLogText(secrets.RedactText(stderrTail))
+	if tail == "" {
+		return detail
+	}
+	return detail + "; stderr tail: " + tail
+}
+
 type appSession struct {
 	cmd      *exec.Cmd
 	stdin    io.WriteCloser
@@ -87,6 +146,10 @@ type appSession struct {
 	processDone   chan struct{}
 	exitMu        sync.Mutex
 	exitErr       error
+	stderrTail    *tailBuffer
+	stderrDone    chan struct{}
+	stopRequested atomic.Bool
+	abortLogOnce  sync.Once
 	stopOnce      sync.Once
 	cleanupOnce   sync.Once
 	releaseSlot   func()
@@ -192,19 +255,34 @@ func (m *Manager) startSession(authJSON []byte) (*appSession, error) {
 		pending:        make(map[string]chan rpcReply),
 		notifications:  make(chan rpcNotification, maxQueuedNotifications),
 		processDone:    make(chan struct{}),
+		stderrTail:     newTailBuffer(maxStderrTailBytes),
+		stderrDone:     make(chan struct{}),
 		releaseSlot:    releaseSlot,
 		serverRequests: make(chan struct{}, maxServerRequests),
 		globalRequests: m.serverRequestSlots,
 		requestContext: requestContext,
 		cancelRequests: cancelRequests,
 	}
-	go func() { _, _ = io.Copy(io.Discard, stderr) }()
+	go func() {
+		_, _ = io.Copy(s.stderrTail, stderr)
+		close(s.stderrDone)
+	}()
 	go s.readLoop(stdout)
 	go func() {
 		err := cmd.Wait()
 		s.exitMu.Lock()
 		s.exitErr = err
 		s.exitMu.Unlock()
+		if !s.stopRequested.Load() {
+			// The process ended before teardown asked it to stop. This is the
+			// only place its exit status and stderr are ever visible; without
+			// this line every crash surfaces as the same opaque ErrProvider.
+			select {
+			case <-s.stderrDone:
+			case <-time.After(250 * time.Millisecond):
+			}
+			log.Printf("codexapp: app-server exited without shutdown: %s", describeExit(err, s.stderrTail.String()))
+		}
 		close(s.processDone)
 		s.failPending()
 	}()
@@ -358,6 +436,10 @@ func classifyRPCError(rpcErr *rpcErrorBody) error {
 		strings.Contains(text, "rate_limit_reached"):
 		return ErrUsageLimit
 	default:
+		// The classified error deliberately carries no detail, so this is the
+		// only record of what the app-server actually rejected.
+		log.Printf("codexapp: app-server rpc error code=%d detail=%s", rpcErr.Code,
+			boundedLogText(secrets.RedactText(strings.TrimSpace(rpcErr.Message+" "+string(rpcErr.Data)))))
 		return ErrProvider
 	}
 }
@@ -397,7 +479,7 @@ func (s *appSession) writeContext(ctx context.Context, message any) error {
 	case s.writeSlot <- struct{}{}:
 		defer func() { <-s.writeSlot }()
 	case <-ctx.Done():
-		s.abortProvider()
+		s.abortProvider("write slot unavailable before deadline")
 		return ctx.Err()
 	}
 	written := make(chan error, 1)
@@ -415,12 +497,19 @@ func (s *appSession) writeContext(ctx context.Context, message any) error {
 		// Closing stdin and killing the child unblocks a pipe write even when a
 		// buggy app-server stopped consuming input. The write goroutine reports
 		// into a buffered channel, so it cannot leak waiting for this caller.
-		s.abortProvider()
+		s.abortProvider("stdin write did not complete before deadline")
 		return ctx.Err()
 	}
 }
 
-func (s *appSession) abortProvider() {
+func (s *appSession) abortProvider(reason string) {
+	s.abortLogOnce.Do(func() {
+		// An abort during requested teardown is routine (a late write racing
+		// stop), not a diagnostic; only pre-shutdown aborts are worth a line.
+		if !s.stopRequested.Load() {
+			log.Printf("codexapp: killing app-server: %s", reason)
+		}
+	})
 	if s.cancelRequests != nil {
 		s.cancelRequests()
 	}
@@ -447,8 +536,10 @@ func (s *appSession) readLoop(stdout io.Reader) {
 		s.dispatch(message)
 	}
 	// A malformed/oversized stream is a failed provider process. Killing it
-	// wakes every pending request without exposing scanner or process details.
-	if scanner.Err() != nil && s.cmd.Process != nil {
+	// wakes every pending request without exposing scanner or process details
+	// to callers; the log line below is the only record of what happened.
+	if err := scanner.Err(); err != nil && s.cmd.Process != nil {
+		log.Printf("codexapp: killing app-server: stdout stream failed: %v", err)
 		_ = s.cmd.Process.Kill()
 	}
 }
@@ -493,7 +584,7 @@ func (s *appSession) dispatch(message rpcEnvelope) {
 		}
 		params, ok := compactNotification(message.Method, message.Params)
 		if !ok {
-			s.abortProvider()
+			s.abortProvider("unparseable or oversized " + message.Method + " notification")
 			return
 		}
 		ctx := s.requestContext
@@ -517,7 +608,7 @@ func (s *appSession) dispatch(message rpcEnvelope) {
 		select {
 		case response <- rpcReply{result: cloneRaw(message.Result), err: message.Error}:
 		default:
-			s.abortProvider()
+			s.abortProvider("duplicate reply for request id " + boundedLogText(key))
 		}
 	}
 }
@@ -614,6 +705,9 @@ func compactTurnError(raw json.RawMessage) json.RawMessage {
 	case strings.Contains(text, "unauthorized"), strings.Contains(text, "authentication_required"):
 		return json.RawMessage(`"unauthorized"`)
 	default:
+		// The raw upstream detail is collapsed to "providerError" from here on,
+		// so log it now or lose it — turn failures are otherwise undiagnosable.
+		log.Printf("codexapp: turn failed upstream: %s", boundedLogText(secrets.RedactText(string(raw))))
 		return json.RawMessage(`"providerError"`)
 	}
 }
@@ -667,7 +761,14 @@ func (s *appSession) failPending() {
 	}
 }
 
+func (s *appSession) exitError() error {
+	s.exitMu.Lock()
+	defer s.exitMu.Unlock()
+	return s.exitErr
+}
+
 func (s *appSession) stop() {
+	s.stopRequested.Store(true)
 	s.stopOnce.Do(func() {
 		if s.cancelRequests != nil {
 			s.cancelRequests()

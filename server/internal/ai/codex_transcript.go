@@ -22,6 +22,9 @@ type codexTranscriptBuilder struct {
 	// textWritten caps total stored assistant text across the whole run, not
 	// per segment, matching the pre-interleaving bound.
 	textWritten int
+	// toolRecords counts persisted pairs so one tool-heavy turn stays well
+	// under maxStoredMessages; see maxStoredToolRecordsPerTurn.
+	toolRecords int
 }
 
 func (b *codexTranscriptBuilder) Text(value string) {
@@ -42,6 +45,12 @@ func (b *codexTranscriptBuilder) ToolRecord(name string, input json.RawMessage, 
 	id := "codex_" + newConversationID()
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.toolRecords >= maxStoredToolRecordsPerTurn {
+		// Stop persisting pairs, never text: later deltas still accumulate in
+		// b.text and reach the transcript through Finish.
+		return
+	}
+	b.toolRecords++
 	assistant := transcriptMessage{Role: agentRoleAssistant}
 	if text := strings.TrimSpace(b.text.String()); text != "" {
 		assistant.Content = append(assistant.Content, transcriptBlock{Type: blockTypeText, Text: text})

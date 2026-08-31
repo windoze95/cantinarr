@@ -45,6 +45,63 @@ func TestRequestMediaSchemaOffersQualityProfileChoiceOnlyOnRequest(t *testing.T)
 	}
 }
 
+// The per-request library selection (HD/4K splits) is offered on exactly the
+// three request-flow tools, as an OPTIONAL property.
+func TestRequestFlowToolsOfferOptionalInstanceID(t *testing.T) {
+	for _, name := range []string{"request_media", "get_request_options", "check_request_status"} {
+		tool := findToolDefinition(name)
+		if tool == nil {
+			t.Fatalf("%s definition not found", name)
+		}
+		properties, ok := tool.InputSchema["properties"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s properties = %#v", name, tool.InputSchema["properties"])
+		}
+		if _, ok := properties["instance_id"]; !ok {
+			t.Fatalf("%s schema is missing instance_id", name)
+		}
+		required, _ := tool.InputSchema["required"].([]string)
+		for _, field := range required {
+			if field == "instance_id" {
+				t.Fatalf("%s must not require instance_id (omitting it means the default library)", name)
+			}
+		}
+	}
+}
+
+// Every arr tool accepts an OPTIONAL instance_id so the assistant can target
+// any library on a multi-library server, not just the global default. The
+// remediation runner's callCtx.InstanceID still overrides it (the
+// get_service_config precedence rule), which execution tests pin.
+func TestArrToolsOfferOptionalInstanceID(t *testing.T) {
+	for _, name := range []string{
+		"get_queue", "get_calendar", "get_library", "get_history",
+		"trigger_search", "search_releases", "grab_release",
+		"remove_queue_item", "get_disk_space", "get_arr_health",
+		"get_episode_timeline", "get_media_file_details", "get_service_config",
+		"get_book_timeline", "diagnose_queue", "get_manual_import_candidates",
+		"execute_manual_import", "remediate_queue_item", "rescan_media",
+	} {
+		tool := findToolDefinition(name)
+		if tool == nil {
+			t.Fatalf("%s definition not found", name)
+		}
+		properties, ok := tool.InputSchema["properties"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s properties = %#v", name, tool.InputSchema["properties"])
+		}
+		if _, ok := properties["instance_id"]; !ok {
+			t.Fatalf("%s schema is missing instance_id", name)
+		}
+		required, _ := tool.InputSchema["required"].([]string)
+		for _, field := range required {
+			if field == "instance_id" {
+				t.Fatalf("%s must not require instance_id (omitting it means the default library)", name)
+			}
+		}
+	}
+}
+
 func TestDisplayMediaMismatch(t *testing.T) {
 	if got := displayMediaMismatch("Toy Story 5", "2026", "Toy Story 5", "2026"); got != "" {
 		t.Fatalf("matching item rejected: %s", got)

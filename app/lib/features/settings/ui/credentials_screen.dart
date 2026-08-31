@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/settings_highlight.dart';
 import '../../ai_assistant/data/codex_oauth_service.dart';
+import '../../ai_assistant/data/grok_oauth_service.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
@@ -36,7 +37,14 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   final _anthropicController = TextEditingController();
   final _openAIController = TextEditingController();
   final _geminiController = TextEditingController();
+  final _grokController = TextEditingController();
   final _customModelController = TextEditingController();
+  // Admin-pinned shared openai reasoning effort. Empty string means auto.
+  String _openaiReasoningEffort = '';
+  // The local provider's scoped endpoint pair.
+  final _localBaseUrlController = TextEditingController();
+  String _localReasoningEffort = '';
+  final _localKeyController = TextEditingController();
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
   bool _healthCheckEnabled = true;
@@ -89,6 +97,14 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       creds['gemini_key'] = _geminiController.text.trim();
       aiChanged = true;
     }
+    if (_grokController.text.isNotEmpty) {
+      creds['grok_key'] = _grokController.text.trim();
+      aiChanged = true;
+    }
+    if (_localKeyController.text.isNotEmpty) {
+      creds['local_openai_key'] = _localKeyController.text.trim();
+      aiChanged = true;
+    }
 
     final selectedModel = _selectedModel == _customModelValue
         ? _customModelController.text.trim()
@@ -105,6 +121,31 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       creds['ai_provider'] = _selectedProvider;
       creds['ai_model'] = selectedModel;
       aiChanged = true;
+    }
+    // Only a visible control writes: hidden state must never silently
+    // rewrite the server, and older servers reject the key as unknown.
+    if (_showOpenAiReasoningEffort &&
+        _openaiReasoningEffort != (_status?.ai.openaiReasoningEffort ?? '')) {
+      creds['openai_reasoning_effort'] = _openaiReasoningEffort;
+      aiChanged = true;
+    }
+    if (_localProviderSelected) {
+      final localBaseUrl = _localBaseUrlController.text.trim();
+      if (localBaseUrl.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter the server base URL')),
+        );
+        return;
+      }
+      if (localBaseUrl != (_status?.ai.localOpenaiBaseUrl ?? '')) {
+        creds['local_openai_base_url'] = localBaseUrl;
+        aiChanged = true;
+      }
+      if (_localReasoningEffort !=
+          (_status?.ai.localOpenaiReasoningEffort ?? '')) {
+        creds['local_openai_reasoning_effort'] = _localReasoningEffort;
+        aiChanged = true;
+      }
     }
     if (_status == null ||
         _healthCheckEnabled != _status!.ai.healthCheckEnabled) {
@@ -128,12 +169,15 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _anthropicController.clear();
       _openAIController.clear();
       _geminiController.clear();
+      _grokController.clear();
       await _loadStatus();
-      // Provider selection and scoped Codex availability are separate live
+      // Provider selection and scoped OAuth availability are separate live
       // server facts. Refresh both so the underlying Settings screen and the
       // assistant cannot retain the pre-save provider state.
       ref.invalidate(codexConnectionStatusProvider);
       ref.invalidate(adminCodexConnectionStatusProvider);
+      ref.invalidate(grokConnectionStatusProvider);
+      ref.invalidate(adminGrokConnectionStatusProvider);
       ref.invalidate(aiSettingsProvider);
       ref.read(authProvider.notifier).refreshConfig();
       if (mounted) {
@@ -207,7 +251,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     _anthropicController.dispose();
     _openAIController.dispose();
     _geminiController.dispose();
+    _grokController.dispose();
     _customModelController.dispose();
+    _localBaseUrlController.dispose();
+    _localKeyController.dispose();
     super.dispose();
   }
 
@@ -224,6 +271,26 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _selectedModel = _customModelValue;
       _customModelController.text = status.ai.model;
     }
+    // Tracks server state, not the dropdown: switching providers keeps the
+    // stored value visible when the admin comes back to OpenAI.
+    _openaiReasoningEffort = status.ai.openaiReasoningEffort;
+    _localBaseUrlController.text = status.ai.localOpenaiBaseUrl;
+    _localReasoningEffort = status.ai.localOpenaiReasoningEffort;
+  }
+
+  /// Effort is openai-only among hosted providers, capability-flagged so
+  /// older servers (which reject the key) never show the control.
+  bool get _showOpenAiReasoningEffort {
+    final provider =
+        _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
+    return provider?.id == 'openai' && provider!.supportsReasoningEffort;
+  }
+
+  /// The local provider carries its own scoped endpoint pair.
+  bool get _localProviderSelected {
+    final provider =
+        _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
+    return provider?.id == 'local_openai';
   }
 
   String _friendlySaveError(Object error) {
@@ -266,6 +333,18 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
         highlightId: widget.highlightId,
         child: child,
       );
+
+  /// Opens a shared OAuth connection screen and refreshes every live server
+  /// fact that its outcome can change.
+  Future<void> _manageSharedOAuth(String route) async {
+    await context.push(route);
+    if (!mounted) return;
+    ref.invalidate(adminCodexConnectionStatusProvider);
+    ref.invalidate(adminGrokConnectionStatusProvider);
+    ref.invalidate(aiSettingsProvider);
+    await _loadStatus();
+    await ref.read(authProvider.notifier).refreshConfig();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -330,6 +409,98 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                 setState(() => _selectedModel = value),
                           ),
                         ),
+                        if (_showOpenAiReasoningEffort) ...[
+                          const SizedBox(height: 12),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAiReasoningEffort,
+                            DropdownButtonFormField<String>(
+                              key: const ValueKey('openai-reasoning-effort'),
+                              initialValue: _openaiReasoningEffort,
+                              decoration: const InputDecoration(
+                                labelText: 'OpenAI reasoning effort',
+                                helperText:
+                                    'How much the model thinks before '
+                                    'answering. Auto keeps the model\'s own '
+                                    'default; None is fastest on local '
+                                    'models.',
+                                helperMaxLines: 3,
+                                isDense: true,
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                    value: '', child: Text('Auto')),
+                                DropdownMenuItem(
+                                    value: 'none', child: Text('None')),
+                                DropdownMenuItem(
+                                    value: 'minimal', child: Text('Minimal')),
+                                DropdownMenuItem(
+                                    value: 'low', child: Text('Low')),
+                                DropdownMenuItem(
+                                    value: 'medium', child: Text('Medium')),
+                                DropdownMenuItem(
+                                    value: 'high', child: Text('High')),
+                              ],
+                              onChanged: (value) => setState(
+                                  () => _openaiReasoningEffort = value ?? ''),
+                            ),
+                          ),
+                        ],
+                        if (_localProviderSelected) ...[
+                          const SizedBox(height: 12),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAiBaseUrl,
+                            TextField(
+                              key: const ValueKey('local-openai-base-url'),
+                              controller: _localBaseUrlController,
+                              decoration: const InputDecoration(
+                                labelText: 'Server base URL',
+                                hintText: 'http://llm-host:11434/v1',
+                                helperText:
+                                    'Required. Your OpenAI-compatible server '
+                                    '(llama.cpp, vLLM, Ollama), reached from '
+                                    'the Cantinarr server, not from this '
+                                    'device.',
+                                helperMaxLines: 3,
+                                isDense: true,
+                              ),
+                              keyboardType: TextInputType.url,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAiReasoningEffort,
+                            DropdownButtonFormField<String>(
+                              key: const ValueKey(
+                                  'local-openai-reasoning-effort'),
+                              initialValue: _localReasoningEffort,
+                              decoration: const InputDecoration(
+                                labelText: 'Reasoning effort',
+                                helperText:
+                                    'How much the model thinks before '
+                                    'answering. None is fastest on local '
+                                    'models.',
+                                helperMaxLines: 3,
+                                isDense: true,
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                    value: '', child: Text('Auto')),
+                                DropdownMenuItem(
+                                    value: 'none', child: Text('None')),
+                                DropdownMenuItem(
+                                    value: 'minimal', child: Text('Minimal')),
+                                DropdownMenuItem(
+                                    value: 'low', child: Text('Low')),
+                                DropdownMenuItem(
+                                    value: 'medium', child: Text('Medium')),
+                                DropdownMenuItem(
+                                    value: 'high', child: Text('High')),
+                              ],
+                              onChanged: (value) => setState(
+                                  () => _localReasoningEffort = value ?? ''),
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 14),
                         _anchor(
                           SettingsAnchors.credentialsHealthCheck,
@@ -351,20 +522,18 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                             status: ref.watch(
                               adminCodexConnectionStatusProvider,
                             ),
-                            onManage: () async {
-                              await context.push(
-                                '/settings/credentials/chatgpt',
-                              );
-                              if (!mounted) return;
-                              ref.invalidate(
-                                adminCodexConnectionStatusProvider,
-                              );
-                              ref.invalidate(aiSettingsProvider);
-                              await _loadStatus();
-                              await ref
-                                  .read(authProvider.notifier)
-                                  .refreshConfig();
-                            },
+                            onManage: () => _manageSharedOAuth(
+                              '/settings/credentials/chatgpt',
+                            ),
+                          )
+                        else if (_selectedProvider == 'grok_oauth')
+                          _SharedGrokPanel(
+                            status: ref.watch(
+                              adminGrokConnectionStatusProvider,
+                            ),
+                            onManage: () => _manageSharedOAuth(
+                              '/settings/credentials/grok',
+                            ),
                           )
                         else
                           _SharedApiCostNotice(
@@ -373,6 +542,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                   _status?.ai.providers ?? const [],
                                 )?.label ??
                                 _selectedProvider,
+                            selfHosted: _localProviderSelected,
                           ),
                         const SizedBox(height: 24),
                         _anchor(
@@ -419,6 +589,35 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                               onDelete: () => _deleteCredential(
                                   'gemini_key', 'Google Gemini'),
                             ),
+                          ),
+                          const SizedBox(height: 20),
+                          _anchor(
+                            SettingsAnchors.credentialsGrok,
+                            CredentialSection(
+                              title: 'xAI Grok (AI)',
+                              description:
+                                  'Shared xAI API key for included AI usage',
+                              isConfigured:
+                                  _status?.isConfigured('grok_key') ?? false,
+                              controller: _grokController,
+                              hint: 'xAI API key',
+                              onDelete: () =>
+                                  _deleteCredential('grok_key', 'xAI Grok'),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          CredentialSection(
+                            title: 'Local server (AI)',
+                            description:
+                                'Optional key or proxy token for the local '
+                                'OpenAI-compatible server; most need none',
+                            isConfigured:
+                                _status?.isConfigured('local_openai_key') ??
+                                    false,
+                            controller: _localKeyController,
+                            hint: 'Optional API key',
+                            onDelete: () => _deleteCredential(
+                                'local_openai_key', 'Local server'),
                           ),
                         ],
                         const SizedBox(height: 32),
@@ -553,7 +752,9 @@ class _AISelectionSection extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           usesOAuth
-              ? 'Connect one server OpenAI OAuth account for users with included access.'
+              ? (providerValue == 'grok_oauth'
+                  ? 'Connect one server xAI Grok account for users with included access.'
+                  : 'Connect one server OpenAI OAuth account for users with included access.')
               : 'Select the server provider and model for included access.',
           style: const TextStyle(
             color: AppTheme.textSecondary,
@@ -758,10 +959,89 @@ class _SharedCodexPanel extends StatelessWidget {
   }
 }
 
+class _SharedGrokPanel extends StatelessWidget {
+  final AsyncValue<GrokConnectionStatus> status;
+  final VoidCallback onManage;
+
+  const _SharedGrokPanel({
+    required this.status,
+    required this.onManage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final connected = status.valueOrNull?.connected == true;
+    return AppPanel(
+      accentColor: AppTheme.warning,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: AppTheme.warning),
+              SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Shared xAI Grok allowance',
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 5),
+                    Text(
+                      'Prompts and tool context from every enabled user use '
+                      'one xAI account and its Grok subscription allowance. '
+                      'Activity is attributable to that account, and any '
+                      'subscription or usage costs remain with it. xAI '
+                      'accounts are intended for one person; enable only '
+                      'people or devices you control.',
+                      style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 13,
+                        height: 1.42,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          OutlinedButton.icon(
+            onPressed: status.isLoading ? null : onManage,
+            icon: Icon(
+              connected
+                  ? Icons.manage_accounts_outlined
+                  : Icons.open_in_browser_rounded,
+              size: 18,
+            ),
+            label: Text(
+              connected
+                  ? 'Manage shared xAI Grok'
+                  : status.hasError
+                      ? 'Retry shared xAI Grok status'
+                      : 'Connect shared xAI Grok',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SharedApiCostNotice extends StatelessWidget {
   final String provider;
 
-  const _SharedApiCostNotice({required this.provider});
+  /// A configured openai base URL means included requests go to the admin's
+  /// own endpoint: claiming paid-quota charges there would be false.
+  final bool selfHosted;
+
+  const _SharedApiCostNotice({required this.provider, this.selfHosted = false});
 
   @override
   Widget build(BuildContext context) {
@@ -779,8 +1059,13 @@ class _SharedApiCostNotice extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Included requests use the server $provider key. Usage counts '
-              'against its paid quota and may create provider charges.',
+              selfHosted
+                  ? 'Included requests go to the configured server '
+                      'endpoint. Costs depend on that server, not on a '
+                      'hosted provider.'
+                  : 'Included requests use the server $provider key. Usage '
+                      'counts against its paid quota and may create provider '
+                      'charges.',
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 13,

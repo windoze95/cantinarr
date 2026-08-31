@@ -5,6 +5,8 @@ import '../features/ai_assistant/ui/ai_chat_screen.dart';
 import '../features/ai_assistant/ui/ai_access_screen.dart';
 import '../features/ai_assistant/ui/codex_connection_screen.dart';
 import '../features/ai_assistant/data/codex_oauth_service.dart';
+import '../features/ai_assistant/ui/grok_connection_screen.dart';
+import '../features/ai_assistant/data/grok_oauth_service.dart';
 import '../features/auth/logic/auth_provider.dart';
 import '../features/auth/ui/auth_screen.dart';
 import '../features/auth/ui/passkey_create_screen.dart';
@@ -24,7 +26,9 @@ import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_releases_tab.dart';
 import '../features/dashboard/ui/dashboard_shell.dart';
 import '../features/dashboard/ui/dashboard_tv_tab.dart';
+import '../features/dashboard/ui/requester_author_detail_screen.dart';
 import '../features/dashboard/ui/requester_book_detail_screen.dart';
+import '../features/dashboard/ui/requester_series_detail_screen.dart';
 import '../features/discover/data/tmdb_models.dart';
 import '../features/downloads/ui/downloads_history_screen.dart';
 import '../features/downloads/ui/downloads_module_shell.dart';
@@ -35,6 +39,7 @@ import '../features/issues/ui/ai_remediation_settings_screen.dart';
 import '../features/issues/ui/issue_thread_screen.dart';
 import '../features/issues/ui/issues_list_screen.dart';
 import '../features/issues/ui/pending_agent_actions_screen.dart';
+import '../features/media_access/ui/media_access_guide.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
 import '../features/notifications/ui/notification_preferences_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
@@ -47,14 +52,12 @@ import '../features/settings/ui/ai_tools_screen.dart';
 import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
 import '../features/settings/ui/discovery_settings_screen.dart';
-import '../features/settings/ui/plex_settings_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
 import '../features/settings/ui/request_settings_screen.dart';
 import '../features/settings/ui/settings_screen.dart';
 import '../features/settings/ui/user_request_settings_screen.dart';
 import '../features/settings/ui/users_screen.dart';
-import '../features/setup_wizard/ui/plex_watch_guide.dart';
 import '../features/setup_wizard/ui/setup_wizard_screen.dart';
 import '../features/shell/ui/app_shell.dart';
 import '../features/sonarr/ui/sonarr_calendar_screen.dart';
@@ -148,12 +151,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return '/dashboard/movies';
       }
       // Requester book surfaces — the Books tab and the id-addressable book
-      // detail — require the books grant and degrade the same way without it.
+      // and author details — require the books grant and degrade the same way
+      // without it.
       final hasChaptarrGrant = auth?.connection?.services.chaptarr ?? false;
       if (isAuthenticated &&
           !hasChaptarrGrant &&
           (_isWithinRoute(state.uri.path, '/dashboard/books') ||
-              _isWithinRoute(state.uri.path, '/detail/book'))) {
+              _isWithinRoute(state.uri.path, '/detail/book') ||
+              _isWithinRoute(state.uri.path, '/detail/author') ||
+              _isWithinRoute(state.uri.path, '/detail/series'))) {
         return '/dashboard/movies';
       }
       return null;
@@ -486,6 +492,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ),
           ),
           GoRoute(
+            path: '/settings/grok',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: GrokConnectionScreen()),
+          ),
+          GoRoute(
+            path: '/settings/credentials/grok',
+            builder: (_, __) => const AppAmbientBackground(
+              child: GrokConnectionScreen(
+                scope: GrokOAuthScope.adminShared,
+              ),
+            ),
+          ),
+          GoRoute(
             path: '/settings/credentials',
             builder: (_, state) => AppAmbientBackground(
                 child: CredentialsScreen(highlightId: _highlightParam(state))),
@@ -612,11 +631,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             builder: (_, __) =>
                 const AppAmbientBackground(child: DevicesScreen()),
           ),
+          // Plex lives in the instance editor now; the old Plex Invites
+          // address opens a new Plex instance so shared links keep working.
           GoRoute(
             path: '/settings/plex',
-            builder: (_, state) => AppAmbientBackground(
-                child:
-                    PlexSettingsScreen(highlightId: _highlightParam(state))),
+            builder: (_, __) => const AppAmbientBackground(
+                child: InstanceEditScreen(initialServiceType: 'plex')),
           ),
           GoRoute(
             path: '/settings/notifications',
@@ -641,8 +661,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/instance/new',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: InstanceEditScreen()),
+            builder: (context, state) {
+              // The setup checklist names the service type (or, for the
+              // download-client category, a selection prompt) when it sends
+              // an admin here; the generic Add Instance button sends none
+              // and keeps the Radarr default.
+              final extra = state.extra as Map<String, dynamic>?;
+              return AppAmbientBackground(
+                child: InstanceEditScreen(
+                  initialServiceType: extra?['service_type'] as String?,
+                  serviceTypePrompt: extra?['service_type_prompt'] as String?,
+                ),
+              );
+            },
           ),
           GoRoute(
             path: '/settings/instance/:id',
@@ -666,10 +697,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             builder: (_, __) =>
                 const AppAmbientBackground(child: SetupWizardScreen()),
           ),
+          // The old static Plex guide is the media-server guide now.
           GoRoute(
             path: '/plex-guide',
+            redirect: (_, __) => '/media-servers',
+          ),
+          GoRoute(
+            path: '/media-servers',
             builder: (_, __) =>
-                const AppAmbientBackground(child: PlexWatchGuide()),
+                const AppAmbientBackground(child: MediaAccessGuide()),
           ),
         ],
       ),
@@ -732,9 +768,37 @@ int? _positiveIntParameter(GoRouterState state, String name) {
 
 /// The `/detail/:type/:id` route body. Books are addressed by their (string)
 /// Chaptarr foreignBookId — the identity request rows store and decision push
-/// payloads carry — not a TMDB id.
+/// payloads carry — not a TMDB id; authors by their foreignAuthorId.
 Widget _mediaDetailChild(GoRouterState state) {
   final type = state.pathParameters['type']!;
+  if (type == 'series') {
+    // A series has no id in the library — Chaptarr stores no series record a
+    // library-wide read can reach — so its name is the identity, and a blank
+    // one addresses nothing.
+    final name = state.pathParameters['id']?.trim() ?? '';
+    if (name.isEmpty) {
+      return const _InvalidRouteScreen(
+        message: 'This series link is invalid.',
+      );
+    }
+    return RequesterSeriesDetailScreen(
+      seriesName: name,
+      instanceId: state.uri.queryParameters['instance_id'],
+    );
+  }
+  if (type == 'author') {
+    final foreignId = state.pathParameters['id']?.trim() ?? '';
+    if (foreignId.isEmpty) {
+      return const _InvalidRouteScreen(
+        message: 'This author link is invalid.',
+      );
+    }
+    return RequesterAuthorDetailScreen(
+      foreignAuthorId: foreignId,
+      nameHint: state.uri.queryParameters['name'],
+      instanceId: state.uri.queryParameters['instance_id'],
+    );
+  }
   if (type == 'book') {
     final foreignId = state.pathParameters['id']?.trim() ?? '';
     if (foreignId.isEmpty) {
@@ -771,12 +835,14 @@ bool _hasValidMediaDetailParameters(GoRouterState state) {
       _positiveIntParameter(state, 'id') != null;
 }
 
-/// Route-level guard for `/detail/:type/:id`. Books use a string foreign id,
-/// so the only malformed shape is a blank id — degrade to the Books tab (the
-/// requester book surface). Movie/TV keep the positive-TMDB-id validation and
-/// their movies-dashboard fallback.
+/// Route-level guard for `/detail/:type/:id`. Books and authors use a string
+/// foreign id and a series uses its name, so the only malformed shape is a
+/// blank id — degrade to the Books
+/// tab (the requester book surface). Movie/TV keep the positive-TMDB-id
+/// validation and their movies-dashboard fallback.
 String? _mediaDetailRedirect(GoRouterState state) {
-  if (state.pathParameters['type'] == 'book') {
+  final type = state.pathParameters['type'];
+  if (type == 'book' || type == 'author' || type == 'series') {
     final id = state.pathParameters['id']?.trim() ?? '';
     return id.isEmpty ? '/dashboard/books' : null;
   }

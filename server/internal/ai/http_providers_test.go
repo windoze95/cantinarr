@@ -205,7 +205,7 @@ func TestLiveAPIKeyInteractiveChat(t *testing.T) {
 			case credentials.AIProviderAnthropic:
 				final, err = NewService(test.key, test.model, toolServer).SendMessage(context.Background(), history, chatCtx, callbacks)
 			case credentials.AIProviderOpenAI:
-				final, err = NewOpenAIService(test.key, test.model, toolServer).SendMessage(context.Background(), history, chatCtx, callbacks)
+				final, err = NewOpenAIService(test.key, test.model, "", "", toolServer).SendMessage(context.Background(), history, chatCtx, callbacks)
 			case credentials.AIProviderGemini:
 				final, err = NewGeminiService(test.key, test.model, toolServer).SendMessage(context.Background(), history, chatCtx, callbacks)
 			}
@@ -255,7 +255,7 @@ func TestLiveOpenAIInteractiveCatalog(t *testing.T) {
 			})
 			history := transcript{textTranscriptMessage(agentRoleUser, "Reply with exactly LIVE_OK. Do not call a tool.")}
 			var streamed strings.Builder
-			final, err := NewOpenAIService(key, model.ID, toolServer).SendMessage(
+			final, err := NewOpenAIService(key, model.ID, "", "", toolServer).SendMessage(
 				context.Background(),
 				history,
 				ChatContext{UserID: 1, Role: auth.RoleUser, DeviceID: "live-openai-catalog-device"},

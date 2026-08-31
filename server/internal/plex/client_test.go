@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func testClient(t *testing.T, handler http.Handler) *Client {
@@ -189,5 +190,76 @@ func TestInviteEmailMapsDuplicateShare(t *testing.T) {
 	err := c.InviteEmail(context.Background(), "cid", "tok", "m1", "bob@example.com", nil)
 	if !errors.Is(err, ErrAlreadyShared) {
 		t.Fatalf("expected ErrAlreadyShared, got %v", err)
+	}
+}
+
+func TestGetUserDecodesTheAccountAndSignOutRemovesTheDevice(t *testing.T) {
+	var signedOut, deleted, lists, listFrom atomic.Int32
+	var deletedPath string
+	var listDevice atomic.Bool
+	listDevice.Store(true)
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Plex-Token") != "user-token" || r.Header.Get("X-Plex-Client-Identifier") != "client-id" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v2/user":
+			w.Write([]byte(`{"id":12345,"uuid":"u-1","username":"rey","email":"Rey@Example.com","title":"Rey","thumb":"https://plex.tv/users/x/avatar","authToken":"user-token"}`))
+		case "GET /devices.xml":
+			n := lists.Add(1)
+			w.Header().Set("Content-Type", "application/xml")
+			mine := ""
+			// Listed outright, or only from the listFrom-th listing on (a
+			// device plex.tv registers a moment after the approval).
+			if listDevice.Load() || (listFrom.Load() > 0 && n >= listFrom.Load()) {
+				mine = `<Device id="1778846848" name="Cantinarr" clientIdentifier="client-id" product="Cantinarr"/>`
+			}
+			w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><MediaContainer size="2"><Device id="555" name="Chrome" clientIdentifier="browser-cid" product="Plex Web"/>` + mine + `</MediaContainer>`))
+		case "DELETE /devices/1778846848.xml":
+			deleted.Add(1)
+			deletedPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+		case "DELETE /api/v2/users/signout":
+			signedOut.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	acct, err := client.GetUser(context.Background(), "client-id", "user-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acct.ID != 12345 || acct.UUID != "u-1" || acct.Username != "rey" || acct.Email != "Rey@Example.com" || acct.Title != "Rey" {
+		t.Fatalf("account = %+v", acct)
+	}
+	// The device plex.tv registered for this client goes; the browser's
+	// device and the plain sign-out are left alone.
+	removed, err := client.SignOut(context.Background(), "client-id", "user-token")
+	if err != nil || !removed {
+		t.Fatalf("SignOut = %v, %v", removed, err)
+	}
+	if deleted.Load() != 1 || deletedPath != "/devices/1778846848.xml" || signedOut.Load() != 0 {
+		t.Fatalf("deleted=%d path=%q signouts=%d", deleted.Load(), deletedPath, signedOut.Load())
+	}
+	// A device that shows up a moment after the approval is still found.
+	listDevice.Store(false)
+	lists.Store(0)
+	listFrom.Store(3)
+	signOutDeviceWait, signOutDevicePoll = 2*time.Second, 20*time.Millisecond
+	removed, err = client.SignOut(context.Background(), "client-id", "user-token")
+	if err != nil || !removed || deleted.Load() != 2 || signedOut.Load() != 0 {
+		t.Fatalf("late device: removed=%v err=%v deleted=%d signouts=%d", removed, err, deleted.Load(), signedOut.Load())
+	}
+	// Never registered: the token is signed out directly once the wait is up.
+	listFrom.Store(0)
+	signOutDeviceWait = 50 * time.Millisecond
+	removed, err = client.SignOut(context.Background(), "client-id", "user-token")
+	if err != nil || removed || deleted.Load() != 2 || signedOut.Load() != 1 {
+		t.Fatalf("fallback: removed=%v err=%v deleted=%d signouts=%d", removed, err, deleted.Load(), signedOut.Load())
+	}
+	if _, err := client.SignOut(context.Background(), "client-id", "wrong-token"); err == nil {
+		t.Fatal("a refused sign-out was reported as done")
 	}
 }

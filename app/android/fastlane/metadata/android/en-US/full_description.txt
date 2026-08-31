@@ -24,7 +24,7 @@ The management side goes as deep as you want:
 • One download queue across SABnzbd, qBittorrent, NZBGet, and Transmission
 • Import Doctor: stuck downloads explain themselves in plain English, with one-click fixes
 • See what's playing through Tautulli — active streams, history, top stats
-• Plex invites, a guided setup checklist, per-user defaults, and device management
+• Plex invites, Jellyfin and Emby accounts, a guided setup checklist, per-user defaults, and device management
 • Your server is an MCP server too: connect Claude or any MCP client and manage your library with the same tools that power the built-in assistant
 
 PRIVACY
@@ -32,4 +32,5 @@ PRIVACY
 The app connects to your own server. API keys stay server-side, availability is computed live from your services, and there are no ads, analytics, or tracking. Poster art loads from the TMDB image CDN. When you use the assistant, your server sends its prompt and context to your personal AI provider or an included provider granted by your admin. If you choose to link ChatGPT, the app opens OpenAI's sign-in page in your browser; your password never passes through Cantinarr.
 
 Website: https://cantinarr.com
+Community: https://discord.gg/zAgRwGwmVB
 Cantinarr is open source (AGPL-3.0): https://github.com/windoze95/cantinarr

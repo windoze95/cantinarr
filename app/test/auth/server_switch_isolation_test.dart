@@ -227,7 +227,7 @@ void main() {
     );
     addTearDown(setupSub.close);
 
-    // Server A answers both admin statuses; its banner data becomes visible.
+    // Server A answers both admin statuses; its data becomes visible.
     await _waitFor(() =>
         container.read(updateStatusProvider) != null &&
         container.read(setupStatusProvider) != null);
@@ -236,7 +236,7 @@ void main() {
         'http://portal-a.example.com');
     expect(container.read(setupStatusProvider)!.items.single.key, 'radarr');
 
-    // A second update-status fetch (an app-resume refresh) hangs on A …
+    // A second update-status fetch (a Settings-screen refresh) hangs on A …
     adapter.deferNextServerAUpdateStatus();
     unawaited(container.read(updateStatusProvider.notifier).refresh());
     await _waitFor(() => adapter.deferredServerACalls == 1);
@@ -246,7 +246,7 @@ void main() {
     await pumpEventQueue();
 
     expect(container.read(updateStatusProvider), isNull,
-        reason: "server A's update banner must never show against server B, "
+        reason: "server A's update status must never show against server B, "
             'even while B refuses the read');
     expect(container.read(setupStatusProvider), isNull,
         reason: "server A's checklist must not survive the switch");

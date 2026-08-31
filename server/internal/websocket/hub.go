@@ -84,14 +84,17 @@ type Event struct {
 // satisfies it. Declared here (rather than importing push) so the hub stays
 // decoupled from the push package and easy to test with a fake.
 type ContentNotifier interface {
-	NotifyNewMovie(title string, tmdbID int)
-	NotifyNewEpisode(seriesTitle string, tmdbID int)
+	// Movie/TV alerts carry the importing library so the audience is the
+	// users who can see that library, and so the dedupe claim is per-library
+	// (the same title landing on HD and 4K must alert both audiences).
+	NotifyNewMovie(title string, tmdbID int, instanceID string)
+	NotifyNewEpisode(seriesTitle string, tmdbID int, instanceID string)
 	NotifyNewBook(title, foreignID, instanceID, format string)
 	// The Upgraded variants page only admins opted into content_upgraded and
 	// silently claim the matching broadcast key, which is what keeps the queue
 	// poller from re-announcing a proven upgrade as new content.
-	NotifyUpgradedMovie(title string, tmdbID int)
-	NotifyUpgradedEpisode(seriesTitle string, tmdbID int)
+	NotifyUpgradedMovie(title string, tmdbID int, instanceID string)
+	NotifyUpgradedEpisode(seriesTitle string, tmdbID int, instanceID string)
 	NotifyUpgradedBook(title, foreignID, instanceID, format string)
 }
 
@@ -1372,9 +1375,9 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 			return
 		}
 		if upgrade {
-			h.content.NotifyUpgradedMovie(movie.Title, movie.TmdbID)
+			h.content.NotifyUpgradedMovie(movie.Title, movie.TmdbID, instanceID)
 		} else {
-			h.content.NotifyNewMovie(movie.Title, movie.TmdbID)
+			h.content.NotifyNewMovie(movie.Title, movie.TmdbID, instanceID)
 		}
 	}
 	for _, movieID := range announce {
@@ -1496,9 +1499,9 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 			return
 		}
 		if upgrade {
-			h.content.NotifyUpgradedEpisode(series.Title, series.TmdbID)
+			h.content.NotifyUpgradedEpisode(series.Title, series.TmdbID, instanceID)
 		} else {
-			h.content.NotifyNewEpisode(series.Title, series.TmdbID)
+			h.content.NotifyNewEpisode(series.Title, series.TmdbID, instanceID)
 		}
 	}
 	for _, seriesID := range announce {

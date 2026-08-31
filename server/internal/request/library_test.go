@@ -225,3 +225,39 @@ func TestReduceLibraryPreservesMixedKnownAndUnknownCanonicalRows(t *testing.T) {
 		t.Fatalf("unknown row = %+v, want canonical ID with status_known=false", unknown)
 	}
 }
+
+// TestReduceLibraryCoverIsClientReachable pins the digest to the same rule as
+// the recent-books feed: the cover is the relative /MediaCover path or the
+// metadata CDN remoteUrl — an arr-origin absolute URL (internal hostname,
+// possibly credential-bearing) is never handed to a non-admin client.
+func TestReduceLibraryCoverIsClientReachable(t *testing.T) {
+	books := []chaptarr.Book{
+		{
+			ID: 1, Title: "Relative", ForeignBookID: "fb-r", MediaType: "ebook",
+			Images: []chaptarr.Image{{CoverType: "cover", URL: "/MediaCover/Books/1/cover.jpg"}},
+		},
+		{
+			ID: 2, Title: "ArrOrigin", ForeignBookID: "fb-a", MediaType: "ebook",
+			Images: []chaptarr.Image{{
+				CoverType: "cover",
+				URL:       "http://library-user:library-pass@chaptarr.internal:8787/MediaCover/2/cover.jpg?apikey=library-key",
+				RemoteURL: "https://cdn.invalid/2/cover.jpg",
+			}},
+		},
+		{
+			ID: 3, Title: "ArrOnly", ForeignBookID: "fb-o", MediaType: "ebook",
+			Images: []chaptarr.Image{{CoverType: "cover", URL: "http://chaptarr.internal:8787/MediaCover/3/cover.jpg"}},
+		},
+	}
+
+	digest := reduceLibrary(books)
+	if got := findTitle(t, digest, "Relative").Cover; got != "/MediaCover/Books/1/cover.jpg" {
+		t.Errorf("relative cover = %q, want the proxied /MediaCover path", got)
+	}
+	if got := findTitle(t, digest, "ArrOrigin").Cover; got != "https://cdn.invalid/2/cover.jpg" {
+		t.Errorf("arr-origin absolute cover = %q, want the CDN remoteUrl fallback", got)
+	}
+	if got := findTitle(t, digest, "ArrOnly").Cover; got != "" {
+		t.Errorf("arr-origin-only cover = %q, want empty so the app draws its placeholder", got)
+	}
+}

@@ -39,6 +39,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'download_client':
       case 'tautulli':
       case 'books':
+      case 'media_servers':
         return '/settings/instance/new';
       case 'media_downloads':
         return '/settings';
@@ -48,8 +49,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'trakt':
       case 'discovery_prefs':
         return '/settings/discovery';
-      case 'plex_invites':
-        return '/settings/plex';
       case 'remediation':
         return '/settings/ai-remediation';
       default:
@@ -77,8 +76,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.monitor_heart_outlined;
       case 'push':
         return Icons.notifications_outlined;
-      case 'plex_invites':
-        return Icons.play_circle_outline;
+      case 'media_servers':
+        return Icons.live_tv_outlined;
       case 'books':
         return Icons.menu_book;
       case 'ai':
@@ -90,9 +89,32 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     }
   }
 
-  Future<void> _openItem(String? route) async {
+  /// Route extras for the instance rows: the add-instance form opens already
+  /// on the service type this row named. The download-client row names a
+  /// category with four members, so instead of guessing one it sends a
+  /// selection prompt the form shows as its disabled placeholder option.
+  Map<String, dynamic>? _extraFor(String key) {
+    switch (key) {
+      case 'radarr':
+        return {'service_type': 'radarr'};
+      case 'sonarr':
+        return {'service_type': 'sonarr'};
+      case 'tautulli':
+        return {'service_type': 'tautulli'};
+      case 'books':
+        return {'service_type': 'chaptarr'};
+      case 'media_servers':
+        return {'service_type_prompt': 'Select a media server'};
+      case 'download_client':
+        return {'service_type_prompt': 'Select a download client'};
+      default:
+        return null;
+    }
+  }
+
+  Future<void> _openItem(String? route, {Object? extra}) async {
     if (route == null) return;
-    await context.push(route);
+    await context.push(route, extra: extra);
     // Re-derive on return: whatever the admin just configured (or didn't)
     // is reflected immediately.
     ref.read(setupStatusProvider.notifier).refresh();
@@ -236,7 +258,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           : route != null
               ? StatusPill(text: 'Set up', color: actionColor)
               : null,
-      onTap: route != null ? () => _openItem(route) : null,
+      onTap: route != null
+          ? () => _openItem(route, extra: _extraFor(item.key))
+          : null,
     );
   }
 }

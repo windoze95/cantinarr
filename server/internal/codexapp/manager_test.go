@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -2326,6 +2327,207 @@ func TestRunWithAccountSessionAuthFailingInjectStillPurgesAccount(t *testing.T) 
 	}
 	if found, err := manager.AccountExists(SharedAccount()); err != nil || found {
 		t.Fatalf("account exists=%t err=%v, want purged after auth failure", found, err)
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+// TestToolFloodCodexAppHelperProcess drives one turn that keeps requesting
+// dynamic tools. By default it stops two calls past the budget and answers,
+// proving the soft landing; with --fake-flood-forever it never stops calling
+// tools, arming the hard backstop instead.
+func TestToolFloodCodexAppHelperProcess(t *testing.T) {
+	logPath := fakeArg("--fake-log=")
+	if logPath == "" {
+		return
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	send := func(value any) {
+		if err := encoder.Encode(value); err != nil {
+			t.Fatalf("encode fake response: %v", err)
+		}
+	}
+	toolCall := func(n int) map[string]any {
+		return map[string]any{"id": fmt.Sprintf("flood-%d", n), "method": "item/tool/call", "params": map[string]any{
+			"callId": fmt.Sprintf("call-%d", n), "threadId": "thread-1", "turnId": "turn-1", "tool": "search_movies", "arguments": map[string]any{"query": fmt.Sprintf("query %d", n)},
+		}}
+	}
+	forever := slices.Contains(os.Args, "--fake-flood-forever")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 64<<10), maxProtocolBytes)
+	for scanner.Scan() {
+		var message map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		logFake(t, logPath, "received", message)
+		method, _ := message["method"].(string)
+		id, hasID := message["id"]
+		if !hasID {
+			continue
+		}
+		switch method {
+		case "initialize":
+			send(map[string]any{"id": id, "result": map[string]any{"codexHome": os.Getenv("CODEX_HOME")}})
+		case "thread/start":
+			send(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-1"}}})
+		case "turn/start":
+			send(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-1", "status": "inProgress", "items": []any{}}}})
+			send(toolCall(1))
+		case "turn/interrupt":
+			send(map[string]any{"id": id, "result": map[string]any{}})
+			send(map[string]any{"method": "turn/completed", "params": map[string]any{
+				"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "interrupted", "items": []any{}},
+			}})
+		case "":
+			key := fmt.Sprint(id)
+			if !strings.HasPrefix(key, "flood-") {
+				continue
+			}
+			n, err := strconv.Atoi(strings.TrimPrefix(key, "flood-"))
+			if err != nil {
+				t.Fatalf("unexpected reply id %q", key)
+			}
+			if !forever && n >= maxDynamicToolCalls+2 {
+				send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{
+					"threadId": "thread-1", "turnId": "turn-1", "itemId": "message-1", "delta": "answer from gathered data",
+				}})
+				send(map[string]any{"method": "turn/completed", "params": map[string]any{
+					"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "completed", "items": []any{}},
+				}})
+				continue
+			}
+			send(toolCall(n + 1))
+		default:
+			send(map[string]any{"id": id, "result": map[string]any{}})
+		}
+	}
+}
+
+type floodReply struct {
+	id      int
+	success bool
+	text    string
+}
+
+// floodReplies extracts Cantinarr's replies to the flood helper's tool calls
+// from the fake protocol log, in call order.
+func floodReplies(t *testing.T, logPath string) []floodReply {
+	t.Helper()
+	var replies []floodReply
+	for _, entry := range readFakeLog(t, logPath) {
+		if entry.Kind != "received" {
+			continue
+		}
+		var envelope struct {
+			ID     string `json:"id"`
+			Method string `json:"method"`
+			Result struct {
+				Success      bool `json:"success"`
+				ContentItems []struct {
+					Text string `json:"text"`
+				} `json:"contentItems"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(entry.Value, &envelope) != nil {
+			continue
+		}
+		if envelope.Method != "" || !strings.HasPrefix(envelope.ID, "flood-") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(envelope.ID, "flood-"))
+		if err != nil {
+			continue
+		}
+		text := ""
+		if len(envelope.Result.ContentItems) > 0 {
+			text = envelope.Result.ContentItems[0].Text
+		}
+		replies = append(replies, floodReply{id: n, success: envelope.Result.Success, text: text})
+	}
+	return replies
+}
+
+func TestCodexRunSoftLandsAfterToolBudget(t *testing.T) {
+	manager, _, _, runtimeDir, logPath := fakeManager(t)
+	if err := manager.saveAccount(SharedAccount(), []byte(`{"tokens":{"access_token":"shared-secret"}}`), AccountStatus{Connected: true}); err != nil {
+		t.Fatal(err)
+	}
+	manager.args = []string{"-test.run=TestToolFloodCodexAppHelperProcess", "--", "--fake-log=" + logPath}
+	manager.toolServer.SetCallAuthorizer(func(context.Context, mcp.CallContext) (string, error) {
+		return auth.RoleUser, nil
+	})
+	var text strings.Builder
+	toolStarts := 0
+	toolRecords := 0
+	err := manager.RunWithAccountSession(context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "", "base", "context", "prompt", nil, Callbacks{
+		OnText:       func(delta string) { text.WriteString(delta) },
+		OnToolStart:  func(string) { toolStarts++ },
+		OnToolRecord: func(string, json.RawMessage, string, bool) { toolRecords++ },
+	})
+	if err != nil {
+		t.Fatalf("soft landing returned error: %v", err)
+	}
+	if text.String() != "answer from gathered data" {
+		t.Fatalf("streamed text = %q", text.String())
+	}
+	if toolStarts != maxDynamicToolCalls || toolRecords != maxDynamicToolCalls {
+		t.Fatalf("executed calls = %d starts / %d records, want %d each; refusals must stay invisible to callbacks", toolStarts, toolRecords, maxDynamicToolCalls)
+	}
+	refusals := 0
+	for _, reply := range floodReplies(t, logPath) {
+		if reply.id <= maxDynamicToolCalls {
+			if reply.text == toolBudgetRefusal {
+				t.Fatalf("in-budget call %d received the budget refusal", reply.id)
+			}
+			continue
+		}
+		if reply.success || reply.text != toolBudgetRefusal {
+			t.Fatalf("over-budget call %d reply success=%t text=%q, want the budget refusal", reply.id, reply.success, reply.text)
+		}
+		refusals++
+	}
+	if refusals != 2 {
+		t.Fatalf("refused replies = %d, want 2", refusals)
+	}
+	for _, entry := range readFakeLog(t, logPath) {
+		if bytes.Contains(entry.Value, []byte(`"method":"turn/interrupt"`)) {
+			t.Fatal("soft landing must not interrupt the turn")
+		}
+	}
+	assertRuntimeEmpty(t, runtimeDir)
+}
+
+func TestCodexRunAbortsAfterToolBudgetGrace(t *testing.T) {
+	manager, _, _, runtimeDir, logPath := fakeManager(t)
+	if err := manager.saveAccount(SharedAccount(), []byte(`{"tokens":{"access_token":"shared-secret"}}`), AccountStatus{Connected: true}); err != nil {
+		t.Fatal(err)
+	}
+	manager.args = []string{"-test.run=TestToolFloodCodexAppHelperProcess", "--", "--fake-log=" + logPath, "--fake-flood-forever"}
+	manager.toolServer.SetCallAuthorizer(func(context.Context, mcp.CallContext) (string, error) {
+		return auth.RoleUser, nil
+	})
+	toolStarts := 0
+	err := manager.RunWithAccountSession(context.Background(), SharedAccount(), 2, "device-2", auth.RoleUser, "", "base", "context", "prompt", nil, Callbacks{
+		OnToolStart: func(string) { toolStarts++ },
+	})
+	if !errors.Is(err, ErrToolBudget) {
+		t.Fatalf("hard abort = %v, want ErrToolBudget", err)
+	}
+	if errors.Is(err, ErrProvider) {
+		t.Fatal("tool budget abort must stay distinguishable from ErrProvider")
+	}
+	if toolStarts != maxDynamicToolCalls {
+		t.Fatalf("executed calls = %d, want %d", toolStarts, maxDynamicToolCalls)
+	}
+	waitForFakeMethod(t, logPath, "turn/interrupt")
+	refused := 0
+	for _, reply := range floodReplies(t, logPath) {
+		if reply.text == toolBudgetRefusal {
+			refused++
+		}
+	}
+	if refused < dynamicToolCallGrace {
+		t.Fatalf("refused replies = %d, want at least the %d grace refusals", refused, dynamicToolCallGrace)
 	}
 	assertRuntimeEmpty(t, runtimeDir)
 }

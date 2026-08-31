@@ -297,7 +297,7 @@ func TestGetMovieStatusMatrix(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			srv := newFakeRadarrServer(t, c.fake)
 			s, uid := newHistoryTestService(t, srv.URL, "", "")
-			st, err := s.getMovieStatus(uid, 550)
+			st, err := s.getMovieStatus(uid, 550, "")
 			if err != nil {
 				t.Fatalf("getMovieStatus: %v", err)
 			}
@@ -312,7 +312,7 @@ func TestGetMovieStatusMatrix(t *testing.T) {
 
 	t.Run("no radarr source", func(t *testing.T) {
 		s, uid := newHistoryTestService(t, "", "", "")
-		st, err := s.getMovieStatus(uid, 550)
+		st, err := s.getMovieStatus(uid, 550, "")
 		if err != nil || st.Status != StatusUnavailable {
 			t.Errorf("status = %+v err=%v, want unavailable", st, err)
 		}

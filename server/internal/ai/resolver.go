@@ -6,6 +6,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/grokoauth"
 )
 
 const (
@@ -21,7 +22,14 @@ type resolvedAI struct {
 	Model     string
 	Reason    string
 	APIKey    string
-	Account   codexapp.AccountRef
+	// BaseURL carries the shared openai endpoint override. Personal
+	// resolutions never set it, and it must never be serialized into
+	// non-admin payloads (settings/available responses, SSE frames).
+	BaseURL string
+	// ReasoningEffort is the admin-pinned shared openai reasoning effort,
+	// with the same shared-only scoping as BaseURL. Empty means auto.
+	ReasoningEffort string
+	Account         codexapp.AccountRef
 }
 
 func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
@@ -54,6 +62,23 @@ func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
 			resolved.Available = true
 			return resolved
 		}
+		if personal.Config.Provider == credentials.AIProviderGrokOAuth {
+			if h.grok == nil || !h.grok.Available() {
+				resolved.Reason = "grok_unavailable"
+				return resolved
+			}
+			connected, err := h.grok.AccountExists(grokoauth.PersonalAccount(userID))
+			if err != nil {
+				resolved.Reason = "storage_error"
+				return resolved
+			}
+			if !connected {
+				resolved.Reason = "personal_grok_disconnected"
+				return resolved
+			}
+			resolved.Available = true
+			return resolved
+		}
 		if !personal.CredentialPresent {
 			resolved.Reason = "personal_credential_missing"
 			return resolved
@@ -74,10 +99,12 @@ func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
 		return resolvedAI{Source: aiSourceNone, Reason: "shared_access_disabled"}
 	}
 	resolved := resolvedAI{
-		Source:   aiSourceShared,
-		Provider: shared.Config.Provider,
-		Model:    shared.Config.Model,
-		Account:  codexapp.SharedAccount(),
+		Source:          aiSourceShared,
+		Provider:        shared.Config.Provider,
+		Model:           shared.Config.Model,
+		BaseURL:         shared.BaseURL,
+		ReasoningEffort: shared.ReasoningEffort,
+		Account:         codexapp.SharedAccount(),
 	}
 	if err != nil {
 		resolved.Reason = "storage_error"
@@ -95,6 +122,23 @@ func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
 		}
 		if !connected {
 			resolved.Reason = "shared_codex_disconnected"
+			return resolved
+		}
+		resolved.Available = true
+		return resolved
+	}
+	if shared.Config.Provider == credentials.AIProviderGrokOAuth {
+		if h.grok == nil || !h.grok.Available() {
+			resolved.Reason = "grok_unavailable"
+			return resolved
+		}
+		connected, err := h.grok.AccountExists(grokoauth.SharedAccount())
+		if err != nil {
+			resolved.Reason = "storage_error"
+			return resolved
+		}
+		if !connected {
+			resolved.Reason = "shared_grok_disconnected"
 			return resolved
 		}
 		resolved.Available = true
@@ -122,10 +166,12 @@ func (h *Handler) resolveAIForUser(userID int64) resolvedAI {
 func (h *Handler) resolveSharedAI(ctx context.Context) resolvedAI {
 	shared, err := h.creds.LoadSharedAIProfile(ctx)
 	resolved := resolvedAI{
-		Source:   aiSourceShared,
-		Provider: shared.Config.Provider,
-		Model:    shared.Config.Model,
-		Account:  codexapp.SharedAccount(),
+		Source:          aiSourceShared,
+		Provider:        shared.Config.Provider,
+		Model:           shared.Config.Model,
+		BaseURL:         shared.BaseURL,
+		ReasoningEffort: shared.ReasoningEffort,
+		Account:         codexapp.SharedAccount(),
 	}
 	if err != nil {
 		resolved.Reason = "storage_error"
@@ -143,6 +189,23 @@ func (h *Handler) resolveSharedAI(ctx context.Context) resolvedAI {
 		}
 		if !connected {
 			resolved.Reason = "shared_codex_disconnected"
+			return resolved
+		}
+		resolved.Available = true
+		return resolved
+	}
+	if shared.Config.Provider == credentials.AIProviderGrokOAuth {
+		if h.grok == nil || !h.grok.Available() {
+			resolved.Reason = "grok_unavailable"
+			return resolved
+		}
+		connected, err := h.grok.AccountExists(grokoauth.SharedAccount())
+		if err != nil {
+			resolved.Reason = "storage_error"
+			return resolved
+		}
+		if !connected {
+			resolved.Reason = "shared_grok_disconnected"
 			return resolved
 		}
 		resolved.Available = true

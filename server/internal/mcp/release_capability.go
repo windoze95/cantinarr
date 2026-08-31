@@ -72,6 +72,7 @@ type scopedReleaseGrabParams struct {
 	GUID          string `json:"guid"`
 	IndexerID     int    `json:"indexer_id"`
 	MediaType     string `json:"media_type"`
+	InstanceID    string `json:"instance_id"`
 	TmdbID        int    `json:"tmdb_id"`
 	SeasonNumber  *int   `json:"season_number"`
 	EpisodeNumber *int   `json:"episode_number"`

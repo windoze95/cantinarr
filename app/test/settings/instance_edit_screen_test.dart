@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
@@ -13,14 +14,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
-/// Fake Dio adapter: serves the instance list and per-type user pins, and
-/// records every request (method, path, decoded body) for assertions.
+/// Fake Dio adapter: serves the instance list, per-type user pins, and
+/// per-type access grants, and records every request (method, path, decoded
+/// body) for assertions.
 class _FakeAdapter implements HttpClientAdapter {
   _FakeAdapter({
     this.instances = const [],
     this.pins = const [],
+    this.grants = const [],
     this.mediaRoots = const ['/media'],
     this.arrRootFolders = const [],
+    this.instancesError,
     this.webhookError,
     this.webhookStatus,
     this.testError,
@@ -28,8 +32,13 @@ class _FakeAdapter implements HttpClientAdapter {
 
   final List<Map<String, dynamic>> instances;
   final List<Map<String, dynamic>> pins;
+  final List<Map<String, dynamic>> grants;
   final List<String> mediaRoots;
   final List<String> arrRootFolders;
+
+  /// GET /api/instances answers 500 with this message when set — mimics the
+  /// backend being down at screen mount.
+  final String? instancesError;
   final String? webhookError;
 
   /// GET /webhook status body; null mimics an older server (404), which the
@@ -61,7 +70,22 @@ class _FakeAdapter implements HttpClientAdapter {
           {'id': i + 1, 'path': arrRootFolders[i]},
       ];
     } else if (options.method == 'GET' && path == '/api/instances') {
+      final error = instancesError;
+      if (error != null) {
+        // Mirrors Go's http.Error: JSON-shaped body, text/plain content type.
+        return ResponseBody.fromString(
+          '${jsonEncode({'error': error})}\n',
+          500,
+          headers: {
+            'content-type': ['text/plain; charset=utf-8'],
+          },
+        );
+      }
       response = instances;
+    } else if (options.method == 'GET' && path.endsWith('/grant-users')) {
+      response = grants;
+    } else if (options.method == 'PUT' && path.endsWith('/grant-users')) {
+      response = grants;
     } else if (options.method == 'GET' && path.endsWith('/users')) {
       response = pins;
     } else if (options.method == 'POST' && path == '/api/instances/test') {
@@ -132,9 +156,13 @@ class _FakeAdapter implements HttpClientAdapter {
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier(this.users);
+  _FakeAuthNotifier(this.users, {this.listUsersError});
 
   final List<UserSummary> users;
+
+  /// listUsers throws this when set — mimics the backend being down at
+  /// screen mount.
+  final Object? listUsersError;
 
   @override
   Future<AuthState> build() async => const AuthState(
@@ -147,7 +175,11 @@ class _FakeAuthNotifier extends AuthNotifier {
       );
 
   @override
-  Future<List<UserSummary>> listUsers() async => users;
+  Future<List<UserSummary>> listUsers() async {
+    final error = listUsersError;
+    if (error != null) throw error;
+    return users;
+  }
 
   @override
   Future<void> refreshConfig() async {}
@@ -188,6 +220,7 @@ Future<void> _pumpEdit(
   WidgetTester tester, {
   required _FakeAdapter adapter,
   required List<UserSummary> users,
+  Object? listUsersError,
   InstanceEditScreen screen = const InstanceEditScreen(),
   Size viewSize = const Size(800, 1800),
   double textScaleFactor = 1,
@@ -210,7 +243,8 @@ Future<void> _pumpEdit(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        authProvider.overrideWith(() => _FakeAuthNotifier(users)),
+        authProvider.overrideWith(
+            () => _FakeAuthNotifier(users, listUsersError: listUsersError)),
         backendClientProvider.overrideWithValue(dio),
       ],
       child: MaterialApp.router(
@@ -237,6 +271,24 @@ Future<void> _fillForm(WidgetTester tester, String name) async {
 }
 
 void main() {
+  testWidgets(
+      'backend down at mount shows a friendly error and no unhandled error '
+      'leaks', (tester) async {
+    // Both directory loads fail: the instance list 500s and the user list
+    // throws. _loadDirectory used to await the two futures sequentially, so
+    // when the first await threw, the second future's error had no listener
+    // and escaped as an unhandled zone error — failing this test pre-fix.
+    final adapter = _FakeAdapter(instancesError: 'connection refused');
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      listUsersError: StateError('backend down'),
+    );
+
+    expect(find.text('Could not load users'), findsOneWidget);
+  });
+
   testWidgets('first instance of a type starts as the default', (tester) async {
     final adapter = _FakeAdapter();
     await _pumpEdit(tester, adapter: adapter, users: [_user(1, 'alice')]);
@@ -254,7 +306,7 @@ void main() {
     final toggle = tester.widget<SwitchListTile>(
         find.widgetWithText(SwitchListTile, 'Default Instance'));
     expect(toggle.value, isFalse);
-    expect(find.text('Per-User Default'), findsOneWidget);
+    expect(find.text('User Access'), findsOneWidget);
     expect(find.widgetWithText(CheckboxListTile, 'alice'), findsOneWidget);
   });
 
@@ -321,14 +373,15 @@ void main() {
     await tester.pumpAndSettle();
 
     // No confirmation dialog for chaptarr, the flag is forced off, and the
-    // selected users are assigned to the new instance.
+    // selected users are granted the new instance.
     final post = adapter.requests
         .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
     expect(post.body['service_type'], 'chaptarr');
     expect(post.body['is_default'], isFalse);
-    final putUsers = adapter.requests.singleWhere((r) =>
-        r.method == 'PUT' && r.path == '/api/instances/chaptarr-new/users');
-    expect(putUsers.body, {
+    final putGrants = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' &&
+        r.path == '/api/instances/chaptarr-new/grant-users');
+    expect(putGrants.body, {
       'user_ids': [1]
     });
   });
@@ -686,12 +739,15 @@ void main() {
   });
 
   testWidgets(
-      'editing a non-default instance pins users and shows current pins',
+      'editing a non-default instance grants users beside their default',
       (tester) async {
     final adapter = _FakeAdapter(
       instances: [Map.of(_mainRadarr), Map.of(_radarrB)],
       pins: [
         {'user_id': 2, 'instance_id': 'radarr-main'},
+      ],
+      grants: [
+        {'user_id': 1, 'instance_id': 'radarr-b'},
       ],
     );
     await _pumpEdit(
@@ -707,49 +763,37 @@ void main() {
       ),
     );
 
-    // Bob is pinned to the sibling instance; selecting him here is a move.
-    expect(find.text('Per-User Default'), findsOneWidget);
-    expect(find.text('Currently assigned to "Main Radarr"'), findsOneWidget);
+    // Alice already holds a grant here (checked); Bob's pin to the sibling is
+    // informational — access here is additive, not a move.
+    expect(find.text('User Access'), findsOneWidget);
+    expect(find.text('Default library: "Main Radarr"'), findsOneWidget);
+    final aliceTile = tester.widget<CheckboxListTile>(
+        find.widgetWithText(CheckboxListTile, 'alice'));
+    expect(aliceTile.value, isTrue);
 
     await tester.tap(find.widgetWithText(CheckboxListTile, 'bob'));
     await tester.pumpAndSettle();
 
-    // Moving bob off the sibling asks for confirmation naming who moves from
-    // where; cancelling aborts the save entirely.
+    // Granting is additive: no reassignment dialog, the save applies both the
+    // instance update and the grant list directly.
     await tester.tap(find.widgetWithText(ElevatedButton, 'Save Changes'));
     await tester.pumpAndSettle();
-    expect(find.text('Reassign 1 user?'), findsOneWidget);
-    expect(
-      find.descendant(
-          of: find.byType(AlertDialog),
-          matching: find.textContaining(
-              'removes bob from "Main Radarr" and assigns them to "Radarr B"')),
-      findsOneWidget,
-    );
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(adapter.requests.where((r) => r.method == 'PUT'), isEmpty);
-
-    // Confirming applies both the instance update and the reassignment.
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Save Changes'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Reassign'));
-    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
 
     expect(
       adapter.requests
           .any((r) => r.method == 'PUT' && r.path == '/api/instances/radarr-b'),
       isTrue,
     );
-    final putUsers = adapter.requests.singleWhere(
-        (r) => r.method == 'PUT' && r.path == '/api/instances/radarr-b/users');
-    expect(putUsers.body, {
-      'user_ids': [2]
+    final putGrants = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' && r.path == '/api/instances/radarr-b/grant-users');
+    expect(putGrants.body, {
+      'user_ids': [1, 2]
     });
   });
 
   testWidgets(
-      'assigning a user pinned to a sibling Chaptarr instance confirms the move',
+      'granting a sibling Chaptarr instance never moves the existing one',
       (tester) async {
     final adapter = _FakeAdapter(
       instances: [
@@ -776,43 +820,23 @@ void main() {
     await tester.pumpAndSettle();
 
     await _fillForm(tester, 'Books B');
+    // Alice's existing library shows as her default, not a pending move.
+    expect(find.text('Default library: "Books A"'), findsOneWidget);
     await tester.tap(find.widgetWithText(CheckboxListTile, 'alice'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
     await tester.pumpAndSettle();
 
-    // Alice is pinned to Books A, so creating must confirm the removal and
-    // spell out where her Books access lands; cancelling creates nothing.
-    expect(find.text('Reassign 1 user?'), findsOneWidget);
-    expect(
-      find.descendant(
-          of: find.byType(AlertDialog),
-          matching: find.textContaining(
-              'removes alice from "Books A" and assigns them to "Books B"')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-          of: find.byType(AlertDialog),
-          matching: find
-              .textContaining('Books access will come from "Books B" instead')),
-      findsOneWidget,
-    );
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(adapter.requests.where((r) => r.method == 'POST'), isEmpty);
-
-    // Confirming creates the instance and moves alice to it.
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Reassign'));
-    await tester.pumpAndSettle();
+    // Additive grant: no reassignment dialog, the create goes straight
+    // through and grants alice the new instance beside Books A.
+    expect(find.byType(AlertDialog), findsNothing);
     final post = adapter.requests
         .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
     expect(post.body['service_type'], 'chaptarr');
-    final putUsers = adapter.requests.singleWhere((r) =>
-        r.method == 'PUT' && r.path == '/api/instances/chaptarr-new/users');
-    expect(putUsers.body, {
+    final putGrants = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' &&
+        r.path == '/api/instances/chaptarr-new/grant-users');
+    expect(putGrants.body, {
       'user_ids': [1]
     });
   });
@@ -891,6 +915,88 @@ void main() {
         .singleWhere((r) => r.path == '/api/instances/test');
     expect(test.body['service_type'], 'sabnzbd');
     expect(find.text(reason), findsOneWidget);
+  });
+
+  // The setup checklist's download-client row names a category, not a
+  // service, so the form opens on the selector's disabled placeholder and
+  // refuses to act until a real type is picked — a guess here is exactly the
+  // guess the prompt exists to prevent, so neither Save nor Test Connection
+  // may reach the server before the choice.
+  testWidgets('a prompted form holds every action until a type is picked',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        serviceTypePrompt: 'Select a download client',
+      ),
+    );
+
+    // The selector opens on the prompt itself…
+    expect(find.text('Select a download client'), findsOneWidget);
+    // …and nothing that depends on a type renders: credentials need to know
+    // their shape (key vs username/password) first, and the default toggle
+    // needs a service to be the default of.
+    expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.widgetWithText(TextField, 'Username'), findsNothing);
+    expect(find.widgetWithText(TextField, 'Password'), findsNothing);
+    expect(
+        find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
+    // The type-independent basics stay.
+    expect(find.widgetWithText(TextField, 'Name'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'URL'), findsOneWidget);
+
+    final requestsBefore = adapter.requests.length;
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+    expect(find.text('Choose a service type'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test Connection'));
+    await tester.pumpAndSettle();
+    // A refusal, in red — not a connection result.
+    final result =
+        tester.widget<Text>(find.text('Choose a service type first.'));
+    expect(result.style?.color, AppTheme.error);
+
+    // Neither action may have reached the server.
+    expect(adapter.requests.length, requestsBefore);
+  });
+
+  testWidgets('picking a type in a prompted form restores the normal fields',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        serviceTypePrompt: 'Select a download client',
+      ),
+    );
+
+    // Open the selector from its placeholder and pick a real member; the
+    // placeholder itself is disabled, so the menu must still offer a choice.
+    await tester.tap(find.text('Select a download client'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('qBittorrent'));
+    await tester.pumpAndSettle();
+
+    // qBittorrent authenticates with username/password, not an API key.
+    expect(find.widgetWithText(TextField, 'Username'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Password'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.widgetWithText(SwitchListTile, 'Default Instance'),
+        findsOneWidget);
+
+    // Save now fails on the ordinary empty-form check instead of the type
+    // prompt: a choice has been made and the form believes it.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+    expect(find.text('Name and URL are required'), findsOneWidget);
+    expect(find.text('Choose a service type'), findsNothing);
   });
 
   testWidgets('offers instant updates for a Chaptarr instance',

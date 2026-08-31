@@ -186,7 +186,7 @@ func TestInteractiveAuthorizationRevocationStopsProviderLoops(t *testing.T) {
 		t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
 		var starts []string
 		var ends []bool
-		finalHistory, err := NewOpenAIService("secret", "gpt-5.5", revokedInteractiveToolServer()).SendMessage(
+		finalHistory, err := NewOpenAIService("secret", "gpt-5.5", "", "", revokedInteractiveToolServer()).SendMessage(
 			context.Background(), history, chatCtx, StreamCallbacks{
 				OnToolStart: func(name, _ string) { starts = append(starts, name) },
 				OnToolEnd:   func(_ string, ok bool) { ends = append(ends, ok) },
@@ -328,6 +328,47 @@ func TestOpenAIValidationProviderContract(t *testing.T) {
 	}
 }
 
+func TestOpenAIExplicitBaseURLOverridesEnvSeam(t *testing.T) {
+	// The admin-configured shared base URL must win over the SDK's implicit
+	// OPENAI_BASE_URL env default, and an empty configured value must leave
+	// that env seam in charge — every other openai test in this suite (and
+	// the lab stack) points the env var at a fake upstream and depends on it.
+	configured := make(chan providerRequest, 1)
+	configuredServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		configured <- captureProviderRequest(r)
+		writeOpenAITextSSE(w)
+	}))
+	t.Cleanup(configuredServer.Close)
+	var envHits atomic.Int64
+	envServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		envHits.Add(1)
+		writeOpenAITextSSE(w)
+	}))
+	t.Cleanup(envServer.Close)
+	t.Setenv("OPENAI_BASE_URL", envServer.URL+"/v1")
+
+	params := TurnParams{
+		History: Transcript{{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockText, Text: "hello"}}}},
+	}
+	if _, err := NewOpenAIService("secret", "gpt-5.5", configuredServer.URL+"/v1", "", nil).NextTurn(context.Background(), params); err != nil {
+		t.Fatalf("turn with explicit base URL: %v", err)
+	}
+	req := <-configured
+	if req.path != "/v1/chat/completions" {
+		t.Fatalf("path=%q, want /v1/chat/completions", req.path)
+	}
+	if got := envHits.Load(); got != 0 {
+		t.Fatalf("env upstream received %d requests despite explicit base URL", got)
+	}
+
+	if _, err := NewOpenAIService("secret", "gpt-5.5", "", "", nil).NextTurn(context.Background(), params); err != nil {
+		t.Fatalf("turn with empty base URL: %v", err)
+	}
+	if envHits.Load() == 0 {
+		t.Fatal("empty base URL no longer honors the OPENAI_BASE_URL env seam")
+	}
+}
+
 func TestOpenAIInteractiveFinalIterationKeepsToolChoiceWithTools(t *testing.T) {
 	tools := toOpenAITools(mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleUser))
 	if len(tools) == 0 {
@@ -338,6 +379,7 @@ func TestOpenAIInteractiveFinalIterationKeepsToolChoiceWithTools(t *testing.T) {
 		[]openai.ChatCompletionMessageParamUnion{openai.UserMessage("hello")},
 		tools,
 		true,
+		"",
 	)
 	body, err := json.Marshal(params)
 	if err != nil {
@@ -362,6 +404,7 @@ func TestOpenAIToolSchemasUseSupportedObjectRoots(t *testing.T) {
 		[]openai.ChatCompletionMessageParamUnion{openai.UserMessage("hello")},
 		toOpenAITools(adminTools),
 		false,
+		"",
 	)
 	body, err := json.Marshal(params)
 	if err != nil {
@@ -407,7 +450,7 @@ func TestOpenAIToolSchemasUseSupportedObjectRoots(t *testing.T) {
 	}
 }
 
-func TestAnthropicToolSchemasCarryFullRoots(t *testing.T) {
+func TestAnthropicToolSchemasUseSupportedObjectRoots(t *testing.T) {
 	adminTools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
 	body, err := json.Marshal(toSDKTools(adminTools))
 	if err != nil {
@@ -421,17 +464,25 @@ func TestAnthropicToolSchemasCarryFullRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	seenGrabRelease := false
+	seenAdditionalProperties := false
 	for _, tool := range decoded {
 		if tool.InputSchema["type"] != "object" {
 			t.Errorf("tool %q input_schema must have type object", tool.Name)
+		}
+		// The Messages API rejects these at the input_schema root, and one bad
+		// tool 400s every request that carries the catalog (#497).
+		for _, keyword := range []string{"oneOf", "anyOf", "allOf", "enum", "const", "not"} {
+			if _, found := tool.InputSchema[keyword]; found {
+				t.Errorf("tool %q has unsupported top-level %s", tool.Name, keyword)
+			}
+		}
+		if _, found := tool.InputSchema["additionalProperties"]; found {
+			seenAdditionalProperties = true
 		}
 		if tool.Name != "grab_release" {
 			continue
 		}
 		seenGrabRelease = true
-		if oneOf, ok := tool.InputSchema["oneOf"].([]any); !ok || len(oneOf) != 3 {
-			t.Errorf("grab_release input_schema oneOf = %#v, want the three media_type branches", tool.InputSchema["oneOf"])
-		}
 		if props, ok := tool.InputSchema["properties"].(map[string]any); !ok || len(props) == 0 {
 			t.Error("grab_release input_schema lost its properties")
 		}
@@ -441,6 +492,141 @@ func TestAnthropicToolSchemasCarryFullRoots(t *testing.T) {
 	}
 	if !seenGrabRelease {
 		t.Fatal("serialized Anthropic tools omitted grab_release")
+	}
+	// Anthropic accepts additionalProperties at the root; the strip must stay
+	// scoped to the rejected combinators rather than flatten every extra keyword.
+	if !seenAdditionalProperties {
+		t.Error("no serialized tool carried root additionalProperties; strip is too broad")
+	}
+	// The strip must be a copy-level decision: Gemini, Codex, and native MCP
+	// clients still rely on grab_release's canonical root oneOf.
+	for _, tool := range adminTools {
+		if tool.Name != "grab_release" {
+			continue
+		}
+		if _, found := tool.InputSchema["oneOf"]; !found {
+			t.Error("toSDKTools mutated the canonical grab_release schema: root oneOf removed")
+		}
+	}
+}
+
+// validationProbeParams mirrors validateAIProfile's TurnParams so the probe
+// shape asserted here is the one the save-time and daily health checks send.
+func validationProbeParams(tools []mcp.Tool) TurnParams {
+	return TurnParams{
+		System: aiValidationSystemPrompt,
+		History: Transcript{{
+			Role:    RoleUser,
+			Content: []TranscriptBlock{{Type: BlockText, Text: aiValidationUserPrompt}},
+		}},
+		Tools:            tools,
+		ForceNoTools:     true,
+		DisableReasoning: true,
+		MaxTokens:        aiValidationMaxTokens,
+	}
+}
+
+func TestAnthropicValidationProbeSendsToolsWithoutToolCalls(t *testing.T) {
+	adminTools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
+	body, err := json.Marshal(anthropicNextTurnParams("claude-sonnet-5", validationProbeParams(adminTools)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if tools, ok := decoded["tools"].([]any); !ok || len(tools) == 0 {
+		t.Fatalf("validation probe omitted tools: %#v", decoded["tools"])
+	}
+	if choice, ok := decoded["tool_choice"].(map[string]any); !ok || choice["type"] != "none" {
+		t.Fatalf("validation probe tool_choice = %#v, want type none", decoded["tool_choice"])
+	}
+
+	// The remediation single-turn shape is unchanged: tools offered, choice free.
+	body, err = json.Marshal(anthropicNextTurnParams("claude-sonnet-5", TurnParams{Tools: adminTools}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded = nil
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := decoded["tool_choice"]; found {
+		t.Fatalf("tool-enabled turn must not force tool_choice, got %#v", decoded["tool_choice"])
+	}
+}
+
+func TestOpenAIValidationProbeSendsToolsWithoutToolCalls(t *testing.T) {
+	adminTools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
+	body, err := json.Marshal(openAINextTurnParams("gpt-5.5", validationProbeParams(adminTools)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if tools, ok := decoded["tools"].([]any); !ok || len(tools) == 0 {
+		t.Fatalf("validation probe omitted tools: %#v", decoded["tools"])
+	}
+	if decoded["tool_choice"] != "none" {
+		t.Fatalf("validation probe tool_choice = %#v, want \"none\"", decoded["tool_choice"])
+	}
+
+	// Without tools the probe must omit tool_choice entirely: the API rejects a
+	// bare tool_choice.
+	body, err = json.Marshal(openAINextTurnParams("gpt-5.5", validationProbeParams(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded = nil
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := decoded["tools"]; found {
+		t.Fatalf("tool-free probe must omit tools, got %#v", decoded["tools"])
+	}
+	if _, found := decoded["tool_choice"]; found {
+		t.Fatalf("tool-free probe must omit tool_choice, got %#v", decoded["tool_choice"])
+	}
+}
+
+func TestGeminiValidationProbeSendsToolsWithoutToolCalls(t *testing.T) {
+	adminTools := mcp.NewToolServer(nil, nil, nil, nil).GetToolsForRole(auth.RoleAdmin)
+	config := geminiNextTurnConfig(validationProbeParams(adminTools))
+	if len(config.Tools) == 0 {
+		t.Fatal("validation probe omitted tools")
+	}
+	if config.ToolConfig == nil || config.ToolConfig.FunctionCallingConfig == nil ||
+		config.ToolConfig.FunctionCallingConfig.Mode != genai.FunctionCallingConfigModeNone {
+		t.Fatalf("validation probe must set function-calling mode NONE, got %#v", config.ToolConfig)
+	}
+
+	// The remediation single-turn shape is unchanged: tools offered, calling free.
+	free := geminiNextTurnConfig(TurnParams{Tools: adminTools})
+	if free.ToolConfig != nil {
+		t.Fatalf("tool-enabled turn must not constrain function calling, got %#v", free.ToolConfig)
+	}
+}
+
+func TestValidationTurnAcceptsToolCallOnlyReply(t *testing.T) {
+	toolOnly := TurnResult{Message: TranscriptMessage{
+		Role:    RoleAssistant,
+		Content: []TranscriptBlock{{Type: BlockToolUse, ID: "t1", Name: "get_queue"}},
+	}}
+	if !validationTurnProvedProvider(toolOnly) {
+		t.Error("a tool-call reply proves the provider accepted the tool payload")
+	}
+	if validationTurnProvedProvider(TurnResult{}) {
+		t.Error("an empty reply must not validate")
+	}
+	blank := TurnResult{Message: TranscriptMessage{
+		Role:    RoleAssistant,
+		Content: []TranscriptBlock{{Type: BlockText, Text: "   "}},
+	}}
+	if validationTurnProvedProvider(blank) {
+		t.Error("a whitespace-only reply must not validate")
 	}
 }
 
@@ -1080,7 +1266,7 @@ func TestOpenAIRefusalAndEmptyResponseAreExplicitErrors(t *testing.T) {
 			t.Cleanup(server.Close)
 			t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
 
-			_, err := NewOpenAIService("secret", "gpt-5.5", nil).NextTurn(context.Background(), TurnParams{
+			_, err := NewOpenAIService("secret", "gpt-5.5", "", "", nil).NextTurn(context.Background(), TurnParams{
 				History: Transcript{{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockText, Text: "hello"}}}},
 			})
 			if err == nil || !strings.Contains(err.Error(), test.want) {

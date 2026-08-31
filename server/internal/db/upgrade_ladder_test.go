@@ -108,12 +108,15 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 
 	// The instance keeps its api key and default flag; the columns added by
 	// the ladder exist and carry their defaults.
-	var apiKey, instanceURL, instanceUsername, webhookToken, mediaDownloadMode, mediaPathMappings string
+	var apiKey, instanceURL, instanceUsername, webhookToken, mediaDownloadMode, mediaPathMappings, mediaServerConfig string
 	var isDefault bool
 	if err := database.QueryRow(
-		`SELECT api_key, url, username, webhook_token, is_default, media_download_mode, media_path_mappings FROM service_instances WHERE id = 'radarr-main'`,
-	).Scan(&apiKey, &instanceURL, &instanceUsername, &webhookToken, &isDefault, &mediaDownloadMode, &mediaPathMappings); err != nil {
+		`SELECT api_key, url, username, webhook_token, is_default, media_download_mode, media_path_mappings, media_server_config FROM service_instances WHERE id = 'radarr-main'`,
+	).Scan(&apiKey, &instanceURL, &instanceUsername, &webhookToken, &isDefault, &mediaDownloadMode, &mediaPathMappings, &mediaServerConfig); err != nil {
 		t.Fatalf("read upgraded service instance: %v", err)
+	}
+	if mediaServerConfig != "{}" {
+		t.Fatalf("media_server_config = %q after upgrade, want {}", mediaServerConfig)
 	}
 	if apiKey != "fake-legacy-api-key" || instanceURL != "http://radarr.local:7878" || !isDefault {
 		t.Fatalf("service instance = (%q, %q, default %t), want seeded values intact", apiKey, instanceURL, isDefault)
@@ -190,7 +193,7 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 
 	// Spot-check tables that did not exist in the old schema: created by
 	// today's initSQL and empty.
-	for _, table := range []string{"issues", "notification_prefs", "user_default_instances", "webauthn_credentials", "user_ai_settings", "arr_queue_witness", "content_alert_claims"} {
+	for _, table := range []string{"issues", "notification_prefs", "user_default_instances", "webauthn_credentials", "user_ai_settings", "arr_queue_witness", "content_alert_claims", "user_media_server_accounts"} {
 		var count int
 		if err := database.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			t.Fatalf("new table %s missing after upgrade: %v", table, err)

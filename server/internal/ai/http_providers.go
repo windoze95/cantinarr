@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -28,15 +29,68 @@ type openAIService struct {
 	client     openai.Client
 	model      openai.ChatModel
 	toolServer *mcp.ToolServer
+	// reasoningEffort is the admin-pinned shared reasoning_effort. Empty
+	// means auto: interactive turns send no effort field and NextTurn keeps
+	// its adaptive ladder. Grok services always leave it empty (the Grok
+	// family rejects the field).
+	reasoningEffort openai.ReasoningEffort
 }
 
-func NewOpenAIService(apiKey, model string, toolServer *mcp.ToolServer) *openAIService {
+// NewOpenAIService builds a chat service against the OpenAI API, or against
+// any OpenAI-compatible endpoint when baseURL is set (the admin-configured
+// shared override). An empty baseURL deliberately passes no WithBaseURL so the
+// SDK's own defaults stay in charge: api.openai.com in production, and the
+// implicit OPENAI_BASE_URL env seam that tests and the lab stack point at
+// fake upstreams. When baseURL is set it is applied after the SDK's env
+// default, so the configured value wins over the env var. reasoningEffort is
+// the admin-pinned effort for every turn (empty = auto).
+func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer) *openAIService {
 	if model == "" {
-		model = "gpt-5.5"
+		model = "gpt-5.6-sol"
+	}
+	options := []openaioption.RequestOption{
+		openaioption.WithAPIKey(apiKey),
+		openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
+		openaioption.WithRequestTimeout(httpProviderStreamTimeout),
+	}
+	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
+		options = append(options, openaioption.WithBaseURL(baseURL))
+	}
+	return &openAIService{
+		client:          openai.NewClient(options...),
+		model:           openai.ChatModel(model),
+		toolServer:      toolServer,
+		reasoningEffort: openai.ReasoningEffort(strings.TrimSpace(reasoningEffort)),
+	}
+}
+
+// localOpenAICredential substitutes the fixed placeholder bearer when the
+// optional local-provider key is unset: most local OpenAI-compatible servers
+// ignore auth, but the SDK always sends an Authorization header and some
+// proxies reject an empty one.
+func localOpenAICredential(key string) string {
+	if strings.TrimSpace(key) == "" {
+		return "cantinarr-local"
+	}
+	return key
+}
+
+// NewGrokService builds a chat service against xAI's OpenAI-compatible API.
+// credential is either a console.x.ai API key or a subscription OAuth bearer
+// token — the wire format is identical. The base URL is pinned to api.x.ai;
+// XAI_BASE_URL exists for tests, mirroring the other providers' seams.
+func NewGrokService(credential, model string, toolServer *mcp.ToolServer) *openAIService {
+	if model == "" {
+		model = "grok-4.6"
+	}
+	baseURL := strings.TrimSpace(os.Getenv("XAI_BASE_URL"))
+	if baseURL == "" {
+		baseURL = "https://api.x.ai/v1"
 	}
 	return &openAIService{
 		client: openai.NewClient(
-			openaioption.WithAPIKey(apiKey),
+			openaioption.WithAPIKey(credential),
+			openaioption.WithBaseURL(baseURL),
 			openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
 			openaioption.WithRequestTimeout(httpProviderStreamTimeout),
 		),
@@ -52,11 +106,21 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 	messages = append(messages, toOpenAIMessages(history)...)
 	tools := toOpenAITools(s.toolServer.GetToolsForRole(chatCtx.Role))
 	finalHistory := cloneTranscript(history)
+	effort := s.reasoningEffort
+	watch := &carouselWatch{}
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
-		params := openAIInteractiveParams(s.model, messages, tools, iteration == maxToolIterations-1)
+		params := openAIInteractiveParams(s.model, messages, tools, iteration == maxToolIterations-1, effort)
 
 		message, finishReason, err := s.chatStream(ctx, params, cb)
+		if err != nil && effort != "" && classifyOpenAIReasoningRejection(err) != openAIReasoningNotRejected {
+			// The endpoint rejected the pinned reasoning_effort (a
+			// non-reasoning model, or a proxy without the control). Drop the
+			// field for the rest of this turn instead of failing the chat.
+			effort = ""
+			params = openAIInteractiveParams(s.model, messages, tools, iteration == maxToolIterations-1, effort)
+			message, finishReason, err = s.chatStream(ctx, params, cb)
+		}
 		if err != nil {
 			return finalHistory, err
 		}
@@ -70,6 +134,19 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 			if message.Content != "" {
 				finalHistory = append(finalHistory, openAIMessageToTranscript(message))
 			}
+			// The turn consumed media results and answered with titles but no
+			// carousel: remind the model once, silently. Post-nudge text is
+			// never streamed — the user already has the complete answer, only
+			// the display_media call (whose media_results frame flows through
+			// OnToolResult) is still owed.
+			if iteration < maxToolIterations-2 && watch.shouldNudge(message.Content) {
+				messages = append(messages, openAIMessageToParam(message))
+				nudge := watch.markNudged()
+				messages = append(messages, openai.UserMessage(nudge))
+				finalHistory = append(finalHistory, textTranscriptMessage(agentRoleUser, nudge))
+				cb.OnText = nil
+				continue
+			}
 			return finalHistory, nil
 		}
 
@@ -77,7 +154,7 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 		finalHistory = append(finalHistory, openAIMessageToTranscript(message))
 		var toolResultBlocks []transcriptBlock
 		for _, toolCall := range message.ToolCalls {
-			result, transcriptBlock, toolErr := s.runOpenAITool(ctx, toolCall, chatCtx, cb)
+			result, transcriptBlock, toolErr := s.runOpenAITool(ctx, toolCall, chatCtx, cb, watch)
 			if toolErr != nil {
 				return finalHistory, toolErr
 			}
@@ -98,12 +175,18 @@ func openAIInteractiveParams(
 	messages []openai.ChatCompletionMessageParamUnion,
 	tools []openai.ChatCompletionToolUnionParam,
 	forceText bool,
+	effort openai.ReasoningEffort,
 ) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Model:               model,
 		Messages:            messages,
 		MaxCompletionTokens: openai.Int(httpProviderMaxOutputTokens),
 		Tools:               tools,
+	}
+	// Auto (empty) sends no field at all, so hosted models keep their own
+	// defaults and OpenAI-compatible servers keep their native behavior.
+	if effort != "" {
+		params.ReasoningEffort = effort
 	}
 	if forceText && len(tools) > 0 {
 		params.ToolChoice.OfAuto = openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone))
@@ -145,7 +228,7 @@ func (s *openAIService) chatStream(ctx context.Context, params openai.ChatComple
 	return message, string(choice.FinishReason), nil
 }
 
-func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCall, chatCtx ChatContext, cb StreamCallbacks) (openai.ChatCompletionMessageParamUnion, transcriptBlock, error) {
+func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCall, chatCtx ChatContext, cb StreamCallbacks, watch *carouselWatch) (openai.ChatCompletionMessageParamUnion, transcriptBlock, error) {
 	name := toolCall.Function.Name
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(name, toolLabel(name))
@@ -182,6 +265,7 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 			IsError:   true,
 		}, nil
 	}
+	watch.observe(name, result.StructuredData)
 	if result.StructuredData != nil && mcp.ToolsWithStructuredResults[name] && cb.OnToolResult != nil {
 		cb.OnToolResult(name, result.StructuredData)
 	}
@@ -338,7 +422,7 @@ func toOpenAITools(tools []mcp.Tool) []openai.ChatCompletionToolUnionParam {
 		for key, value := range t.InputSchema {
 			parameters[key] = value
 		}
-		for _, key := range []string{"oneOf", "anyOf", "allOf", "enum", "const", "not"} {
+		for _, key := range unsupportedToolRootKeywords {
 			delete(parameters, key)
 		}
 		fn := openai.FunctionDefinitionParam{
@@ -389,6 +473,7 @@ func (s *geminiService) SendMessage(ctx context.Context, history transcript, cha
 	contents := toGeminiContents(history)
 	tools := toGeminiTools(s.toolServer.GetToolsForRole(chatCtx.Role))
 	system := &genai.Content{Parts: []*genai.Part{genai.NewPartFromText(systemPrompt + "\n\n" + dynamicContext(chatCtx))}}
+	watch := &carouselWatch{}
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		useTools := iteration != maxToolIterations-1
@@ -419,6 +504,15 @@ func (s *geminiService) SendMessage(ctx context.Context, history transcript, cha
 			if len(content.Parts) > 0 {
 				finalHistory = append(finalHistory, geminiContentToTranscript(content))
 			}
+			// Owed carousel: remind once, silently (see the openAI loop).
+			if iteration < maxToolIterations-2 && watch.shouldNudge(geminiContentText(content)) {
+				contents = append(contents, content)
+				nudge := watch.markNudged()
+				contents = append(contents, genai.NewContentFromParts([]*genai.Part{genai.NewPartFromText(nudge)}, genai.RoleUser))
+				finalHistory = append(finalHistory, textTranscriptMessage(agentRoleUser, nudge))
+				cb.OnText = nil
+				continue
+			}
 			return finalHistory, nil
 		}
 
@@ -427,7 +521,7 @@ func (s *geminiService) SendMessage(ctx context.Context, history transcript, cha
 		resultParts := make([]*genai.Part, 0, len(functionCalls))
 		toolResultBlocks := make([]transcriptBlock, 0, len(functionCalls))
 		for _, call := range functionCalls {
-			result, transcriptBlock, toolErr := s.runGeminiTool(ctx, call, chatCtx, cb)
+			result, transcriptBlock, toolErr := s.runGeminiTool(ctx, call, chatCtx, cb, watch)
 			if toolErr != nil {
 				return finalHistory, toolErr
 			}
@@ -655,7 +749,7 @@ func geminiContentHasUsableOutput(content *genai.Content) bool {
 	return false
 }
 
-func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionCall, chatCtx ChatContext, cb StreamCallbacks) (*genai.Part, transcriptBlock, error) {
+func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionCall, chatCtx ChatContext, cb StreamCallbacks, watch *carouselWatch) (*genai.Part, transcriptBlock, error) {
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(call.Name, toolLabel(call.Name))
 	}
@@ -695,6 +789,7 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionC
 				IsError:   true,
 			}, nil
 	}
+	watch.observe(call.Name, result.StructuredData)
 	if result.StructuredData != nil && mcp.ToolsWithStructuredResults[call.Name] && cb.OnToolResult != nil {
 		cb.OnToolResult(call.Name, result.StructuredData)
 	}
@@ -774,6 +869,21 @@ func toGeminiContents(messages transcript) []*genai.Content {
 		}
 	}
 	return out
+}
+
+// geminiContentText concatenates the plain text parts of one model content,
+// for the carousel-nudge gate.
+func geminiContentText(content *genai.Content) string {
+	if content == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, part := range content.Parts {
+		if part != nil && !part.Thought {
+			sb.WriteString(part.Text)
+		}
+	}
+	return sb.String()
 }
 
 func geminiContentToTranscript(content *genai.Content) transcriptMessage {

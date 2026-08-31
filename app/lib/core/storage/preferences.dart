@@ -33,32 +33,6 @@ final requestNotificationsEnabledProvider =
   (ref) => RequestNotificationsNotifier(),
 );
 
-const _plexGuideKey = 'plex_guide_enabled';
-
-/// Whether the "Watch on Plex" guide appears in the menu and Settings.
-/// Stored locally on the device and defaults to enabled; users who are
-/// already set up can hide it from the guide itself or from Settings.
-class PlexGuideNotifier extends StateNotifier<bool> {
-  PlexGuideNotifier() : super(true) {
-    _load();
-  }
-
-  Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    state = prefs.getBool(_plexGuideKey) ?? true;
-  }
-
-  Future<void> set(bool value) async {
-    state = value;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_plexGuideKey, value);
-  }
-}
-
-final plexGuideEnabledProvider = StateNotifierProvider<PlexGuideNotifier, bool>(
-  (ref) => PlexGuideNotifier(),
-);
-
 const _setupReminderKey = 'setup_reminder_enabled';
 
 /// Whether the drawer shows a "Setup checklist" reminder while features
@@ -147,14 +121,13 @@ final profileApprovalsMenuOnlyWhenPendingProvider =
   ),
 );
 
-const _dismissedUpdateVersionKey = 'dismissed_update_version';
 const _dismissedAppSkewPairKey = 'dismissed_app_skew_pair';
 const _dismissedServerSkewPairKey = 'dismissed_server_skew_pair';
 
 /// A device-local "don't show this exact notice again" slot: one string
-/// holding the identity of the dismissed notice (a release version, or a
-/// `version|floor` pair). The notice resurfaces as soon as its identity
-/// changes, so a dismissal only ever silences the thing it was for.
+/// holding the identity of the dismissed notice (a `version|floor` pair). The
+/// notice resurfaces as soon as its identity changes, so a dismissal only ever
+/// silences the thing it was for.
 class DismissedNoticeNotifier extends StateNotifier<String?> {
   DismissedNoticeNotifier(this._key) : super(null) {
     _load();
@@ -173,13 +146,6 @@ class DismissedNoticeNotifier extends StateNotifier<String?> {
     await prefs.setString(_key, value);
   }
 }
-
-/// The server version the admin last dismissed the "update available" banner
-/// for; the banner reappears once a newer version is offered.
-final dismissedUpdateVersionProvider =
-    StateNotifierProvider<DismissedNoticeNotifier, String?>(
-  (ref) => DismissedNoticeNotifier(_dismissedUpdateVersionKey),
-);
 
 /// The `appVersion|serverFloor` pair whose "update this app" skew warning was
 /// dismissed; either side changing brings the warning back.

@@ -13,10 +13,11 @@ import (
 // the library HOLDS (the record's files, with import dates) to what HAPPENED
 // (the grab and import history, newest first, with download identities), so a
 // wrong-book report is judged from receipts instead of a title string.
-func (s *ToolServer) getBookTimeline(input json.RawMessage, instanceID string) (*ToolResult, error) {
+func (s *ToolServer) getBookTimeline(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
 	var params struct {
-		MediaType string `json:"media_type"`
-		BookID    int    `json:"book_id"`
+		MediaType  string `json:"media_type"`
+		InstanceID string `json:"instance_id"`
+		BookID     int    `json:"book_id"`
 	}
 	if err := json.Unmarshal(nonEmptyJSON(input), &params); err != nil {
 		return nil, fmt.Errorf("invalid get_book_timeline input: %w", err)
@@ -27,9 +28,9 @@ func (s *ToolServer) getBookTimeline(input json.RawMessage, instanceID string) (
 	if params.BookID <= 0 {
 		return &ToolResult{Text: "get_book_timeline needs the issue's book_id."}, nil
 	}
-	client := s.GetChaptarrFor(instanceID)
+	client, _, refusal := s.chaptarrTargetFor(params.InstanceID, callInstanceID)
 	if client == nil {
-		return &ToolResult{Text: "Chaptarr is not configured."}, nil
+		return &ToolResult{Text: refusal}, nil
 	}
 	return s.getBookTimelineWithClient(client, input)
 }

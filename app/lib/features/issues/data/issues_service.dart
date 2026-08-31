@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/network/long_request_options.dart';
 import 'agent_action_models.dart';
 import 'agent_approval_rule_models.dart';
 import 'issue_models.dart';
@@ -198,7 +199,7 @@ class IssuesService {
     final resp = await _dio.put(
       '/api/admin/remediation-settings',
       data: settings.toJson(),
-      options: Options(receiveTimeout: _aiValidationReceiveTimeout),
+      options: longRequestOptions(timeout: _aiValidationReceiveTimeout),
     );
     return RemediationSettings.fromJson(resp.data as Map<String, dynamic>);
   }
@@ -277,7 +278,7 @@ class IssuesService {
     final resp = await _dio.post(
       '/api/admin/agent-actions/approve-batch',
       data: {'ids': ids},
-      options: Options(receiveTimeout: _batchApproveReceiveTimeout),
+      options: longRequestOptions(timeout: _batchApproveReceiveTimeout),
     );
     final data = resp.data as Map<String, dynamic>?;
     return ((data?['results'] as List?) ?? const [])

@@ -321,3 +321,22 @@ func TestCredentialStatusReportsBuiltInTrakt(t *testing.T) {
 		t.Fatalf("admin ID: configured=%t builtin=%t, want true/false", configured, builtin)
 	}
 }
+
+func getCredentialsAIStatus(t *testing.T, handler *Handler) map[string]any {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	handler.Get(recorder, httptest.NewRequest(http.MethodGet, "/api/admin/credentials", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var status map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	ai, ok := status["ai"].(map[string]any)
+	if !ok {
+		t.Fatalf("ai status missing: %s", recorder.Body.String())
+	}
+	return ai
+}
+

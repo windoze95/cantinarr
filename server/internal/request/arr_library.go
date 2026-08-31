@@ -41,7 +41,25 @@ func (s *Service) movieAvailabilityDigest(userID int64) (map[int]movieAvailabili
 	if client == nil {
 		return nil, false
 	}
+	return s.movieDigestFor(client, instanceID)
+}
 
+// movieAvailabilityDigestForInstance is movieAvailabilityDigest with the
+// resolution hoisted out: it reads one specific library's digest. The caller
+// authorizes the selection — this is reached with ids from the user's own
+// history rows or their granted set, never a raw client-supplied id.
+func (s *Service) movieAvailabilityDigestForInstance(instanceID string) (map[int]movieAvailability, bool) {
+	if s.registry == nil || instanceID == "" {
+		return nil, false
+	}
+	client, err := s.registry.GetRadarrClient(instanceID)
+	if err != nil || client == nil {
+		return nil, false
+	}
+	return s.movieDigestFor(client, instanceID)
+}
+
+func (s *Service) movieDigestFor(client *radarr.Client, instanceID string) (map[int]movieAvailability, bool) {
 	cacheKey := "movie-availability:" + instanceID
 	if s.libraryCache != nil {
 		if data, ok := s.libraryCache.Get(cacheKey); ok {
@@ -80,7 +98,24 @@ func (s *Service) seriesAvailabilityDigest(userID int64) (map[int]seriesAvailabi
 	if client == nil {
 		return nil, false
 	}
+	return s.seriesDigestFor(client, instanceID)
+}
 
+// seriesAvailabilityDigestForInstance is seriesAvailabilityDigest with the
+// resolution hoisted out; the same authorization note as the movie variant
+// applies.
+func (s *Service) seriesAvailabilityDigestForInstance(instanceID string) (map[int]seriesAvailability, bool) {
+	if s.registry == nil || instanceID == "" {
+		return nil, false
+	}
+	client, err := s.registry.GetSonarrClient(instanceID)
+	if err != nil || client == nil {
+		return nil, false
+	}
+	return s.seriesDigestFor(client, instanceID)
+}
+
+func (s *Service) seriesDigestFor(client *sonarr.Client, instanceID string) (map[int]seriesAvailability, bool) {
 	cacheKey := "series-availability:" + instanceID
 	if s.libraryCache != nil {
 		if data, ok := s.libraryCache.Get(cacheKey); ok {
@@ -169,6 +204,8 @@ func (s *Service) InvalidateBookDigests(instanceID string) {
 	s.libraryCache.Delete("book-library:" + instanceID)
 	s.libraryCache.Delete("book-live:" + instanceID)
 	s.libraryCache.Delete("book-recent:" + instanceID)
+	s.libraryCache.Delete("book-authors:" + instanceID)
+	s.libraryCache.Delete("book-series:" + instanceID)
 }
 
 // getRadarrWithID resolves the same Radarr client as getRadarr but also

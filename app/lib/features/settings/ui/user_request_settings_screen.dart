@@ -49,6 +49,10 @@ class _UserRequestSettingsScreenState
   // (null = inherit the global default; for chaptarr, null = no per-user grant).
   Map<String, String?> _defaultInstances = {};
 
+  // Additional instance access grants, keyed by service type. Grants widen
+  // what the user may pick per request; they never move the default above.
+  Map<String, Set<String>> _instanceGrants = {};
+
   @override
   void initState() {
     super.initState();
@@ -74,6 +78,7 @@ class _UserRequestSettingsScreenState
       final user = await _service.getUserSettings(widget.userId);
       final admin = await _service.getAdminSettings();
       final defaults = await _service.getUserDefaultInstances(widget.userId);
+      final grants = await _service.getUserInstanceGrants(widget.userId);
       if (!mounted) return;
       setState(() {
         _global = admin.settings;
@@ -86,6 +91,9 @@ class _UserRequestSettingsScreenState
         _qualityRadarr = user.qualityProfileRadarr;
         _qualitySonarr = user.qualityProfileSonarr;
         _defaultInstances = Map<String, String?>.from(defaults);
+        _instanceGrants = {
+          for (final entry in grants.entries) entry.key: Set.of(entry.value),
+        };
         _isLoading = false;
       });
     } catch (e) {
@@ -119,6 +127,13 @@ class _UserRequestSettingsScreenState
           type: _defaultInstances[type],
       };
       await _service.updateUserDefaultInstances(widget.userId, defaults);
+      // Same rule for grants: name every visible type so an emptied set
+      // clears its rows instead of being silently skipped.
+      final grants = <String, List<String>>{
+        for (final type in _instancesByType().keys)
+          type: (_instanceGrants[type] ?? const <String>{}).toList()..sort(),
+      };
+      await _service.updateUserInstanceGrants(widget.userId, grants);
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context)
@@ -133,6 +148,10 @@ class _UserRequestSettingsScreenState
 
   @override
   Widget build(BuildContext context) {
+    // Subscribe to the auth state: the instance sections are derived from the
+    // connection's instance list, and a read alone would freeze this screen
+    // on whatever had loaded at first build.
+    ref.watch(authProvider);
     return Scaffold(
       appBar: AppBar(title: Text('User Settings — ${widget.username}')),
       body: CenteredContent(
@@ -279,13 +298,63 @@ class _UserRequestSettingsScreenState
         child: Text(
           'Pin which instance this user defaults to per service. For regular '
           'users, choosing a Chaptarr instance grants Books access. Admins can '
-          'pin their own request target here too.',
+          'pin their own request target here too. Below each default, extra '
+          'libraries can be granted so the user chooses per request — a grant '
+          'never moves the default.',
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
       ),
-      for (final entry in grouped.entries)
+      for (final entry in grouped.entries) ...[
         _defaultInstanceField(serviceType: entry.key, instances: entry.value),
+        if (entry.value.length > 1)
+          _instanceGrantsField(serviceType: entry.key, instances: entry.value),
+      ],
     ];
+  }
+
+  /// Checkbox list of additional library grants for one service type, shown
+  /// only when siblings exist (a single-instance type has nothing extra to
+  /// grant).
+  Widget _instanceGrantsField({
+    required String serviceType,
+    required List<ServiceInstance> instances,
+  }) {
+    final granted = _instanceGrants[serviceType] ?? const <String>{};
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Also grant ${_serviceLabel(serviceType)} libraries',
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          for (final inst in instances)
+            CheckboxListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              activeColor: AppTheme.accent,
+              title: Text(inst.name,
+                  style: const TextStyle(color: AppTheme.textPrimary)),
+              value: granted.contains(inst.id),
+              onChanged: (checked) => setState(() {
+                final next = Set<String>.of(granted);
+                if (checked == true) {
+                  next.add(inst.id);
+                } else {
+                  next.remove(inst.id);
+                }
+                _instanceGrants[serviceType] = next;
+              }),
+            ),
+        ],
+      ),
+    );
   }
 
   Widget _defaultInstanceField({
@@ -355,6 +424,10 @@ class _UserRequestSettingsScreenState
         return 'Transmission';
       case 'tautulli':
         return 'Tautulli';
+      case 'jellyfin':
+        return 'Jellyfin';
+      case 'emby':
+        return 'Emby';
       default:
         return serviceType;
     }

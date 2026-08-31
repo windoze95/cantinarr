@@ -432,9 +432,9 @@ func (h *Handler) movieImported(instanceID string, movieID int, title string, tm
 	})
 	if h.content != nil {
 		if isUpgrade {
-			h.content.NotifyUpgradedMovie(title, tmdbID)
+			h.content.NotifyUpgradedMovie(title, tmdbID, instanceID)
 		} else {
-			h.content.NotifyNewMovie(title, tmdbID)
+			h.content.NotifyNewMovie(title, tmdbID, instanceID)
 		}
 	}
 }
@@ -496,9 +496,9 @@ func (h *Handler) seriesChanged(instanceID string, seriesID int, title string, t
 	})
 	if notify && h.content != nil {
 		if isUpgrade {
-			h.content.NotifyUpgradedEpisode(title, tmdbID)
+			h.content.NotifyUpgradedEpisode(title, tmdbID, instanceID)
 		} else {
-			h.content.NotifyNewEpisode(title, tmdbID)
+			h.content.NotifyNewEpisode(title, tmdbID, instanceID)
 		}
 	}
 }

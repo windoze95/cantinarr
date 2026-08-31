@@ -147,11 +147,81 @@ void main() {
         movies: const [],
         series: const [partial, empty, abandoned],
       );
-      expect(map[(MediaType.tv, 100)]?.label, 'Partially Available');
+      expect(map[(MediaType.tv, 100)]?.label, 'Partial');
+      expect(map[(MediaType.tv, 100)]?.episodeSubtitle, '4/8 eps');
       expect(map[(MediaType.tv, 200)]?.label, 'Requested');
+      expect(map[(MediaType.tv, 200)]?.episodeSubtitle, isNull);
       // In the library but unmonitored with nothing on disk: to a requester
       // it is simply not available — no chip.
       expect(map[(MediaType.tv, 300)], isNull);
+    });
+
+    test('episodeSubtitle prefers totalEpisodeCount over episodeCount', () {
+      // Sonarr's "obtainable now" count (episodeCount) undercounts a
+      // renewed-but-not-fully-aired season; the subtitle must agree with the
+      // badge's own files < total verdict, which reads totalEpisodeCount.
+      const renewed = SonarrSeries(
+        id: 8,
+        title: 'Renewed Show',
+        tmdbId: 400,
+        year: 2021,
+        monitored: true,
+        statistics: SonarrStatistics(
+          episodeFileCount: 18,
+          episodeCount: 20,
+          totalEpisodeCount: 24,
+        ),
+      );
+      final map = buildSearchLibraryStatus(
+        searchResults: [tv(400, 'Renewed Show', '2021-01-01')],
+        movies: const [],
+        series: const [renewed],
+      );
+      expect(map[(MediaType.tv, 400)]?.label, 'Partial');
+      expect(map[(MediaType.tv, 400)]?.episodeSubtitle, '18/24 eps');
+    });
+
+    test('movie statuses never carry an episodeSubtitle', () {
+      const movies = [
+        RadarrMovie(
+            id: 1, title: 'Owned Film', year: 1999, tmdbId: 550, hasFile: true),
+        RadarrMovie(
+            id: 2,
+            title: 'Wanted Film',
+            year: 2008,
+            tmdbId: 551,
+            monitored: true),
+      ];
+      final map = buildSearchLibraryStatus(
+        searchResults: const [],
+        movies: movies,
+        series: const [],
+      );
+      expect(map[(MediaType.movie, 550)]?.label, 'Available');
+      expect(map[(MediaType.movie, 550)]?.episodeSubtitle, isNull);
+      expect(map[(MediaType.movie, 551)]?.label, 'Requested');
+      expect(map[(MediaType.movie, 551)]?.episodeSubtitle, isNull);
+    });
+
+    test('a series with files but an unknown episode total gets no subtitle',
+        () {
+      // files > 0 but total == 0: a real denominator does not exist yet, and
+      // printing '3/0 eps' would be nonsense next to the badge.
+      const unknownTotal = SonarrSeries(
+        id: 9,
+        title: 'Unknown Total',
+        tmdbId: 500,
+        year: 2022,
+        monitored: true,
+        statistics: SonarrStatistics(episodeFileCount: 3, episodeCount: 0),
+      );
+      final map = buildSearchLibraryStatus(
+        searchResults: [tv(500, 'Unknown Total', '2022-01-01')],
+        movies: const [],
+        series: const [unknownTotal],
+      );
+      expect(map[(MediaType.tv, 500)]?.label, 'Partial');
+      expect(map[(MediaType.tv, 500)]?.episodeSubtitle, isNull);
     });
   });
 }

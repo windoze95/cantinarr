@@ -1,8 +1,9 @@
 // Package serversettings stores small, admin-editable, server-wide preferences
 // in the settings key/value table (mirroring the remediation/request settings
-// pattern). It holds the optional management-portal URL that the "update
-// available" banner links to, and the discovery preferences that decide which
-// feed backs the headline discovery rows.
+// pattern). It holds the optional management-portal URL that the app's
+// "update the server" warning links to, the external address that outward
+// links (connect invites, passkey setup) are built from, and the discovery
+// preferences that decide which feed backs the headline discovery rows.
 package serversettings
 
 import (
@@ -76,6 +77,17 @@ type Settings struct {
 	// portal (e.g. an Unraid or Portainer page). Empty means "not configured".
 	ManagementURL string `json:"management_url"`
 
+	// ExternalURL is the origin other people's devices use to reach this
+	// server (a reverse-proxy domain, a public IP, a Tailscale name). Outward
+	// links the server hands to someone who is not yet connected — connect
+	// invites and passkey setup links — are built from it. It is deliberately
+	// separate from the arr-facing webhook origin (env config) and the MCP
+	// OAuth issuer: those must be reachable from the arrs / stable for token
+	// audiences, while this one only has to be reachable from an invitee's
+	// device. Empty means "not configured": invite links then fall back to the
+	// address the generating admin's own app is connected with.
+	ExternalURL string `json:"external_url"`
+
 	// DiscoverySource picks which feed backs the headline discovery rows.
 	// Empty means no admin has decided, and doubles as the marker for that:
 	// it is read back as DefaultSourceFor, and it is what DiscoveryChosen and
@@ -119,6 +131,7 @@ func (s *Service) Get() Settings {
 func (s *Service) normalized(in Settings) Settings {
 	out := in
 	out.ManagementURL = strings.TrimSpace(out.ManagementURL)
+	out.ExternalURL = normalizeExternalURL(out.ExternalURL)
 	if !discoveryDecided(out) {
 		out.DiscoverySource = DefaultSourceFor(s.traktAvailable())
 		out.DiscoveryEnglishOnly = DefaultDiscoveryEnglishOnly
@@ -172,10 +185,28 @@ func discoveryDecided(in Settings) bool {
 func (s *Service) SetManagementURL(raw string) (Settings, error) {
 	next := s.raw()
 	next.ManagementURL = strings.TrimSpace(raw)
-	if err := validateURL(next.ManagementURL); err != nil {
+	if err := validateURL("management_url", next.ManagementURL); err != nil {
 		return Settings{}, err
 	}
 	return s.save(next)
+}
+
+// SetExternalURL stores the origin outward links are built from, leaving every
+// other preference untouched. Empty clears it, returning invite links to the
+// generating app's own address.
+func (s *Service) SetExternalURL(raw string) (Settings, error) {
+	next := s.raw()
+	next.ExternalURL = normalizeExternalURL(raw)
+	if err := validateURL("external_url", next.ExternalURL); err != nil {
+		return Settings{}, err
+	}
+	return s.save(next)
+}
+
+// normalizeExternalURL trims whitespace and any trailing slash so the stored
+// origin concatenates cleanly with API paths on every client.
+func normalizeExternalURL(raw string) string {
+	return strings.TrimRight(strings.TrimSpace(raw), "/")
 }
 
 // SetDiscovery stores the discovery preferences, leaving every other
@@ -236,15 +267,15 @@ func validateDiscoverySource(raw string) error {
 }
 
 // validateURL accepts an empty string (clears the setting) or an absolute
-// http(s) URL; anything else is rejected so the banner never links somewhere
+// http(s) URL; anything else is rejected so the link never points somewhere
 // unusable.
-func validateURL(raw string) error {
+func validateURL(field, raw string) error {
 	if raw == "" {
 		return nil
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("management_url must be an http(s) URL")
+		return fmt.Errorf("%s must be an http(s) URL", field)
 	}
 	return nil
 }

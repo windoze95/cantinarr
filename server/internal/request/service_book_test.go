@@ -705,16 +705,16 @@ func TestBookRequestFormatMonitorsRequestedEditions(t *testing.T) {
 }
 
 func TestBookRequestErrorStatus(t *testing.T) {
-	if got := bookRequestErrorStatus(ErrChaptarrInstanceForbidden); got != http.StatusForbidden {
+	if got := requestErrorStatus(ErrChaptarrInstanceForbidden); got != http.StatusForbidden {
 		t.Fatalf("forbidden status = %d, want 403", got)
 	}
-	if got := bookRequestErrorStatus(ErrChaptarrInstanceInvalid); got != http.StatusBadRequest {
+	if got := requestErrorStatus(ErrChaptarrInstanceInvalid); got != http.StatusBadRequest {
 		t.Fatalf("invalid status = %d, want 400", got)
 	}
-	if got := bookRequestErrorStatus(ErrBookFormatUnresolved); got != http.StatusConflict {
+	if got := requestErrorStatus(ErrBookFormatUnresolved); got != http.StatusConflict {
 		t.Fatalf("unresolved status = %d, want 409", got)
 	}
-	if got := bookRequestErrorStatus(errors.New("upstream failed")); got != http.StatusInternalServerError {
+	if got := requestErrorStatus(errors.New("upstream failed")); got != http.StatusInternalServerError {
 		t.Fatalf("generic status = %d, want 500", got)
 	}
 }
@@ -726,7 +726,7 @@ func TestBookRequestOptionsDoNotOfferIgnoredQualityChoice(t *testing.T) {
 	if err := svc.SetGlobalSettings(settings); err != nil {
 		t.Fatal(err)
 	}
-	opts, err := svc.GetRequestOptions(uid, false, "book")
+	opts, err := svc.GetRequestOptions(uid, false, "book", "")
 	if err != nil {
 		t.Fatal(err)
 	}

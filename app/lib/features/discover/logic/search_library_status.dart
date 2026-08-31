@@ -9,7 +9,22 @@ import '../data/tmdb_models.dart';
 class LibraryStatus {
   final String label;
   final Color color;
-  const LibraryStatus({required this.label, required this.color});
+
+  /// The all-seasons episode line for a partially-available series, e.g.
+  /// `'4/8 eps'` — derived from [SonarrSeries.episodeTotals], the same
+  /// accessor the Partial verdict itself is decided from
+  /// (deliberately not `statistics.episodeCount`, which
+  /// `dashboard_tv_tab.dart`'s `_availabilityLine` reads instead): a card
+  /// that showed a complete count beside an incomplete badge would
+  /// contradict itself. Null for movies and for every state other than
+  /// Partial.
+  final String? episodeSubtitle;
+
+  const LibraryStatus({
+    required this.label,
+    required this.color,
+    this.episodeSubtitle,
+  });
 }
 
 const _available = LibraryStatus(
@@ -17,7 +32,7 @@ const _available = LibraryStatus(
   color: AppTheme.available,
 );
 const _partial = LibraryStatus(
-  label: 'Partially Available',
+  label: 'Partial',
   color: AppTheme.requested,
 );
 const _requested = LibraryStatus(
@@ -26,7 +41,7 @@ const _requested = LibraryStatus(
 );
 
 /// Availability chips for search results, in the requester's vocabulary
-/// (Available / Partially Available / Requested) so they agree with what the
+/// (Available / Partial / Requested) so they agree with what the
 /// detail page will say — never library-manager jargon (Complete / Missing /
 /// Unmonitored). A title that's in the library but has nothing on disk and
 /// isn't being fetched gets no chip: to a requester it's simply not
@@ -82,7 +97,16 @@ Map<(MediaType, int), LibraryStatus> buildSearchLibraryStatus({
     if (total > 0 && files >= total) {
       map[(MediaType.tv, item.id)] = _available;
     } else if (files > 0) {
-      map[(MediaType.tv, item.id)] = _partial;
+      // total == 0 means Sonarr has no real denominator yet (a season pack
+      // pending metadata, say) — a '3/0 eps' line would be nonsense next to
+      // the badge, so the plain _partial (no subtitle) stands in that case.
+      map[(MediaType.tv, item.id)] = total == 0
+          ? _partial
+          : LibraryStatus(
+              label: _partial.label,
+              color: _partial.color,
+              episodeSubtitle: '$files/$total eps',
+            );
     } else if (match.monitored) {
       map[(MediaType.tv, item.id)] = _requested;
     }

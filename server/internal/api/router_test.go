@@ -105,12 +105,23 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	createConfigInstance(t, store, "chaptarr", "Private Books", false)
 	createConfigInstance(t, store, "sabnzbd", "Downloads", false)
 	createConfigInstance(t, store, "tautulli", "Tautulli", false)
+	homeJellyfin := createConfigInstance(t, store, "jellyfin", "Home Jellyfin", false)
+	createConfigInstance(t, store, "jellyfin", "Other Jellyfin", false)
+	denEmby := createConfigInstance(t, store, "emby", "Den Emby", false)
+	createConfigInstance(t, store, "emby", "Other Emby", false)
+	cantinaPlex := createConfigInstance(t, store, "plex", "Cantina Plex", false)
+	createConfigInstance(t, store, "plex", "Other Plex", false)
 
 	if err := store.SetUserDefault(userID, "radarr", fourKRadarr.ID); err != nil {
 		t.Fatalf("pin radarr: %v", err)
 	}
 	if err := store.SetUserDefault(userID, "chaptarr", books.ID); err != nil {
 		t.Fatalf("grant chaptarr: %v", err)
+	}
+	// Media servers are grant-only: the granted one is listed so the app can
+	// offer the account guide, the other never falls back into view.
+	if err := store.SetUserGrants(userID, map[string][]string{"jellyfin": {homeJellyfin.ID}, "emby": {denEmby.ID}, "plex": {cantinaPlex.ID}}); err != nil {
+		t.Fatalf("grant media servers: %v", err)
 	}
 
 	resp := requestConfig(t, store, creds, remediationSvc, &auth.Claims{
@@ -120,9 +131,15 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	})
 
 	want := map[string]string{
-		fourKRadarr.ID: "radarr",
-		mainSonarr.ID:  "sonarr",
-		books.ID:       "chaptarr",
+		fourKRadarr.ID:  "radarr",
+		mainSonarr.ID:   "sonarr",
+		books.ID:        "chaptarr",
+		homeJellyfin.ID: "jellyfin",
+		denEmby.ID:      "emby",
+		cantinaPlex.ID:  "plex",
+	}
+	if !resp.PlexAccessRequestable {
+		t.Fatal("a server with a Plex instance must say Plex access can be asked for")
 	}
 	if len(resp.Instances) != len(want) {
 		t.Fatalf("instances = %#v, want %d visible instances", resp.Instances, len(want))
@@ -140,6 +157,64 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	}
 	if !resp.Services["radarr"] || !resp.Services["sonarr"] || !resp.Services["chaptarr"] {
 		t.Fatalf("services = %#v, want radarr/sonarr/chaptarr visible", resp.Services)
+	}
+}
+
+// A user granted a sibling instance sees BOTH libraries, with is_default
+// marking their effective default — which is how single-instance clients keep
+// picking the right one.
+func TestConfigHandlerListsGrantedInstancesForNonAdmin(t *testing.T) {
+	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
+	mainRadarr := createConfigInstance(t, store, "radarr", "Movies", true)
+	fourKRadarr := createConfigInstance(t, store, "radarr", "4K Movies", false)
+	createConfigInstance(t, store, "radarr", "Kids Movies", false)
+	mainSonarr := createConfigInstance(t, store, "sonarr", "Main Sonarr", true)
+
+	if err := store.SetUserGrants(userID, map[string][]string{
+		"radarr": {mainRadarr.ID, fourKRadarr.ID},
+	}); err != nil {
+		t.Fatalf("grant radarr pair: %v", err)
+	}
+
+	resp := requestConfig(t, store, creds, remediationSvc, &auth.Claims{
+		UserID:   userID,
+		Username: "alice",
+		Role:     auth.RoleUser,
+	})
+
+	byID := map[string]bool{}
+	for _, inst := range resp.Instances {
+		byID[inst.ID] = inst.IsDefault
+	}
+	if len(resp.Instances) != 3 {
+		t.Fatalf("instances = %#v, want granted radarr pair + default sonarr", resp.Instances)
+	}
+	if isDefault, ok := byID[mainRadarr.ID]; !ok || !isDefault {
+		t.Fatalf("granted global default should be visible and marked default: %#v", resp.Instances)
+	}
+	if isDefault, ok := byID[fourKRadarr.ID]; !ok || isDefault {
+		t.Fatalf("granted sibling should be visible and NOT marked default: %#v", resp.Instances)
+	}
+	if isDefault, ok := byID[mainSonarr.ID]; !ok || !isDefault {
+		t.Fatalf("untouched sonarr should stay the single effective default: %#v", resp.Instances)
+	}
+
+	// Pinning the sibling flips which visible instance carries is_default
+	// without changing the visible set.
+	if err := store.SetUserDefault(userID, "radarr", fourKRadarr.ID); err != nil {
+		t.Fatalf("pin 4K: %v", err)
+	}
+	resp = requestConfig(t, store, creds, remediationSvc, &auth.Claims{
+		UserID:   userID,
+		Username: "alice",
+		Role:     auth.RoleUser,
+	})
+	defaults := map[string]bool{}
+	for _, inst := range resp.Instances {
+		defaults[inst.ID] = inst.IsDefault
+	}
+	if !defaults[fourKRadarr.ID] || defaults[mainRadarr.ID] {
+		t.Fatalf("after pinning 4K, is_default should follow the pin: %#v", resp.Instances)
 	}
 }
 
@@ -375,7 +450,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 	cfg := &config.Config{
 		JWTSecret:         "config-jwt-secret",
 		ServerName:        "Coverage Lab",
-		PublicURL:         "https://config-public-url-secret.invalid",
+		ArrCallbackURL:    "https://config-public-url-secret.invalid",
 		EncryptionKeyFile: "/config/encryption-key-path-secret",
 		PushGatewayURL:    "https://config-push-gateway-secret.invalid",
 		PushAPIKey:        "config-push-api-key-secret",
@@ -385,7 +460,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 	}
 	secretSentinels = append(secretSentinels,
 		cfg.JWTSecret,
-		cfg.PublicURL,
+		cfg.ArrCallbackURL,
 		cfg.EncryptionKeyFile,
 		cfg.PushGatewayURL,
 		cfg.PushAPIKey,
@@ -451,6 +526,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			assertExactMapKeys(t, payload,
 				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
+				"plex_access_requestable",
 			)
 
 			var services map[string]bool
@@ -510,9 +586,10 @@ func assertExactMapKeys[V any](t *testing.T, got map[string]V, want ...string) {
 }
 
 type configHandlerResponse struct {
-	MinAppVersion string          `json:"min_app_version"`
-	Services      map[string]bool `json:"services"`
-	Instances     []struct {
+	MinAppVersion         string          `json:"min_app_version"`
+	Services              map[string]bool `json:"services"`
+	PlexAccessRequestable bool            `json:"plex_access_requestable"`
+	Instances             []struct {
 		ID             string `json:"id"`
 		ServiceType    string `json:"service_type"`
 		Name           string `json:"name"`
@@ -528,6 +605,14 @@ type failingConfigInstanceStore struct {
 
 func (s *failingConfigInstanceStore) ListUserDefaults(int64) (map[string]string, error) {
 	return nil, s.defaultsErr
+}
+
+func (s *failingConfigInstanceStore) VisibleInstanceIDs(int64, string) ([]string, error) {
+	return nil, s.defaultsErr
+}
+
+func (s *failingConfigInstanceStore) EffectiveDefaultInstanceID(int64, string) (string, error) {
+	return "", s.defaultsErr
 }
 
 func (s *failingConfigInstanceStore) ListAll() ([]instance.Instance, error) {
@@ -607,4 +692,25 @@ func requestConfig(
 		t.Fatalf("Decode() error = %v", err)
 	}
 	return resp
+}
+
+// A user with no Plex grant still learns that a Plex server exists — the
+// guide offers "share your Plex email" on that alone — and learns nothing
+// else about it. A server without Plex says so.
+func TestConfigHandlerPlexAccessRequestable(t *testing.T) {
+	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
+	claims := &auth.Claims{UserID: userID, Username: "alice", Role: auth.RoleUser}
+	if resp := requestConfig(t, store, creds, remediationSvc, claims); resp.PlexAccessRequestable {
+		t.Fatal("no Plex instance, yet requestable")
+	}
+	plex := createConfigInstance(t, store, "plex", "Cantina Plex", false)
+	resp := requestConfig(t, store, creds, remediationSvc, claims)
+	if !resp.PlexAccessRequestable {
+		t.Fatal("a Plex instance exists, yet not requestable")
+	}
+	for _, inst := range resp.Instances {
+		if inst.ID == plex.ID {
+			t.Fatal("an ungranted Plex instance was listed")
+		}
+	}
 }

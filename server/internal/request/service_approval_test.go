@@ -400,7 +400,7 @@ func TestDenyRequest(t *testing.T) {
 	}
 
 	// The requester's own status now reads denied (nothing landed in any arr).
-	if st, err := s.GetUserStatus(uid, 550, "movie"); err != nil || st.Status != StatusDenied {
+	if st, err := s.GetUserStatus(uid, 550, "movie", ""); err != nil || st.Status != StatusDenied {
 		t.Errorf("GetUserStatus = %+v err=%v, want denied", st, err)
 	}
 

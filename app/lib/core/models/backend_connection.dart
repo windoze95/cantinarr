@@ -1,3 +1,10 @@
+/// Service types that are media servers: places users sign in to watch, as
+/// opposed to the arrs and download clients Cantinarr drives. Access to one
+/// is grant-only, so an instance of these types is listed for a requester only
+/// when an admin granted it. Jellyfin and Emby hold accounts Cantinarr
+/// creates; Plex holds shares Cantinarr sends to the user's Plex email.
+const mediaServerServiceTypes = {'jellyfin', 'emby', 'plex'};
+
 /// Represents a configured service instance (Radarr or Sonarr).
 class ServiceInstance {
   final String id;
@@ -57,6 +64,11 @@ class BackendConnection {
   /// Whether the user-facing "Report a problem" affordance should be shown.
   final bool allowReporting;
 
+  /// Whether the server has a Plex instance at all. A user who holds no Plex
+  /// grant still sees the access guide on this alone, so they can share the
+  /// email their invite should go to and have their admin told.
+  final bool plexAccessRequestable;
+
   const BackendConnection({
     required this.serverUrl,
     required this.accessToken,
@@ -68,6 +80,7 @@ class BackendConnection {
     this.instances = const [],
     this.issuesEnabled = false,
     this.allowReporting = false,
+    this.plexAccessRequestable = false,
   });
 
   BackendConnection copyWith({
@@ -81,6 +94,7 @@ class BackendConnection {
     List<ServiceInstance>? instances,
     bool? issuesEnabled,
     bool? allowReporting,
+    bool? plexAccessRequestable,
   }) =>
       BackendConnection(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -93,6 +107,8 @@ class BackendConnection {
         instances: instances ?? this.instances,
         issuesEnabled: issuesEnabled ?? this.issuesEnabled,
         allowReporting: allowReporting ?? this.allowReporting,
+        plexAccessRequestable:
+            plexAccessRequestable ?? this.plexAccessRequestable,
       );
 
   /// Get all Radarr instances.
@@ -125,6 +141,26 @@ class BackendConnection {
   /// Get all Tautulli instances.
   List<ServiceInstance> get tautulliInstances =>
       instances.where((i) => i.serviceType == 'tautulli').toList();
+
+  /// Get all media-server (Jellyfin, Emby, Plex) instances. The backend lists
+  /// one for a requester only when an admin granted them access, so its mere
+  /// presence means the user may get access there and the menu should offer
+  /// the media server access guide.
+  List<ServiceInstance> get mediaServerInstances => instances
+      .where((i) => mediaServerServiceTypes.contains(i.serviceType))
+      .toList();
+
+  /// Whether the access guide has anything to show: a granted media server,
+  /// or a Plex server the user can ask for.
+  bool get mediaAccessGuideVisible =>
+      mediaServerInstances.isNotEmpty || plexAccessRequestable;
+
+  /// The media-server types the guide is titled after: the granted ones,
+  /// plus Plex when it can be asked for.
+  Set<String> get mediaAccessGuideTypes => {
+        for (final i in mediaServerInstances) i.serviceType,
+        if (plexAccessRequestable) 'plex',
+      };
 
   /// Whether downloads are configured for [instanceId]. New servers report
   /// this per instance. Fall back to the legacy global capability only when no

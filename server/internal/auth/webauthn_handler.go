@@ -74,7 +74,13 @@ func (h *Handler) CreatePasskeySetupLink(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	link := publicBaseURL(r) + "/passkeys/create?token=" + url.QueryEscape(token)
+	// Prefer the admin-configured external address: the link is opened on the
+	// user's own device, which may not reach the origin this request used.
+	base := h.resolvedExternalURL()
+	if base == "" {
+		base = publicBaseURL(r)
+	}
+	link := base + "/passkeys/create?token=" + url.QueryEscape(token)
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"link":       link,
 		"expires_at": expiresAt,

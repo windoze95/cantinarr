@@ -6,17 +6,16 @@ import '../../../core/network/websocket_client.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../auth/logic/auth_provider.dart';
 
-/// Tracks how many users shared a Plex email but have no invite sent yet,
-/// for admins only.
+/// Tracks how many users shared a Plex email but have no Plex share yet,
+/// for admins only: the ones waiting to be granted a Plex server.
 ///
 /// This is the persistent surface behind the miss-able `plex_access_request`
 /// push: the count drives a drawer "Plex invites" entry (shown only while
 /// someone is waiting) and the hamburger dot. Seeded from the admin users
-/// list and refreshed by `plex_access_request` websocket events — the server
-/// emits one for every state change (waiting, auto-sent, auto-failed), and
-/// stamps `plex_invited_at` before emitting, so a refetch always sees the
-/// settled state. Non-admin accounts always report 0 and never call the
-/// admin-only endpoint.
+/// list and refreshed by `plex_access_request` websocket events; the server
+/// derives `plex_invited_at` from the user's live Plex share, so a refetch
+/// always sees the settled state. Non-admin accounts always report 0 and
+/// never call the admin-only endpoint.
 class PlexInvitesWaitingNotifier extends StateNotifier<int> {
   PlexInvitesWaitingNotifier(this._ref) : super(0) {
     _bind();

@@ -14,7 +14,6 @@ import 'package:cantinarr/features/settings/data/settings_search_index.dart';
 import 'package:cantinarr/features/settings/ui/ai_tools_screen.dart';
 import 'package:cantinarr/features/settings/ui/credentials_screen.dart';
 import 'package:cantinarr/features/settings/ui/discovery_settings_screen.dart';
-import 'package:cantinarr/features/settings/ui/plex_settings_screen.dart';
 import 'package:cantinarr/features/settings/ui/request_settings_screen.dart';
 import 'package:cantinarr/features/settings/ui/settings_screen.dart';
 import 'package:dio/dio.dart';
@@ -47,6 +46,8 @@ const _adminGates = SettingsSearchGates(
   user: _admin,
   chaptarrEnabled: true,
   donateVisible: true,
+  phoneAppsVisible: true,
+  mediaServersVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
@@ -96,10 +97,18 @@ Future<void> _assertTitles(
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier({required this.user, this.chaptarr = false});
+  _FakeAuthNotifier({
+    required this.user,
+    this.chaptarr = false,
+    this.instances = const [],
+  });
 
   final UserProfile user;
   final bool chaptarr;
+
+  /// A jellyfin instance here renders the root's media server guide row
+  /// (gated on `mediaServersVisible`), keeping that entry drift-checked.
+  final List<ServiceInstance> instances;
 
   @override
   Future<AuthState> build() async => AuthState(
@@ -108,6 +117,7 @@ class _FakeAuthNotifier extends AuthNotifier {
           accessToken: 'access',
           refreshToken: 'refresh',
           services: AvailableServices(chaptarr: chaptarr),
+          instances: instances,
         ),
         user: user,
       );
@@ -208,7 +218,16 @@ void main() {
         ProviderScope(
           overrides: [
             backendClientProvider.overrideWithValue(dio),
-            authProvider.overrideWith(() => _FakeAuthNotifier(user: user)),
+            authProvider.overrideWith(() => _FakeAuthNotifier(
+                  user: user,
+                  instances: const [
+                    ServiceInstance(
+                      id: 'jf-a',
+                      serviceType: 'jellyfin',
+                      name: 'Home Jellyfin',
+                    ),
+                  ],
+                )),
             aiSettingsProvider.overrideWith((_) async => _aiSettings()),
           ],
           child: const MaterialApp(home: SettingsScreen()),
@@ -312,6 +331,9 @@ void main() {
                 'label': 'OpenAI',
                 'auth_type': 'api_key',
                 'credential_key': 'openai_key',
+                // Renders the reasoning-effort control so its index title
+                // stays drift-checked against the screen.
+                'supports_reasoning_effort': true,
                 'models': [
                   {'id': 'gpt-5.5', 'label': 'GPT-5.5'},
                 ],
@@ -324,18 +346,6 @@ void main() {
     );
     await _assertTitles(
         tester, _controlsFor('/settings/credentials'), _adminGates);
-  });
-
-  testWidgets('plex invite controls', (tester) async {
-    await _pumpScreen(
-      tester,
-      const PlexSettingsScreen(),
-      dio: _dioFor(const {
-        '/api/admin/plex/status': {'linked': true},
-        '/api/admin/plex/servers': {'servers': <dynamic>[]},
-      }),
-    );
-    await _assertTitles(tester, _controlsFor('/settings/plex'), _adminGates);
   });
 
   testWidgets('discovery controls', (tester) async {

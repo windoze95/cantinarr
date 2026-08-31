@@ -454,7 +454,8 @@ func (n *Notifier) notifyProfileChangePending(client *Client, data map[string]in
 // notifyPlexAccessRequested pushes "a user shared their Plex email" to
 // opted-in admins. The body is one of three FIXED templates picked by the
 // invite_state enum ("" needs a manual invite, "sent" auto-invite went out,
-// "failed" auto-invite needs a retry) — the username and email are
+// "failed" auto-invite needs a retry; "claimed", an address another user's
+// row holds, reads as waiting on the admin) — the username and email are
 // user-controlled and never placed on the lock screen; user_id rides along
 // for tap deep-linking to the Users screen. A collapse id per user keeps a
 // user editing their email from stacking alerts.
@@ -485,22 +486,23 @@ func (n *Notifier) notifyPlexAccessRequested(client *Client, data map[string]int
 	n.sendWithOptions(client, recipients, "Plex access request", body, out, opts)
 }
 
-// NotifyNewMovie pushes a "movie became available" alert to every user opted
-// into the new_movie category (on by default). A collapse id keeps repeat
-// availability pings for the same movie from stacking on-device.
-func (n *Notifier) NotifyNewMovie(title string, tmdbID int) {
-	n.notifyNewContent(CategoryNewMovie, "movie", "New movie available", title+" is ready to watch", title, tmdbID)
+// NotifyNewMovie pushes a "movie became available" alert to the opted-in
+// users who can see the importing library (usersOptedIntoNewVideo). A
+// collapse id keeps repeat availability pings for the same movie from
+// stacking on-device.
+func (n *Notifier) NotifyNewMovie(title string, tmdbID int, instanceID string) {
+	n.notifyNewContent(CategoryNewMovie, "movie", "radarr", "New movie available", title+" is ready to watch", title, tmdbID, instanceID)
 }
 
-// NotifyNewEpisode pushes a "new episodes available" alert to every user opted
-// into the new_episode category (on by default). The copy is plural with no
+// NotifyNewEpisode pushes a "new episodes available" alert to the opted-in
+// users who can see the importing library. The copy is plural with no
 // count on purpose: the alert sends on the first import of a wave and
 // claimContentAlert absorbs the rest of a season pack behind it, so at send
 // time the server cannot know whether one episode or ten are landing — an
 // honest count would mean holding the push, and a singular title undersells a
 // pack. The body stays count-free so the pair reads naturally either way.
-func (n *Notifier) NotifyNewEpisode(seriesTitle string, tmdbID int) {
-	n.notifyNewContent(CategoryNewEpisode, "tv", "New episodes available", "New on "+seriesTitle, seriesTitle, tmdbID)
+func (n *Notifier) NotifyNewEpisode(seriesTitle string, tmdbID int, instanceID string) {
+	n.notifyNewContent(CategoryNewEpisode, "tv", "sonarr", "New episodes available", "New on "+seriesTitle, seriesTitle, tmdbID, instanceID)
 }
 
 // NotifyNewBook pushes a "book became available" alert for a completed
@@ -516,7 +518,10 @@ func (n *Notifier) NotifyNewBook(title, foreignID, instanceID, format string) {
 	if client == nil || title == "" {
 		return
 	}
-	if !n.claimContentAlert(CategoryNewBook, "book", foreignID+"|"+format, title) {
+	// The claim id carries the library: the audience is per-instance, so the
+	// same foreignBookId importing on two Chaptarr instances inside the
+	// window must alert both instances' readers.
+	if !n.claimContentAlert(CategoryNewBook, "book", contentClaimID(instanceID, foreignID+"|"+format), title) {
 		return
 	}
 	recipients, err := n.prefs.usersOptedIntoNewBook(instanceID)
@@ -561,14 +566,14 @@ func bookReadyBody(title, format string) string {
 // NotifyUpgradedMovie pushes a "movie file was upgraded" alert to admins opted
 // into the content_upgraded category (off by default). See
 // notifyUpgradedContent for why the broadcast key is claimed first.
-func (n *Notifier) NotifyUpgradedMovie(title string, tmdbID int) {
-	n.notifyUpgradedContent(CategoryNewMovie, "movie", "Movie upgraded", title+" was replaced with a better version", title, tmdbID)
+func (n *Notifier) NotifyUpgradedMovie(title string, tmdbID int, instanceID string) {
+	n.notifyUpgradedContent(CategoryNewMovie, "movie", "Movie upgraded", title+" was replaced with a better version", title, tmdbID, instanceID)
 }
 
 // NotifyUpgradedEpisode pushes an "episode file was upgraded" alert to admins
 // opted into the content_upgraded category (off by default).
-func (n *Notifier) NotifyUpgradedEpisode(seriesTitle string, tmdbID int) {
-	n.notifyUpgradedContent(CategoryNewEpisode, "tv", "Episode upgraded", "An episode of "+seriesTitle+" was replaced with a better version", seriesTitle, tmdbID)
+func (n *Notifier) NotifyUpgradedEpisode(seriesTitle string, tmdbID int, instanceID string) {
+	n.notifyUpgradedContent(CategoryNewEpisode, "tv", "Episode upgraded", "An episode of "+seriesTitle+" was replaced with a better version", seriesTitle, tmdbID, instanceID)
 }
 
 // NotifyUpgradedBook pushes a "book file was upgraded" alert to admins opted
@@ -584,12 +589,13 @@ func (n *Notifier) NotifyUpgradedBook(title, foreignID, instanceID, format strin
 	}
 	// Absorb the poller before anything else can bail: the silent claim must
 	// land even when the gateway is unenrolled or the admin alert is deduped.
-	n.claimContentAlertSilently(CategoryNewBook, "book", foreignID+"|"+format, title)
+	// Byte-identical to NotifyNewBook's claim id for the same import.
+	n.claimContentAlertSilently(CategoryNewBook, "book", contentClaimID(instanceID, foreignID+"|"+format), title)
 	client := n.client()
 	if client == nil {
 		return
 	}
-	if !n.claimContentAlertScoped(CategoryContentUpgraded, "book", foreignID+"|"+format, title, stormScopeUpgrade) {
+	if !n.claimContentAlertScoped(CategoryContentUpgraded, "book", contentClaimID(instanceID, foreignID+"|"+format), title, stormScopeUpgrade) {
 		return
 	}
 	recipients, err := n.prefs.usersOptedInto(CategoryContentUpgraded)
@@ -635,16 +641,19 @@ func bookUpgradedBody(title, format string) string {
 // the household with a false "New movie available" — the ledger claim is what
 // keeps it quiet. Only then does the admin content_upgraded alert claim its
 // own key and send under its own storm budget.
-func (n *Notifier) notifyUpgradedContent(broadcastCategory, mediaType, title, body, mediaTitle string, tmdbID int) {
+func (n *Notifier) notifyUpgradedContent(broadcastCategory, mediaType, title, body, mediaTitle string, tmdbID int, instanceID string) {
 	if mediaTitle == "" {
 		return
 	}
-	n.claimContentAlertSilently(broadcastCategory, mediaType, strconv.Itoa(tmdbID), mediaTitle)
+	// Byte-identical to the id notifyNewContent claims for the same import on
+	// the same library — that identity is what keeps the poller's re-witness
+	// quiet.
+	n.claimContentAlertSilently(broadcastCategory, mediaType, contentClaimID(instanceID, strconv.Itoa(tmdbID)), mediaTitle)
 	client := n.client()
 	if client == nil {
 		return
 	}
-	if !n.claimContentAlertScoped(CategoryContentUpgraded, mediaType, strconv.Itoa(tmdbID), mediaTitle, stormScopeUpgrade) {
+	if !n.claimContentAlertScoped(CategoryContentUpgraded, mediaType, contentClaimID(instanceID, strconv.Itoa(tmdbID)), mediaTitle, stormScopeUpgrade) {
 		return
 	}
 	recipients, err := n.prefs.usersOptedInto(CategoryContentUpgraded)
@@ -660,23 +669,30 @@ func (n *Notifier) notifyUpgradedContent(broadcastCategory, mediaType, title, bo
 		"tmdb_id":    tmdbID,
 		"media_type": mediaType,
 	}
+	if instanceID != "" {
+		data["instance_id"] = instanceID
+	}
 	n.sendWithOptions(client, recipients, title, body, data, SendOptions{
 		CollapseID: fmt.Sprintf("%s:%d", CategoryContentUpgraded, tmdbID),
 	})
 }
 
 // notifyNewContent is the shared body for the new-content notifications: it
-// resolves the opted-in audience for the category and dispatches one collapsed
-// push carrying the media identity for tap routing.
-func (n *Notifier) notifyNewContent(category, mediaType, title, body, mediaTitle string, tmdbID int) {
+// resolves the opted-in audience that can see the importing library and
+// dispatches one collapsed push carrying the media identity for tap routing.
+// The claim id carries the library so the same title importing on two
+// libraries inside the window alerts BOTH libraries' audiences — with
+// per-library audiences, one shared claim would silently drop the second
+// library's alert on the floor.
+func (n *Notifier) notifyNewContent(category, mediaType, serviceType, title, body, mediaTitle string, tmdbID int, instanceID string) {
 	client := n.client()
 	if client == nil || mediaTitle == "" {
 		return
 	}
-	if !n.claimContentAlert(category, mediaType, strconv.Itoa(tmdbID), mediaTitle) {
+	if !n.claimContentAlert(category, mediaType, contentClaimID(instanceID, strconv.Itoa(tmdbID)), mediaTitle) {
 		return
 	}
-	recipients, err := n.prefs.usersOptedInto(category)
+	recipients, err := n.prefs.usersOptedIntoNewVideo(category, serviceType, instanceID)
 	if err != nil {
 		n.logger.Error("push: resolve new-content recipients", "err", err, "category", category)
 		return
@@ -689,9 +705,24 @@ func (n *Notifier) notifyNewContent(category, mediaType, title, body, mediaTitle
 		"tmdb_id":    tmdbID,
 		"media_type": mediaType,
 	}
+	if instanceID != "" {
+		data["instance_id"] = instanceID
+	}
 	n.sendWithOptions(client, recipients, title, body, data, SendOptions{
 		CollapseID: fmt.Sprintf("%s:%d", category, tmdbID),
 	})
+}
+
+// contentClaimID scopes a content claim's identity to the importing library.
+// The webhook and the queue poller announcing the same import name the same
+// instance, so their dedupe still collapses; only genuinely different
+// libraries' imports stop colliding. An empty instance id degrades to the
+// legacy unscoped identity.
+func contentClaimID(instanceID, id string) string {
+	if instanceID == "" {
+		return id
+	}
+	return instanceID + "|" + id
 }
 
 // contentAlertWindow is how long a new-content alert suppresses repeats of the

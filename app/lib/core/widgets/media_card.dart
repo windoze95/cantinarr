@@ -5,6 +5,18 @@ import 'cached_image.dart';
 
 /// A poster card for movies/TV shows with optional status badge.
 class MediaCard extends StatelessWidget {
+  /// Extra height a horizontal row of [MediaCard]s must reserve below the
+  /// poster when its cards carry a [subtitle] line (e.g. TV rows' episode
+  /// availability). Shared by every browse-row/library-row call site
+  /// (`CategoryRow`, `DashboardTvTab`, `DashboardMoviesTab`) so the literal
+  /// can never drift between them — see [plainRowExtraHeight] for rows whose
+  /// cards never carry a subtitle.
+  static const double subtitleRowExtraHeight = 68;
+
+  /// Extra height a horizontal row of [MediaCard]s must reserve below the
+  /// poster when its cards never carry a [subtitle] line (e.g. movie rows).
+  static const double plainRowExtraHeight = 54;
+
   final int id;
   final String title;
   final String? posterPath;
@@ -13,6 +25,13 @@ class MediaCard extends StatelessWidget {
 
   /// Optional secondary line under the title (e.g. "18/24 eps" availability).
   final String? subtitle;
+
+  /// How many lines the subtitle may use. One by default — a shelf of cards
+  /// reads best with a single line — but a caller whose subtitle carries a
+  /// fact that must not be cut off (a "9 of 41 books available" count means
+  /// nothing once it ellipsises to "9 of 41 books avail…") can allow more,
+  /// and size its row to match.
+  final int subtitleMaxLines;
   final VoidCallback? onTap;
   final double width;
 
@@ -34,6 +53,7 @@ class MediaCard extends StatelessWidget {
     this.statusLabel,
     this.statusColor,
     this.subtitle,
+    this.subtitleMaxLines = 1,
     this.onTap,
     this.width = 120,
     this.rating,
@@ -66,6 +86,7 @@ class MediaCard extends StatelessWidget {
         imageUrl: imageUrl,
         title: title,
         subtitle: subtitle,
+        subtitleMaxLines: subtitleMaxLines,
         statusLabel: statusLabel,
         statusColor: statusColor,
         rating: rating,
@@ -83,6 +104,7 @@ class _InteractiveMediaCard extends StatefulWidget {
   final String imageUrl;
   final String title;
   final String? subtitle;
+  final int subtitleMaxLines;
   final String? statusLabel;
   final Color? statusColor;
   final double? rating;
@@ -96,6 +118,7 @@ class _InteractiveMediaCard extends StatefulWidget {
     required this.imageUrl,
     required this.title,
     required this.subtitle,
+    required this.subtitleMaxLines,
     required this.statusLabel,
     required this.statusColor,
     required this.rating,
@@ -286,7 +309,7 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                   const SizedBox(height: 2),
                   Text(
                     widget.subtitle!,
-                    maxLines: 1,
+                    maxLines: widget.subtitleMaxLines,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           color: AppTheme.textMuted,

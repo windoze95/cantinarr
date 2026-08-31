@@ -1354,8 +1354,12 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 	// text reflected by it) to override them. A model-selected queue id is kept
 	// only for user issues without an exact detector row, and is always paired
 	// with the authoritative media filters enforced by the read tool.
+	// instance_id is in the list because every arr tool now accepts it from the
+	// model: a scoped read must stay on the issue's own library, so the model's
+	// choice is dropped here (the settings tools re-inject the issue's id below;
+	// the callCtx-plumbed tools get it as trusted call context instead).
 	modelQueueID := params["queue_id"]
-	for _, key := range []string{"media_type", "tmdb_id", "tvdb_id", "season_number", "episode_number", "queue_id", "download_id", "book_id", "author_id"} {
+	for _, key := range []string{"media_type", "instance_id", "tmdb_id", "tvdb_id", "season_number", "episode_number", "queue_id", "download_id", "book_id", "author_id"} {
 		delete(params, key)
 	}
 	params["media_type"] = issue.MediaType

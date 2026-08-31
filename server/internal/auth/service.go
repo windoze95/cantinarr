@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 	"net/url"
 	"strings"
 	"time"
@@ -324,12 +325,13 @@ func (s *Service) SetPassword(userID int64, newPassword string) error {
 
 // SetPlexEmail stores the email the user wants their Plex invite sent to and
 // reports whether it actually changed, so callers can skip re-notifying admins
-// when a user resubmits the same address. Validation is deliberately shallow
-// (shape + length): the address is only ever displayed to an admin who pastes
-// it into Plex, never used for delivery by us.
+// when a user resubmits the same address. The address is stored in its
+// canonical spelling (mediaserver.CanonicalEmail) — it is the identity the
+// media-access service keys Plex shares by — and validated for shape only:
+// plex.tv's own answer is the real validation.
 func (s *Service) SetPlexEmail(userID int64, email string) (bool, error) {
-	email = strings.TrimSpace(email)
-	if !plexEmailValid(email) {
+	email = mediaserver.CanonicalEmail(email)
+	if !mediaserver.ValidEmail(email) {
 		return false, ErrInvalidPlexEmail
 	}
 
@@ -341,25 +343,56 @@ func (s *Service) SetPlexEmail(userID int64, email string) (bool, error) {
 		return false, nil
 	}
 
-	// A changed address also clears the invited stamp: any invite already
-	// sent went to the OLD email, so the user is back to "waiting".
-	if _, err := s.db.Exec(
-		"UPDATE users SET plex_email = ?, plex_invited_at = NULL WHERE id = ?",
-		email, userID,
-	); err != nil {
+	if _, err := s.db.Exec("UPDATE users SET plex_email = ? WHERE id = ?", email, userID); err != nil {
 		return false, fmt.Errorf("update plex email: %w", err)
 	}
 	return true, nil
 }
 
-// plexEmailValid is a shape check, not RFC validation: something@something
-// with no spaces, short enough for a users-table column.
-func plexEmailValid(email string) bool {
-	if email == "" || len(email) > 254 || strings.ContainsAny(email, " \t\n") {
-		return false
+// plexInvitedAt derives the "invite sent" stamp older apps read from the
+// Plex account rows the media-access service keeps: the earliest live (not
+// switched-off) Plex row is when the user's invite went out. The users
+// column of the same name is no longer written; it stays in the schema
+// because the migration ledger is append-only.
+func (s *Service) plexInvitedAt(userID int64) *time.Time {
+	var at sql.NullTime
+	err := s.db.QueryRow(
+		`SELECT a.created_at FROM user_media_server_accounts a
+		   JOIN service_instances si ON si.id = a.instance_id
+		  WHERE a.user_id = ? AND si.service_type = 'plex' AND a.disabled_at IS NULL
+		  ORDER BY a.created_at LIMIT 1`, userID,
+	).Scan(&at)
+	if err != nil || !at.Valid {
+		return nil
 	}
-	at := strings.Index(email, "@")
-	return at > 0 && at < len(email)-1
+	t := at.Time
+	return &t
+}
+
+// plexInvitedAtByUser is plexInvitedAt for every user at once (ListUsers).
+func (s *Service) plexInvitedAtByUser() (map[int64]time.Time, error) {
+	rows, err := s.db.Query(
+		`SELECT a.user_id, a.created_at FROM user_media_server_accounts a
+		   JOIN service_instances si ON si.id = a.instance_id
+		  WHERE si.service_type = 'plex' AND a.disabled_at IS NULL
+		  ORDER BY a.user_id, a.created_at`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query plex invites: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]time.Time{}
+	for rows.Next() {
+		var userID int64
+		var at time.Time
+		if err := rows.Scan(&userID, &at); err != nil {
+			return nil, fmt.Errorf("scan plex invite: %w", err)
+		}
+		if _, seen := out[userID]; !seen {
+			out[userID] = at
+		}
+	}
+	return out, rows.Err()
 }
 
 // Refresh exchanges a refresh token for a fresh access token. This is the one
@@ -551,6 +584,16 @@ func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*
 	token := hex.EncodeToString(tokenBytes)
 
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	// Issuing a link supersedes this user's outstanding one, which is what the
+	// admin UI promises ("it replaces any previous link") and what reissuing
+	// is for: an admin who re-invites because the old link went to the wrong
+	// chat has to actually kill it, not add a second working key that lives
+	// out its full seven days. Redeemed rows stay for the audit trail.
+	if _, err := s.db.Exec(
+		"DELETE FROM connect_tokens WHERE user_id = ? AND redeemed_at IS NULL", userID,
+	); err != nil {
+		return nil, fmt.Errorf("supersede previous connect tokens: %w", err)
+	}
 	_, err = s.db.Exec(
 		"INSERT INTO connect_tokens (token, user_id, created_by, expires_at) VALUES (?, ?, ?, ?)",
 		token, userID, createdBy, expiresAt,
@@ -701,6 +744,13 @@ func (s *Service) RevokeDevice(deviceID string) error {
 // ListUsers returns every account enriched with device counts, password state,
 // and whether an unredeemed connect-link invite is still outstanding.
 func (s *Service) ListUsers() ([]UserSummary, error) {
+	// Read the derived Plex stamps first: SQLite hands this process one
+	// connection, so a second query while the users rows are still open would
+	// wait on itself forever.
+	invitedAt, err := s.plexInvitedAtByUser()
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(`
 		SELECT
 			u.id,
@@ -712,7 +762,6 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 			u.passkey_enabled,
 			u.ai_shared_enabled,
 			u.plex_email,
-			u.plex_invited_at,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
@@ -729,16 +778,16 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 	var users []UserSummary
 	for rows.Next() {
 		var u UserSummary
-		var invitedAt sql.NullTime
 		if err := rows.Scan(
 			&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail, &invitedAt,
+			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail,
 			&u.DeviceCount, &u.HasPendingInvite,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
-		if invitedAt.Valid {
-			u.PlexInvitedAt = &invitedAt.Time
+		if at, ok := invitedAt[u.ID]; ok {
+			t := at
+			u.PlexInvitedAt = &t
 		}
 		u.Permissions = PermissionsForRole(u.Role)
 		users = append(users, u)
@@ -914,7 +963,6 @@ func (s *Service) DeleteUser(actorID, userID int64) error {
 
 func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 	var u UserSummary
-	var invitedAt sql.NullTime
 	err := s.db.QueryRow(`
 		SELECT
 			u.id,
@@ -926,7 +974,6 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 			u.passkey_enabled,
 			u.ai_shared_enabled,
 			u.plex_email,
-			u.plex_invited_at,
 			(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.revoked_at IS NULL) AS device_count,
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
@@ -936,7 +983,7 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 		WHERE u.id = ?
 	`, time.Now(), userID).Scan(
 		&u.ID, &u.Username, &u.Role, &u.CreatedAt,
-		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail, &invitedAt,
+		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail,
 		&u.DeviceCount, &u.HasPendingInvite,
 	)
 	if err != nil {
@@ -945,9 +992,7 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 		}
 		return nil, fmt.Errorf("load user summary: %w", err)
 	}
-	if invitedAt.Valid {
-		u.PlexInvitedAt = &invitedAt.Time
-	}
+	u.PlexInvitedAt = s.plexInvitedAt(u.ID)
 	u.Permissions = PermissionsForRole(u.Role)
 	return &u, nil
 }
@@ -1188,31 +1233,25 @@ func userWithPermissions(user *User) User {
 
 func (s *Service) getUserByUsername(username string) (*User, error) {
 	var user User
-	var invitedAt sql.NullTime
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, plex_invited_at, created_at FROM users WHERE username = ?", username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &invitedAt, &user.CreatedAt)
+		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, created_at FROM users WHERE username = ?", username,
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
-	if invitedAt.Valid {
-		user.PlexInvitedAt = &invitedAt.Time
-	}
+	user.PlexInvitedAt = s.plexInvitedAt(user.ID)
 	return &user, nil
 }
 
 func (s *Service) getUserByID(id int64) (*User, error) {
 	var user User
-	var invitedAt sql.NullTime
 	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, plex_invited_at, created_at FROM users WHERE id = ?", id,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &invitedAt, &user.CreatedAt)
+		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, created_at FROM users WHERE id = ?", id,
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
-	if invitedAt.Valid {
-		user.PlexInvitedAt = &invitedAt.Time
-	}
+	user.PlexInvitedAt = s.plexInvitedAt(user.ID)
 	return &user, nil
 }
 

@@ -198,6 +198,17 @@ class AuthService {
     );
   }
 
+  /// Revoke this device's own session (sign out). Uses a bare client on
+  /// purpose: the intercepted one would run its 401→refresh→expire machinery
+  /// during teardown.
+  Future<void> logout(String serverUrl, String accessToken) async {
+    final dio = _createDio(serverUrl);
+    await dio.post(
+      '/api/auth/logout',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
   /// List all user accounts (admin only).
   Future<List<UserSummary>> listUsers(
     String serverUrl,
@@ -414,12 +425,23 @@ class ConnectTokenResponse {
   final String link;
   final String expiresAt;
 
-  const ConnectTokenResponse({required this.link, required this.expiresAt});
+  /// Where the link's server address came from: 'external_address' when the
+  /// admin-configured external address was used, 'app' when it fell back to
+  /// the address this app is connected with (older servers send nothing,
+  /// which reads as '' and hints nowhere).
+  final String originSource;
+
+  const ConnectTokenResponse({
+    required this.link,
+    required this.expiresAt,
+    this.originSource = '',
+  });
 
   factory ConnectTokenResponse.fromJson(Map<String, dynamic> json) =>
       ConnectTokenResponse(
         link: json['link'] as String,
         expiresAt: json['expires_at'] as String,
+        originSource: json['origin_source'] as String? ?? '',
       );
 }
 
@@ -466,7 +488,8 @@ class UserSummary {
   final bool sharedAiEnabled;
 
   /// The email this user shared for their Plex server invite ('' = none yet),
-  /// and when Cantinarr last sent their invite (null = never).
+  /// and when their invite went out (null = no Plex share yet; derived by
+  /// the server from the user's live Plex account row).
   final String plexEmail;
   final String? plexInvitedAt;
 
@@ -527,6 +550,9 @@ class ServerConfig {
   /// Whether users may see the "Report a problem" affordance.
   final bool allowReporting;
 
+  /// Whether a Plex server exists that an ungranted user can ask access to.
+  final bool plexAccessRequestable;
+
   const ServerConfig({
     required this.serverName,
     this.serverVersion,
@@ -535,6 +561,7 @@ class ServerConfig {
     this.instances = const [],
     this.issuesEnabled = false,
     this.allowReporting = false,
+    this.plexAccessRequestable = false,
   });
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) {
@@ -552,6 +579,7 @@ class ServerConfig {
       instances: instancesList,
       issuesEnabled: json['issues_enabled'] as bool? ?? false,
       allowReporting: json['allow_reporting'] as bool? ?? false,
+      plexAccessRequestable: json['plex_access_requestable'] as bool? ?? false,
     );
   }
 }

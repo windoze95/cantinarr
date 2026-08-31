@@ -5,6 +5,12 @@ class ChatMessage {
   final String id;
   final ChatRole role;
   final String content;
+
+  /// When set, this is what is sent to the server in place of [content].
+  /// [content] is always what the chat bubble renders; [wireContent], when
+  /// non-null, lets a hand-off carry context (e.g. the active discovery tab)
+  /// that the user never typed, without the transcript claiming they did.
+  final String? wireContent;
   final DateTime timestamp;
   final List<MediaResultItem> mediaResults;
   final List<ConfigChange> configurationChanges;
@@ -24,6 +30,7 @@ class ChatMessage {
     required this.id,
     required this.role,
     required this.content,
+    this.wireContent,
     required this.timestamp,
     this.mediaResults = const [],
     this.configurationChanges = const [],
@@ -35,6 +42,7 @@ class ChatMessage {
 
   ChatMessage copyWith({
     String? content,
+    String? wireContent,
     List<MediaResultItem>? mediaResults,
     List<ConfigChange>? configurationChanges,
     bool? isStreaming,
@@ -46,6 +54,7 @@ class ChatMessage {
         id: id,
         role: role,
         content: content ?? this.content,
+        wireContent: wireContent ?? this.wireContent,
         timestamp: timestamp,
         mediaResults: mediaResults ?? this.mediaResults,
         configurationChanges:
@@ -58,7 +67,7 @@ class ChatMessage {
 
   Map<String, dynamic> toApiMessage() => {
         'role': role == ChatRole.user ? 'user' : 'assistant',
-        'content': content,
+        'content': wireContent ?? content,
       };
 }
 

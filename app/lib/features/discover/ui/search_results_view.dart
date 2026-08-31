@@ -399,6 +399,23 @@ class _SearchResultTile extends StatelessWidget {
                           ],
                         ],
                       ),
+                      // Episode-count line for a Partial TV
+                      // result, e.g. "4/8 eps" — same style MediaCard's
+                      // subtitle uses on browse rows, so the two surfaces
+                      // read as the same kind of information (D-04). Never
+                      // populated for movies or any other status.
+                      if (status?.episodeSubtitle != null) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          status!.episodeSubtitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppTheme.textMuted,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
                       // Overview (lines adapt to title length)
                       if (hasOverview) ...[
                         const SizedBox(height: 4),

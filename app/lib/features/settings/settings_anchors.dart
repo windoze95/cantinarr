@@ -10,7 +10,6 @@
 abstract final class SettingsAnchors {
   // /settings (root)
   static const rootRequestUpdates = 'root.request-updates';
-  static const rootShowPlexGuide = 'root.show-plex-guide';
   static const rootAttentionApprovals = 'root.attention-approvals';
   static const rootAttentionIssues = 'root.attention-issues';
   static const rootAttentionAgentFixes = 'root.attention-agent-fixes';
@@ -59,15 +58,16 @@ abstract final class SettingsAnchors {
   static const remediationUserWait = 'remediation.user-wait';
   static const remediationBreakerGiveups = 'remediation.breaker-giveups';
 
-  // /settings/plex
-  static const plexAutoInvite = 'plex.auto-invite';
-
   // /settings/credentials
   static const credentialsAiModel = 'credentials.ai-model';
+  static const credentialsOpenAiBaseUrl = 'credentials.openai-base-url';
+  static const credentialsOpenAiReasoningEffort =
+      'credentials.openai-reasoning-effort';
   static const credentialsHealthCheck = 'credentials.health-check';
   static const credentialsAnthropic = 'credentials.anthropic';
   static const credentialsOpenAi = 'credentials.openai';
   static const credentialsGemini = 'credentials.gemini';
+  static const credentialsGrok = 'credentials.grok';
 
   // /settings/discovery — the TMDB/Trakt sections moved here from the
   // credentials screen; their ids keep the historic `credentials.` prefix

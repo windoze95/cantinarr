@@ -23,12 +23,12 @@ type recordingContent struct {
 	upgradedEpisodes []string // "seriesTitle|tmdbID"
 }
 
-func (r *recordingContent) NotifyNewMovie(title string, tmdbID int) {
+func (r *recordingContent) NotifyNewMovie(title string, tmdbID int, instanceID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.movies = append(r.movies, fmt.Sprintf("%s|%d", title, tmdbID))
 }
-func (r *recordingContent) NotifyNewEpisode(seriesTitle string, tmdbID int) {
+func (r *recordingContent) NotifyNewEpisode(seriesTitle string, tmdbID int, instanceID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.episodes = append(r.episodes, fmt.Sprintf("%s|%d", seriesTitle, tmdbID))
@@ -38,12 +38,12 @@ func (r *recordingContent) NotifyNewBook(title, foreignID, instanceID, format st
 	defer r.mu.Unlock()
 	r.books = append(r.books, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
 }
-func (r *recordingContent) NotifyUpgradedMovie(title string, tmdbID int) {
+func (r *recordingContent) NotifyUpgradedMovie(title string, tmdbID int, instanceID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.upgradedMovies = append(r.upgradedMovies, fmt.Sprintf("%s|%d", title, tmdbID))
 }
-func (r *recordingContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int) {
+func (r *recordingContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int, instanceID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.upgradedEpisodes = append(r.upgradedEpisodes, fmt.Sprintf("%s|%d", seriesTitle, tmdbID))

@@ -746,6 +746,40 @@ func TestScopeReadToolInputInjectsAuthoritativeBookIdentity(t *testing.T) {
 	}
 }
 
+// A model-supplied instance_id is dropped from every scoped read: the arr
+// tools accept it interactively, but a scoped issue read stays on the issue's
+// own library (delivered as trusted callCtx.InstanceID, or re-injected below
+// for the settings tools) no matter what the model asked for.
+func TestScopeReadToolInputStripsModelInstanceID(t *testing.T) {
+	issue := &Issue{MediaType: "movie", TmdbID: 550, InstanceID: "radarr-authoritative"}
+	for _, toolName := range []string{"get_queue", "get_library", "get_history", "search_releases", "get_arr_health"} {
+		raw, err := scopeReadToolInput(issue, toolName, json.RawMessage(`{"instance_id":"radarr-model-pick"}`))
+		if err != nil {
+			t.Fatalf("%s: %v", toolName, err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := got["instance_id"]; ok {
+			t.Fatalf("%s kept a model instance_id: %s", toolName, raw)
+		}
+	}
+	// The settings tools have no callCtx plumbing, so for them the issue's own
+	// instance is re-injected — never the model's.
+	raw, err := scopeReadToolInput(issue, "get_service_config", json.RawMessage(`{"section":"indexers","instance_id":"radarr-model-pick"}`))
+	if err != nil {
+		t.Fatalf("get_service_config: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["instance_id"] != "radarr-authoritative" {
+		t.Fatalf("settings instance_id = %v, want the issue's own", got["instance_id"])
+	}
+}
+
 func TestScopeReadToolInputFailsClosedWithoutUsableIdentity(t *testing.T) {
 	if _, err := scopeReadToolInput(&Issue{MediaType: "movie"}, "get_queue", json.RawMessage(`{"queue_id":9}`)); err == nil {
 		t.Fatal("unscoped movie queue read was accepted")

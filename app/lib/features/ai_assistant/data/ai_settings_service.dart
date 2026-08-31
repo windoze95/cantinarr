@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/backend_client.dart';
+import '../../../core/network/long_request_options.dart';
 import 'ai_provider_models.dart';
 
 const _aiValidationReceiveTimeout = Duration(seconds: 75);
@@ -165,7 +166,9 @@ String _fallbackLabel(String provider) => switch (provider) {
       'anthropic' => 'Anthropic',
       'openai' => 'OpenAI',
       'gemini' => 'Google Gemini',
+      'grok' => 'xAI Grok',
       'codex' => 'OpenAI (OAuth)',
+      'grok_oauth' => 'xAI Grok (OAuth)',
       _ => provider,
     };
 
@@ -191,7 +194,7 @@ class AiSettingsService {
     final response = await _dio.put(
       '/api/ai/settings',
       data: data,
-      options: Options(receiveTimeout: _aiValidationReceiveTimeout),
+      options: longRequestOptions(timeout: _aiValidationReceiveTimeout),
     );
     return AiSettings.fromJson(response.data as Map<String, dynamic>);
   }
@@ -210,7 +213,7 @@ class AiSettingsService {
     await _dio.put(
       '/api/ai/credentials/${Uri.encodeComponent(provider)}',
       data: {'api_key': apiKey, 'model': model},
-      options: Options(receiveTimeout: _aiValidationReceiveTimeout),
+      options: longRequestOptions(timeout: _aiValidationReceiveTimeout),
     );
   }
 

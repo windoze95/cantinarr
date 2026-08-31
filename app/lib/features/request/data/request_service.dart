@@ -22,7 +22,7 @@ enum RequestStatus {
   available('Available', 'Available'),
 
   /// Partially available (some seasons/episodes).
-  partial('Partially Available', 'Request More'),
+  partial('Partial', 'Request More'),
 
   /// An administrator declined the request; it can be requested again.
   denied('Request Denied', 'Request');
@@ -466,19 +466,78 @@ class RequestSeasonStatus {
   String get episodesLabel => '$episodeFileCount/$episodeCount';
 }
 
+/// A movie's theatrical and digital release dates, mirroring the backend
+/// `StatusResponse.releases` payload. Only movies already in the library carry
+/// them; everything else is [none].
+///
+/// These are calendar dates, not instants. The backend sends plain `YYYY-MM-DD`
+/// precisely so nothing localises them — a release date converted across time
+/// zones lands a day early or late — so they are parsed component-wise and must
+/// never be run through `toLocal()`.
+class MovieReleaseDates {
+  final DateTime? inCinemas;
+  final DateTime? digital;
+
+  const MovieReleaseDates({this.inCinemas, this.digital});
+
+  /// The absence of dates: either the title isn't in the library or the arr
+  /// knows neither date.
+  static const MovieReleaseDates none = MovieReleaseDates();
+
+  bool get isEmpty => inCinemas == null && digital == null;
+
+  factory MovieReleaseDates.fromJson(Map<String, dynamic> json) =>
+      MovieReleaseDates(
+        inCinemas: _parseCalendarDate(json['in_cinemas'] as String?),
+        digital: _parseCalendarDate(json['digital'] as String?),
+      );
+}
+
+/// Parses a `YYYY-MM-DD` calendar date into local midnight, ignoring anything
+/// after the date part. Returns null for a missing or unparseable value.
+DateTime? _parseCalendarDate(String? value) {
+  if (value == null || value.length < 10) return null;
+  final year = int.tryParse(value.substring(0, 4));
+  final month = int.tryParse(value.substring(5, 7));
+  final day = int.tryParse(value.substring(8, 10));
+  if (year == null || month == null || day == null) return null;
+  return DateTime(year, month, day);
+}
+
 /// The full request status for a title: the overall [status] plus, for TV, the
-/// per-season breakdown (empty for movies or series not in the library).
+/// per-season breakdown (empty for movies or series not in the library) and,
+/// for movies in the library, the [releases] dates. When the user is granted
+/// more than one library for the media type, [instanceStatuses] carries each
+/// granted library's own status so the screen can show one chip per library.
 class RequestStatusDetail {
   final RequestStatus status;
   final List<RequestSeasonStatus> seasons;
+  final MovieReleaseDates releases;
+  final Map<String, RequestStatus> instanceStatuses;
 
   const RequestStatusDetail({
     this.status = RequestStatus.unavailable,
     this.seasons = const [],
+    this.releases = MovieReleaseDates.none,
+    this.instanceStatuses = const {},
   });
 
   factory RequestStatusDetail.fromJson(Map<String, dynamic> json) {
     final statusName = json['status'] as String? ?? 'unavailable';
+    final releases = json['releases'];
+    final rawInstanceStatuses = json['instance_statuses'];
+    final instanceStatuses = <String, RequestStatus>{};
+    if (rawInstanceStatuses is Map<String, dynamic>) {
+      for (final entry in rawInstanceStatuses.entries) {
+        final value = entry.value;
+        if (value is! Map<String, dynamic>) continue;
+        final name = value['status'] as String? ?? 'unavailable';
+        instanceStatuses[entry.key] = RequestStatus.values.firstWhere(
+          (s) => s.name == name,
+          orElse: () => RequestStatus.unavailable,
+        );
+      }
+    }
     return RequestStatusDetail(
       status: RequestStatus.values.firstWhere(
         (s) => s.name == statusName,
@@ -487,6 +546,10 @@ class RequestStatusDetail {
       seasons: ((json['seasons'] as List?) ?? const [])
           .map((e) => RequestSeasonStatus.fromJson(e as Map<String, dynamic>))
           .toList(),
+      releases: releases is Map<String, dynamic>
+          ? MovieReleaseDates.fromJson(releases)
+          : MovieReleaseDates.none,
+      instanceStatuses: instanceStatuses,
     );
   }
 }
@@ -550,13 +613,22 @@ class RequestService {
   }
 
   /// Like [checkStatus] but also returns the per-season availability breakdown
-  /// (TV only). Falls back to an unavailable detail with no seasons on error.
+  /// (TV only). An [instanceId] scopes the read to that granted library; null
+  /// reads the user's default. Falls back to an unavailable detail with no
+  /// seasons on error.
   Future<RequestStatusDetail> checkStatusDetail(
-      int tmdbId, MediaType mediaType) async {
+    int tmdbId,
+    MediaType mediaType, {
+    String? instanceId,
+  }) async {
     try {
       final resp = await _backendDio.get(
         '/api/requests/$tmdbId/status',
-        queryParameters: {'media_type': mediaType.name},
+        queryParameters: {
+          'media_type': mediaType.name,
+          if (instanceId != null && instanceId.isNotEmpty)
+            'instance_id': instanceId,
+        },
       );
       return RequestStatusDetail.fromJson(resp.data as Map<String, dynamic>);
     } catch (_) {
@@ -564,13 +636,22 @@ class RequestService {
     }
   }
 
-  /// Fetch the option set the current user may choose for [mediaType].
-  /// Returns null on error (the caller then submits with no options).
-  Future<RequestOptions?> fetchOptions(MediaType mediaType) async {
+  /// Fetch the option set the current user may choose for [mediaType]. An
+  /// [instanceId] scopes the quality profiles to that library (profiles live
+  /// inside an instance, so a sibling's ids would be meaningless). Returns
+  /// null on error (the caller then submits with no options).
+  Future<RequestOptions?> fetchOptions(
+    MediaType mediaType, {
+    String? instanceId,
+  }) async {
     try {
       final resp = await _backendDio.get(
         '/api/requests/options',
-        queryParameters: {'media_type': mediaType.name},
+        queryParameters: {
+          'media_type': mediaType.name,
+          if (instanceId != null && instanceId.isNotEmpty)
+            'instance_id': instanceId,
+        },
       );
       return RequestOptions.fromJson(resp.data as Map<String, dynamic>);
     } catch (_) {
@@ -580,7 +661,8 @@ class RequestService {
 
   /// Submit a request for a media item. Returns the resulting [RequestStatus]
   /// (e.g. [RequestStatus.pending] when approval is required), or null on
-  /// failure.
+  /// failure. An [instanceId] routes the request to that granted library, the
+  /// same wire field book requests already use.
   Future<RequestStatus?> request({
     required int tmdbId,
     required MediaType mediaType,
@@ -589,6 +671,7 @@ class RequestService {
     String? seasonScope,
     List<int>? seasons,
     int? qualityProfileId,
+    String? instanceId,
   }) async {
     try {
       final body = <String, dynamic>{
@@ -607,6 +690,9 @@ class RequestService {
       }
       if (qualityProfileId != null && qualityProfileId != 0) {
         body['quality_profile_id'] = qualityProfileId;
+      }
+      if (instanceId != null && instanceId.isNotEmpty) {
+        body['instance_id'] = instanceId;
       }
       final resp = await _backendDio.post('/api/requests', data: body);
       if (resp.statusCode != 200 && resp.statusCode != 201) return null;

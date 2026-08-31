@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
@@ -220,5 +223,49 @@ func TestCodexAutonomousTurnForceNoToolsAndPropagatesError(t *testing.T) {
 	})
 	if !errors.Is(err, wantErr) || len(manager.tools) != 0 {
 		t.Fatalf("NextTurn err=%v tools=%v", err, manager.tools)
+	}
+}
+
+func TestResolveSharedAutonomousTurnUsesLocalProviderBaseURL(t *testing.T) {
+	h, registry, _, _ := newResolverTestHandler(t)
+	configured := make(chan providerRequest, 1)
+	configuredServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		configured <- captureProviderRequest(r)
+		writeOpenAITextSSE(w)
+	}))
+	t.Cleanup(configuredServer.Close)
+	var envHits atomic.Int64
+	envServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		envHits.Add(1)
+		writeOpenAITextSSE(w)
+	}))
+	t.Cleanup(envServer.Close)
+	t.Setenv("OPENAI_BASE_URL", envServer.URL+"/v1")
+
+	if err := registry.SetAIConfig(credentials.AIProviderLocalOpenAI, "local-model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetSetting(credentials.KeyLocalOpenAIBaseURL, configuredServer.URL+"/v1"); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := h.ResolveSharedAutonomousTurn(context.Background(), AutonomousModelOverride{})
+	if err != nil {
+		t.Fatalf("resolve shared autonomous turn: %v", err)
+	}
+	if _, err := resolved.Runner.NextTurn(context.Background(), TurnParams{
+		History: Transcript{{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockText, Text: "observe"}}}},
+	}); err != nil {
+		t.Fatalf("autonomous turn: %v", err)
+	}
+	req := <-configured
+	if req.path != "/v1/chat/completions" {
+		t.Fatalf("path=%q, want /v1/chat/completions", req.path)
+	}
+	if got := req.header.Get("Authorization"); got != "Bearer cantinarr-local" {
+		t.Fatalf("Authorization=%q", got)
+	}
+	if got := envHits.Load(); got != 0 {
+		t.Fatalf("env upstream received %d requests despite the shared base URL", got)
 	}
 }

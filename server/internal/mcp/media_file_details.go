@@ -16,27 +16,35 @@ import (
 // This is a per-title API read of what the arr already analyzed — nothing
 // scans the library, and nothing in this server ever does.
 
-func mediaFileDetailsInput(input json.RawMessage) (mediaType string, tmdbID, season int, err error) {
+func mediaFileDetailsInput(input json.RawMessage) (mediaType, modelInstanceID string, tmdbID, season int, err error) {
 	var args struct {
 		MediaType    string `json:"media_type"`
+		InstanceID   string `json:"instance_id"`
 		TmdbID       int    `json:"tmdb_id"`
 		SeasonNumber int    `json:"season_number"`
 	}
 	if err := json.Unmarshal(nonEmptyJSON(input), &args); err != nil {
-		return "", 0, 0, fmt.Errorf("invalid get_media_file_details input: %w", err)
+		return "", "", 0, 0, fmt.Errorf("invalid get_media_file_details input: %w", err)
 	}
-	return args.MediaType, args.TmdbID, args.SeasonNumber, nil
+	return args.MediaType, args.InstanceID, args.TmdbID, args.SeasonNumber, nil
 }
 
-func (s *ToolServer) getMediaFileDetails(input json.RawMessage, instanceID string) (*ToolResult, error) {
-	mediaType, tmdbID, season, err := mediaFileDetailsInput(input)
+func (s *ToolServer) getMediaFileDetails(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
+	mediaType, modelInstanceID, tmdbID, season, err := mediaFileDetailsInput(input)
 	if err != nil {
 		return nil, err
 	}
+	instanceID := arrToolInstanceID(modelInstanceID, callInstanceID)
 	switch mediaType {
 	case "movie":
+		if client, _, refusal := s.radarrTargetFor(modelInstanceID, callInstanceID); client == nil {
+			return &ToolResult{Text: refusal}, nil
+		}
 		return s.movieFileDetails(tmdbID, instanceID)
 	case "tv":
+		if client, _, refusal := s.sonarrTargetFor(modelInstanceID, callInstanceID); client == nil {
+			return &ToolResult{Text: refusal}, nil
+		}
 		return s.episodeFileDetails(tmdbID, season, instanceID)
 	default:
 		return &ToolResult{Text: "get_media_file_details reads movie and tv files. Book files carry no media-property analysis in Chaptarr; this read cannot see them — that is blindness, not absence."}, nil

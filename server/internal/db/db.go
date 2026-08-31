@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS service_instances (
     sort_order INTEGER DEFAULT 0,
     media_download_mode TEXT NOT NULL DEFAULT 'disabled',
     media_path_mappings TEXT NOT NULL DEFAULT '[]',
+    media_server_config TEXT NOT NULL DEFAULT '{}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -108,6 +109,33 @@ CREATE TABLE IF NOT EXISTS user_default_instances (
     service_type TEXT NOT NULL,
     instance_id TEXT NOT NULL,
     PRIMARY KEY (user_id, service_type)
+);
+
+-- Additional per-user instance access grants (admin-managed). A row lets the
+-- user see and use this instance ALONGSIDE their effective default, so one
+-- person can hold e.g. an HD and a 4K Radarr at once and choose per request.
+-- The user_default_instances pin stays the user's default among their granted
+-- set. With no grant rows the old model applies unchanged: the pin alone, or
+-- the global default (chaptarr stays grant-only, never falling back).
+CREATE TABLE IF NOT EXISTS user_instance_grants (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, instance_id)
+);
+
+-- Media-server accounts Cantinarr created or an admin linked (Jellyfin/Emby).
+-- Rows are an action log: what Cantinarr did and when access was switched
+-- off. The media server itself is the live truth and is re-read on view.
+CREATE TABLE IF NOT EXISTS user_media_server_accounts (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    remote_user_id TEXT NOT NULL,
+    remote_username TEXT NOT NULL,
+    created_by_cantinarr INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    disabled_at DATETIME,
+    PRIMARY KEY (user_id, instance_id),
+    UNIQUE (instance_id, remote_user_id)
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -294,6 +322,29 @@ CREATE TABLE IF NOT EXISTS shared_codex_account (
     email TEXT NOT NULL DEFAULT '',
     plan_type TEXT NOT NULL DEFAULT '',
     rate_limits_json TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Per-user xAI Grok OAuth state, the Grok analog of user_codex_accounts.
+-- auth_blob is the OAuth token record (access + rotating refresh token)
+-- encrypted with Cantinarr's AES-256-GCM secrets cipher; it never exists in
+-- plaintext outside one request. Email and plan are display metadata only.
+CREATE TABLE IF NOT EXISTS user_grok_accounts (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    auth_blob TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- One server-wide xAI Grok authorization for the admin-funded shared
+-- provider, singleton-keyed like shared_codex_account so admin turnover
+-- cannot orphan it.
+CREATE TABLE IF NOT EXISTS shared_grok_account (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    auth_blob TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -918,6 +969,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// bypassing approval policy. This answers what already went wrong, which
 		// is a different question and must not move a row out of the queue.
 		{alter: "ALTER TABLE request_log ADD COLUMN add_failure_reason TEXT"},
+		// Media-server instances (Jellyfin/Emby): the client-reachable sign-in
+		// address shown to granted users plus the shared library ids, as one
+		// JSON document; '{}' for every other service type.
+		{alter: "ALTER TABLE service_instances ADD COLUMN media_server_config TEXT NOT NULL DEFAULT '{}'"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
@@ -934,15 +989,15 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("clear legacy agent-run cost estimates: %w", err)
 	}
 
-	// Chaptarr has no global default — instances are granted per user — but
-	// older versions let the flag be set. Zero any legacy rows so the
-	// admin/AI fallback (GetDefault) resolves purely by sort order. Runs every
-	// boot; idempotent and the table is tiny.
+	// Chaptarr and the media servers (Jellyfin, Emby, Plex) have no global default —
+	// instances are granted per user — but older versions let the flag be
+	// set. Zero any legacy rows so the admin/AI fallback (GetDefault) resolves
+	// purely by sort order. Runs every boot; idempotent and the table is tiny.
 	if _, err := db.Exec(
-		"UPDATE service_instances SET is_default = 0 WHERE service_type = 'chaptarr' AND is_default = 1",
+		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'jellyfin', 'emby', 'plex') AND is_default = 1",
 	); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("clear chaptarr default flags: %w", err)
+		return nil, fmt.Errorf("clear grant-only default flags: %w", err)
 	}
 
 	// Auto-detected issues used to store the *arr service type in media_type

@@ -103,6 +103,80 @@ func TestOpenAIAPIKeySavesThroughAuthenticatedRouter(t *testing.T) {
 	}
 }
 
+// TestLocalProviderSavesThroughAuthenticatedRouter proves the local provider
+// end to end through the real router: the admin save's validation turn lands
+// on the configured upstream while the env-default upstream stays silent, the
+// endpoint persists plaintext and echoes back to admins, and a requester's
+// personal openai save still validates against the default endpoint —
+// personal keys are never redirected by the shared local endpoint.
+func TestLocalProviderSavesThroughAuthenticatedRouter(t *testing.T) {
+	configuredUpstream, configuredRequests := newStrictOpenAISaveUpstream(t)
+	envUpstream, envRequests := newStrictOpenAISaveUpstream(t)
+	t.Setenv("OPENAI_BASE_URL", envUpstream.URL+"/v1")
+
+	harness := newRBACRouterHarness(t, false)
+	const (
+		model       = "gpt-4.1-mini"
+		personalKey = "sk-test-personal-openai"
+	)
+	sharedPayload, err := json.Marshal(map[string]string{
+		credentials.KeyAIProvider:         credentials.AIProviderLocalOpenAI,
+		credentials.KeyAIModel:            model,
+		credentials.KeyLocalOpenAIBaseURL: configuredUpstream.URL + "/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := serveRBACRequestWithBody(
+		harness.router,
+		http.MethodPut,
+		"/api/admin/credentials",
+		harness.adminToken,
+		string(sharedPayload),
+	)
+	if shared.Code != http.StatusOK {
+		t.Fatalf("admin local-provider save status=%d, want 200; body=%s", shared.Code, shared.Body.String())
+	}
+	// Keyless local profiles authenticate with the fixed placeholder bearer.
+	assertStrictOpenAISaveRequest(t, configuredRequests, "cantinarr-local", model)
+	assertNoStrictOpenAISaveRequest(t, envRequests)
+	if got := harness.registry.GetSetting(credentials.KeyLocalOpenAIBaseURL); got != configuredUpstream.URL+"/v1" {
+		t.Fatalf("stored base URL=%q", got)
+	}
+
+	status := serveRBACRequest(harness.router, http.MethodGet, "/api/admin/credentials", harness.adminToken)
+	if status.Code != http.StatusOK {
+		t.Fatalf("admin status read=%d; body=%s", status.Code, status.Body.String())
+	}
+	var decoded struct {
+		AI struct {
+			LocalBaseURL string `json:"local_openai_base_url"`
+		} `json:"ai"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.AI.LocalBaseURL != configuredUpstream.URL+"/v1" {
+		t.Fatalf("echoed base URL=%q", decoded.AI.LocalBaseURL)
+	}
+
+	personal := serveRBACRequestWithBody(
+		harness.router,
+		http.MethodPut,
+		"/api/ai/settings",
+		harness.requesterToken,
+		`{"provider":"openai","model":"gpt-4.1-mini","api_key":"sk-test-personal-openai"}`,
+	)
+	if personal.Code != http.StatusOK {
+		t.Fatalf("requester personal save status=%d, want 200; body=%s", personal.Code, personal.Body.String())
+	}
+	assertStrictOpenAISaveRequest(t, envRequests, personalKey, model)
+	assertNoStrictOpenAISaveRequest(t, configuredRequests)
+	if strings.Contains(personal.Body.String(), configuredUpstream.URL) {
+		t.Fatalf("personal settings response leaked the shared base URL: %s", personal.Body.String())
+	}
+}
+
 func TestLiveOpenAIAPIKeySavesThroughAuthenticatedRouter(t *testing.T) {
 	if os.Getenv("CANTINARR_LIVE_AI_TESTS") != "1" {
 		t.Skip("set CANTINARR_LIVE_AI_TESTS=1 to run hosted-provider save tests")
@@ -183,6 +257,35 @@ func TestLiveOpenAIAPIKeySavesThroughAuthenticatedRouter(t *testing.T) {
 	}
 }
 
+// TestCredentialSaveErrorsAreJSON pins the error transport through the real
+// router: the app renders body["error"] only when the response is labeled
+// application/json, so a text/plain error means users see a generic "Failed
+// to save settings." with the actual reason discarded.
+func TestCredentialSaveErrorsAreJSON(t *testing.T) {
+	harness := newRBACRouterHarness(t, false)
+
+	resp := serveRBACRequestWithBody(
+		harness.router,
+		http.MethodPut,
+		"/api/admin/credentials",
+		harness.adminToken,
+		`{"ai_provider":"not-a-provider"}`,
+	)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("unknown-provider save status=%d, want 400; body=%s", resp.Code, resp.Body.String())
+	}
+	if ct := resp.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("error Content-Type = %q, want application/json so the app can show the reason", ct)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("error body is not valid JSON: %v (%s)", err, resp.Body.String())
+	}
+	if body["error"] == "" {
+		t.Fatalf("error body missing the error field: %s", resp.Body.String())
+	}
+}
+
 func newStrictOpenAISaveUpstream(t *testing.T) (*httptest.Server, <-chan strictOpenAISaveRequest) {
 	t.Helper()
 	requests := make(chan strictOpenAISaveRequest, 4)
@@ -247,11 +350,33 @@ func assertStrictOpenAISaveRequest(t *testing.T, requests <-chan strictOpenAISav
 		if request.body["model"] != model {
 			t.Fatalf("OpenAI validation model=%v, want %q", request.body["model"], model)
 		}
-		if _, found := request.body["tool_choice"]; found {
-			t.Fatalf("tool-free OpenAI save validation sent tool_choice: %#v", request.body)
+		// The probe must carry the same tool payload a real chat serializes —
+		// a provider that rejects a tool schema has to fail at save time, not
+		// on the first real chat (#497) — while tool_choice none keeps the
+		// reply a plain text turn.
+		if choice, found := request.body["tool_choice"]; !found || choice != "none" {
+			t.Fatalf("save validation tool_choice=%v, want \"none\" alongside the tool payload", request.body["tool_choice"])
 		}
-		if _, found := request.body["tools"]; found {
-			t.Fatalf("tool-free OpenAI save validation sent tools: %#v", request.body)
+		tools, ok := request.body["tools"].([]any)
+		if !ok || len(tools) == 0 {
+			t.Fatal("save validation sent no tools; the probe must carry the chat tool payload")
+		}
+		seenGrabRelease := false
+		for _, raw := range tools {
+			tool, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			fn, ok := tool["function"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if fn["name"] == "grab_release" {
+				seenGrabRelease = true
+			}
+		}
+		if !seenGrabRelease {
+			t.Fatal("save validation omitted grab_release; the probe must exercise the full admin catalog")
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("OpenAI save validation did not reach the strict upstream")

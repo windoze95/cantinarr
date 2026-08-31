@@ -238,7 +238,8 @@ class _NotificationPreferencesScreenState
           ),
           _toggle(
             title: 'Plex access requests',
-            subtitle: 'When someone shares their Plex email for an invite',
+            subtitle:
+                'When someone shares their Plex email and needs you to grant them Plex',
             value: prefs.plexAccessRequest,
             onChanged: (v) =>
                 _save(prefs.copyWith(plexAccessRequest: v), prefs),
@@ -277,7 +278,7 @@ class _NotificationPreferencesScreenState
           ),
         _toggle(
           title: 'Plex invite sent',
-          subtitle: 'When your Plex invite email goes out',
+          subtitle: 'When your Plex invite goes out',
           value: prefs.plexInviteSent,
           onChanged: (v) => _save(prefs.copyWith(plexInviteSent: v), prefs),
           anchor: SettingsAnchors.notificationsPlexInviteSent,

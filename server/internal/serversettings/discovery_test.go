@@ -104,6 +104,9 @@ func TestSettersPreserveEachOthersFields(t *testing.T) {
 	if _, err := s.SetManagementURL("http://tower.local/Docker"); err != nil {
 		t.Fatalf("SetManagementURL: %v", err)
 	}
+	if _, err := s.SetExternalURL("https://cantina.example.com"); err != nil {
+		t.Fatalf("SetExternalURL: %v", err)
+	}
 	if _, err := s.SetDiscovery(DiscoverySourceTraktTrending, true); err != nil {
 		t.Fatalf("SetDiscovery: %v", err)
 	}
@@ -111,6 +114,9 @@ func TestSettersPreserveEachOthersFields(t *testing.T) {
 	got := s.Get()
 	if got.ManagementURL != "http://tower.local/Docker" {
 		t.Errorf("ManagementURL = %q, want it preserved through the discovery write", got.ManagementURL)
+	}
+	if got.ExternalURL != "https://cantina.example.com" {
+		t.Errorf("ExternalURL = %q, want it preserved through the other writes", got.ExternalURL)
 	}
 	if got.DiscoverySource != DiscoverySourceTraktTrending || !got.DiscoveryEnglishOnly {
 		t.Errorf("discovery = (%q, %t), want (%q, true)",
@@ -125,6 +131,9 @@ func TestSettersPreserveEachOthersFields(t *testing.T) {
 	if got.DiscoverySource != DiscoverySourceTraktTrending || !got.DiscoveryEnglishOnly {
 		t.Errorf("discovery = (%q, %t) after a management-URL write, want it preserved",
 			got.DiscoverySource, got.DiscoveryEnglishOnly)
+	}
+	if got.ExternalURL != "https://cantina.example.com" {
+		t.Errorf("ExternalURL = %q after a management-URL write, want it preserved", got.ExternalURL)
 	}
 }
 

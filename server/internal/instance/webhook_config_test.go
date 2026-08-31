@@ -571,7 +571,7 @@ func TestConfigureWebhookRejectsUnsupportedAndUnknownInstances(t *testing.T) {
 	}
 }
 
-func TestConfigureWebhookRejectsInvalidConfiguredPublicURL(t *testing.T) {
+func TestConfigureWebhookRejectsInvalidConfiguredCallbackURL(t *testing.T) {
 	store := newTestStore(t)
 	id := mkInstance(t, store, "radarr", "Movies")
 	router := chi.NewRouter()
@@ -584,7 +584,7 @@ func TestConfigureWebhookRejectsInvalidConfiguredPublicURL(t *testing.T) {
 	}
 }
 
-func TestConfiguredPublicURLWinsOverRequestOrigin(t *testing.T) {
+func TestConfiguredCallbackURLWinsOverRequestOrigin(t *testing.T) {
 	h := NewHandler(nil, nil, "https://public.example")
 	req := httptest.NewRequest(http.MethodPost, "http://internal.invalid/instances/id/webhook", nil)
 	req.Header.Set("X-Forwarded-Host", "attacker.example")
@@ -858,10 +858,10 @@ func TestWebhookStatusUnsupportedAndUnknownInstances(t *testing.T) {
 	}
 }
 
-// TestWebhookStatusReportsUnusablePublicURL: with a public URL that can never
+// TestWebhookStatusReportsUnusableCallbackURL: with a callback URL that can never
 // carry a callback, the status is an answer (configure would fail the same
 // way), not an error.
-func TestWebhookStatusReportsUnusablePublicURL(t *testing.T) {
+func TestWebhookStatusReportsUnusableCallbackURL(t *testing.T) {
 	store := newTestStore(t)
 	id := mkInstance(t, store, "radarr", "Movies")
 	rec := getWebhookStatus(t, NewHandler(store, nil, "javascript://attacker.example"), id)

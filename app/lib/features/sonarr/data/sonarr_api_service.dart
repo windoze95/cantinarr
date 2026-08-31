@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import '../../../core/network/long_request_options.dart';
 import 'sonarr_models.dart';
 
 /// Networking layer for Sonarr, proxied through the Cantinarr backend.
@@ -18,8 +19,11 @@ class SonarrApiService {
     return SonarrSystemStatus.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Fetches the entire series library in one unpaginated response — slow for
+  /// large libraries.
   Future<List<SonarrSeries>> getSeries() async {
-    final resp = await _dio.get('$_basePath/series');
+    final resp =
+        await _dio.get('$_basePath/series', options: longRequestOptions());
     return (resp.data as List<dynamic>)
         .map((s) => SonarrSeries.fromJson(s as Map<String, dynamic>))
         .toList();
@@ -272,7 +276,7 @@ class SonarrApiService {
     final resp = await _dio.get(
       '$_basePath/release',
       queryParameters: {'seriesId': seriesId, 'seasonNumber': seasonNumber},
-      options: Options(receiveTimeout: const Duration(seconds: 120)),
+      options: longRequestOptions(),
     );
     return (resp.data as List<dynamic>)
         .map((r) => SonarrRelease.fromJson(r as Map<String, dynamic>))
@@ -287,7 +291,7 @@ class SonarrApiService {
     await _dio.post(
       '$_basePath/release',
       data: {'guid': guid, 'indexerId': indexerId},
-      options: Options(receiveTimeout: const Duration(seconds: 60)),
+      options: longRequestOptions(timeout: const Duration(seconds: 60)),
     );
   }
 
@@ -297,7 +301,7 @@ class SonarrApiService {
     final resp = await _dio.get(
       '$_basePath/release',
       queryParameters: {'episodeId': episodeId},
-      options: Options(receiveTimeout: const Duration(seconds: 120)),
+      options: longRequestOptions(),
     );
     return (resp.data as List<dynamic>)
         .map((r) => SonarrRelease.fromJson(r as Map<String, dynamic>))
@@ -379,7 +383,7 @@ class SonarrApiService {
         'downloadId': downloadId,
         'filterExistingFiles': false,
       },
-      options: Options(receiveTimeout: const Duration(seconds: 60)),
+      options: longRequestOptions(timeout: const Duration(seconds: 60)),
     );
     return (resp.data as List<dynamic>)
         .map((c) =>

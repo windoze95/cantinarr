@@ -42,7 +42,6 @@ func TestBuildSetupItemsMapsFacts(t *testing.T) {
 		HasDownloadClient: true,
 		MediaDownloads:    true,
 		TMDB:              true,
-		PlexInvites:       true,
 	})
 	got := map[string]bool{}
 	for _, item := range items {
@@ -53,7 +52,7 @@ func TestBuildSetupItemsMapsFacts(t *testing.T) {
 		"sonarr":          false,
 		"tmdb":            true,
 		"push":            false,
-		"plex_invites":    true,
+		"media_servers":   false,
 		"download_client": true,
 		"media_downloads": true,
 		"tautulli":        false,

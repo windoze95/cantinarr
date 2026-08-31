@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/phone_apps_sheet.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../data/book_ownership.dart';
 import '../data/request_service.dart';
@@ -270,6 +271,9 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       await _refreshAfterSubmission();
       if (!mounted) return;
       _announce(outcome);
+      if (submission.succeeded(format)) {
+        unawaited(maybeShowPhoneAppsPrompt(context));
+      }
     } finally {
       if (mounted) {
         setState(() => _inFlight.remove(format));

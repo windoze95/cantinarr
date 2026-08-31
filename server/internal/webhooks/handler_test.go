@@ -42,8 +42,8 @@ type fakeContent struct {
 	upgradedBooks    []string
 }
 
-func (f *fakeContent) NotifyNewMovie(title string, tmdbID int) { f.movies = append(f.movies, title) }
-func (f *fakeContent) NotifyNewEpisode(seriesTitle string, tmdbID int) {
+func (f *fakeContent) NotifyNewMovie(title string, tmdbID int, instanceID string) { f.movies = append(f.movies, title) }
+func (f *fakeContent) NotifyNewEpisode(seriesTitle string, tmdbID int, instanceID string) {
 	f.episodes = append(f.episodes, seriesTitle)
 }
 
@@ -54,10 +54,10 @@ func (f *fakeContent) NotifyNewBook(title, foreignID, instanceID, format string)
 	f.books = append(f.books, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
 }
 
-func (f *fakeContent) NotifyUpgradedMovie(title string, tmdbID int) {
+func (f *fakeContent) NotifyUpgradedMovie(title string, tmdbID int, instanceID string) {
 	f.upgradedMovies = append(f.upgradedMovies, title)
 }
-func (f *fakeContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int) {
+func (f *fakeContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int, instanceID string) {
 	f.upgradedEpisodes = append(f.upgradedEpisodes, seriesTitle)
 }
 func (f *fakeContent) NotifyUpgradedBook(title, foreignID, instanceID, format string) {

@@ -73,19 +73,29 @@ func TestUsersOptedIntoDefaultBehavior(t *testing.T) {
 
 	store := NewPrefsStore(database)
 
+	// new_movie/new_episode are per-library truth now: the unscoped query
+	// refuses them the way it refuses new_book, and the scoped query's
+	// empty-instance fallback answers with the legacy unscoped audience.
+	if _, err := store.usersOptedInto(CategoryNewMovie); err == nil {
+		t.Error("usersOptedInto(new_movie) should refuse; it requires usersOptedIntoNewVideo")
+	}
+	if _, err := store.usersOptedInto(CategoryNewEpisode); err == nil {
+		t.Error("usersOptedInto(new_episode) should refuse; it requires usersOptedIntoNewVideo")
+	}
+
 	// new_movie on by default => alice + admin included, bob excluded.
-	got, err := store.usersOptedInto(CategoryNewMovie)
+	got, err := store.usersOptedIntoNewVideo(CategoryNewMovie, "radarr", "")
 	if err != nil {
-		t.Fatalf("usersOptedInto(new_movie): %v", err)
+		t.Fatalf("usersOptedIntoNewVideo(new_movie, \"\"): %v", err)
 	}
 	if !equalIDs(got, []int64{1, 3}) {
 		t.Errorf("new_movie opted-in = %v, want [1 3]", got)
 	}
 
 	// new_episode on by default and untouched => everyone included.
-	got, err = store.usersOptedInto(CategoryNewEpisode)
+	got, err = store.usersOptedIntoNewVideo(CategoryNewEpisode, "sonarr", "")
 	if err != nil {
-		t.Fatalf("usersOptedInto(new_episode): %v", err)
+		t.Fatalf("usersOptedIntoNewVideo(new_episode, \"\"): %v", err)
 	}
 	if !equalIDs(got, []int64{1, 2, 3}) {
 		t.Errorf("new_episode opted-in = %v, want [1 2 3]", got)
@@ -242,6 +252,86 @@ func TestUsersOptedIntoNewBookScopesToInstanceAccess(t *testing.T) {
 	}
 	if !equalIDs(got, []int64{2, 6}) {
 		t.Errorf("books-a audience after admin opt-out = %v, want [2 6]", got)
+	}
+
+	// An access GRANT is an assignment too: a granted user joins that
+	// instance's audience without holding the pin.
+	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key) VALUES ('books-a', 'chaptarr', 'Books A', 'http://books-a', 'k')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (7, 'frank', '', 'user')")
+	mustExec(t, database, "INSERT INTO user_instance_grants (user_id, instance_id) VALUES (7, 'books-a')")
+	got, err = store.usersOptedIntoNewBook("books-a")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewBook(books-a) with grant: %v", err)
+	}
+	if !equalIDs(got, []int64{2, 6, 7}) {
+		t.Errorf("books-a audience with a granted reader = %v, want [2 6 7]", got)
+	}
+}
+
+// A new_movie/new_episode audience is the users who can SEE the importing
+// library — the same visible set request routing and the status chips use:
+// pin-or-grant rows, the global default for unpinned users (a pin stays
+// exclusive), and the books-style admin fallback (an admin with no rows for
+// the type hears every library).
+func TestUsersOptedIntoNewVideoScopesToVisibleLibraries(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order) VALUES ('radarr-hd', 'radarr', 'Movies', 'http://hd', 'k', 1, 0)")
+	mustExec(t, database, "INSERT INTO service_instances (id, service_type, name, url, api_key, is_default, sort_order) VALUES ('radarr-4k', 'radarr', '4K Movies', 'http://4k', 'k', 0, 1)")
+	// alice(1): no rows — the default library only. bob(2): granted 4K
+	// beside the default. carol(3): PINNED 4K — exclusive, loses the
+	// default. dave(4): opted out of new_movie. erin(5): admin pinned HD —
+	// scoped like anyone. frank(6): admin with no rows — hears everything.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'bob', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'carol', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (4, 'dave', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'erin', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (6, 'frank', '', 'admin')")
+	mustExec(t, database, "INSERT INTO user_instance_grants (user_id, instance_id) VALUES (2, 'radarr-4k')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (3, 'radarr', 'radarr-4k')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (5, 'radarr', 'radarr-hd')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_movie) VALUES (4, 0)")
+
+	store := NewPrefsStore(database)
+
+	got, err := store.usersOptedIntoNewVideo(CategoryNewMovie, "radarr", "radarr-hd")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewVideo(hd): %v", err)
+	}
+	if !equalIDs(got, []int64{1, 2, 5, 6}) {
+		t.Errorf("HD audience = %v, want [1 2 5 6] (default users + pinned admin + rowless admin; never the 4K-pinned)", got)
+	}
+
+	got, err = store.usersOptedIntoNewVideo(CategoryNewMovie, "radarr", "radarr-4k")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewVideo(4k): %v", err)
+	}
+	if !equalIDs(got, []int64{2, 3, 6}) {
+		t.Errorf("4K audience = %v, want [2 3 6] (granted bob + pinned carol + rowless admin)", got)
+	}
+
+	// With no explicit global default, the deterministic first-by-sort chain
+	// is the default the rowless users hear — matching VisibleInstanceIDs.
+	mustExec(t, database, "UPDATE service_instances SET is_default = 0 WHERE id = 'radarr-hd'")
+	got, err = store.usersOptedIntoNewVideo(CategoryNewMovie, "radarr", "radarr-hd")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewVideo(hd, no flag): %v", err)
+	}
+	if !equalIDs(got, []int64{1, 2, 5, 6}) {
+		t.Errorf("HD audience without the flag = %v, want [1 2 5 6] via the first-by-sort chain", got)
+	}
+
+	// A sonarr import never borrows radarr rows: with no sonarr instances
+	// configured, only the rowless-admin fallback answers.
+	got, err = store.usersOptedIntoNewVideo(CategoryNewEpisode, "sonarr", "sonarr-x")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewVideo(sonarr-x): %v", err)
+	}
+	if !equalIDs(got, []int64{5, 6}) {
+		t.Errorf("unknown sonarr audience = %v, want [5 6] (admins with no sonarr rows)", got)
 	}
 }
 

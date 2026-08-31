@@ -138,9 +138,52 @@ Build number = latest TestFlight build + 1 (`next_build_number` lane in
 Capability/entitlement changes invalidate the provisioning profile — regenerate it and update the
 secret.
 
+### Reaching testers
+
+Uploading a build reaches nobody outside the team on its own. The internal group **Cantinarr
+Testers** was created with "Enable automatic distribution", so it picks up every upload by
+itself; external groups have no such setting, and a build sits in App Store Connect until
+somebody adds it to one.
+
+**There is no checkbox to flip on an existing group, so don't go looking for one.** The
+underlying attribute is `hasAccessToAllBuilds`, and the API is explicit that it is create-only:
+a `PATCH` naming it answers `ENTITY_ERROR.ATTRIBUTE.NOT_ALLOWED` ("can not be included in a
+'UPDATE' operation"), while the same attribute passes schema validation on `POST /v1/betaGroups`.
+Turning it on for Public Beta would mean deleting and recreating the group, which destroys the
+public link every tester joined through and the README advertises — and Apple documents the
+setting only for internal testers, so it may not apply to external groups at all. The
+`distribute` job is the supported path, not a workaround.
+
+The `distribute` job closes that gap for **Public Beta** — the group behind the public
+[TestFlight link](https://testflight.apple.com/join/bCPDwCsD) in the README — so every build cut
+from `main` reaches those testers without anyone opening App Store Connect. It runs
+`scripts/testflight_distribute.py` on a Linux runner rather than distributing inline from
+fastlane, because `distribute_external` requires `skip_waiting_for_build_processing: false` and
+would hold a 10x-billed macOS runner through Apple's processing. The script waits for the build
+to leave processing, submits it for Beta App Review if it still needs that, then adds it to the
+group; testers are notified, since `autoNotifyEnabled` is on.
+
+Notes on the shape of that job:
+
+- The group is addressed by **id**, and its name is asserted against the id before anything is
+  distributed. A renamed or recreated group fails the run rather than pushing a build at an
+  audience nobody chose. Both live in the job's `env:` block.
+- Adding a build re-submits nothing when the marketing version is unchanged: Apple auto-approves
+  those (`betaReviewState: APPROVED`, `submittedDate: null`). The **first** build of a new
+  `pubspec.yaml` version does go through Beta App Review, so it reaches Public Beta whenever
+  Apple approves it, not at the end of the workflow run.
+- The wait is capped at 45 minutes. `testflight-deploy` concurrency holds for the whole
+  workflow, so an Apple-side ingestion stall fails this job instead of blocking the next merge's
+  build indefinitely; the build is still there and can be pushed by hand.
+- Re-running the workflow is safe — a build already in the group is a no-op, so testers are not
+  notified twice.
+- Adding another external group is one more `distribute` job (or a matrix over group id/name).
+  Internal groups are rejected on purpose: they answer `422 Cannot add internal group to a
+  build`.
+
 | Secret | Contents |
 |---|---|
-| `APP_STORE_CONNECT_KEY_ID` / `APP_STORE_CONNECT_ISSUER_ID` / `APP_STORE_CONNECT_API_KEY_B64` | App Store Connect API key (used for build numbers + uploads) |
+| `APP_STORE_CONNECT_KEY_ID` / `APP_STORE_CONNECT_ISSUER_ID` / `APP_STORE_CONNECT_API_KEY_B64` | App Store Connect API key (used for build numbers, uploads, and external distribution) |
 | `IOS_DIST_CERT_BASE64` / `IOS_DIST_CERT_PASSWORD` | Apple Distribution certificate (.p12) |
 | `IOS_PROVISIONING_PROFILE_BASE64` | App Store provisioning profile |
 

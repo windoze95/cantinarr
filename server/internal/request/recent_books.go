@@ -153,17 +153,41 @@ func recentBookFiles(client *chaptarr.Client, books []chaptarr.Book) (map[int][]
 	return byBook, nil
 }
 
-// buildRecentBooks orders library records by when their files landed.
+// buildRecentBooks reduces the library to one card per title, ordered by when
+// that title's files landed.
 //
-// Recency is the newest file's dateAdded, never the book record's own added
+// Recency is the newest bookFile.dateAdded, never the book record's own added
 // date: a book requested months ago and downloaded today belongs at the top.
-// Ebook and audiobook are separate records sharing a foreignBookId and stay
-// separate here — they are two distinct arrivals at two distinct times, and
-// merging them would hide the second one entirely.
+//
+// A title's ebook and audiobook are separate Chaptarr records sharing a
+// foreignBookId, and they are merged into one card. They were deliberately kept
+// apart when each card announced its own format ("eBook"/"Audiobook") — two
+// arrivals, two cards, each saying something the other did not. The card now
+// leads with the title's *ownership* instead ("eBook + Audiobook", plus an
+// availability pill), which is a fact about the title rather than the record,
+// so both cards render identical text and, since the detail route is keyed by
+// foreignBookId, identical links. Nothing is hidden by merging them: the card
+// carries the newest arrival's date, so a late-arriving audiobook still floats
+// its title to the front of the row.
+//
+// Grouping is the same groupKey the ownership digest uses, so a record with no
+// foreignBookId can never merge into another title — and two records that do
+// share one are, by the library's own identity rule, the same book.
 func buildRecentBooks(books []chaptarr.Book, filesByBook map[int][]chaptarr.BookFile, limit int) []RecentBook {
-	items := make([]RecentBook, 0, len(books))
+	type group struct {
+		item    RecentBook
+		formats map[string]struct{}
+		// coverFrom is the arrival time of the record g.item.Cover came from,
+		// so a later record can only replace it by being *older* — see the
+		// cover selection below.
+		coverFrom time.Time
+		coverID   int
+	}
+	groups := make(map[string]*group, len(books))
+	order := make([]string, 0, len(books))
+
 	for _, book := range books {
-		// One record is one card even when a multi-part audiobook has many
+		// One record is one arrival even when a multi-part audiobook has many
 		// files; the record is the unit the library and detail page address.
 		var newest time.Time
 		for _, f := range filesByBook[book.ID] {
@@ -178,14 +202,69 @@ func buildRecentBooks(books []chaptarr.Book, filesByBook map[int][]chaptarr.Book
 		if newest.IsZero() {
 			continue
 		}
-		items = append(items, RecentBook{
-			BookID:        book.ID,
-			ForeignBookID: book.ForeignBookID,
-			Title:         book.Title,
-			Format:        recordFormat(book),
-			Cover:         clientReachableCover(book),
-			ImportedAt:    newest,
-		})
+
+		key := groupKey(book)
+		g, ok := groups[key]
+		if !ok {
+			g = &group{formats: make(map[string]struct{}, 2)}
+			groups[key] = g
+			order = append(order, key)
+		}
+		g.formats[recordFormat(book)] = struct{}{}
+
+		// The card is dated and identified by the title's newest arrival, so a
+		// format that lands today leads the row even when its sibling landed
+		// months ago.
+		if newest.After(g.item.ImportedAt) {
+			g.item.ImportedAt = newest
+			g.item.BookID = book.ID
+		}
+		if g.item.Title == "" {
+			g.item.Title = book.Title
+		}
+		if g.item.ForeignBookID == "" {
+			g.item.ForeignBookID = book.ForeignBookID
+		}
+		// Cover selection, deliberately not "first usable in library order".
+		//
+		// Chaptarr emits /MediaCover/Books/{id}/cover.jpg for a record whether
+		// or not the art behind it has been downloaded, so a path being present
+		// is not evidence it resolves — and nothing here can tell the two apart.
+		// A record created minutes ago is the one most likely to have art that
+		// does not exist yet.
+		//
+		// So prefer the art of the *established* record: the one whose files
+		// landed earliest. When a second format merges into a title, the card
+		// then keeps the cover it was already rendering instead of adopting the
+		// new arrival's possibly-empty one and losing its art for good (the
+		// arrival's own path never becomes correct on a later refresh, so this
+		// was permanent). Ties break on the lower record id to stay stable
+		// across fetches.
+		if cover := clientReachableCover(book); cover != "" {
+			better := g.item.Cover == "" ||
+				newest.Before(g.coverFrom) ||
+				(newest.Equal(g.coverFrom) && book.ID < g.coverID)
+			if better {
+				g.item.Cover = cover
+				g.coverFrom = newest
+				g.coverID = book.ID
+			}
+		}
+	}
+
+	items := make([]RecentBook, 0, len(order))
+	for _, key := range order {
+		g := groups[key]
+		// A format label describes the whole card, so it survives only when
+		// every record behind it agrees. A merged eBook+Audiobook card has no
+		// single format, and claiming either one would be wrong — the card's
+		// ownership line already names both.
+		if len(g.formats) == 1 {
+			for format := range g.formats {
+				g.item.Format = format
+			}
+		}
+		items = append(items, g.item)
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -203,22 +282,29 @@ func buildRecentBooks(books []chaptarr.Book, filesByBook map[int][]chaptarr.Book
 }
 
 // clientReachableCover returns a cover the app can actually load.
+func clientReachableCover(book chaptarr.Book) string {
+	return clientReachableImage(book.Images, "cover")
+}
+
+// clientReachableImage picks one image from an arr record that a client is
+// allowed to dereference.
 //
 // Clients must never dereference an arr-origin URL, so only the relative
 // /MediaCover path (which the app resolves through the authenticated instance
 // proxy) is passed through. An absolute arr-origin URL falls back to the
 // metadata provider's CDN copy, and anything else yields "" so the app draws
-// its placeholder instead of a broken image.
-func clientReachableCover(book chaptarr.Book) string {
+// its placeholder instead of a broken image. The preferred cover type wins when
+// the record carries it; otherwise the first usable image does.
+func clientReachableImage(images []chaptarr.Image, preferred string) string {
 	pick := func(match func(chaptarr.Image) bool) (chaptarr.Image, bool) {
-		for _, img := range book.Images {
+		for _, img := range images {
 			if img.URL != "" && match(img) {
 				return img, true
 			}
 		}
 		return chaptarr.Image{}, false
 	}
-	img, ok := pick(func(i chaptarr.Image) bool { return i.CoverType == "cover" })
+	img, ok := pick(func(i chaptarr.Image) bool { return i.CoverType == preferred })
 	if !ok {
 		img, ok = pick(func(chaptarr.Image) bool { return true })
 	}

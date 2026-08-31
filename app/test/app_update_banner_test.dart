@@ -17,77 +17,28 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// The admin-only "update available" banner, exercised end to end through the
-/// real provider + service chain against a canned /api/admin/update-status
-/// payload: visibility gating (admin, availability, dismissal) and the
-/// portal-vs-guide primary action.
+/// The app-wide banner slot, exercised end to end through the real provider +
+/// service chain against a canned /api/admin/update-status payload: the
+/// warn-only version-skew notices it does carry, and the release-news bar it
+/// deliberately does not.
 void main() {
-  testWidgets('shows for an admin, with the guide action when no portal is set',
+  testWidgets('never nags about a newer release, even for an admin',
       (tester) async {
-    final adapter = _UpdateStatusAdapter();
-    await _pumpApp(tester, role: 'admin', adapter: adapter);
+    await _pumpApp(tester, role: 'admin', adapter: _UpdateStatusAdapter());
 
-    expect(find.text('Cantinarr 1.3.0 is available'), findsOneWidget);
-    expect(find.text('Notes'), findsOneWidget);
-    expect(find.text('How to update'), findsOneWidget);
-    expect(find.text('Update'), findsNothing);
+    expect(find.textContaining('is available'), findsNothing,
+        reason: 'the app-wide release-news bar is off');
+    expect(find.byIcon(Icons.close), findsNothing,
+        reason: 'no banner means no dismiss button in the slot');
   });
 
-  testWidgets('offers the management portal as the primary action when set',
-      (tester) async {
-    final adapter =
-        _UpdateStatusAdapter(managementUrl: 'http://tower.local/docker');
-    await _pumpApp(tester, role: 'admin', adapter: adapter);
-
-    expect(find.text('Cantinarr 1.3.0 is available'), findsOneWidget);
-    expect(find.text('Update'), findsOneWidget);
-    expect(find.text('How to update'), findsNothing);
-  });
-
-  testWidgets('never renders — or even fetches — for a non-admin',
+  testWidgets('never fetches the admin-only status for a non-admin',
       (tester) async {
     final adapter = _UpdateStatusAdapter();
     await _pumpApp(tester, role: 'user', adapter: adapter);
 
-    expect(find.text('Cantinarr 1.3.0 is available'), findsNothing);
     expect(adapter.updateStatusCalls, 0,
         reason: 'the admin-only endpoint must not be called for a requester');
-  });
-
-  testWidgets('stays hidden when the server reports no update available',
-      (tester) async {
-    final adapter = _UpdateStatusAdapter(available: false);
-    await _pumpApp(tester, role: 'admin', adapter: adapter);
-
-    expect(find.text('Cantinarr 1.3.0 is available'), findsNothing);
-  });
-
-  testWidgets('stays hidden for a release the admin already dismissed',
-      (tester) async {
-    final adapter = _UpdateStatusAdapter();
-    await _pumpApp(
-      tester,
-      role: 'admin',
-      adapter: adapter,
-      prefs: {'dismissed_update_version': '1.3.0'},
-    );
-
-    expect(find.text('Cantinarr 1.3.0 is available'), findsNothing);
-  });
-
-  testWidgets('dismissing hides the banner and persists per release',
-      (tester) async {
-    final adapter = _UpdateStatusAdapter();
-    await _pumpApp(tester, role: 'admin', adapter: adapter);
-    expect(find.text('Cantinarr 1.3.0 is available'), findsOneWidget);
-
-    await tester.tap(find.byIcon(Icons.close));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Cantinarr 1.3.0 is available'), findsNothing);
-    final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString('dismissed_update_version'), '1.3.0',
-        reason: 'the dismissal silences exactly the offered version');
   });
 
   const appTooOldMessage =
@@ -134,7 +85,7 @@ void main() {
     await _pumpApp(
       tester,
       role: 'admin',
-      adapter: _UpdateStatusAdapter(available: false),
+      adapter: _UpdateStatusAdapter(),
       serverVersion: '0.2.0',
       minServerFloor: '9.9.9',
     );
@@ -143,12 +94,25 @@ void main() {
         reason: 'no portal configured, so the action is the update guide');
   });
 
+  testWidgets('points the server-too-old action at the portal when set',
+      (tester) async {
+    await _pumpApp(
+      tester,
+      role: 'admin',
+      adapter: _UpdateStatusAdapter(managementUrl: 'http://tower.local/docker'),
+      serverVersion: '0.2.0',
+      minServerFloor: '9.9.9',
+    );
+    expect(find.text('Update'), findsOneWidget);
+    expect(find.text('How to update'), findsNothing);
+  });
+
   testWidgets('a requester never sees the server-too-old warning',
       (tester) async {
     await _pumpApp(
       tester,
       role: 'user',
-      adapter: _UpdateStatusAdapter(available: false),
+      adapter: _UpdateStatusAdapter(),
       serverVersion: '0.2.0',
       minServerFloor: '9.9.9',
     );
@@ -156,8 +120,7 @@ void main() {
         reason: 'a requester cannot update the server');
   });
 
-  testWidgets('app-too-old outranks server-too-old and release news',
-      (tester) async {
+  testWidgets('app-too-old outranks server-too-old', (tester) async {
     _mockAppVersion('0.1.0');
     await _pumpApp(
       tester,
@@ -169,7 +132,6 @@ void main() {
     );
     expect(find.text(appTooOldMessage), findsOneWidget);
     expect(find.text(serverTooOldMessage), findsNothing);
-    expect(find.text('Cantinarr 1.3.0 is available'), findsNothing);
   });
 }
 
@@ -264,16 +226,13 @@ class _FakeDeepLinks implements DeepLinkSource {
   Stream<Uri> get uriLinkStream => controller.stream;
 }
 
-/// Canned backend: /api/admin/update-status answers from the constructor
-/// knobs (and counts its calls); everything else gets the empty paged payload
-/// the landing screens expect.
+/// Canned backend: /api/admin/update-status always reports a newer release
+/// (so "never nags" above is load-bearing) with the portal from the
+/// constructor knob, and counts its calls; everything else gets the empty
+/// paged payload the landing screens expect.
 class _UpdateStatusAdapter implements HttpClientAdapter {
-  _UpdateStatusAdapter({
-    this.available = true,
-    this.managementUrl = '',
-  });
+  _UpdateStatusAdapter({this.managementUrl = ''});
 
-  final bool available;
   final String managementUrl;
   int updateStatusCalls = 0;
 
@@ -290,7 +249,7 @@ class _UpdateStatusAdapter implements HttpClientAdapter {
         'update': {
           'current': '1.2.3',
           'latest': '1.3.0',
-          'available': available,
+          'available': true,
           'url': 'https://github.com/windoze95/cantinarr/releases/tag/v1.3.0',
         },
         'management_url': managementUrl,

@@ -250,6 +250,53 @@ void main() {
       );
     });
 
+    testWidgets('a connect link while signed in asks before switching, and '
+        'Cancel keeps everything', (tester) async {
+      final app = await _pumpApp(tester, authState: _authedState);
+      app.links.controller.add(Uri.parse(
+          'cantinarr://connect?token=tok-1&server=https://other.example.com'));
+      await _settleLink(tester);
+
+      expect(find.text('Switch Server'), findsOneWidget);
+      expect(app.auth.connectLinks, isEmpty,
+          reason: 'an authenticated link must never connect silently');
+      expect(app.auth.switchCalls, isEmpty);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(app.auth.switchCalls, isEmpty);
+      expect(find.text('Switch Server'), findsNothing);
+    });
+
+    testWidgets('confirming the switch hands the link to the auth flow',
+        (tester) async {
+      final app = await _pumpApp(tester, authState: _authedState);
+      app.links.controller.add(Uri.parse(
+          'cantinarr://connect?token=tok-1&server=https://other.example.com'));
+      await _settleLink(tester);
+
+      await tester.tap(find.text('Switch'));
+      await tester.pumpAndSettle();
+
+      expect(app.auth.switchCalls, [('https://other.example.com', 'tok-1')]);
+      expect(app.auth.connectLinks, isEmpty);
+    });
+
+    testWidgets('a rejected link reports the session is kept', (tester) async {
+      final app = await _pumpApp(tester, authState: _authedState);
+      app.auth.switchResult = false;
+      app.links.controller.add(Uri.parse(
+          'cantinarr://connect?token=tok-dead&server=https://other.example.com'));
+      await _settleLink(tester);
+
+      await tester.tap(find.text('Switch'));
+      await tester.pumpAndSettle();
+
+      expect(app.auth.switchCalls, [('https://other.example.com', 'tok-dead')]);
+      expect(find.textContaining('still signed in'), findsOneWidget,
+          reason: 'the user must hear that the dead link cost them nothing');
+    });
+
     testWidgets('wrong-scheme, wrong-host, and malformed links are ignored',
         (tester) async {
       final app = await _pumpApp(tester, authState: _authedState);
@@ -379,6 +426,8 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   final AuthState _initial;
   final List<String> connectLinks = [];
+  final List<(String, String)> switchCalls = [];
+  bool switchResult = true;
 
   @override
   Future<AuthState> build() async => _initial;
@@ -386,6 +435,12 @@ class _FakeAuthNotifier extends AuthNotifier {
   @override
   Future<void> connectWithLink(String link) async {
     connectLinks.add(link);
+  }
+
+  @override
+  Future<bool> switchServer(String serverUrl, String token) async {
+    switchCalls.add((serverUrl, token));
+    return switchResult;
   }
 
   @override

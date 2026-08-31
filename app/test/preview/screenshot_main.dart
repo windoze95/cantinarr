@@ -113,6 +113,11 @@ const _adminState = AuthState(
         name: 'Tautulli',
         isDefault: true,
       ),
+      ServiceInstance(
+        id: 'jellyfin-main',
+        serviceType: 'jellyfin',
+        name: 'Home Jellyfin',
+      ),
     ],
   ),
   user: UserProfile(id: 1, username: 'preview-admin', role: 'admin'),

@@ -21,11 +21,27 @@ const (
 	maxGlobalRequests      = 16
 	maxQueuedNotifications = 64
 	maxNotificationBytes   = 256 << 10
-	maxDynamicToolCalls    = 15
-	maxRunDuration         = 5 * time.Minute
-	maxAccountOperation    = 30 * time.Second
-	maxServerWrite         = 5 * time.Second
-	accountStatusTTL       = 60 * time.Second
+	// maxDynamicToolCalls counts individual tool calls, and codex issues them
+	// strictly sequentially — unlike the HTTP providers, whose 15-iteration cap
+	// counts model round-trips that each may carry several parallel calls. The
+	// budget stays generous so multi-instance library sweeps land; exhausting it
+	// steers the model to answer from gathered data instead of failing the turn.
+	maxDynamicToolCalls = 48
+	// dynamicToolCallGrace bounds how many over-budget calls are answered with
+	// a steering refusal before the turn is aborted as unrecoverable.
+	dynamicToolCallGrace = 8
+	// toolBudgetTimeReserve starts refusing tool calls when less than this much
+	// of the run deadline remains, so a slow turn still ends in an answer.
+	toolBudgetTimeReserve = 45 * time.Second
+	maxRunDuration        = 5 * time.Minute
+	maxAccountOperation   = 30 * time.Second
+	maxServerWrite        = 5 * time.Second
+	accountStatusTTL      = 60 * time.Second
+	// maxStderrTailBytes bounds the retained app-server stderr, quoted
+	// (redacted) only when the process dies before shutdown was requested.
+	maxStderrTailBytes = 8 << 10
+	// maxLogDetailBytes bounds redacted diagnostic detail in one log line.
+	maxLogDetailBytes = 2048
 )
 
 // Options controls app-server discovery and the memory-backed directory used
@@ -51,6 +67,12 @@ type AccountRef struct {
 
 func PersonalAccount(userID int64) AccountRef { return AccountRef{userID: userID} }
 func SharedAccount() AccountRef               { return AccountRef{shared: true} }
+
+// Shared and UserID expose the reference's identity so sibling OAuth
+// integrations can address the equivalent account without widening this
+// package's authority.
+func (r AccountRef) Shared() bool  { return r.shared }
+func (r AccountRef) UserID() int64 { return r.userID }
 
 func (r AccountRef) valid() bool {
 	return (r.shared && r.userID == 0) || (!r.shared && r.userID > 0)
@@ -150,6 +172,7 @@ const (
 	CodeInvalidInput     Code = "invalid_input"
 	CodeBusy             Code = "busy"
 	CodeHistoryInject    Code = "history_inject"
+	CodeToolBudget       Code = "tool_budget"
 )
 
 // Error is intentionally small: it never wraps process stderr, OAuth payloads,
@@ -182,6 +205,9 @@ var (
 	// than auth or usage limits. Native history replay is an enhancement, so
 	// callers retry the turn with a flattened prompt instead of surfacing it.
 	ErrHistoryInject = &Error{Code: CodeHistoryInject, message: "Codex history injection failed"}
+	// ErrToolBudget reports that the model kept requesting tools after the
+	// dynamic tool budget was exhausted and every grace call was refused.
+	ErrToolBudget = &Error{Code: CodeToolBudget, message: "Codex turn exceeded its tool call budget"}
 )
 
 // IsCode is a convenience for HTTP adapters that map safe error classes to

@@ -9,6 +9,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/grokoauth"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 )
 
@@ -62,9 +63,19 @@ func (h *Handler) ResolveSharedAutonomousTurn(ctx context.Context, override Auto
 	case credentials.AIProviderAnthropic:
 		runner = NewService(resolved.APIKey, model, h.toolServer)
 	case credentials.AIProviderOpenAI:
-		runner = NewOpenAIService(resolved.APIKey, model, h.toolServer)
+		runner = NewOpenAIService(resolved.APIKey, model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
+	case credentials.AIProviderLocalOpenAI:
+		runner = NewOpenAIService(localOpenAICredential(resolved.APIKey), model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
 	case credentials.AIProviderGemini:
 		runner = NewGeminiService(resolved.APIKey, model, h.toolServer)
+	case credentials.AIProviderGrok:
+		runner = NewGrokService(resolved.APIKey, model, h.toolServer)
+	case credentials.AIProviderGrokOAuth:
+		runner = &grokOAuthTurnRunner{
+			manager:    h.grok,
+			model:      model,
+			toolServer: h.toolServer,
+		}
 	case credentials.AIProviderCodex:
 		runner = &codexAutonomousTurnRunner{
 			manager: h.codex,
@@ -99,6 +110,26 @@ func (r *admittedAutonomousTurnRunner) NextTurn(ctx context.Context, p TurnParam
 	}
 	defer release()
 	return r.delegate.NextTurn(ctx, p)
+}
+
+// grokOAuthTurnRunner resolves a fresh shared-account bearer token for every
+// turn. Autonomous runs outlive a single token lifetime, so binding the token
+// at resolve time would strand long runs on an expired credential.
+type grokOAuthTurnRunner struct {
+	manager    *grokoauth.Manager
+	model      string
+	toolServer *mcp.ToolServer
+}
+
+func (r *grokOAuthTurnRunner) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error) {
+	if r.manager == nil || !r.manager.Available() {
+		return TurnResult{}, fmt.Errorf("grok oauth turn: %w", grokoauth.ErrUnavailable)
+	}
+	token, err := r.manager.AccessToken(ctx, grokoauth.SharedAccount())
+	if err != nil {
+		return TurnResult{}, fmt.Errorf("grok oauth turn: %w", err)
+	}
+	return NewGrokService(token, r.model, r.toolServer).NextTurn(ctx, p)
 }
 
 type codexAutonomousTurnRunner struct {

@@ -1115,11 +1115,11 @@ Map<String, dynamic> _dlItem({
 
 /// Multi-search results returned for ANY query. Ids/titles overlap the Radarr
 /// and Sonarr libraries so the availability chips render a full mix
-/// (Available / Partially Available / Requested / no chip).
+/// (Available / Partial / Requested / no chip).
 Map<String, dynamic> _searchResults() => _page([
       _movieItem(_phm, withMediaType: true), // Radarr hasFile -> Available
       _movieItem(_movies[1], withMediaType: true), // Toy Story 5 -> Available
-      _tvItem(_hotd, withMediaType: true), // Sonarr 21/26 -> Partially Available
+      _tvItem(_hotd, withMediaType: true), // Sonarr 21/26 -> Partial
       _tvItem(_tv[4], withMediaType: true), // The Boys 32/40 -> Partial
       _movieItem(_movies[2], withMediaType: true), // Devil Wears Prada 2 -> Requested
       _movieItem(_movies[3], withMediaType: true), // Mortal Kombat II -> Requested

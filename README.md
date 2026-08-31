@@ -2,7 +2,7 @@
 
 **Your media server just learned to run itself.**
 
-**[cantinarr.com](https://cantinarr.com)** · **[Live demo](https://demo.cantinarr.com)** · **[Request a feature](https://cantinarr.com/roadmap/)**
+**[cantinarr.com](https://cantinarr.com)** · **[Discord](https://discord.gg/zAgRwGwmVB)** · **[Live demo](https://demo.cantinarr.com)** · **[iPhone beta](https://testflight.apple.com/join/bCPDwCsD)** · **[Android beta](https://cantinarr.com/#android-beta)** · **[Request a feature](https://cantinarr.com/roadmap/)**
 
 Discover and request movies, TV shows, and books. Get push notifications. Manage Radarr, Sonarr, Chaptarr, and your download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. You set the agent's operating boundaries. Your household gets the simple experience; you keep control of access, approvals, and quality.
 
@@ -44,20 +44,21 @@ Discover and request movies, TV shows, and books. Get push notifications. Manage
 - **TMDB + Trakt for discovery** -- The best metadata, images, and trending data, proxied through the server so keys stay off devices -- and TMDB works out of the box on a built-in key, no signup needed. Sonarr's TVDB dependency is invisible.
 - **You choose what "popular" means** -- The headline row on the Movies and TV tabs reads TMDB weekly trending, or Trakt trending (ranked by who is actually watching), or TMDB's all-time popularity ranking. Connect Trakt and the rows switch to it automatically -- no second setting to find. An English-only switch keeps the discovery and recommendation rows to English-language originals; it ships on, and search always finds everything either way.
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
-- **Books too** -- A Chaptarr (Readarr-API) module with per-format smarts: tap a book's eBook or Audiobook row to request that format; monitored formats read **Requested** until they download; owned-aware search and plain per-format controls stay pinned to the selected, authorized Chaptarr instance. Access is granted per user, and the Books tab opens on a Recently Added row so a book that just landed is visible without searching for it.
+- **Books too** -- A Chaptarr (Readarr-API) module with per-format smarts: tap a book's eBook or Audiobook row to request that format; monitored formats read **Requested** until they download; owned-aware search and plain per-format controls stay pinned to the selected, authorized Chaptarr instance. Access is granted per user, and the Books tab opens on a Recently Added row so a book that just landed is visible without searching for it, plus Authors and Series rows -- Chaptarr has no popular feed, so the library's own authors and series are what you browse when you don't have a title in mind; tapping one lists the whole run with each title's per-format state, so a half-finished series shows exactly which books are missing.
 - **Take available files with you** -- Optional, resumable downloads let signed-in users save exact ebook, audiobook, movie, and episode files from their authorized library. Cantinarr re-checks the live arr file record before issuing a short-lived, file-scoped link without putting arr credentials in the URL.
 - **Request approvals** -- Optional approval queue, globally or per user. Admins also control per-user season choice, quality choice, and default quality profiles. Approve/deny lands as a push notification for the requester.
-- **AI assistant** -- "What should I watch tonight?" Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link OpenAI (OAuth) with a one-time ChatGPT browser code—even without included access, and their choice never has to match the server's provider. Admins can configure the same providers as an included server profile and grant that shared access per user. A personal provider is an explicit override; Cantinarr never silently spends the shared account when that override needs attention. The assistant searches your library, checks availability, requests for you, and gives admins conversational queue and release control.
-- **AI remediation agent** -- Users tap "Report a problem" (or Cantinarr detects one itself, in the queue or as it imports); each report is bound to the exact Radarr/Sonarr instance and begins with a quiet observation window. Cantinarr gives Sonarr/Radarr time to retry or replace a download before it alerts anyone or starts the agent; a persistent quiet problem then enters the supervised workflow. Recovery cancels stale proposals before dispatch. Automatic resolution requires an exact changed file plus a matching post-incident import record—not queue disappearance or a file that was already there. **One whole class of this never needs reporting.** The moment Sonarr says it imported an episode that has not aired yet, Cantinarr checks that season against its own air dates: a file your service imported *before* that episode aired cannot be that episode, and a season already holding files for episodes that have not aired is content that does not exist yet. When that is what happened, the season is already waiting in your issues with a fix attached — one issue for the whole season however many bogus files arrived, and an instance with no instant updates configured gets the same check on a quarter-hour timer instead. One approval fixes it: the agent proposes deleting exactly those files, blocklisting the releases that delivered them, and searching for replacements — only the episodes that have actually aired, leaving the rest of the season for your service to grab as it comes out. One problem, one decision; you are never asked to approve the second half of a fix you already approved. When the fix lands on something you reported, you are the one who says whether it worked -- **"This is fixed"** closes your own report, so an admin is never asked to adjudicate content they haven't watched. Tired of approving the same fix? Checking **"Always approve"** on an approval arms a standing rule for that exact problem-and-fix pair (force imports and destructive queue actions stay separate opt-ins): future matches are approved and executed without paging you, and the rule pauses itself the moment a fix fails or an issue closes out unresolved. **Some problems should not be repaired again.** When the same fault keeps coming back on one service -- on separate days, not just across a dozen titles in one bad minute -- Cantinarr says so once and names the setting that would stop it: the free-space floor, the remote path mapping, the indexer whose torrents have no seeders behind them. That is advice and never an edit; Cantinarr changes no setting on your services. Closing the notice is what mutes it -- for a couple of months if you fixed it, for a year if you told Cantinarr you are not going to -- and it only ever comes back if the problem does. Where there is no honest answer to give, nothing is raised at all. Remediation is server-owned: it always uses the admin's shared API key or shared OpenAI OAuth connection and never a reporter's personal provider or per-user included-access grant. Admins may give remediation its own tested model designation while keeping that global provider and credential.
-- **MCP server** -- 36 of the 38 in-app AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, with OAuth discovery, browser/passkey login, dynamic client registration, and persistent rotating refresh tokens. The two quality-profile mutation tools remain in-app-only because their one-use safety handoff depends on authenticated in-app chat-turn provenance. This inbound OAuth lets external clients access Cantinarr; it is separate from the outbound personal/shared OpenAI OAuth used by Codex chat. Every tool can be toggled on/off from Settings > AI Tools.
+- **AI assistant** -- "What should I watch tonight?" Every user can bring a personal Anthropic, OpenAI, Gemini, or xAI Grok API key, or link a subscription account with a one-time browser code -- OpenAI (OAuth) through ChatGPT, or xAI Grok (OAuth) through SuperGrok / X Premium+ -- even without included access, and their choice never has to match the server's provider. Admins can configure the same providers as an included server profile and grant that shared access per user. A personal provider is an explicit override; Cantinarr never silently spends the shared account when that override needs attention. The assistant searches your library, checks availability, requests for you, and gives admins conversational queue and release control.
+- **Local AI** -- A first-class **Local (OpenAI-compatible)** provider runs shared AI against your own server (llama.cpp, vLLM, Ollama): enter a base URL and model ID, pin a reasoning effort, and skip the API key entirely (most local servers ignore auth; an optional token slot covers proxies that don't). Assistant traffic never leaves your network, and the save-time test proves the endpoint before anything is stored.
+- **AI remediation agent** -- Users tap "Report a problem" (or Cantinarr detects one itself, in the queue or as it imports); each report is bound to the exact Radarr/Sonarr instance and begins with a quiet observation window. Cantinarr gives Sonarr/Radarr time to retry or replace a download before it alerts anyone or starts the agent; a persistent quiet problem then enters the supervised workflow. Recovery cancels stale proposals before dispatch. Automatic resolution requires an exact changed file plus a matching post-incident import record—not queue disappearance or a file that was already there. **One whole class of this never needs reporting.** The moment Sonarr says it imported an episode that has not aired yet, Cantinarr checks that season against its own air dates: a file your service imported *before* that episode aired cannot be that episode, and a season already holding files for episodes that have not aired is content that does not exist yet. When that is what happened, the season is already waiting in your issues with a fix attached — one issue for the whole season however many bogus files arrived, and an instance with no instant updates configured gets the same check on a quarter-hour timer instead. One approval fixes it: the agent proposes deleting exactly those files, blocklisting the releases that delivered them, and searching for replacements — only the episodes that have actually aired, leaving the rest of the season for your service to grab as it comes out. One problem, one decision; you are never asked to approve the second half of a fix you already approved. When the fix lands on something you reported, you are the one who says whether it worked -- **"This is fixed"** closes your own report, so an admin is never asked to adjudicate content they haven't watched. Tired of approving the same fix? Checking **"Always approve"** on an approval arms a standing rule for that exact problem-and-fix pair (force imports and destructive queue actions stay separate opt-ins): future matches are approved and executed without paging you, and the rule pauses itself the moment a fix fails or an issue closes out unresolved. **Some problems should not be repaired again.** When the same fault keeps coming back on one service -- on separate days, not just across a dozen titles in one bad minute -- Cantinarr says so once and names the setting that would stop it: the free-space floor, the remote path mapping, the indexer whose torrents have no seeders behind them. That is advice and never an edit; Cantinarr changes no setting on your services. Closing the notice is what mutes it -- for a couple of months if you fixed it, for a year if you told Cantinarr you are not going to -- and it only ever comes back if the problem does. Where there is no honest answer to give, nothing is raised at all. Remediation is server-owned: it always uses the admin's shared API key or shared OAuth connection (OpenAI or xAI Grok) and never a reporter's personal provider or per-user included-access grant. Admins may give remediation its own tested model designation while keeping that global provider and credential.
+- **MCP server** -- 37 of the 38 in-app AI tools are exposed as a [Model Context Protocol](https://modelcontextprotocol.io/) endpoint at `/mcp`, with OAuth discovery, browser/passkey login, dynamic client registration, and persistent rotating refresh tokens. Only the quality-profile apply tool remains in-app-only because its one-use safety handoff depends on authenticated in-app chat-turn provenance; the external preview instead parks a proposal an admin approves in the app. This inbound OAuth lets external clients access Cantinarr; it is separate from the outbound personal/shared OpenAI OAuth used by Codex chat. Every tool can be toggled on/off from Settings > AI Tools.
 - **Deep *arr control** -- SABnzbd, qBittorrent, NZBGet, and Transmission modules with live queue management (an aggregate All view with a master pause across every client when several are configured), plus drill-down Radarr/Sonarr control: series → season → episode with per-item progress, quality, and history; episode multi-select with batch search; long-press action menus; Edit Series; interactive release search everywhere. Admin AI/MCP tools can inspect quality profiles and import or update native/TRaSH custom formats across Radarr, Sonarr, and Chaptarr. After an explicit admin request, in-app AI previews and autonomously applies a narrow profile score, cutoff, or upgrade-policy change in the same authenticated chat turn. AI/MCP profile and custom-format writes are recorded under Settings > Configuration history for later review and live comparison. Each applied quality-profile update can be restored once, only while Cantinarr's instance, profile, and dependency guards still match; the linked restore is final, and custom-format entries are review-only.
 - **Import Doctor** -- when a download is stuck, Cantinarr explains *why* in plain English (sample file, un-extracted archive, unconfirmed TheXEM mapping, "not an upgrade", unparseable/invalid file, remote-path-mapping or download-client problems, stalled torrent, permissions...) and offers **one-click fixes** with full transparency: manual/force import with the candidate files shown, remove + blocklist + re-search, hand-off to a tool like Unpackerr, or rescan. Cantinarr clears the stuck item and leaves the replacement to your service's own settings — with one exception: when the download was only an upgrade for something you already have *and* nothing asked for it (your service picked it up on its own), it is simply dropped. Your copy stays watchable, and a better version is still picked up whenever one shows up. The same diagnosis backs the app, the AI assistant, the remediation agent, and MCP.
 - **Flexible requests** -- request a whole title in one tap, or pick exactly which **seasons** (or book **formats**) you want; partially-available shows surface per-season availability and a one-tap path to request the rest.
 - **Always in sync** -- availability is computed live from the arrs (never from a stale snapshot), and server-managed Radarr/Sonarr/Chaptarr webhooks -- installed automatically the moment you add an instance -- push manual imports, deletes, and adds into the app the moment they happen without exposing callback credentials to a device. Books gain the most: an ebook can finish downloading between two polls, so instant updates are what make its "ready to read" alert reliable.
 - **Push notifications** -- APNs (iOS) and FCM (Android) via a self-hosted push gateway with zero-config auto-enrollment: new-content alerts for movies, episodes, and books, approval/issue alerts for admins, per-user preference toggles, deep links into the right screen.
-- **Plex onboarding** -- new users request access right from the in-app guide with their Plex email. Link your Plex account once and the server invite is one tap from the Users screen -- or fully automatic, with the user pushed a "check your inbox" the moment it's sent.
+- **Plex, Jellyfin, and Emby access** -- connect your media server and choose which users get access. On Jellyfin or Emby each of them creates their own account from the app with a password only they know, or links one they already have by signing in with it once (administrator accounts included; Cantinarr never changes those); on Plex they sign in with their own Plex account, or share its email, and the invite goes out the moment you grant them (or on its own, with auto-approve). Already have users on the server? Import them from Users: each picked account becomes a Cantinarr user of the same name, granted and linked, with a connect link to hand out. Everyone sees the libraries you picked and the address to sign in at, an available title's page gets a **Watch on Jellyfin** / **Watch on Emby** button that opens it on your server (looked up live as their own account, so it appears only for what they can actually see), and the app shows the live state: invite pending, accepted, or switched off. Take access away and a Jellyfin or Emby account is switched off rather than deleted, so watch history survives, and a Plex share is removed; grant again and it comes back (for someone still connected to your Plex account, without another invite).
 - **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
-- **Secrets encrypted at rest** -- arr API keys, download-client passwords, webhook tokens, shared and personal AI credentials, and OpenAI OAuth authorization are AES-256-GCM encrypted in the database.
+- **Secrets encrypted at rest** -- arr API keys, download-client passwords, webhook tokens, shared and personal AI credentials, and OpenAI/xAI OAuth authorizations are AES-256-GCM encrypted in the database.
 - **Household-friendly** -- Connect links, passwordless by default, role-based access, per-user default instances. Admins manage services; users just browse and request.
 - **Guided setup** -- a live checklist wizard derived from what's actually configured: every step opens the real settings screen, progress can't go stale, and newly shipped features appear on the list automatically.
 - **Single container** -- The static Go API/web server plus a pinned Codex app-server helper, with one exposed port. Runs great on a Raspberry Pi or NAS.
@@ -75,7 +76,61 @@ is `docker compose pull && docker compose up -d`. To build the image from your
 checkout instead, layer the dev override:
 `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`.
 
+Or add Cantinarr to an existing stack (Portainer, Dockhand, etc.) -- no clone
+needed; this minimal service is the whole setup:
+
+```yaml
+services:
+  cantinarr:
+    image: ghcr.io/windoze95/cantinarr:latest
+    ports:
+      - "8585:8585"
+    volumes:
+      - ./config:/config
+    # Optional: enables push notifications (see Configuration)
+    # environment:
+    #   - CANTINARR_PUSH_GATEWAY_URL=https://push.julian.codes
+    restart: unless-stopped
+```
+
+Update it later with `docker compose pull && docker compose up -d`.
+
 Open `http://your-server:8585` -- the setup wizard walks you through creating an admin account. Discovery and search work immediately on the built-in TMDB key. Then connect your services (Radarr, Sonarr, etc.) from **Settings > Providers & Credentials** and **Settings > Add Instance** in the admin UI. Configure an included AI provider there (fresh installs preselect OpenAI OAuth with the fast GPT-5.6 Luna model -- connecting a ChatGPT account is all it takes) and grant it per user, or let each person bring a provider under **Settings > AI Access**.
+
+### Unraid
+
+Search **Cantinarr** in the **Apps** tab. The listing was approved on 2026-08-16
+and appears once the next Community Applications build publishes; its template
+lives in [`windoze95/cantinarr-unraid`](https://github.com/windoze95/cantinarr-unraid).
+
+If it is not there yet, add the file to Unraid's user-template folder yourself,
+since Unraid removed custom template repositories:
+
+```bash
+curl -o /boot/config/plugins/dockerMan/templates-user/my-cantinarr.xml \
+  https://raw.githubusercontent.com/windoze95/cantinarr-unraid/main/templates/cantinarr.xml
+```
+
+Then **Docker > Add Container**, pick `Cantinarr` from the Template dropdown, and
+Apply. It publishes port 8585 and keeps the database and encryption key in
+`/mnt/user/appdata/cantinarr`. Two advanced fields are worth opening: **Public
+URL**, the origin your arrs POST webhooks back to, and the read-only **Media
+library** mount plus **Media roots**, which together turn on completed-media
+downloads.
+
+### Prebuilt binaries (no Docker)
+
+Every release attaches `cantinarr-linux-amd64.tar.gz` and `cantinarr-linux-arm64.tar.gz`
+(with `.sha256` checksums), extracted from the same build as the published image. Each
+contains the `cantinarr` server with the web app embedded, the pinned `codex-app-server`
+runtime it can spawn for ChatGPT-subscription AI access, and license notices:
+
+```bash
+tar -xzf cantinarr-linux-amd64.tar.gz
+install -m 0755 cantinarr codex-app-server /usr/local/bin/
+mkdir -p /config   # database + generated encryption key live here
+cantinarr          # serves everything on 8585 (CANTINARR_PORT overrides)
+```
 
 ### From Source
 
@@ -97,6 +152,21 @@ reports. Building the image yourself, pass your own with
 `docker build --build-arg APP_BUILD_NUMBER=<n> .`; leave it out and About falls back
 to `pubspec.yaml`'s placeholder.
 
+## Get the app
+
+The mobile apps are in beta ahead of their public store launch. Every one of these
+talks only to your own server, so stand one up first (above) -- or open the
+[live demo](https://demo.cantinarr.com) in a browser to look around.
+
+- **iPhone and iPad** -- join the public beta on
+  [TestFlight](https://testflight.apple.com/join/bCPDwCsD). No invite needed.
+- **Android** -- [ask for a tester slot](https://cantinarr.com/#android-beta). Play
+  testing is closed, so testers are added by hand: email **windoze95@proton.me**
+  with the address associated with your Play Store (Google) account -- that exact
+  address is what Google needs to let you in -- and you'll get the opt-in link back.
+- **Any browser** -- your server already serves the full app at
+  `http://your-server:8585`. Nothing to install.
+
 ## Repository Structure
 
 ```
@@ -104,8 +174,8 @@ cantinarr/
 ├── server/                 # Go backend -- see server/README.md
 │   ├── cmd/server/         # Entry point
 │   └── internal/           # ai, api, arr, auth, cache, chaptarr, codexapp,
-│                           # config, credentials, db, discover, downloads, instance,
-│                           # mcp, mcpserver, mediafiles, mediapath, nzbget, proxy, push, qbittorrent,
+│                           # config, credentials, db, discover, downloads, emby, grokoauth, instance, jellyfin,
+│                           # mcp, mcpserver, mediaaccess, mediafiles, mediapath, mediaserver, nzbget, proxy, push, qbittorrent,
 │                           # radarr, remediation, request, sabnzbd, secrets,
 │                           # sonarr, tautulli, tmdb, trakt, transmission,
 │                           # web, webhooks, websocket
@@ -127,7 +197,7 @@ cantinarr/
 
 ## Configuration
 
-Shared service credentials are managed through the admin UI -- no environment variables are needed for API keys. AI is different from the other integrations: an admin can configure a server profile using an API key or a shared OpenAI (OAuth) link, while every user can independently configure the same choices as a personal override. API keys and OAuth authorization stay encrypted and server-side. Every provider, model, remediation-model override, or key save -- and every completed OAuth selection -- must complete one small real, tool-free, low-reasoning message-response turn before Cantinarr activates it. Validation reports a safe actionable category for an invalid credential, unsupported model/access, exhausted quota, or temporary provider outage without exposing upstream secrets. OpenAI OAuth offers the recommended Codex model plus GPT-5.6 Sol, Terra, and Luna.
+Shared service credentials are managed through the admin UI -- no environment variables are needed for API keys. AI is different from the other integrations: an admin can configure a server profile using an API key or a shared OAuth link (OpenAI or xAI Grok), while every user can independently configure the same choices as a personal override. API keys and OAuth authorization stay encrypted and server-side. Self-hosted AI is its own provider: pick **Local (OpenAI-compatible)** in **Settings > Providers & Credentials**, enter the server's base URL (llama.cpp `llama-server`, vLLM, Ollama, and similar; use the endpoint's final URL, usually ending in `/v1` -- redirects are not followed) and the model ID it hosts. No API key is needed (an optional token slot covers proxies that check auth), the same save-time test proves the endpoint before anything is stored, and personal OpenAI keys are unaffected and keep using api.openai.com. Both the Local and hosted OpenAI providers offer a reasoning-effort pin (Auto/None/Minimal/Low/Medium/High) -- None keeps thinking-heavy local models fast, Auto preserves the provider's own default. Every provider, model, remediation-model override, or key save -- and every completed OAuth selection -- must complete one small real, tool-free, low-reasoning message-response turn before Cantinarr activates it. Validation reports a safe actionable category for an invalid credential, unsupported model/access, exhausted quota, or temporary provider outage without exposing upstream secrets. OpenAI OAuth offers the recommended Codex model plus GPT-5.6 Sol, Terra, and Luna. xAI Grok (OAuth) signs in with a SuperGrok or X Premium+ account via xAI's device flow and serves the same Grok models as the API-key path.
 
 The server also runs one small shared-model health turn every 24 hours by default. A failure opens one deduplicated admin-only issue; a later successful turn resolves it. Admins who want zero background AI usage can disable this check in **Settings > Providers & Credentials** without weakening the mandatory save-time test. The remediation agent remains independent of this monitor and always resolves credentials directly from the admin's shared profile.
 
@@ -140,8 +210,12 @@ Included AI is an explicit per-user entitlement for new accounts; the initial ad
 | Chaptarr instance | Admin UI | Books module; grant access per user from the instance editor or user settings -- full walkthrough in [`docs/books-setup.md`](docs/books-setup.md) |
 | SABnzbd/qBittorrent/NZBGet/Transmission | Admin UI | Download client modules (queue, history, speeds) |
 | Tautulli instance | Admin UI | Plex activity, watch history, stats |
-| Anthropic/OpenAI/Gemini API key | Admin UI | Enables shared API-key-backed AI chat and autonomous remediation |
+| Plex, Jellyfin, or Emby instance | Admin UI | Media server access: per-user grants, shared libraries, and the sign-in address users see; Plex links a plex.tv account with a PIN and picks the server to share |
+| Anthropic/OpenAI/Gemini/xAI API key | Admin UI | Enables shared API-key-backed AI chat and autonomous remediation |
+| OpenAI reasoning effort | Admin UI | Optional; pins `reasoning_effort` for the shared OpenAI provider (none/minimal/low/medium/high). Auto sends no effort field; endpoints that reject the field fall back automatically |
+| Local (OpenAI-compatible) | Admin UI | First-class shared provider for self-hosted OpenAI-compatible servers: required base URL and model ID, optional key/token, own reasoning-effort pin. Shared profile only -- never selectable as a personal provider |
 | OpenAI (OAuth) | Personal link under Settings > AI Access, or an admin-managed shared link | Uses a ChatGPT account's Codex allowance for the selected personal or included model; the admin-shared link also powers server-owned remediation. Per-user shared chat access is opt-in and carries a quota/cost warning |
+| xAI Grok (OAuth) | Personal link under Settings > AI Access, or an admin-managed shared link | Uses an xAI account's Grok subscription allowance (SuperGrok or X Premium+) via xAI's device flow instead of a metered API key; the admin-shared link also powers server-owned remediation |
 | Trakt client ID | Admin UI | Enhances discovery + fallback ID bridging; required to select the Trakt trending source under Settings > Discovery, which the headline rows then adopt automatically |
 | Discovery row source | Admin UI | Settings > Discovery: which feed backs the headline rows (Trakt when configured, else TMDB trending), plus the English-only filter (on by default) |
 
@@ -157,12 +231,12 @@ Optional server env vars for deployment tuning:
 |---|---|---|
 | `CANTINARR_PORT` | `8585` | HTTP listen port. Kubernetes service-link values (`tcp://…`) injected by a Service named `cantinarr` are ignored in favor of the default; set a numeric value to override |
 | `CANTINARR_SERVER_NAME` | `Cantinarr` | Display name shown in clients |
-| `CANTINARR_PUBLIC_URL` | direct request origin | Origin the Radarr/Sonarr/Chaptarr containers POST webhooks back to, so it must be resolvable and reachable **from the arrs themselves** -- in same-network/cluster deployments a cluster-internal origin like `http://cantinarr:8585` is usually the right value. Set it explicitly behind a reverse proxy (forwarded headers are deliberately ignored) |
-| `CANTINARR_OAUTH_ISSUER` | request-derived origin | Canonical external HTTPS origin for inbound MCP OAuth metadata, token audience, and browser-origin checks; setting it also enables stable RFC 9207 authorization-response `iss` and permits that origin to call `/mcp`. Set it behind a reverse proxy and keep it stable (changing it makes existing audience-bound MCP tokens reconnect); do not substitute the arr-reachable `CANTINARR_PUBLIC_URL` |
+| `CANTINARR_ARR_CALLBACK_URL` | direct request origin | Origin the Radarr/Sonarr/Chaptarr containers POST webhooks back to, so it must be resolvable and reachable **from the arrs themselves** -- in same-network/cluster deployments a cluster-internal origin like `http://cantinarr:8585` is usually the right value. Set it explicitly behind a reverse proxy (forwarded headers are deliberately ignored). Formerly `CANTINARR_PUBLIC_URL`, which stays accepted forever (the new name wins when both are set); it was renamed because "public URL" suggested the user-facing address, which is the in-app **Settings > External Address** instead |
+| `CANTINARR_OAUTH_ISSUER` | request-derived origin | Canonical external HTTPS origin for inbound MCP OAuth metadata, token audience, and browser-origin checks; setting it also enables stable RFC 9207 authorization-response `iss` and permits that origin to call `/mcp`. Set it behind a reverse proxy and keep it stable (changing it makes existing audience-bound MCP tokens reconnect); do not substitute the arr-reachable `CANTINARR_ARR_CALLBACK_URL` |
 | `CANTINARR_MCP_ALLOWED_ORIGINS` | unset | Comma-separated additional browser origins allowed to call `/mcp`. If neither this nor `CANTINARR_OAUTH_ISSUER` is configured, requests that supply `Origin` are rejected; native and server-side MCP clients need no entry |
 | `CANTINARR_JWT_SECRET` | auto-generated | HMAC secret for signing short-lived access tokens. Device sessions do not depend on it: changing it never signs anyone out |
 | `CANTINARR_ENCRYPTION_KEY` | auto-generated key file | Base64 32-byte key for secrets-at-rest (default: `/config/encryption.key`) |
-| `CANTINARR_AI_PROVIDER` | `anthropic` | Fallback provider for the included server AI profile when none is saved in the admin UI (`anthropic`, `openai`, `gemini`, or `codex`) |
+| `CANTINARR_AI_PROVIDER` | `codex` | Fallback provider for the included server AI profile when none is saved in the admin UI (`anthropic`, `openai`, `gemini`, `grok`, `codex`, or `grok_oauth`) |
 | `CANTINARR_AI_MODEL` | provider default | Fallback model for the included server AI profile when none is saved in the admin UI |
 | `CANTINARR_CODEX_BIN` | auto-discovered | Optional path to `codex-app-server` or the full `codex` CLI; container images bundle the tested 0.144.3 app-server at `/usr/local/bin/codex-app-server` |
 | `CANTINARR_CODEX_RUNTIME_DIR` | `/dev/shm/cantinarr-codex` | Absolute Linux tmpfs/ramfs directory used for server-owned, ephemeral per-session Codex state; if it already exists, it must be owned by the server user with mode `0700` |
@@ -174,7 +248,7 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_ANDROID_PACKAGE_NAME` | `codes.julian.cantinarr` | Android package name for native passkeys |
 | `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Android signing cert fingerprints for `/.well-known/assetlinks.json` |
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Additional WebAuthn origins to trust |
-| `CANTINARR_DISABLE_UPDATE_CHECK` | unset | Set to `1` to disable the periodic GitHub release check behind the admin "update available" banner |
+| `CANTINARR_DISABLE_UPDATE_CHECK` | unset | Set to `1` to disable the periodic GitHub release check behind the admin update-status endpoint |
 
 Source image builds also accept the Docker build argument
 `CANTINARR_E2E_WEB_SEMANTICS` (default `false`). It exists only for the
@@ -186,7 +260,9 @@ OpenAI (OAuth) source deployments use Codex app-server and are supported only on
 
 Native app passkeys require a public HTTPS server domain associated with the app (AASA for Apple, Digital Asset Links for Android). Browser passkey setup remains available when native association isn't possible. See [`server/README.md`](server/README.md#configuration) for details.
 
-By default, users are passwordless and passkeyless: a connect link starts a permanent device session, so household members never deal with credentials. A session never expires -- not from idle time, server restarts, upgrades, or secret rotation -- and ends only when an admin revokes the device (**Settings > Devices**) or deletes the user. Admins grant a password and/or passkey per user from **Settings > Users** when a user needs one. A password is what authorizes MCP clients on deployments served over plain HTTP, where passkeys are unavailable (WebAuthn requires a secure context). Disabling a method is a real revoke -- it clears the stored password or deletes the user's passkeys. To recover access, an admin issues a fresh connect link.
+By default, users are passwordless and passkeyless: a connect link starts a permanent device session, so household members never deal with credentials. Each link signs one device into the app, once. A session never expires -- not from idle time, server restarts, upgrades, or secret rotation -- and ends only when an admin revokes the device (**Settings > Devices**) or deletes the user. Admins grant a password and/or passkey per user from **Settings > Users** when a user needs one -- that is also the durable way to sign in on the web, where clearing browser data wipes the device session a link created. A password is what authorizes MCP clients on deployments served over plain HTTP, where passkeys are unavailable (WebAuthn requires a secure context). Disabling a method is a real revoke -- it clears the stored password or deletes the user's passkeys. To recover access, an admin issues a fresh connect link.
+
+Connect links embed a server address. Set **Settings > External Address** to the origin people reach your server through (a reverse proxy domain, a public IP) and links are built from it; left unset, a link uses the address the generating admin's own app is connected with, which usually only works on the admin's network -- the invite dialog says so when that happens.
 
 ## How It Works
 
@@ -198,15 +274,16 @@ By default, users are passwordless and passkeyless: a connect link starts a perm
 5. Watch download progress live and get push notifications
 6. Something wrong with a file? Tap "Report a problem"; Cantinarr quietly watches for an in-flight Radarr/Sonarr recovery, then investigates only if the problem persists
 7. Ask the AI assistant for recommendations or to make requests for you. Use the included server provider when granted, or choose your own provider under **Settings > AI Access**
+8. Sharing a media server? Open **Watch on Plex** / **Watch on Jellyfin** / **Watch on Emby** in the menu: create your account or sign in with one you already have (Jellyfin, Emby), or sign in with Plex or share your Plex email and accept the invite (Plex), then sign in at the address shown; on Jellyfin or Emby, an available title's page in Cantinarr also has a **Watch on** button that opens it on your server
 
 ### For Admins
 1. Deploy the container and complete the setup wizard
-2. Add your shared API credentials and service instances from Settings; for included AI, either add an Anthropic/OpenAI/Gemini key or link a shared OpenAI (OAuth) account
-3. Generate connect links for your household, grant included AI access where wanted, and pin per-user default instances if you run several
+2. Add your shared API credentials and service instances from Settings; for included AI, either add an Anthropic/OpenAI/Gemini/xAI key or link a shared OpenAI (OAuth) or xAI Grok (OAuth) account; a Plex, Jellyfin, or Emby instance also chooses which users get access there
+3. Invite your household from **Settings > Users** (set **Settings > External Address** first so links work away from home), grant included AI access where wanted, and pin per-user default instances if you run several
 4. Optionally require approval for requests -- pending ones arrive as push notifications
-5. Instant updates come on by themselves: adding a Radarr/Sonarr/Chaptarr instance installs the server's authenticated webhook automatically (books need it most -- an ebook can finish downloading between two polls). Each instance's edit screen shows the live state and a **Configure instant updates** button to repair it -- e.g. after changing `CANTINARR_PUBLIC_URL`
+5. Instant updates come on by themselves: adding a Radarr/Sonarr/Chaptarr instance installs the server's authenticated webhook automatically (books need it most -- an ebook can finish downloading between two polls). Each instance's edit screen shows the live state and a **Configure instant updates** button to repair it -- e.g. after changing `CANTINARR_ARR_CALLBACK_URL`
 6. Manage everything from the app -- queues, stuck imports, issues, agent fixes. No config files.
-7. When a newer release ships, an in-app banner points you to it; optionally set an **Update Portal** link (**Settings > Admin**) to jump straight to your container manager. See [`docs/updating.md`](docs/updating.md).
+7. Updating means pulling the newer image and recreating the container -- see [`docs/updating.md`](docs/updating.md). Optionally set an **Update Portal** link (**Settings > Admin**) so an in-app update warning jumps straight to your container manager.
 
 ### ID Bridge (TMDB-to-TVDB)
 
@@ -233,7 +310,7 @@ Movies don't need bridging -- Radarr natively supports TMDB IDs. Books are keyed
 | Server | Go 1.25, Chi router, SQLite (pure Go) |
 | Client | Flutter (Dart), Riverpod, GoRouter |
 | Auth | JWT (HS256), bcrypt, connect tokens, WebAuthn passkeys |
-| AI | Personal or admin-shared Anthropic, OpenAI, and Gemini API credentials, plus personal or shared OpenAI OAuth via the bundled pinned Codex app-server; SSE app streaming |
+| AI | Personal or admin-shared Anthropic, OpenAI, Gemini, and xAI Grok API credentials, plus personal or shared OpenAI OAuth via the bundled pinned Codex app-server and xAI Grok OAuth via xAI's device flow; SSE app streaming |
 | MCP | [mcp-go](https://github.com/mark3labs/mcp-go), Streamable HTTP + inbound Cantinarr OAuth |
 | Real-time | gorilla/websocket + arr webhooks |
 | Push | Self-hosted push gateway (APNs) |
@@ -250,12 +327,17 @@ Full API documentation is in [`server/README.md`](server/README.md#api-reference
 
 ## Contributing
 
-Cantinarr development happens directly by the maintainer, so external pull requests are closed automatically. The two ways to shape the project:
+Pull requests are welcome. Three ways to shape the project:
 
+- **Pull requests** -- fork, branch, and open one. Run the checks first (`go vet ./...` and `go test ./...` from `server/`; `flutter analyze --no-fatal-infos` and `flutter test` from `app/`), and update any doc your change makes untrue. CI runs the same checks on every PR, and a first-time contributor's run needs one approval from the maintainer before it starts. For anything large, open an issue first so the shape can be agreed before you build it.
 - **Bugs and technical issues** -- open one on the [issue tracker](https://github.com/windoze95/cantinarr/issues).
 - **Feature requests** -- post and vote at [cantinarr.com/roadmap](https://cantinarr.com/roadmap/), no account needed.
 
-`AGENTS.md` is the operating manual for the maintainer's own workflow (branch protocol, verification commands, documentation standard).
+[`AGENTS.md`](AGENTS.md) is the operating manual for the repo: branch protocol, verification commands, architecture conventions, and the documentation standard. It applies to human contributors and AI agents alike.
+
+## Community
+
+Questions, setup help, and release news: [Discord](https://discord.gg/zAgRwGwmVB). Bugs still go to the [issue tracker](https://github.com/windoze95/cantinarr/issues) and feature requests to the [roadmap](https://cantinarr.com/roadmap/), so they stay searchable and votable.
 
 ## Support
 

@@ -255,6 +255,87 @@ func TestSanitizeJSONExpandedCredentialCoverage(t *testing.T) {
 	}
 }
 
+// Queue and history prose embeds download-client and indexer URLs mid-message
+// ("Unable to connect to http://user:pass@host/..."). Userinfo must be
+// stripped from an embedded reference even though the surrounding string is
+// not itself a URL reference, because requesters can read queue and history
+// records through the instance proxy.
+func TestStripEmbeddedURLUserinfo(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{
+			name:  "prose before the reference",
+			value: "Unable to connect to http://embedded-user:embedded-pass@qbit.invalid:8080/api/v2 after 3 tries",
+			want:  "Unable to connect to http://qbit.invalid:8080/api/v2 after 3 tries",
+		},
+		{
+			name:  "comma-separated references each keep their own scrub",
+			value: "tried http://a:secret-one@first.invalid,http://b:secret-two@second.invalid/path today",
+			want:  "tried http://first.invalid,http://second.invalid/path today",
+		},
+		{
+			name:  "password containing a comma is not split into prose",
+			value: "see http://user:pa,ss@host.invalid then retry",
+			want:  "see http://host.invalid then retry",
+		},
+		{
+			name:  "uppercase scheme",
+			value: "Retry HTTPS://embedded-user:embedded-pass@files.invalid now",
+			want:  "Retry HTTPS://files.invalid now",
+		},
+		{
+			name:  "scheme decorated by a leading digit",
+			value: "item2https://embedded-user:embedded-pass@download.invalid done",
+			want:  "item2https://download.invalid done",
+		},
+		{
+			name:  "IPv6 authority",
+			value: "dial http://embedded-user:embedded-pass@[::1]:7878/api failed",
+			want:  "dial http://[::1]:7878/api failed",
+		},
+		{
+			name:  "prose email and bare URL stay untouched",
+			value: "contact ops@example.invalid about http://tracker.invalid/announce",
+			want:  "contact ops@example.invalid about http://tracker.invalid/announce",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeURLCredentials(tc.value); got != tc.want {
+				t.Errorf("sanitizeURLCredentials(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// End to end: a queue-shaped status message loses both the embedded userinfo
+// and the embedded sensitive query value while the readable prose survives.
+func TestSanitizeJSONScrubsEmbeddedProseURL(t *testing.T) {
+	const (
+		username = "embedded-user"
+		password = "embedded-pass"
+		apiKey   = "embedded-api-key"
+	)
+	body := []byte(`{"statusMessages":[{"title":"item","messages":["Download failed from https://` +
+		username + `:` + password + `@indexer.invalid/get?apikey=` + apiKey + ` after 2 attempts"]}]}`)
+
+	sanitized, err := sanitizeJSON(body)
+	if err != nil {
+		t.Fatalf("sanitizeJSON: %v", err)
+	}
+	for _, secret := range []string{username, password, apiKey} {
+		if bytes.Contains(sanitized, []byte(secret)) {
+			t.Fatalf("sanitized JSON retained %q: %s", secret, sanitized)
+		}
+	}
+	if !bytes.Contains(sanitized, []byte("indexer.invalid")) || !bytes.Contains(sanitized, []byte("Download failed")) {
+		t.Errorf("prose or host was over-redacted: %s", sanitized)
+	}
+}
+
 // INST-018: Secret-bearing response URL headers are scrubbed without losing routing.
 func TestSanitizeResponseURLHeaders(t *testing.T) {
 	const (
@@ -326,5 +407,19 @@ func TestArrAPIPathSuffix(t *testing.T) {
 		if got != tt.want || ok != tt.ok {
 			t.Errorf("arrAPIPathSuffix(%q) = %q, %v; want %q, %v", tt.path, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestSanitizeFailureReasonLogsOnlySentinels(t *testing.T) {
+	if got := sanitizeFailureReason(errJSONResponseTooLarge); got != errJSONResponseTooLarge.Error() {
+		t.Errorf("sentinel reason = %q; want %q", got, errJSONResponseTooLarge.Error())
+	}
+	// A transport error can embed the upstream URL; it must never become a
+	// loggable reason.
+	if got := sanitizeFailureReason(errors.New("dial tcp radarr.internal:7878: no route to host")); got != "" {
+		t.Errorf("non-sentinel reason = %q; want empty", got)
+	}
+	if got := sanitizeFailureReason(nil); got != "" {
+		t.Errorf("nil reason = %q; want empty", got)
 	}
 }

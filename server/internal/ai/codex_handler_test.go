@@ -192,3 +192,28 @@ func TestPersonalCodexReconnectPreservesAndTestsSelectedModel(t *testing.T) {
 		t.Fatalf("config=%#v found=%t err=%v", config, found, err)
 	}
 }
+
+func TestCodexClientErrorMapsToolBudgetAndTimeout(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		source string
+		want   string
+	}{
+		{"tool budget shared", codexapp.ErrToolBudget, aiSourceShared,
+			"The AI needed more lookups than one question allows and had to stop. Try again, or split the question into smaller parts."},
+		{"tool budget personal", codexapp.ErrToolBudget, aiSourcePersonal,
+			"The AI needed more lookups than one question allows and had to stop. Try again, or split the question into smaller parts."},
+		{"run deadline", context.DeadlineExceeded, aiSourceShared,
+			"The AI request took too long and was stopped. Try again with a smaller question."},
+		{"provider default shared", codexapp.ErrProvider, aiSourceShared,
+			"Included OpenAI OAuth is temporarily unavailable. Try again or ask an admin to check the shared connection."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := codexClientError(tc.err, tc.source); got != tc.want {
+				t.Fatalf("codexClientError = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -277,6 +277,304 @@ func TestRequestMediaRoutesToCallersInstanceAndLogsAttribution(t *testing.T) {
 	}
 }
 
+// TestRequestMediaSelectsGrantedLibrary proves the assistant flow for the
+// HD/4K split: get_request_options lists the caller's libraries by name,
+// request_media with a granted sibling's instance_id adds on that library
+// (the default sees no traffic), and a library outside the granted set is
+// refused benignly with no upstream traffic.
+func TestRequestMediaSelectsGrantedLibrary(t *testing.T) {
+	uhd := &callRecorder{}
+	uhdServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup":
+			_, _ = w.Write([]byte(`[{"title":"Dune","tmdbId":438631,"year":2021}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":42,"name":"4K Remux"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/movies"}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/movie":
+			uhd.record(r)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected 4K radarr request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer uhdServer.Close()
+
+	hd := &callRecorder{}
+	hdServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hd.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer hdServer.Close()
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+	res, err := database.Exec("INSERT INTO users (username, password_hash, role) VALUES ('requester', '', 'user')")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	uid, _ := res.LastInsertId()
+
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x21}, 32))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	store := instance.NewStore(database, cipher)
+	hdInst := &instance.Instance{ServiceType: "radarr", Name: "Movies", URL: hdServer.URL, APIKey: "hd", IsDefault: true}
+	uhdInst := &instance.Instance{ServiceType: "radarr", Name: "4K Movies", URL: uhdServer.URL, APIKey: "uhd"}
+	ghostInst := &instance.Instance{ServiceType: "radarr", Name: "Kids Movies", URL: hdServer.URL, APIKey: "kids"}
+	for _, inst := range []*instance.Instance{hdInst, uhdInst, ghostInst} {
+		if err := store.Create(inst); err != nil {
+			t.Fatalf("create instance %s: %v", inst.Name, err)
+		}
+	}
+	// The HD/4K shape: the default plus one granted sibling; Kids stays
+	// ungranted.
+	if err := store.SetUserGrants(uid, map[string][]string{"radarr": {uhdInst.ID}}); err != nil {
+		t.Fatalf("grant 4K: %v", err)
+	}
+
+	registry := instance.NewRegistry(store)
+	service := requestsvc.NewService(database, registry, nil, nil)
+	server := NewToolServer(nil, service, registry, nil)
+	server.SetCallAuthorizer(func(context.Context, CallContext) (string, error) {
+		return auth.RoleUser, nil
+	})
+	callCtx := CallContext{UserID: uid, Role: auth.RoleUser, DeviceID: "device-1", Reauthorize: true}
+
+	options, err := server.ExecuteTool(
+		context.Background(),
+		"get_request_options",
+		json.RawMessage(`{"media_type":"movie"}`),
+		callCtx,
+	)
+	if err != nil {
+		t.Fatalf("get_request_options: %v", err)
+	}
+	if !strings.Contains(options.Text, `"libraries"`) ||
+		!strings.Contains(options.Text, `"name":"4K Movies"`) ||
+		!strings.Contains(options.Text, `"name":"Movies"`) {
+		t.Fatalf("options = %q, want the caller's two libraries listed", options.Text)
+	}
+	if strings.Contains(options.Text, "Kids Movies") {
+		t.Fatalf("options = %q, must not list an ungranted library", options.Text)
+	}
+
+	result, err := server.ExecuteTool(
+		context.Background(),
+		"request_media",
+		json.RawMessage(`{"tmdb_id":438631,"media_type":"movie","instance_id":"`+uhdInst.ID+`"}`),
+		callCtx,
+	)
+	if err != nil {
+		t.Fatalf("request_media: %v", err)
+	}
+	if !strings.Contains(result.Text, `"status":"requested"`) ||
+		!strings.Contains(result.Text, `"instance_id":"`+uhdInst.ID+`"`) {
+		t.Fatalf("request result = %q, want requested on the 4K library", result.Text)
+	}
+	if adds := uhd.mutations(); len(adds) != 1 {
+		t.Fatalf("4K adds = %+v, want exactly one", adds)
+	}
+	if got := hd.all(); len(got) != 0 {
+		t.Fatalf("default library received %d request(s): %+v", len(got), got)
+	}
+
+	// An ungranted library is refused benignly, with no upstream traffic.
+	result, err = server.ExecuteTool(
+		context.Background(),
+		"request_media",
+		json.RawMessage(`{"tmdb_id":438631,"media_type":"movie","instance_id":"`+ghostInst.ID+`"}`),
+		callCtx,
+	)
+	if err != nil {
+		t.Fatalf("request_media forbidden: %v", err)
+	}
+	if !strings.HasPrefix(result.Text, "Request failed:") ||
+		!strings.Contains(result.Text, "not available to you") {
+		t.Fatalf("forbidden result = %q", result.Text)
+	}
+	if got := hd.all(); len(got) != 0 {
+		t.Fatalf("forbidden request reached an arr: %+v", got)
+	}
+
+	// check_request_status honors the selection and carries per-library chips.
+	status, err := server.ExecuteTool(
+		context.Background(),
+		"check_request_status",
+		json.RawMessage(`{"tmdb_id":438631,"media_type":"movie","instance_id":"`+uhdInst.ID+`"}`),
+		callCtx,
+	)
+	if err != nil {
+		t.Fatalf("check_request_status: %v", err)
+	}
+	if !strings.Contains(status.Text, `"instance_statuses"`) {
+		t.Fatalf("status = %q, want per-library instance_statuses", status.Text)
+	}
+}
+
+// TestArrReadToolsTargetNamedLibrary proves an admin can point the arr read
+// tools at any configured library by instance_id: the named sibling is read,
+// the default sees zero traffic, an unknown id is refused with the
+// settings-family failure text (never a silent default read), and a trusted
+// callCtx.InstanceID overrides the model's choice so remediation scoping
+// stays unforgeable.
+func TestArrReadToolsTargetNamedLibrary(t *testing.T) {
+	deflt := &callRecorder{}
+	defaultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deflt.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
+			_, _ = w.Write([]byte(`[{"id":1,"title":"Default Movie","year":2020,"tmdbId":100,"monitored":true,"hasFile":true}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/diskspace":
+			_, _ = w.Write([]byte(`[{"path":"/movies","label":"","freeSpace":100,"totalSpace":200}]`))
+		default:
+			t.Errorf("unexpected default radarr request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer defaultServer.Close()
+
+	temp := &callRecorder{}
+	tempServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		temp.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
+			_, _ = w.Write([]byte(`[{"id":2,"title":"Temp Movie","year":2021,"tmdbId":200,"monitored":true,"hasFile":false}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/diskspace":
+			_, _ = w.Write([]byte(`[{"path":"/temp-movies","label":"","freeSpace":50,"totalSpace":200}]`))
+		default:
+			t.Errorf("unexpected temp radarr request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer tempServer.Close()
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x21}, 32))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	store := instance.NewStore(database, cipher)
+	defaultInst := &instance.Instance{ServiceType: "radarr", Name: "Movies", URL: defaultServer.URL, APIKey: "hd", IsDefault: true}
+	tempInst := &instance.Instance{ServiceType: "radarr", Name: "Temp Movies", URL: tempServer.URL, APIKey: "temp"}
+	for _, inst := range []*instance.Instance{defaultInst, tempInst} {
+		if err := store.Create(inst); err != nil {
+			t.Fatalf("create instance %s: %v", inst.Name, err)
+		}
+	}
+	server := NewToolServer(nil, nil, instance.NewRegistry(store), nil)
+
+	// A named sibling library is the one that gets read, and the answer says
+	// so; the default sees zero traffic.
+	result, err := server.ExecuteTool(
+		context.Background(),
+		"get_library",
+		json.RawMessage(`{"media_type":"movie","instance_id":"`+tempInst.ID+`"}`),
+		adminCallContext(),
+	)
+	if err != nil {
+		t.Fatalf("get_library on temp: %v", err)
+	}
+	if !strings.Contains(result.Text, `Movie library on Radarr instance "Temp Movies"`) ||
+		!strings.Contains(result.Text, "Temp Movie") {
+		t.Fatalf("temp library read = %q", result.Text)
+	}
+	if got := deflt.all(); len(got) != 0 {
+		t.Fatalf("default library was read for a temp-targeted call: %+v", got)
+	}
+
+	// An unknown id is refused with the settings-family text — never a quiet
+	// read of the default — and no arr sees traffic.
+	result, err = server.ExecuteTool(
+		context.Background(),
+		"get_library",
+		json.RawMessage(`{"media_type":"movie","instance_id":"radarr-nope"}`),
+		adminCallContext(),
+	)
+	if err != nil {
+		t.Fatalf("get_library unknown id: %v", err)
+	}
+	if !strings.Contains(result.Text, `No radarr instance with ID "radarr-nope"`) {
+		t.Fatalf("unknown-id refusal = %q", result.Text)
+	}
+	if got := deflt.all(); len(got) != 0 {
+		t.Fatalf("unknown id read the default library: %+v", got)
+	}
+	if got := temp.all(); len(got) != 1 {
+		t.Fatalf("temp traffic changed unexpectedly: %+v", got)
+	}
+
+	// A trusted callCtx.InstanceID beats the model's instance_id: a scoped
+	// remediation read cannot be widened onto another library.
+	pinned := adminCallContext()
+	pinned.InstanceID = defaultInst.ID
+	result, err = server.ExecuteTool(
+		context.Background(),
+		"get_library",
+		json.RawMessage(`{"media_type":"movie","instance_id":"`+tempInst.ID+`"}`),
+		pinned,
+	)
+	if err != nil {
+		t.Fatalf("get_library with pinned callCtx: %v", err)
+	}
+	if !strings.Contains(result.Text, `Movie library on Radarr instance "Movies"`) ||
+		!strings.Contains(result.Text, "Default Movie") {
+		t.Fatalf("pinned read = %q", result.Text)
+	}
+	if got := temp.all(); len(got) != 1 {
+		t.Fatalf("model instance_id widened a pinned read onto temp: %+v", got)
+	}
+
+	// The action-tool path shares the refusal: a typo'd id runs nothing.
+	result, err = server.ExecuteTool(
+		context.Background(),
+		"trigger_search",
+		json.RawMessage(`{"media_type":"movie","tmdb_id":100,"instance_id":"radarr-nope"}`),
+		adminCallContext(),
+	)
+	if err != nil {
+		t.Fatalf("trigger_search unknown id: %v", err)
+	}
+	if !strings.Contains(result.Text, `No Radarr, Sonarr, or Chaptarr instance with ID "radarr-nope"`) {
+		t.Fatalf("trigger_search refusal = %q", result.Text)
+	}
+	if got := deflt.mutations(); len(got) != 0 {
+		t.Fatalf("refused trigger_search still reached the default: %+v", got)
+	}
+
+	// get_disk_space now lists every configured library, labeled.
+	result, err = server.ExecuteTool(
+		context.Background(),
+		"get_disk_space",
+		json.RawMessage(`{}`),
+		adminCallContext(),
+	)
+	if err != nil {
+		t.Fatalf("get_disk_space: %v", err)
+	}
+	if !strings.Contains(result.Text, `Radarr instance "Movies" disk space:`) ||
+		!strings.Contains(result.Text, `Radarr instance "Temp Movies" disk space:`) ||
+		!strings.Contains(result.Text, "/temp-movies") {
+		t.Fatalf("disk space = %q, want both libraries labeled", result.Text)
+	}
+}
+
 // --- instance scoping (extends release_capability_test's binding coverage) ---
 
 // TestArrToolsRefuseUnknownInstanceWithoutDefaultFallback pins that a call
@@ -1134,7 +1432,7 @@ func TestGetQueueRendersProgressErrorsAndExactScopeVerification(t *testing.T) {
 		t.Fatalf("get_queue: %v", err)
 	}
 	for _, want := range []string{
-		"Movie queue (1 items):",
+		"Movie queue on Radarr instance \"radarr\" (1 items):",
 		"[queue 42] Scoped Movie (2026) — downloading",
 		"75.0% done",
 		"00:12:00 left",
@@ -1181,7 +1479,7 @@ func TestGetQueueRendersProgressErrorsAndExactScopeVerification(t *testing.T) {
 	// Empty, and explicit about what that does and does not rule out: the
 	// typed Verification below is the machine answer, this is the one the
 	// model reads.
-	if !strings.Contains(result.Text, "Movie queue: empty") ||
+	if !strings.Contains(result.Text, "Movie queue on Radarr instance \"radarr\": empty") ||
 		!strings.Contains(result.Text, "queue item 41") ||
 		!strings.Contains(result.Text, "already in the library") {
 		t.Fatalf("absent-target render = %q", result.Text)

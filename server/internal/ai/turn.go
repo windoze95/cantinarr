@@ -103,9 +103,11 @@ type TurnParams struct {
 	Tools []mcp.Tool
 	// History is the provider-neutral transcript to continue from.
 	History Transcript
-	// ForceNoTools uses each provider's compatible tool-free request shape so the
-	// model must answer in text (used to coerce a final diagnosis when bounds are
-	// nearly spent).
+	// ForceNoTools forbids tool calls for this turn so the model must answer in
+	// text (validation probes; coercing a final diagnosis when bounds are nearly
+	// spent). Tools stay attached when provided — each provider gets its
+	// tools-plus-no-calls request shape — so a probe can exercise the exact tool
+	// payload a real turn serializes (#497).
 	ForceNoTools bool
 	// DisableReasoning requests the provider's lowest supported reasoning mode.
 	// Validation probes use this so hidden reasoning cannot consume their small
@@ -208,35 +210,45 @@ func exportMessage(m transcriptMessage) TranscriptMessage {
 
 const anthropicValidationReasoningMaxTokens = 16000
 
-// NextTurn runs one Anthropic turn with p.System as the system prompt and p.Tools
-// as the explicit tool list, streaming text but executing nothing.
-func (s *Service) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error) {
+// anthropicNextTurnParams builds the single-turn request so contract tests can
+// assert the exact wire shape (tool payload + tool_choice) without a network.
+func anthropicNextTurnParams(model anthropic.Model, p TurnParams) anthropic.MessageNewParams {
 	maxTurnTokens := turnMaxTokens(p)
-	if p.DisableReasoning && anthropicAlwaysUsesAdaptiveThinking(s.model) && maxTurnTokens < anthropicValidationReasoningMaxTokens {
+	if p.DisableReasoning && anthropicAlwaysUsesAdaptiveThinking(model) && maxTurnTokens < anthropicValidationReasoningMaxTokens {
 		// Fable's adaptive thinking cannot be disabled. Give the readiness probe a
 		// bounded allowance large enough that hidden reasoning cannot crowd out its
 		// one-word visible response.
 		maxTurnTokens = anthropicValidationReasoningMaxTokens
 	}
 	params := anthropic.MessageNewParams{
-		Model:     s.model,
+		Model:     model,
 		MaxTokens: int64(maxTurnTokens),
 		System: []anthropic.TextBlockParam{
 			{Text: p.System, CacheControl: anthropic.NewCacheControlEphemeralParam()},
 		},
 		Messages: anthropicTurnMessages(p.History),
 	}
-	if !p.ForceNoTools && len(p.Tools) > 0 {
+	if len(p.Tools) > 0 {
 		params.Tools = toSDKTools(p.Tools)
-	} else {
+	}
+	if p.ForceNoTools || len(p.Tools) == 0 {
+		// Under ForceNoTools the tools stay attached; tool_choice none is what
+		// forbids calls, matching the interactive loop's final iteration.
 		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfNone: &anthropic.ToolChoiceNoneParam{}}
 	}
-	if p.DisableReasoning && supportsAnthropicAdaptiveThinking(s.model) && !anthropicAlwaysUsesAdaptiveThinking(s.model) {
+	if p.DisableReasoning && supportsAnthropicAdaptiveThinking(model) && !anthropicAlwaysUsesAdaptiveThinking(model) {
 		disabled := anthropic.NewThinkingConfigDisabledParam()
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
-	} else if !p.DisableReasoning && supportsAnthropicAdaptiveThinking(s.model) {
+	} else if !p.DisableReasoning && supportsAnthropicAdaptiveThinking(model) {
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
 	}
+	return params
+}
+
+// NextTurn runs one Anthropic turn with p.System as the system prompt and p.Tools
+// as the explicit tool list, streaming text but executing nothing.
+func (s *Service) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error) {
+	params := anthropicNextTurnParams(s.model, p)
 
 	// Stream one turn with no callbacks (remediation streams via WS per persisted
 	// step, not token-by-token). Reuse streamOne so accumulation/cache breakpoints
@@ -360,6 +372,11 @@ const (
 	openAIReasoningNone
 	openAIReasoningMinimal
 	openAIReasoningLow
+	// openAIReasoningHidden marks models that reason internally without an
+	// effort control (xAI's Grok family): never send reasoning_effort, but
+	// budget output like a reasoning model so hidden tokens cannot starve a
+	// small probe.
+	openAIReasoningHidden
 )
 
 type openAIReasoningAttempt struct {
@@ -372,6 +389,20 @@ type openAIReasoningAttempt struct {
 // chat loop) so the chat path stays untouched while this seam also reads usage.
 func (s *openAIService) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error) {
 	attempts := openAIReasoningAttempts(s.model, p)
+	// An admin-pinned effort leads the ladder so validation proves the exact
+	// configuration production turns will use; the capability-based attempts
+	// stay behind it as the rejection fallback.
+	if s.reasoningEffort != "" {
+		requested := int64(turnMaxTokens(p))
+		budget := requested
+		if s.reasoningEffort != openai.ReasoningEffortNone && budget < openAIValidationReasoningMaxTokens {
+			budget = openAIValidationReasoningMaxTokens
+		}
+		pinned := openAIReasoningAttempt{effort: s.reasoningEffort, maxTokens: budget}
+		if len(attempts) == 0 || attempts[0] != pinned {
+			attempts = append([]openAIReasoningAttempt{pinned}, attempts...)
+		}
+	}
 	for i := 0; i < len(attempts); {
 		result, err := s.openAINextTurnAttempt(ctx, p, attempts[i])
 		if err == nil {
@@ -446,8 +477,12 @@ func openAINextTurnParamsForAttempt(model openai.ChatModel, p TurnParams, attemp
 			IncludeUsage: openai.Bool(true),
 		},
 	}
-	if !p.ForceNoTools && len(p.Tools) > 0 {
+	if len(p.Tools) > 0 {
 		params.Tools = toOpenAITools(p.Tools)
+		if p.ForceNoTools {
+			// tool_choice is only valid alongside tools — the API rejects it bare.
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{OfAuto: openai.String("none")}
+		}
 	}
 	if attempt.effort != "" {
 		params.ReasoningEffort = attempt.effort
@@ -494,6 +529,8 @@ func openAIReasoningAttempts(model openai.ChatModel, p TurnParams) []openAIReaso
 		appendAttempt(openai.ReasoningEffortLow, reasoningBudget)
 	case openAIReasoningLow:
 		appendAttempt(openai.ReasoningEffortLow, reasoningBudget)
+	case openAIReasoningHidden:
+		appendAttempt("", reasoningBudget)
 	default:
 		appendAttempt(openai.ReasoningEffortNone, requested)
 		appendAttempt(openai.ReasoningEffortLow, reasoningBudget)
@@ -522,6 +559,8 @@ func openAIModelReasoningCapability(model openai.ChatModel) openAIReasoningCapab
 		return openAIReasoningMinimal
 	case len(name) >= 2 && name[0] == 'o' && name[1] >= '0' && name[1] <= '9':
 		return openAIReasoningLow
+	case strings.HasPrefix(name, "grok-"):
+		return openAIReasoningHidden
 	default:
 		return openAIReasoningUnknown
 	}
@@ -681,6 +720,23 @@ func (s *geminiService) NextTurn(ctx context.Context, p TurnParams) (TurnResult,
 	return TurnResult{}, errGeminiIncompleteStream
 }
 
+// geminiNextTurnConfig builds the single-turn request config so contract tests
+// can assert the exact tool payload + no-call mode without a network.
+func geminiNextTurnConfig(p TurnParams) *genai.GenerateContentConfig {
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: &genai.Content{Parts: []*genai.Part{genai.NewPartFromText(p.System)}},
+		MaxOutputTokens:   int32(turnMaxTokens(p)),
+	}
+	if len(p.Tools) > 0 {
+		config.Tools = toGeminiTools(p.Tools)
+		if p.ForceNoTools {
+			// Tools stay attached; function-calling mode NONE is what forbids calls.
+			config.ToolConfig = &genai.ToolConfig{FunctionCallingConfig: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeNone}}
+		}
+	}
+	return config
+}
+
 // geminiNextTurnOnce owns a fresh aggregation buffer. Unlike interactive chat,
 // NextTurn has emitted no callbacks and executed no tools, so retrying one
 // semantically incomplete stream cannot duplicate user-visible output or side
@@ -689,13 +745,7 @@ func (s *geminiService) NextTurn(ctx context.Context, p TurnParams) (TurnResult,
 // arrived but Google's terminal finish chunk did not.
 func (s *geminiService) geminiNextTurnOnce(ctx context.Context, p TurnParams) (TurnResult, error) {
 	contents := geminiTurnContents(p.History)
-	config := &genai.GenerateContentConfig{
-		SystemInstruction: &genai.Content{Parts: []*genai.Part{genai.NewPartFromText(p.System)}},
-		MaxOutputTokens:   int32(turnMaxTokens(p)),
-	}
-	if !p.ForceNoTools && len(p.Tools) > 0 {
-		config.Tools = toGeminiTools(p.Tools)
-	}
+	config := geminiNextTurnConfig(p)
 
 	content := genai.NewContentFromParts(nil, genai.RoleModel)
 	var finishReason genai.FinishReason

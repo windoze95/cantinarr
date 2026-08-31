@@ -225,9 +225,10 @@ func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck | chaptarr.He
 	return sb.String()
 }
 
-func (s *ToolServer) getArrHealth(input json.RawMessage, instanceID string) (*ToolResult, error) {
+func (s *ToolServer) getArrHealth(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
 	var params struct {
-		MediaType string `json:"media_type"`
+		MediaType  string `json:"media_type"`
+		InstanceID string `json:"instance_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -237,50 +238,50 @@ func (s *ToolServer) getArrHealth(input json.RawMessage, instanceID string) (*To
 	var sections []string
 
 	if mediaType == "movie" || mediaType == "all" {
-		client := s.GetRadarrFor(instanceID)
+		client, label, refusal := s.radarrTargetFor(params.InstanceID, callInstanceID)
 		if client == nil {
 			if mediaType == "movie" {
-				return &ToolResult{Text: "Radarr is not configured."}, nil
+				return &ToolResult{Text: refusal}, nil
 			}
-			sections = append(sections, "Radarr is not configured.")
+			sections = append(sections, refusal)
 		} else {
 			checks, err := client.GetHealth()
 			if err != nil {
 				return nil, err
 			}
-			sections = append(sections, renderHealthSection("Radarr", checks))
+			sections = append(sections, renderHealthSection(label, checks))
 		}
 	}
 
 	if mediaType == "tv" || mediaType == "all" {
-		client := s.GetSonarrFor(instanceID)
+		client, label, refusal := s.sonarrTargetFor(params.InstanceID, callInstanceID)
 		if client == nil {
 			if mediaType == "tv" {
-				return &ToolResult{Text: "Sonarr is not configured."}, nil
+				return &ToolResult{Text: refusal}, nil
 			}
-			sections = append(sections, "Sonarr is not configured.")
+			sections = append(sections, refusal)
 		} else {
 			checks, err := client.GetHealth()
 			if err != nil {
 				return nil, err
 			}
-			sections = append(sections, renderHealthSection("Sonarr", checks))
+			sections = append(sections, renderHealthSection(label, checks))
 		}
 	}
 
 	if mediaType == "book" || mediaType == "all" {
-		client := s.GetChaptarrFor(instanceID)
+		client, label, refusal := s.chaptarrTargetFor(params.InstanceID, callInstanceID)
 		if client == nil {
 			if mediaType == "book" {
-				return &ToolResult{Text: "Chaptarr is not configured."}, nil
+				return &ToolResult{Text: refusal}, nil
 			}
-			sections = append(sections, "Chaptarr is not configured.")
+			sections = append(sections, refusal)
 		} else {
 			checks, err := client.GetHealth()
 			if err != nil {
 				return nil, err
 			}
-			sections = append(sections, renderHealthSection("Chaptarr", checks))
+			sections = append(sections, renderHealthSection(label, checks))
 		}
 	}
 
@@ -289,9 +290,10 @@ func (s *ToolServer) getArrHealth(input json.RawMessage, instanceID string) (*To
 
 // --- diagnose_queue ---
 
-func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*ToolResult, error) {
+func (s *ToolServer) diagnoseQueue(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
 	var params struct {
 		MediaType     string `json:"media_type"`
+		InstanceID    string `json:"instance_id"`
 		QueueID       int    `json:"queue_id"`
 		DownloadID    string `json:"download_id"`
 		TmdbID        int    `json:"tmdb_id"`
@@ -317,12 +319,12 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 	healthy := 0
 
 	if mediaType == "movie" || mediaType == "all" {
-		radarrClient := s.GetRadarrFor(instanceID)
+		radarrClient, _, refusal := s.radarrTargetFor(params.InstanceID, callInstanceID)
 		if radarrClient == nil {
 			if mediaType == "movie" {
-				return &ToolResult{Text: "Radarr is not configured."}, nil
+				return &ToolResult{Text: refusal}, nil
 			}
-			notes = append(notes, "Radarr is not configured.")
+			notes = append(notes, refusal)
 		} else {
 			items, err := radarrClient.GetQueueDetailed()
 			if err != nil {
@@ -355,12 +357,12 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 	}
 
 	if mediaType == "tv" || mediaType == "all" {
-		sonarrClient := s.GetSonarrFor(instanceID)
+		sonarrClient, _, refusal := s.sonarrTargetFor(params.InstanceID, callInstanceID)
 		if sonarrClient == nil {
 			if mediaType == "tv" {
-				return &ToolResult{Text: "Sonarr is not configured."}, nil
+				return &ToolResult{Text: refusal}, nil
 			}
-			notes = append(notes, "Sonarr is not configured.")
+			notes = append(notes, refusal)
 		} else {
 			items, err := sonarrClient.GetQueueDetailed()
 			if err != nil {
@@ -390,12 +392,12 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 	}
 
 	if mediaType == "book" || mediaType == "all" {
-		chaptarrClient := s.GetChaptarrFor(instanceID)
+		chaptarrClient, _, refusal := s.chaptarrTargetFor(params.InstanceID, callInstanceID)
 		if chaptarrClient == nil {
 			if mediaType == "book" {
-				return &ToolResult{Text: "Chaptarr is not configured."}, nil
+				return &ToolResult{Text: refusal}, nil
 			}
-			notes = append(notes, "Chaptarr is not configured.")
+			notes = append(notes, refusal)
 		} else {
 			items, err := chaptarrClient.GetQueueDetailed()
 			if err != nil {
@@ -495,10 +497,11 @@ func formatRejections(rejections []arr.ManualImportRejectionView) string {
 	return strings.Join(parts, "; ")
 }
 
-func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID string) (*ToolResult, error) {
+func (s *ToolServer) getManualImportCandidates(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
 	var params struct {
 		QueueID       int    `json:"queue_id"`
 		MediaType     string `json:"media_type"`
+		InstanceID    string `json:"instance_id"`
 		DownloadID    string `json:"download_id"`
 		TmdbID        int    `json:"tmdb_id"`
 		TvdbID        int    `json:"tvdb_id"`
@@ -518,9 +521,9 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID
 
 	switch params.MediaType {
 	case "movie":
-		client := s.GetRadarrFor(instanceID)
+		client, _, refusal := s.radarrTargetFor(params.InstanceID, callInstanceID)
 		if client == nil {
-			return &ToolResult{Text: "Radarr is not configured."}, nil
+			return &ToolResult{Text: refusal}, nil
 		}
 		item, err := findRadarrQueueItem(client, params.QueueID)
 		if err != nil {
@@ -565,9 +568,9 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID
 		return &ToolResult{Text: sb.String()}, nil
 
 	case "tv":
-		client := s.GetSonarrFor(instanceID)
+		client, _, refusal := s.sonarrTargetFor(params.InstanceID, callInstanceID)
 		if client == nil {
-			return &ToolResult{Text: "Sonarr is not configured."}, nil
+			return &ToolResult{Text: refusal}, nil
 		}
 		item, err := findSonarrQueueItem(client, params.QueueID)
 		if err != nil {
@@ -616,9 +619,9 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID
 		return &ToolResult{Text: sb.String()}, nil
 
 	case "book":
-		client := s.GetChaptarrFor(instanceID)
+		client, _, refusal := s.chaptarrTargetFor(params.InstanceID, callInstanceID)
 		if client == nil {
-			return &ToolResult{Text: "Chaptarr is not configured."}, nil
+			return &ToolResult{Text: refusal}, nil
 		}
 		item, err := findChaptarrQueueItem(client, params.QueueID)
 		if err != nil {
@@ -693,16 +696,21 @@ func hasPermanentRejection(rejections []arr.ManualImportRejectionView) bool {
 
 // --- execute_manual_import ---
 
-func (s *ToolServer) executeManualImport(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) executeManualImport(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
 	var params struct {
-		QueueID   int    `json:"queue_id"`
-		MediaType string `json:"media_type"`
-		Force     bool   `json:"force"`
+		QueueID    int    `json:"queue_id"`
+		MediaType  string `json:"media_type"`
+		InstanceID string `json:"instance_id"`
+		Force      bool   `json:"force"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := ExecuteManualImportHelper(s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.QueueID, params.Force, nil)
+	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	if refusal != "" {
+		return &ToolResult{Text: refusal}, nil
+	}
+	text, err := ExecuteManualImportHelper(radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.QueueID, params.Force, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -739,16 +747,21 @@ func importSkippedMessage(skipped []string, force bool) string {
 
 // --- remediate_queue_item ---
 
-func (s *ToolServer) remediateQueueItem(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) remediateQueueItem(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
 	var params struct {
-		QueueID   int    `json:"queue_id"`
-		MediaType string `json:"media_type"`
-		Action    string `json:"action"`
+		QueueID    int    `json:"queue_id"`
+		MediaType  string `json:"media_type"`
+		InstanceID string `json:"instance_id"`
+		Action     string `json:"action"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := RemediateQueueItemHelper(s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.QueueID, params.Action)
+	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	if refusal != "" {
+		return &ToolResult{Text: refusal}, nil
+	}
+	text, err := RemediateQueueItemHelper(radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.QueueID, params.Action)
 	if err != nil {
 		return nil, err
 	}
@@ -757,16 +770,21 @@ func (s *ToolServer) remediateQueueItem(input json.RawMessage) (*ToolResult, err
 
 // --- rescan_media ---
 
-func (s *ToolServer) rescanMedia(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) rescanMedia(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
 	var params struct {
-		TmdbID    int    `json:"tmdb_id"`
-		MediaType string `json:"media_type"`
-		AuthorID  int    `json:"author_id"`
+		TmdbID     int    `json:"tmdb_id"`
+		MediaType  string `json:"media_type"`
+		InstanceID string `json:"instance_id"`
+		AuthorID   int    `json:"author_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	text, err := RescanMediaHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.TmdbID, params.AuthorID)
+	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	if refusal != "" {
+		return &ToolResult{Text: refusal}, nil
+	}
+	text, err := RescanMediaHelper(s.bridge, radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.TmdbID, params.AuthorID)
 	if err != nil {
 		return nil, err
 	}

@@ -1,20 +1,22 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
+import '../../../core/models/backend_connection.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
+import '../../../core/widgets/phone_apps_sheet.dart';
 import '../../../core/widgets/settings_highlight.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/settings_search_index.dart';
 import '../data/setup_status_service.dart';
 import '../logic/app_version_provider.dart';
+import '../logic/external_address_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
 import '../settings_anchors.dart';
@@ -58,6 +60,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.read(authProvider.notifier).refreshUser();
       ref.read(setupStatusProvider.notifier).refresh();
       ref.read(updateStatusProvider.notifier).refresh();
+      ref.read(externalAddressProvider.notifier).refresh();
     });
   }
 
@@ -70,12 +73,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final instances = connection?.instances ?? [];
     final setupStatus = ref.watch(setupStatusProvider);
     final updateStatus = ref.watch(updateStatusProvider);
+    final externalAddress = ref.watch(externalAddressProvider);
     final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
     final appVersion = ref.watch(appVersionProvider).valueOrNull;
+    final mediaServersVisible = connection?.mediaAccessGuideVisible ?? false;
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
       donateVisible: _donateVisible,
+      phoneAppsVisible: phoneAppsVisible,
+      mediaServersVisible: mediaServersVisible,
     );
     final searching = _query.trim().isNotEmpty;
 
@@ -135,6 +142,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ? AppTheme.available
                     : AppTheme.error,
               ),
+            ),
+            // Every role gets this — it is the only way off a server the
+            // user no longer wants (there is no other path back to the
+            // connect screen while a session exists).
+            _SettingsTile(
+              icon: Icons.logout,
+              title: 'Sign out',
+              subtitle: 'Disconnect this device from the server',
+              onTap: () => _confirmSignOut(context),
             ),
 
             const SizedBox(height: 16),
@@ -201,6 +217,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     size: 12,
                     color: AppTheme.available,
                   ),
+                  // Admins edit the instance. The one instance a requester
+                  // can open is a media server, whose tile leads to the
+                  // access guide (their account and where to sign in).
                   onTap: user?.isAdmin == true
                       ? () => context.push(
                             '/settings/instance/${inst.id}',
@@ -210,7 +229,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               'is_default': inst.isDefault,
                             },
                           )
-                      : null,
+                      : mediaServerServiceTypes.contains(inst.serviceType)
+                          ? () => context.push('/media-servers')
+                          : null,
                 )),
             if (user?.isAdmin != true)
               _SettingsTile(
@@ -240,14 +261,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),
               const _SectionHeader(title: 'Admin'),
-              // People and access first: invite, manage, their devices,
-              // their Plex — then the AI/config stack.
-              _SettingsTile(
-                icon: Icons.link,
-                title: 'Generate Connect Link',
-                subtitle: 'Create a link to invite a new user',
-                onTap: () => _showGenerateConnectLinkDialog(context),
-              ),
+              // People and access first: users (inviting lives there now),
+              // the address their invite links are built from, their
+              // devices, then the AI/config stack.
               _SettingsTile(
                 icon: Icons.people_outline,
                 title: 'Users',
@@ -255,16 +271,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onTap: () => context.push('/settings/users'),
               ),
               _SettingsTile(
+                icon: Icons.public,
+                title: 'External Address',
+                subtitle: (externalAddress?.isNotEmpty ?? false)
+                    ? externalAddress!
+                    : 'Address invite links use outside your network',
+                onTap: () =>
+                    _showExternalAddressDialog(context, externalAddress ?? ''),
+              ),
+              _SettingsTile(
                 icon: Icons.devices,
                 title: 'Connected Devices',
                 subtitle: 'Manage all connected devices',
                 onTap: () => context.push('/settings/devices'),
-              ),
-              _SettingsTile(
-                icon: Icons.play_circle_outline,
-                title: 'Plex Invites',
-                subtitle: 'Link Plex for one-tap and automatic invites',
-                onTap: () => context.push('/settings/plex'),
               ),
               _SettingsTile(
                 icon: Icons.key_outlined,
@@ -307,7 +326,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Update Portal',
                 subtitle: (updateStatus?.managementUrl.isNotEmpty ?? false)
                     ? updateStatus!.managementUrl
-                    : 'Link your container manager for the update banner',
+                    : 'Link your container manager for update prompts',
                 onTap: () => _showManagementUrlDialog(
                   context,
                   updateStatus?.managementUrl ?? '',
@@ -385,31 +404,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
             const SizedBox(height: 16),
 
-            // Guides
-            const _SectionHeader(title: 'Guides'),
-            // The row opens the guide; its switch governs the menu entry.
-            SettingsHighlight(
-              anchorId: SettingsAnchors.rootShowPlexGuide,
-              highlightId: _activeHighlight,
-              child: ListTile(
-                leading: const Icon(Icons.play_circle_outline,
-                    color: AppTheme.textSecondary),
-                title: const Text('Watch on Plex',
-                    style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w500)),
-                subtitle: const Text('Show the guide in the menu',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-                trailing: Switch(
-                  value: ref.watch(plexGuideEnabledProvider),
-                  onChanged: (v) =>
-                      ref.read(plexGuideEnabledProvider.notifier).set(v),
-                  activeThumbColor: AppTheme.accent,
-                ),
-                onTap: () => context.push('/plex-guide'),
+            // Guides. Only while a media server is shared with this account
+            // (or a Plex server can be asked for): the guide's content comes
+            // from the server, so without one there is nothing to open.
+            if (mediaServersVisible) ...[
+              const _SectionHeader(title: 'Guides'),
+              _SettingsTile(
+                icon: Icons.live_tv_outlined,
+                title: 'Media server access',
+                subtitle: 'Get your access and see where to sign in',
+                onTap: () => context.push('/media-servers'),
               ),
-            ),
+            ],
 
             const SizedBox(height: 16),
 
@@ -424,12 +430,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 builder: (_) => const AboutSheet(),
               ),
             ),
+            if (phoneAppsVisible)
+              _SettingsTile(
+                icon: Icons.smartphone,
+                title: 'Get the phone app',
+                subtitle: 'iPhone and Android, with push notifications',
+                onTap: () => showAppSheet(
+                  context,
+                  builder: (_) => const PhoneAppsSheet(),
+                ),
+              ),
             _SettingsTile(
               icon: Icons.code,
               title: 'GitHub',
               subtitle: 'Source code, issues, and releases',
               onTap: () => launchUrl(
                 Uri.parse(_githubUrl),
+                mode: LaunchMode.externalApplication,
+              ),
+            ),
+            _SettingsTile(
+              icon: Icons.forum_outlined,
+              title: 'Discord',
+              subtitle: 'Questions, help, and news from other users',
+              onTap: () => launchUrl(
+                Uri.parse(_discordUrl),
                 mode: LaunchMode.externalApplication,
               ),
             ),
@@ -521,8 +546,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // Action tiles on the root screen run their own handler; results with an
     // anchor dismiss search and reveal their row in place.
     switch (entry.id) {
-      case 'root.connect-link':
-        _showGenerateConnectLinkDialog(context);
+      case 'root.sign-out':
+        _confirmSignOut(context);
+        return;
+      case 'root.external-address':
+        _showExternalAddressDialog(
+          context,
+          ref.read(externalAddressProvider) ?? '',
+        );
         return;
       case 'root.update-portal':
         _showManagementUrlDialog(
@@ -535,6 +566,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         return;
       case 'root.github':
         launchUrl(Uri.parse(_githubUrl),
+            mode: LaunchMode.externalApplication);
+        return;
+      case 'root.discord':
+        launchUrl(Uri.parse(_discordUrl),
             mode: LaunchMode.externalApplication);
         return;
       case 'root.roadmap':
@@ -553,100 +588,105 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     });
   }
 
-  void _showGenerateConnectLinkDialog(BuildContext context) {
-    final nameController = TextEditingController();
-    String? generatedLink;
-    bool isGenerating = false;
+  Future<void> _confirmSignOut(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Sign Out'),
+        content: const Text(
+          'This device will be disconnected. To sign back in you may need '
+          'a new connect link, or your password or passkey.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.error,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sign out'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    // No navigation here: clearing the session flips the router's
+    // refreshListenable and the redirect lands on the connect screen.
+    await ref.read(authProvider.notifier).logout();
+  }
+
+  void _showExternalAddressDialog(BuildContext context, String current) {
+    final controller = TextEditingController(text: current);
+    bool saving = false;
 
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Generate Connect Link'),
+          title: const Text('External Address'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (generatedLink == null) ...[
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Name',
-                    hintText: 'e.g. Mom, Dad, Roommate',
-                    prefixIcon: Icon(Icons.person_outline),
-                  ),
-                  textCapitalization: TextCapitalization.words,
-                  textInputAction: TextInputAction.done,
+              const Text(
+                'The address other people use to reach this server, like a '
+                'reverse proxy domain or a public IP. Invite links and '
+                'passkey links are built from it. Leave blank to build links '
+                'from the address your own app connects with, which usually '
+                'only works on your network.',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                decoration: const InputDecoration(
+                  labelText: 'External address',
+                  hintText: 'https://cantinarr.example.com',
+                  prefixIcon: Icon(Icons.public),
                 ),
-              ] else ...[
-                const Text(
-                  'Share this link:',
-                  style: TextStyle(color: AppTheme.textSecondary),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppTheme.accent.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: SelectableText(
-                    generatedLink!,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-              ],
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                textInputAction: TextInputAction.done,
+              ),
             ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text(generatedLink != null ? 'Done' : 'Cancel'),
+              child: const Text('Cancel'),
             ),
-            if (generatedLink == null)
-              ElevatedButton(
-                onPressed: isGenerating
-                    ? null
-                    : () async {
-                        final name = nameController.text.trim();
-                        if (name.isEmpty) return;
-                        setDialogState(() => isGenerating = true);
-                        try {
-                          final resp = await ref
-                              .read(authProvider.notifier)
-                              .generateConnectToken(name);
-                          setDialogState(() {
-                            generatedLink = resp.link;
-                            isGenerating = false;
-                          });
-                        } catch (e) {
-                          setDialogState(() => isGenerating = false);
-                          if (dialogContext.mounted) {
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(
-                                  content: Text('Failed to generate link: $e')),
-                            );
-                          }
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      setDialogState(() => saving = true);
+                      try {
+                        await ref
+                            .read(externalAddressProvider.notifier)
+                            .set(controller.text.trim());
+                        if (dialogContext.mounted) {
+                          Navigator.of(dialogContext).pop();
                         }
-                      },
-                child: isGenerating
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Generate'),
-              ),
-            if (generatedLink != null)
-              ElevatedButton.icon(
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: generatedLink!));
-                  ScaffoldMessenger.of(dialogContext).showSnackBar(
-                    const SnackBar(content: Text('Link copied!')),
-                  );
-                },
-                icon: const Icon(Icons.copy, size: 18),
-                label: const Text('Copy'),
-              ),
+                      } catch (e) {
+                        setDialogState(() => saving = false);
+                        if (dialogContext.mounted) {
+                          ScaffoldMessenger.of(dialogContext).showSnackBar(
+                            SnackBar(content: Text('Failed to save: $e')),
+                          );
+                        }
+                      }
+                    },
+              child: saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save'),
+            ),
           ],
         ),
       ),
@@ -666,9 +706,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'Optional. When set, the "update available" banner links here so '
-                'you can apply the update in your own container manager (e.g. an '
-                'Unraid Docker page or Portainer). The link opens on your '
+                'Optional. When set, an in-app prompt to update the server '
+                'links here so you can apply the update in your own container '
+                'manager (e.g. an Unraid Docker page or Portainer). The link '
+                'opens on your '
                 'devices, so use an address they can reach — a cluster-internal '
                 'name only the server resolves won\'t work from a phone. Leave '
                 'blank to clear.',
@@ -744,6 +785,9 @@ IconData _serviceIcon(String serviceType) {
       return Icons.download_outlined;
     case 'tautulli':
       return Icons.monitor_heart_outlined;
+    case 'jellyfin':
+    case 'emby':
+      return Icons.live_tv_outlined;
     default:
       return Icons.dns_outlined;
   }
@@ -767,6 +811,10 @@ String _serviceLabel(String serviceType) {
       return 'Transmission';
     case 'tautulli':
       return 'Tautulli';
+    case 'jellyfin':
+      return 'Jellyfin';
+    case 'emby':
+      return 'Emby';
     default:
       return serviceType;
   }
@@ -795,6 +843,7 @@ String _aiAccessSubtitle(AiSettings? settings) {
 }
 
 const _githubUrl = 'https://github.com/windoze95/cantinarr';
+const _discordUrl = 'https://discord.gg/zAgRwGwmVB';
 const _roadmapUrl = 'https://cantinarr.com/roadmap/';
 const _donateUrl = 'https://github.com/sponsors/windoze95';
 

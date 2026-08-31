@@ -359,7 +359,7 @@ func TestGetTVStatusFromEpisodeList(t *testing.T) {
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
 	seedTvdbCache(t, s, 300, 999)
 
-	st, err := s.getTVStatus(uid, 300)
+	st, err := s.getTVStatus(uid, 300, "")
 	if err != nil {
 		t.Fatalf("getTVStatus: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestGetTVStatusSeasonStatisticsFallback(t *testing.T) {
 	s, uid := newHistoryTestService(t, "", srv.URL, "")
 	seedTvdbCache(t, s, 300, 999)
 
-	st, err := s.getTVStatus(uid, 300)
+	st, err := s.getTVStatus(uid, 300, "")
 	if err != nil {
 		t.Fatalf("getTVStatus: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestGetTVStatusUnresolvable(t *testing.T) {
 		srv := newFakeSonarrServer(t, f)
 		s, uid := newHistoryTestService(t, "", srv.URL, "")
 		seedTvdbCache(t, s, 300, 999)
-		st, err := s.getTVStatus(uid, 300)
+		st, err := s.getTVStatus(uid, 300, "")
 		if err != nil || st.Status != StatusUnavailable {
 			t.Errorf("status = %+v err=%v, want unavailable", st, err)
 		}
@@ -461,7 +461,7 @@ func TestGetTVStatusUnresolvable(t *testing.T) {
 		f := &fakeSonarrTV{} // any request would fail the test via t.Errorf
 		srv := newFakeSonarrServer(t, f)
 		s, uid := newHistoryTestService(t, "", srv.URL, "")
-		st, err := s.getTVStatus(uid, 300)
+		st, err := s.getTVStatus(uid, 300, "")
 		if err != nil || st.Status != StatusUnavailable {
 			t.Errorf("status = %+v err=%v, want unavailable", st, err)
 		}

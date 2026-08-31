@@ -20,12 +20,17 @@ type Config struct {
 	DBPath     string
 	Port       int
 	ServerName string
-	// PublicURL is the trusted origin used to build the callback that
+	// ArrCallbackURL is the trusted origin used to build the callback that
 	// Radarr/Sonarr POST webhooks to, so it must be resolvable and reachable
 	// from the arr containers themselves (cluster-internal origins are valid
 	// and often correct). Empty falls back to the direct request origin;
 	// forwarded headers are never trusted for callback credentials.
-	PublicURL string
+	// Read from CANTINARR_ARR_CALLBACK_URL, falling back to the deprecated
+	// CANTINARR_PUBLIC_URL — that name read as user-facing when this origin
+	// is usually internal, and the user-facing origin is the in-app External
+	// Address setting instead. The old name stays accepted forever; never
+	// repurpose it, since existing deployments hold internal origins in it.
+	ArrCallbackURL string
 	// OAuthIssuer is the canonical external origin for inbound MCP OAuth.
 	// When set, OAuth metadata, authorization responses, resource audiences,
 	// and MCP browser origin checks use it instead of request headers.
@@ -53,8 +58,8 @@ type Config struct {
 	PushGatewayURL  string
 	PushAPIKey      string
 	PushEnrollToken string
-	// DisableUpdateCheck turns off the periodic GitHub release check that powers
-	// the admin "update available" banner (CANTINARR_DISABLE_UPDATE_CHECK).
+	// DisableUpdateCheck turns off the periodic GitHub release check behind the
+	// admin update-status endpoint (CANTINARR_DISABLE_UPDATE_CHECK).
 	DisableUpdateCheck bool
 	// CodexBin optionally overrides the Codex app-server executable. Empty lets
 	// the adapter discover codex-app-server first and the full codex CLI second.
@@ -75,11 +80,22 @@ func Load() (*Config, error) {
 		log.Println("Loaded .env file")
 	}
 
+	// The new name wins when both are set; the deprecated one keeps every
+	// existing deployment working without edits.
+	arrCallbackVar := "CANTINARR_ARR_CALLBACK_URL"
+	arrCallbackURL := os.Getenv(arrCallbackVar)
+	if arrCallbackURL == "" {
+		if legacy := os.Getenv("CANTINARR_PUBLIC_URL"); legacy != "" {
+			arrCallbackVar = "CANTINARR_PUBLIC_URL"
+			arrCallbackURL = legacy
+		}
+	}
+
 	cfg := &Config{
 		JWTSecret:         os.Getenv("CANTINARR_JWT_SECRET"),
 		DBPath:            "/config/cantinarr.db",
 		ServerName:        os.Getenv("CANTINARR_SERVER_NAME"),
-		PublicURL:         strings.TrimRight(os.Getenv("CANTINARR_PUBLIC_URL"), "/"),
+		ArrCallbackURL:    strings.TrimRight(arrCallbackURL, "/"),
 		OAuthIssuer:       strings.TrimRight(strings.TrimSpace(os.Getenv("CANTINARR_OAUTH_ISSUER")), "/"),
 		MCPAllowedOrigins: splitEnvList(os.Getenv("CANTINARR_MCP_ALLOWED_ORIGINS")),
 		EncryptionKeyFile: "/config/encryption.key",
@@ -104,8 +120,8 @@ func Load() (*Config, error) {
 	if cfg.AndroidPackageName == "" {
 		cfg.AndroidPackageName = "codes.julian.cantinarr"
 	}
-	if err := validatePublicURL(cfg.PublicURL); err != nil {
-		return nil, fmt.Errorf("invalid CANTINARR_PUBLIC_URL: %w", err)
+	if err := validateHTTPOrigin(cfg.ArrCallbackURL); err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", arrCallbackVar, err)
 	}
 	if cfg.OAuthIssuer != "" {
 		normalized, err := normalizeHTTPOrigin(cfg.OAuthIssuer)
@@ -228,7 +244,7 @@ func isKubernetesServiceLinkPort(value string) bool {
 	return err == nil && port > 0 && port <= 65535
 }
 
-func validatePublicURL(value string) error {
+func validateHTTPOrigin(value string) error {
 	if value == "" {
 		return nil
 	}
@@ -247,7 +263,7 @@ func validatePublicURL(value string) error {
 
 func normalizeHTTPOrigin(value string) (string, error) {
 	value = strings.TrimSpace(value)
-	if err := validatePublicURL(value); err != nil {
+	if err := validateHTTPOrigin(value); err != nil {
 		return "", err
 	}
 	u, err := url.Parse(value)

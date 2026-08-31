@@ -9,8 +9,10 @@ import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/settings_highlight.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../settings/settings_anchors.dart';
+import '../data/ai_provider_models.dart';
 import '../data/ai_settings_service.dart';
 import '../data/codex_oauth_service.dart';
+import '../data/grok_oauth_service.dart';
 
 /// Self-service AI source selection for one Cantinarr account.
 ///
@@ -185,10 +187,21 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
     }
   }
 
-  Future<void> _openOpenAIOAuth() async {
-    await context.push('/settings/chatgpt');
-    if (!mounted) return;
-    ref.invalidate(codexConnectionStatusProvider);
+  Future<void> _openOAuth(String? provider) async {
+    // Explicit per-provider routing: a future OAuth provider must add its own
+    // branch rather than silently landing on another provider's sign-in.
+    switch (provider) {
+      case 'grok_oauth':
+        await context.push('/settings/grok');
+        if (!mounted) return;
+        ref.invalidate(grokConnectionStatusProvider);
+      case 'codex':
+        await context.push('/settings/chatgpt');
+        if (!mounted) return;
+        ref.invalidate(codexConnectionStatusProvider);
+      default:
+        return;
+    }
     await _refresh();
   }
 
@@ -281,7 +294,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
             onSaveKeyAndUse: () => _saveAndUse(settings, saveKey: true),
             onUseConfigured: () => _saveAndUse(settings),
             onDeleteKey: (provider) => _deleteKey(settings, provider),
-            onOpenChatGPT: _openOpenAIOAuth,
+            onManageOAuth: () => _openOAuth(_provider),
           ),
         ),
       ],
@@ -409,7 +422,7 @@ class _PersonalSourcePanel extends StatelessWidget {
   final VoidCallback onSaveKeyAndUse;
   final VoidCallback onUseConfigured;
   final ValueChanged<String> onDeleteKey;
-  final VoidCallback onOpenChatGPT;
+  final VoidCallback onManageOAuth;
 
   const _PersonalSourcePanel({
     required this.settings,
@@ -426,7 +439,7 @@ class _PersonalSourcePanel extends StatelessWidget {
     required this.onSaveKeyAndUse,
     required this.onUseConfigured,
     required this.onDeleteKey,
-    required this.onOpenChatGPT,
+    required this.onManageOAuth,
   });
 
   @override
@@ -496,7 +509,7 @@ class _PersonalSourcePanel extends StatelessWidget {
           const SizedBox(height: 7),
           const Text(
             'A personal provider takes priority over included AI. Keys and '
-            'OpenAI OAuth authorization stay encrypted on your Cantinarr server.',
+            'OAuth authorizations stay encrypted on your Cantinarr server.',
             style: TextStyle(color: AppTheme.textSecondary, height: 1.42),
           ),
           const SizedBox(height: 16),
@@ -551,11 +564,12 @@ class _PersonalSourcePanel extends StatelessWidget {
             ],
             const SizedBox(height: 14),
             if (option.usesOAuth)
-              _ChatGPTActions(
+              _OAuthActions(
+                brand: _oauthBrand(option),
                 configured: configured,
                 active: activeThisProvider,
                 saving: saving,
-                onManage: onOpenChatGPT,
+                onManage: onManageOAuth,
                 onUse: onUseConfigured,
               )
             else ...[
@@ -626,14 +640,23 @@ class _PersonalSourcePanel extends StatelessWidget {
   }
 }
 
-class _ChatGPTActions extends StatelessWidget {
+/// Short brand phrase used in OAuth button labels for one provider.
+String _oauthBrand(AiProviderOption option) => switch (option.id) {
+      'codex' => 'OpenAI OAuth',
+      'grok_oauth' => 'xAI Grok',
+      _ => option.label,
+    };
+
+class _OAuthActions extends StatelessWidget {
+  final String brand;
   final bool configured;
   final bool active;
   final bool saving;
   final VoidCallback onManage;
   final VoidCallback onUse;
 
-  const _ChatGPTActions({
+  const _OAuthActions({
+    required this.brand,
     required this.configured,
     required this.active,
     required this.saving,
@@ -647,7 +670,7 @@ class _ChatGPTActions extends StatelessWidget {
       return ElevatedButton.icon(
         onPressed: onManage,
         icon: const Icon(Icons.open_in_browser_rounded, size: 18),
-        label: const Text('Connect personal OpenAI OAuth'),
+        label: Text('Connect personal $brand'),
       );
     }
     return Column(
@@ -656,13 +679,13 @@ class _ChatGPTActions extends StatelessWidget {
         OutlinedButton.icon(
           onPressed: onManage,
           icon: const Icon(Icons.manage_accounts_outlined, size: 18),
-          label: const Text('Manage personal OpenAI OAuth'),
+          label: Text('Manage personal $brand'),
         ),
         if (!active) ...[
           const SizedBox(height: 8),
           ElevatedButton(
             onPressed: saving ? null : onUse,
-            child: const Text('Use personal OpenAI OAuth'),
+            child: Text('Use personal $brand'),
           ),
         ],
       ],
@@ -879,6 +902,12 @@ String _reasonCopy(String reason) => switch (reason) {
         'Included OpenAI OAuth needs the server admin to connect its shared account.',
       'codex_unavailable' =>
         'OpenAI OAuth is configured, but its Codex runtime is unavailable on this server.',
+      'personal_grok_disconnected' =>
+        'The selected personal xAI Grok account needs to be connected.',
+      'shared_grok_disconnected' =>
+        'Included xAI Grok needs the server admin to connect its shared account.',
+      'grok_unavailable' =>
+        'xAI Grok OAuth is unavailable on this server right now.',
       'storage_error' =>
         'Cantinarr could not read the saved AI credentials. Ask the admin to '
             'check the server logs and encryption key.',

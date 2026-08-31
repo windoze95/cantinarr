@@ -21,6 +21,7 @@ const (
 	KeyAnthropicKey    = "anthropic_key"
 	KeyOpenAIKey       = "openai_key"
 	KeyGeminiKey       = "gemini_key"
+	KeyGrokKey         = "grok_key"
 	KeyTraktClientID   = "trakt_client_id"
 
 	KeyAIProvider = "ai_provider"
@@ -29,17 +30,64 @@ const (
 	// Provider/model saves always perform their own validation turn.
 	KeyAIHealthCheckEnabled = "ai_health_check_enabled"
 	KeyAIHealthLastCheckAt  = "ai_health_last_check_at"
+	// KeyOpenAIReasoningEffort pins the reasoning_effort the shared openai
+	// provider sends on every turn. Empty means auto: interactive chat sends
+	// no effort field and validation keeps its adaptive ladder. Plain
+	// setting, deliberately not in AllKeys: AllKeys drives encryption at
+	// rest, the startup EncryptExisting migration, per-key GET booleans, and
+	// DELETE, none of which apply to a non-secret knob.
+	KeyOpenAIReasoningEffort = "openai_reasoning_effort"
+	// KeyLocalOpenAIKey is the OPTIONAL API key for the local
+	// OpenAI-compatible provider. Most local servers ignore auth entirely;
+	// when unset the server sends a fixed placeholder bearer. Stored
+	// encrypted like every credential because some proxies do check it.
+	KeyLocalOpenAIKey = "local_openai_key"
+	// KeyLocalOpenAIBaseURL is the REQUIRED endpoint of the local
+	// OpenAI-compatible provider. Plain setting (not a secret), with
+	// shared-only exposure rules: it may name cluster-internal hosts and
+	// must never reach non-admin payloads.
+	KeyLocalOpenAIBaseURL = "local_openai_base_url"
+	// KeyLocalOpenAIReasoningEffort mirrors KeyOpenAIReasoningEffort for the
+	// local provider.
+	KeyLocalOpenAIReasoningEffort = "local_openai_reasoning_effort"
 )
+
+// AIReasoningEfforts is the closed set of admin-settable shared openai
+// reasoning efforts, lowest first. "none" maps to think-free turns on
+// OpenAI-compatible servers (llama.cpp, vLLM, Ollama translate it), the rest
+// trade latency for deliberation.
+var AIReasoningEfforts = []string{"none", "minimal", "low", "medium", "high"}
+
+// IsValidAIReasoningEffort reports whether value may be stored under
+// KeyOpenAIReasoningEffort. Empty is valid and means auto.
+func IsValidAIReasoningEffort(value string) bool {
+	if value == "" {
+		return true
+	}
+	for _, effort := range AIReasoningEfforts {
+		if value == effort {
+			return true
+		}
+	}
+	return false
+}
 
 // AllKeys lists every credential key the system manages. Values for these
 // keys are encrypted at rest; other settings (e.g. tool toggles) stay plain.
-var AllKeys = []string{KeyTMDBAccessToken, KeyAnthropicKey, KeyOpenAIKey, KeyGeminiKey, KeyTraktClientID}
+var AllKeys = []string{KeyTMDBAccessToken, KeyAnthropicKey, KeyOpenAIKey, KeyGeminiKey, KeyGrokKey, KeyLocalOpenAIKey, KeyTraktClientID}
 
 const (
 	AIProviderAnthropic = "anthropic"
 	AIProviderOpenAI    = "openai"
 	AIProviderGemini    = "gemini"
+	AIProviderGrok      = "grok"
 	AIProviderCodex     = "codex"
+	AIProviderGrokOAuth = "grok_oauth"
+	// AIProviderLocalOpenAI is the first-class entry for self-hosted
+	// OpenAI-compatible servers (llama.cpp, vLLM, Ollama). It reuses the
+	// openai wire protocol with its own endpoint/effort settings, is
+	// shared-profile-only, and treats its API key as optional.
+	AIProviderLocalOpenAI = "local_openai"
 
 	AIAuthTypeAPIKey    = "api_key"
 	AIAuthTypeUserOAuth = "user_oauth"
@@ -67,11 +115,24 @@ type AIModelOption struct {
 
 // AIProviderOption describes a supported AI provider and its default models.
 type AIProviderOption struct {
-	ID            string          `json:"id"`
-	Label         string          `json:"label"`
-	AuthType      string          `json:"auth_type"`
-	CredentialKey string          `json:"credential_key"`
-	Models        []AIModelOption `json:"models"`
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	AuthType      string `json:"auth_type"`
+	CredentialKey string `json:"credential_key"`
+	// SupportsBaseURL marks providers whose shared profile carries an
+	// admin-set endpoint (the local provider only). The app renders endpoint
+	// fields from this flag, so servers without it never show them.
+	SupportsBaseURL bool `json:"supports_base_url,omitempty"`
+	// SupportsReasoningEffort marks providers whose shared profile accepts a
+	// pinned reasoning effort, with the same app-side gating: no flag, no
+	// field.
+	SupportsReasoningEffort bool `json:"supports_reasoning_effort,omitempty"`
+	// SharedOnly marks providers that exist only as the admin-configured
+	// shared profile. They are filtered out of personal settings payloads
+	// and rejected as personal selections: their endpoints can name
+	// cluster-internal hosts, which must never ride a non-admin path.
+	SharedOnly bool            `json:"shared_only,omitempty"`
+	Models     []AIModelOption `json:"models"`
 }
 
 // AIConfig is the active provider/model pair used by the AI assistant.
@@ -95,17 +156,17 @@ var AIProviders = []AIProviderOption{
 		},
 	},
 	{
-		ID:            AIProviderOpenAI,
-		Label:         "OpenAI",
-		AuthType:      AIAuthTypeAPIKey,
-		CredentialKey: KeyOpenAIKey,
+		ID:                      AIProviderOpenAI,
+		Label:                   "OpenAI",
+		AuthType:                AIAuthTypeAPIKey,
+		CredentialKey:           KeyOpenAIKey,
+		SupportsReasoningEffort: true,
 		Models: []AIModelOption{
-			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Flagship OpenAI model"},
-			{ID: "gpt-5.4", Label: "GPT-5.4", Description: "Affordable frontier model"},
-			{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Description: "Lower latency and cost"},
-			{ID: "gpt-5.4-nano", Label: "GPT-5.4 nano", Description: "Smallest current GPT-5.4 model"},
-			{ID: "gpt-4.1", Label: "GPT-4.1", Description: "Stable previous-generation model"},
-			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Fast previous-generation model"},
+			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Frontier model for complex work"},
+			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Balances intelligence and cost"},
+			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Fast model for high-volume work"},
+			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Previous-generation flagship"},
+			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Low-cost older model"},
 		},
 	},
 	{
@@ -120,8 +181,14 @@ var AIProviders = []AIProviderOption{
 			{ID: "gemini-3.1-pro-preview-customtools", Label: "Gemini 3.1 Pro Preview Custom Tools", Description: "Gemini 3.1 Pro endpoint tuned for custom tool-heavy workflows"},
 			{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro", Description: "Advanced reasoning and coding"},
 			{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash", Description: "Low-latency reasoning"},
-			{ID: "gemini-2.5-flash-lite", Label: "Gemini 2.5 Flash-Lite", Description: "Fastest budget Gemini option"},
 		},
+	},
+	{
+		ID:            AIProviderGrok,
+		Label:         "xAI Grok",
+		AuthType:      AIAuthTypeAPIKey,
+		CredentialKey: KeyGrokKey,
+		Models:        grokModels,
 	},
 	{
 		ID:       AIProviderCodex,
@@ -134,6 +201,32 @@ var AIProviders = []AIProviderOption{
 			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Fast GPT-5.6 model for clear, repeatable work"},
 		},
 	},
+	{
+		ID:       AIProviderGrokOAuth,
+		Label:    "xAI Grok (OAuth)",
+		AuthType: AIAuthTypeUserOAuth,
+		Models:   grokModels,
+	},
+	{
+		ID:                      AIProviderLocalOpenAI,
+		Label:                   "Local (OpenAI-compatible)",
+		AuthType:                AIAuthTypeAPIKey,
+		CredentialKey:           KeyLocalOpenAIKey,
+		SupportsBaseURL:         true,
+		SupportsReasoningEffort: true,
+		SharedOnly:              true,
+		// No catalog on purpose: local model IDs are whatever the server
+		// hosts, so the app offers only the custom-model field.
+		Models: []AIModelOption{},
+	},
+}
+
+// grokModels is shared by both xAI providers: the API key and the
+// subscription OAuth paths serve the same OpenAI-compatible model catalog.
+var grokModels = []AIModelOption{
+	{ID: "grok-4.6", Label: "Grok 4.6", Description: "Latest flagship xAI model"},
+	{ID: "grok-4.5", Label: "Grok 4.5", Description: "Previous-generation flagship model"},
+	{ID: "grok-4.3", Label: "Grok 4.3", Description: "Affordable model with a 1M-token context"},
 }
 
 func isSecretKey(key string) bool {
@@ -145,14 +238,49 @@ func isSecretKey(key string) bool {
 	return false
 }
 
-// DefaultAIModel returns the default model for a provider.
+// DefaultAIModel returns the default model for a provider. A known provider
+// with no catalog (local OpenAI-compatible servers host arbitrary model IDs)
+// returns empty: the model must be chosen explicitly.
 func DefaultAIModel(provider string) string {
 	for _, p := range AIProviders {
-		if p.ID == provider && len(p.Models) > 0 {
-			return p.Models[0].ID
+		if p.ID == provider {
+			if len(p.Models) > 0 {
+				return p.Models[0].ID
+			}
+			return ""
 		}
 	}
 	return AIProviders[0].Models[0].ID
+}
+
+// IsSharedOnlyAIProvider reports whether provider exists only as the
+// admin-configured shared profile (never a personal selection).
+func IsSharedOnlyAIProvider(provider string) bool {
+	for _, p := range AIProviders {
+		if p.ID == provider {
+			return p.SharedOnly
+		}
+	}
+	return false
+}
+
+// AIProviderKeyOptional reports whether provider works without a stored API
+// key. Local OpenAI-compatible servers usually ignore auth; the ai package
+// substitutes a fixed placeholder bearer when the key is unset.
+func AIProviderKeyOptional(provider string) bool {
+	return provider == AIProviderLocalOpenAI
+}
+
+// PersonalAIProviders returns the provider catalog with shared-only entries
+// removed — the list personal (non-admin) settings payloads may carry.
+func PersonalAIProviders() []AIProviderOption {
+	out := make([]AIProviderOption, 0, len(AIProviders))
+	for _, p := range AIProviders {
+		if !p.SharedOnly {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // AIKeyCredentialKey returns the secret setting key for a provider API key.
@@ -176,6 +304,17 @@ func IsValidAIProvider(provider string) bool {
 	return false
 }
 
+// IsOAuthAIProvider reports whether provider authenticates with a linked
+// user account instead of a stored API key.
+func IsOAuthAIProvider(provider string) bool {
+	for _, p := range AIProviders {
+		if p.ID == provider {
+			return p.AuthType == AIAuthTypeUserOAuth
+		}
+	}
+	return false
+}
+
 func inferAIProvider(model string) string {
 	switch {
 	case model == "":
@@ -186,6 +325,8 @@ func inferAIProvider(model string) string {
 		return AIProviderOpenAI
 	case hasAnyPrefix(model, "gemini-"):
 		return AIProviderGemini
+	case hasAnyPrefix(model, "grok-"):
+		return AIProviderGrok
 	default:
 		return ""
 	}
@@ -215,6 +356,10 @@ type Registry struct {
 	// fallback contract as the TMDB token above.
 	defaultTraktClientID string
 
+	// tmdbBaseURL overrides the TMDB API root for lazily built clients.
+	// Test-only; empty in production.
+	tmdbBaseURL string
+
 	mu          sync.RWMutex
 	cachedTMDB  *tmdb.Client
 	cachedTrakt *trakt.Client
@@ -237,6 +382,12 @@ func WithDefaultTMDBToken(token string) Option {
 // so registries built in tests stay Trakt-less unless a test opts in.
 func WithDefaultTraktClientID(clientID string) Option {
 	return func(r *Registry) { r.defaultTraktClientID = clientID }
+}
+
+// WithTMDBBaseURL points lazily built TMDB clients at an alternate API root.
+// Test-only: production always talks to api.themoviedb.org.
+func WithTMDBBaseURL(baseURL string) Option {
+	return func(r *Registry) { r.tmdbBaseURL = baseURL }
 }
 
 // NewRegistry creates a new credentials registry.
@@ -504,12 +655,16 @@ func (r *Registry) Invalidate() {
 func (r *Registry) load() {
 	r.loaded = true
 
+	newTMDB := tmdb.NewClient
+	if r.tmdbBaseURL != "" {
+		newTMDB = func(token string) *tmdb.Client { return tmdb.NewClientWithBaseURL(token, r.tmdbBaseURL) }
+	}
 	if token := r.getSettingLocked(KeyTMDBAccessToken); token != "" {
-		r.cachedTMDB = tmdb.NewClient(token)
+		r.cachedTMDB = newTMDB(token)
 	} else if r.defaultTMDBToken != "" {
 		// No admin token stored (or it failed to decrypt): run on the built-in
 		// public token so discovery works without any TMDB signup.
-		r.cachedTMDB = tmdb.NewClient(r.defaultTMDBToken)
+		r.cachedTMDB = newTMDB(r.defaultTMDBToken)
 	}
 	if clientID := r.getSettingLocked(KeyTraktClientID); clientID != "" {
 		r.cachedTrakt = trakt.NewClient(clientID)

@@ -539,15 +539,15 @@ type probeContent struct {
 	onBook func()
 }
 
-func (p *probeContent) NotifyNewMovie(title string, tmdbID int)         {}
-func (p *probeContent) NotifyNewEpisode(seriesTitle string, tmdbID int) {}
+func (p *probeContent) NotifyNewMovie(title string, tmdbID int, instanceID string)         {}
+func (p *probeContent) NotifyNewEpisode(seriesTitle string, tmdbID int, instanceID string) {}
 func (p *probeContent) NotifyNewBook(title, foreignID, instanceID, format string) {
 	if p.onBook != nil {
 		p.onBook()
 	}
 }
-func (p *probeContent) NotifyUpgradedMovie(title string, tmdbID int)                   {}
-func (p *probeContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int)           {}
+func (p *probeContent) NotifyUpgradedMovie(title string, tmdbID int, instanceID string)                   {}
+func (p *probeContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int, instanceID string)           {}
 func (p *probeContent) NotifyUpgradedBook(title, foreignID, instanceID, format string) {}
 
 func joinComma(parts []string) string {

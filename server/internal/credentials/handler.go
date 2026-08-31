@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ const (
 	maxCredentialSettingsBody = 128 << 10
 	maxAIModelLength          = 256
 	maxAIKeyLength            = 32 << 10
+	maxAIBaseURLLength        = 2048
 )
 
 // Handler provides admin-only REST endpoints for credential management.
@@ -78,8 +80,17 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	config := h.registry.GetAIConfig()
 	status["ai"] = map[string]any{
-		"config":    config,
-		"providers": AIProviders,
+		"config": config,
+		// Flat sibling of config on purpose: AIConfig also serializes into
+		// non-admin payloads, and a LAN endpoint belongs only in this
+		// admin-gated response.
+		// Flat siblings of config on purpose: AIConfig also serializes into
+		// non-admin payloads, and endpoint configuration belongs only in this
+		// admin-gated response.
+		"openai_reasoning_effort":       strings.TrimSpace(h.registry.GetSetting(KeyOpenAIReasoningEffort)),
+		"local_openai_base_url":         strings.TrimSpace(h.registry.GetSetting(KeyLocalOpenAIBaseURL)),
+		"local_openai_reasoning_effort": strings.TrimSpace(h.registry.GetSetting(KeyLocalOpenAIReasoningEffort)),
+		"providers":                     AIProviders,
 		"health_check": map[string]any{
 			"enabled":        h.registry.AIHealthCheckEnabled(),
 			"interval_hours": int(AIHealthCheckInterval / time.Hour),
@@ -106,7 +117,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var body map[string]string
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCredentialSettingsBody)).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	// Keep the validated snapshot and its transaction indivisible from another
@@ -123,10 +134,13 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	valid[KeyAIProvider] = true
 	valid[KeyAIModel] = true
 	valid[KeyAIHealthCheckEnabled] = true
+	valid[KeyOpenAIReasoningEffort] = true
+	valid[KeyLocalOpenAIBaseURL] = true
+	valid[KeyLocalOpenAIReasoningEffort] = true
 
 	for key := range body {
 		if !valid[key] {
-			http.Error(w, `{"error":"unknown credential key: `+key+`"}`, http.StatusBadRequest)
+			writeJSONError(w, "unknown credential key: "+key, http.StatusBadRequest)
 			return
 		}
 		if key == KeyAIProvider || key == KeyAIModel || key == KeyAIHealthCheckEnabled {
@@ -145,7 +159,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			provider = current.Provider
 		}
 		if !IsValidAIProvider(provider) {
-			http.Error(w, `{"error":"unknown AI provider"}`, http.StatusBadRequest)
+			writeJSONError(w, "unknown AI provider", http.StatusBadRequest)
 			return
 		}
 		if !modelSet || model == "" {
@@ -156,7 +170,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(model) > maxAIModelLength {
-			http.Error(w, `{"error":"AI model is too long"}`, http.StatusBadRequest)
+			writeJSONError(w, "AI model is too long", http.StatusBadRequest)
 			return
 		}
 		candidate = AIConfig{Provider: provider, Model: model}
@@ -167,10 +181,38 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if healthSet {
 		parsed, err := strconv.ParseBool(strings.TrimSpace(healthValue))
 		if err != nil {
-			http.Error(w, `{"error":"ai_health_check_enabled must be true or false"}`, http.StatusBadRequest)
+			writeJSONError(w, "ai_health_check_enabled must be true or false", http.StatusBadRequest)
 			return
 		}
 		healthEnabled = parsed
+	}
+
+	// The effective endpoint settings for this save: the body's value when a
+	// key is present (empty string is a deliberate clear), else the stored
+	// value. Candidate profiles must always carry the effective values so a
+	// key rotation with no endpoint fields still validates against the
+	// configured endpoint, not the provider default. The pairs are
+	// provider-scoped: hosted openai and the local provider never share a
+	// slot.
+	openaiEndpoint, ok := h.effectiveEndpointSettings(w, body, "", KeyOpenAIReasoningEffort)
+	if !ok {
+		return
+	}
+	localEndpoint, ok := h.effectiveEndpointSettings(w, body, KeyLocalOpenAIBaseURL, KeyLocalOpenAIReasoningEffort)
+	if !ok {
+		return
+	}
+	// The local provider is unusable without an endpoint and has no model
+	// catalog to fall back on: selecting it demands both, explicitly.
+	if candidate.Provider == AIProviderLocalOpenAI {
+		if localEndpoint.baseURL == "" {
+			writeJSONError(w, "local_openai_base_url is required for the local provider", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(candidate.Model) == "" {
+			writeJSONError(w, "a model ID is required for the local provider", http.StatusBadRequest)
+			return
+		}
 	}
 
 	profiles := make(map[string]AIProfile)
@@ -180,19 +222,45 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		if value := strings.TrimSpace(body[option.CredentialKey]); value != "" {
 			if len(value) > maxAIKeyLength {
-				http.Error(w, `{"error":"AI credential is too long"}`, http.StatusBadRequest)
+				writeJSONError(w, "AI credential is too long", http.StatusBadRequest)
 				return
+			}
+			if option.ID == AIProviderLocalOpenAI && option.ID != candidate.Provider {
+				// The optional local key cannot be probed without the local
+				// endpoint and an explicit model, which only a local
+				// candidate carries. It persists now and is proven the
+				// moment the local provider is selected.
+				body[option.CredentialKey] = value
+				continue
 			}
 			config := AIConfig{Provider: option.ID, Model: DefaultAIModel(option.ID)}
 			if option.ID == candidate.Provider {
 				config.Model = candidate.Model
 			}
-			profiles[option.ID] = AIProfile{Config: config, APIKey: value, CredentialPresent: true}
+			profile := AIProfile{Config: config, APIKey: value, CredentialPresent: true}
+			switch option.ID {
+			case AIProviderOpenAI:
+				profile.ReasoningEffort = openaiEndpoint.effort
+			case AIProviderLocalOpenAI:
+				profile.BaseURL = localEndpoint.baseURL
+				profile.ReasoningEffort = localEndpoint.effort
+			}
+			profiles[option.ID] = profile
 			body[option.CredentialKey] = value
 		}
 	}
 	mustTestSelected := providerSet || modelSet || (healthSet && healthEnabled && !h.registry.AIHealthCheckEnabled())
 	if key := AIKeyCredentialKey(candidate.Provider); key != "" && strings.TrimSpace(body[key]) != "" {
+		mustTestSelected = true
+	}
+	// An endpoint change (or clear) alone must re-prove the selected
+	// provider against the new configuration. With another provider
+	// selected the values persist untested; selecting the provider later
+	// forces the probe via providerSet.
+	if openaiEndpoint.effortSet && candidate.Provider == AIProviderOpenAI {
+		mustTestSelected = true
+	}
+	if (localEndpoint.baseURLSet || localEndpoint.effortSet) && candidate.Provider == AIProviderLocalOpenAI {
 		mustTestSelected = true
 	}
 	if mustTestSelected {
@@ -201,15 +269,22 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			profile = AIProfile{Config: candidate}
 			if key := AIKeyCredentialKey(candidate.Provider); key != "" {
 				profile.APIKey = h.registry.GetCredential(key)
-				profile.CredentialPresent = strings.TrimSpace(profile.APIKey) != ""
+				profile.CredentialPresent = strings.TrimSpace(profile.APIKey) != "" || AIProviderKeyOptional(candidate.Provider)
 			} else {
-				profile.CredentialPresent = candidate.Provider == AIProviderCodex
+				profile.CredentialPresent = IsOAuthAIProvider(candidate.Provider)
+			}
+			switch candidate.Provider {
+			case AIProviderOpenAI:
+				profile.ReasoningEffort = openaiEndpoint.effort
+			case AIProviderLocalOpenAI:
+				profile.BaseURL = localEndpoint.baseURL
+				profile.ReasoningEffort = localEndpoint.effort
 			}
 			profiles[candidate.Provider] = profile
 		}
 	}
 	if len(profiles) > 0 && h.validateSharedAI == nil {
-		http.Error(w, `{"error":"AI settings validation is unavailable"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, "AI settings validation is unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	for _, profile := range profiles {
@@ -223,8 +298,13 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.applyUpdate(body, candidate, providerSet || modelSet, healthEnabled, healthSet); err != nil {
-		http.Error(w, `{"error":"failed to save settings"}`, http.StatusInternalServerError)
+	plainWrites := []plainSettingWrite{
+		{key: KeyOpenAIReasoningEffort, value: openaiEndpoint.effort, set: openaiEndpoint.effortSet},
+		{key: KeyLocalOpenAIBaseURL, value: localEndpoint.baseURL, set: localEndpoint.baseURLSet},
+		{key: KeyLocalOpenAIReasoningEffort, value: localEndpoint.effort, set: localEndpoint.effortSet},
+	}
+	if err := h.applyUpdate(body, candidate, providerSet || modelSet, healthEnabled, healthSet, plainWrites); err != nil {
+		writeJSONError(w, "failed to save settings", http.StatusInternalServerError)
 		return
 	}
 
@@ -240,22 +320,33 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) reauthorizeSharedAIWrite(w http.ResponseWriter, r *http.Request) bool {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return false
 	}
 	if h.authorizePermission == nil {
-		http.Error(w, `{"error":"credential authorization is temporarily unavailable"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, "credential authorization is temporarily unavailable", http.StatusServiceUnavailable)
 		return false
 	}
 	if err := h.authorizePermission(r.Context(), claims.UserID, claims.DeviceID, auth.PermissionCredentialsManage); err != nil {
 		if errors.Is(err, auth.ErrAuthUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			http.Error(w, `{"error":"credential authorization is temporarily unavailable"}`, http.StatusServiceUnavailable)
+			writeJSONError(w, "credential authorization is temporarily unavailable", http.StatusServiceUnavailable)
 		} else {
-			http.Error(w, `{"error":"permission denied"}`, http.StatusForbidden)
+			writeJSONError(w, "permission denied", http.StatusForbidden)
 		}
 		return false
 	}
 	return true
+}
+
+// writeJSONError sends {"error": message} with a JSON content type. http.Error
+// would label the body text/plain, which the app's client refuses to decode —
+// every failure on this handler then rendered as a generic "Failed to save
+// settings." instead of the real reason (an expired key sat behind exactly
+// that copy in the #497 report).
+func writeJSONError(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 func writeCredentialValidationError(w http.ResponseWriter, err error) {
@@ -264,12 +355,7 @@ func writeCredentialValidationError(w http.ResponseWriter, err error) {
 	if errors.As(err, &safe) && strings.TrimSpace(safe.SafeUserMessage()) != "" {
 		message = safe.SafeUserMessage()
 	}
-	payload, marshalErr := json.Marshal(map[string]string{"error": message})
-	if marshalErr != nil {
-		http.Error(w, `{"error":"AI settings validation failed. Nothing was saved."}`, http.StatusUnprocessableEntity)
-		return
-	}
-	http.Error(w, string(payload), http.StatusUnprocessableEntity)
+	writeJSONError(w, message, http.StatusUnprocessableEntity)
 }
 
 func credentialValidationDiagnostic(err error) string {
@@ -283,7 +369,59 @@ func credentialValidationDiagnostic(err error) string {
 	return secrets.RedactError(err).Error()
 }
 
-func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet bool, healthEnabled, healthSet bool) error {
+// endpointSettings is the effective provider-scoped base-URL/effort pair for
+// one save, with per-field presence so an untouched field never rewrites the
+// stored row.
+type endpointSettings struct {
+	baseURL    string
+	baseURLSet bool
+	effort     string
+	effortSet  bool
+}
+
+// effectiveEndpointSettings resolves one provider's endpoint pair from the
+// request body over the stored values, writing the HTTP error itself and
+// returning ok=false when a supplied value is invalid.
+func (h *Handler) effectiveEndpointSettings(w http.ResponseWriter, body map[string]string, baseURLKey, effortKey string) (endpointSettings, bool) {
+	settings := endpointSettings{effort: strings.TrimSpace(h.registry.GetSetting(effortKey))}
+	if baseURLKey != "" {
+		settings.baseURL = strings.TrimSpace(h.registry.GetSetting(baseURLKey))
+	}
+	if value, set := body[baseURLKey]; baseURLKey != "" && set {
+		settings.baseURLSet = true
+		settings.baseURL = strings.TrimSpace(value)
+		if len(settings.baseURL) > maxAIBaseURLLength {
+			writeJSONError(w, baseURLKey+" is too long", http.StatusBadRequest)
+			return settings, false
+		}
+		if settings.baseURL != "" {
+			parsed, err := url.Parse(settings.baseURL)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+				writeJSONError(w, baseURLKey+" must be an absolute http or https URL", http.StatusBadRequest)
+				return settings, false
+			}
+		}
+	}
+	if value, set := body[effortKey]; set {
+		settings.effortSet = true
+		settings.effort = strings.ToLower(strings.TrimSpace(value))
+		if !IsValidAIReasoningEffort(settings.effort) {
+			writeJSONError(w, effortKey+" must be one of none, minimal, low, medium, high, or empty for auto", http.StatusBadRequest)
+			return settings, false
+		}
+	}
+	return settings, true
+}
+
+// plainSettingWrite is one plaintext settings row to persist in applyUpdate:
+// empty value deletes the row (deliberate clear), set=false skips it.
+type plainSettingWrite struct {
+	key   string
+	value string
+	set   bool
+}
+
+func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet bool, healthEnabled, healthSet bool, plain []plainSettingWrite) error {
 	tx, err := h.registry.db.Begin()
 	if err != nil {
 		return err
@@ -316,6 +454,21 @@ func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet
 			return err
 		}
 	}
+	for _, write := range plain {
+		if !write.set {
+			continue
+		}
+		// Stored plaintext on purpose: endpoint configuration is not a
+		// secret and stays out of the AllKeys encryption loop above. An
+		// empty value is a deliberate clear.
+		if write.value == "" {
+			if _, err := tx.Exec("DELETE FROM settings WHERE key = ?", write.key); err != nil {
+				return err
+			}
+		} else if _, err := tx.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", write.key, write.value); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -334,12 +487,12 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !valid {
-		http.Error(w, `{"error":"unknown credential key"}`, http.StatusBadRequest)
+		writeJSONError(w, "unknown credential key", http.StatusBadRequest)
 		return
 	}
 
 	if err := h.registry.DeleteCredential(key); err != nil {
-		http.Error(w, `{"error":"failed to delete credential"}`, http.StatusInternalServerError)
+		writeJSONError(w, "failed to delete credential", http.StatusInternalServerError)
 		return
 	}
 
