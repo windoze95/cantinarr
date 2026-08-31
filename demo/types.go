@@ -37,6 +37,47 @@ const (
 	serviceQbittorrent  = "qbittorrent"
 	serviceTransmission = "transmission"
 	serviceTautulli     = "tautulli"
+
+	// Media servers. Cantinarr manages user ACCESS on these, never library
+	// routing: they follow the Chaptarr rule (never a global default, granted
+	// per user, invisible to arr routing). Jellyfin and Emby hold accounts
+	// Cantinarr creates; Plex holds shares Cantinarr sends.
+	serviceJellyfin = "jellyfin"
+	serviceEmby     = "emby"
+	servicePlex     = "plex"
+)
+
+// mediaServerTypes are the service types that are media servers, in the
+// server's stable order. Mirrors instance.MediaServerTypes().
+func mediaServerTypes() []string {
+	return []string{serviceJellyfin, serviceEmby, servicePlex}
+}
+
+// isMediaServerType reports whether serviceType is a media server.
+func isMediaServerType(serviceType string) bool {
+	switch serviceType {
+	case serviceJellyfin, serviceEmby, servicePlex:
+		return true
+	}
+	return false
+}
+
+// mediaServerKindFor maps a media-server type to the access kind the app
+// renders: Jellyfin/Emby hand out accounts, Plex hands out invites.
+func mediaServerKindFor(serviceType string) string {
+	if serviceType == servicePlex {
+		return mediaServerKindInvite
+	}
+	return mediaServerKindAccount
+}
+
+const (
+	mediaServerKindAccount = "account"
+	mediaServerKindInvite  = "invite"
+
+	// plexPublicAddress is where anyone signs in to any Plex server, so it is
+	// the sign-in address a Plex instance shows unless an admin typed another.
+	plexPublicAddress = "https://app.plex.tv"
 )
 
 // ─── Request statuses ───────────────────────────────────

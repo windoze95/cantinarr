@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -45,7 +44,8 @@ func registerUsersAdmin(r chi.Router) {
 	admin.Post("/admin/users/{userID}/test-push", uaTestPushHandler)
 	admin.Get("/admin/users/{userID}/default-instances", uaDefaultInstancesGetHandler)
 	admin.Put("/admin/users/{userID}/default-instances", uaDefaultInstancesPutHandler)
-	admin.Post("/admin/users/{userID}/plex-invite", uaPlexInviteHandler)
+	admin.Get("/admin/users/{userID}/instance-grants", uaInstanceGrantsGetHandler)
+	admin.Put("/admin/users/{userID}/instance-grants", uaInstanceGrantsPutHandler)
 }
 
 // uaUserID parses the {userID} path param; ok is false for non-numeric or
@@ -73,16 +73,28 @@ func uaConnectTokenHandler(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Name == "" || req.ServerURL == "" {
-		writeErr(w, http.StatusBadRequest, "name and server_url required")
+	if req.Name == "" {
+		writeErr(w, http.StatusBadRequest, "name required")
 		return
 	}
-	// The demo always advertises DEMO_SERVER_URL in the link; the request's
-	// server_url is validated but not echoed (contract.md, deliberate).
+	// A saved external address is the address every link uses, so the app no
+	// longer has to supply one. Without it, the app's own address is all
+	// there is and it stays required.
+	_, originSource := connectLinkOrigin()
+	if originSource == "app" && req.ServerURL == "" {
+		writeErr(w, http.StatusBadRequest, "server_url required")
+		return
+	}
+	// The demo advertises its own configured address in the link; the
+	// request's server_url is validated but not echoed (contract.md).
 	link, expiresAt := mintConnectToken(req.Name)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"link":       link,
 		"expires_at": expiresAt,
+		// Which address the link was built from. "app" makes the invite
+		// dialog warn that the link carries whatever address this device
+		// connects with, which an invitee off the LAN cannot reach.
+		"origin_source": originSource,
 	})
 }
 
@@ -364,46 +376,74 @@ func uaDefaultInstancesPutHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, uaDefaultInstancesMap(id))
 }
 
-// ─── Plex invite ────────────────────────────────────────
+// ─── Per-user instance grants ───────────────────────────
 
-// uaPlexInviteHandler — POST /api/admin/users/{userID}/plex-invite. One-tap
-// Plex invite for the user's shared email. Both success statuses stamp
-// plex_invited_at; only a fresh "invited" pushes the plex_invite_sent event
-// to that user.
-func uaPlexInviteHandler(w http.ResponseWriter, r *http.Request) {
+// uaGrantableServiceTypes are the types a grant can name. Unlike a default
+// pin, a grant is ADDITIVE: it puts an instance alongside the user's default
+// rather than moving them onto it, which is what lets a requester choose a
+// library per request.
+var uaGrantableServiceTypes = func() map[string]bool {
+	out := map[string]bool{}
+	for _, st := range grantableServiceTypes() {
+		out[st] = true
+	}
+	return out
+}()
+
+// uaInstanceGrantsGetHandler — GET .../instance-grants. A
+// {service_type: [instance_id, ...]} object, {} when none. The app hard-casts
+// the body to a map, so it is never null and never a list.
+func uaInstanceGrantsGetHandler(w http.ResponseWriter, r *http.Request) {
 	id, ok := uaUserID(r)
 	if !ok {
-		writeErr(w, http.StatusBadRequest, "invalid user ID")
+		writeErr(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
 	u := userByID(id)
 	if u == nil {
-		// Matches the real handler: a failed user load lands in the default
-		// branch, not a 404.
-		writeErr(w, http.StatusBadGateway, "Plex invite failed")
+		// An unknown user holds no grants — the same answer as none stored.
+		writeJSON(w, http.StatusOK, map[string][]string{})
 		return
 	}
-	if u.PlexEmail == "" {
-		writeErr(w, http.StatusConflict, "user has not shared a Plex email")
+	writeJSON(w, http.StatusOK, userInstanceGrants(u))
+}
+
+// uaInstanceGrantsPutHandler — PUT .../instance-grants. Replaces the grants
+// for exactly the service types the body names and leaves every other type
+// alone; null or [] for a key clears it. Everything is validated before
+// anything applies, so a rejected body changes nothing.
+func uaInstanceGrantsPutHandler(w http.ResponseWriter, r *http.Request) {
+	id, ok := uaUserID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	if !plexConfigured() {
-		writeErr(w, http.StatusConflict, "Plex invites are not configured")
+	var req map[string][]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	status := "invited"
-	if u.PlexInvitedAt != nil {
-		// Re-inviting an already-invited account: plex.tv reports the share
-		// already exists. Still success, still stamps plex_invited_at.
-		status = "already_shared"
+	for key, ids := range req {
+		if !uaGrantableServiceTypes[key] {
+			writeErr(w, http.StatusBadRequest, "unknown service_type: "+key)
+			return
+		}
+		for _, instID := range ids {
+			inst := instanceByID(instID)
+			if inst == nil {
+				writeErr(w, http.StatusBadRequest, "instance not found: "+instID)
+				return
+			}
+			if inst.ServiceType != key {
+				writeErr(w, http.StatusBadRequest,
+					fmt.Sprintf("instance %s is %q, not %q", instID, inst.ServiceType, key))
+				return
+			}
+		}
 	}
-	now := time.Now()
-	withUser(id, func(u *DemoUser) { u.PlexInvitedAt = &now })
-	if status == "invited" {
-		wsToUser(id, evtPlexInviteSent, map[string]any{})
+	if !setUserInstanceGrants(id, req) {
+		writeErr(w, http.StatusNotFound, "user not found")
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status": status,
-		"email":  u.PlexEmail,
-	})
+	writeJSON(w, http.StatusOK, userInstanceGrants(userByID(id)))
 }

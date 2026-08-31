@@ -4,9 +4,9 @@
 // JSON shapes mirror app-arr.md §6 / app-requests-books.md §8 exactly:
 // camelCase fields, integer counters as JSON ints, arrays never null, and
 // ebook/audiobook as SEPARATE book records sharing foreignBookId. Book covers
-// are generated at runtime as deterministic PNG placeholders (public-domain
-// safe) and served under MediaCover/Books/{bookId}/... with an image
-// content type.
+// and author portraits are generated at runtime as deterministic PNG
+// placeholders (public-domain safe) and served under MediaCover/Books/{bookId}/...
+// and MediaCover/{authorId}/... with an image content type.
 package main
 
 import (
@@ -85,6 +85,8 @@ func handleChaptarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInsta
 		chapHandleRootFolders(w)
 	case strings.HasPrefix(p, "MediaCover/Books/") && method == http.MethodGet:
 		chapHandleMediaCover(w, strings.TrimPrefix(p, "MediaCover/Books/"))
+	case strings.HasPrefix(p, "MediaCover/") && method == http.MethodGet:
+		chapHandleAuthorMediaCover(w, strings.TrimPrefix(p, "MediaCover/"))
 	default:
 		writeErr(w, http.StatusNotFound, "not found")
 	}
@@ -111,6 +113,12 @@ func chapNonAdminAllowed(method, rest string) bool {
 		}
 	}
 	if tail, found := strings.CutPrefix(p, "MediaCover/Books/"); found {
+		parts := strings.SplitN(tail, "/", 2)
+		return len(parts) == 2 && chapPositiveInt(parts[0]) && parts[1] != ""
+	}
+	// Author portraits: Chaptarr files them at MediaCover/{authorId}/<file>,
+	// with no Authors/ subtree, so the id sits directly under MediaCover.
+	if tail, found := strings.CutPrefix(p, "MediaCover/"); found {
 		parts := strings.SplitN(tail, "/", 2)
 		return len(parts) == 2 && chapPositiveInt(parts[0]) && parts[1] != ""
 	}
@@ -180,7 +188,10 @@ func chapLockedAuthorJSON(a *chapAuthorRec) map[string]any {
 			"sizeOnDisk":         size,
 			"percentOfBooks":     percent,
 		},
-		"images": []any{},
+		"images": []any{map[string]any{
+			"coverType": "poster",
+			"url":       chapAuthorImagePath(a.ID),
+		}},
 		"genres": a.Genres,
 	}
 }
@@ -241,6 +252,7 @@ func chapLockedBookJSON(bookID int, asLibrary bool) map[string]any {
 		"releaseDate":   meta.ReleaseDate + "T00:00:00Z",
 		"monitored":     monitored,
 		"mediaType":     format,
+		"seriesTitle":   meta.SeriesTitle,
 		"anyEditionOk":  true,
 		"pageCount":     meta.PageCount,
 		"author": map[string]any{
@@ -515,9 +527,7 @@ func chapHandleBookAdd(w http.ResponseWriter, r *http.Request) {
 	if st := chapRecStates[bf.BookID]; st != nil {
 		st.InLibrary = true
 	}
-	if a := chapAuthorsByID[meta.AuthorID]; a != nil {
-		a.InLibrary = true
-	}
+	chapLockedJoinLibrary(chapAuthorsByID[meta.AuthorID])
 	if body.AddOptions.SearchForNewBook && !bf.Downloaded && !chapLockedQueueHas(bf.BookID) {
 		chapLockedEnqueue(bf.BookID)
 		changed = true
@@ -778,9 +788,7 @@ func chapHandleReleaseGrab(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 					meta := chapMetaByFID[b.ForeignID]
-					if a := chapAuthorsByID[meta.AuthorID]; a != nil {
-						a.InLibrary = true
-					}
+					chapLockedJoinLibrary(chapAuthorsByID[meta.AuthorID])
 				}
 				chapMu.Unlock()
 			}
@@ -933,18 +941,36 @@ func chapPageBounds(r *http.Request, total int) (page, size, start, end int) {
 
 // ─── MediaCover placeholder covers ──────────────────────
 
+// chapAuthorCoverSeed lifts author ids clear of the book-record id space so a
+// generated portrait never comes out identical to the cover of the book record
+// that happens to share its number.
+const chapAuthorCoverSeed = 90000
+
+// chapHandleMediaCover serves a book cover: MediaCover/Books/{bookId}/<file>.
 func chapHandleMediaCover(w http.ResponseWriter, tail string) {
+	chapWriteMediaCover(w, tail, 0)
+}
+
+// chapHandleAuthorMediaCover serves an author portrait:
+// MediaCover/{authorId}/<file>. Chaptarr has no Authors/ subtree — the author
+// id sits directly under MediaCover — so this path must not be confused with a
+// book cover's.
+func chapHandleAuthorMediaCover(w http.ResponseWriter, tail string) {
+	chapWriteMediaCover(w, tail, chapAuthorCoverSeed)
+}
+
+func chapWriteMediaCover(w http.ResponseWriter, tail string, seedOffset int) {
 	parts := strings.SplitN(tail, "/", 2)
 	if len(parts) != 2 || parts[1] == "" {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-	bookID, err := strconv.Atoi(parts[0])
-	if err != nil || bookID <= 0 {
+	id, err := strconv.Atoi(parts[0])
+	if err != nil || id <= 0 {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-	data := chapCoverPNG(bookID)
+	data := chapCoverPNG(seedOffset + id)
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))

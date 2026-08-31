@@ -163,8 +163,8 @@ func authMeHandler(w http.ResponseWriter, r *http.Request) {
 		"plex_email":       u.PlexEmail,
 		"plex_invited_at":  nil,
 	}
-	if u.PlexInvitedAt != nil {
-		out["plex_invited_at"] = *u.PlexInvitedAt
+	if at := userPlexInvitedAt(u); at != nil {
+		out["plex_invited_at"] = *at
 	}
 	writeJSON(w, http.StatusOK, out)
 }

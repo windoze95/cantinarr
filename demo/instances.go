@@ -30,9 +30,12 @@ var instMgmtServiceTypes = map[string]bool{
 	serviceRadarr: true, serviceSonarr: true, serviceChaptarr: true,
 	serviceSabnzbd: true, serviceQbittorrent: true, serviceNzbget: true,
 	serviceTransmission: true, serviceTautulli: true,
+	serviceJellyfin: true, serviceEmby: true, servicePlex: true,
 }
 
-const instMgmtEnumError = "service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"
+const instMgmtEnumError = "service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin', 'emby', 'plex'"
+
+const instMgmtMediaServerEnumError = "service_type must be a media server type ('jellyfin', 'emby', 'plex')"
 
 // ─── Domain-local overlay state ─────────────────────────
 
@@ -49,6 +52,7 @@ func instMgmtResolve(id string) *DemoInstance {
 	withInstance(id, func(i *DemoInstance) {
 		c := *i
 		c.MediaPathMappings = append([]map[string]string{}, i.MediaPathMappings...)
+		c.MediaServerConfig = i.MediaServerConfig.clone()
 		cp = &c
 	})
 	return cp
@@ -87,7 +91,7 @@ func instMgmtJSON(inst *DemoInstance) map[string]any {
 			"cantinarr_path": m["cantinarr_path"],
 		})
 	}
-	return map[string]any{
+	out := map[string]any{
 		"id":                  inst.ID,
 		"service_type":        inst.ServiceType,
 		"name":                inst.Name,
@@ -98,6 +102,23 @@ func instMgmtJSON(inst *DemoInstance) map[string]any {
 		"media_downloads":     inst.MediaDownloads,
 		"media_path_mappings": mappings,
 	}
+	// media_server_config is present only for media servers, and only in its
+	// public shape — the server-managed link identity (client id, the Plex
+	// owner) is never served.
+	if cfg := inst.MediaServerConfig; cfg != nil && isMediaServerType(inst.ServiceType) {
+		msc := map[string]any{
+			"public_address": cfg.PublicAddress,
+			"library_ids":    append([]string{}, cfg.LibraryIDs...),
+		}
+		if cfg.MachineIdentifier != "" {
+			msc["machine_identifier"] = cfg.MachineIdentifier
+		}
+		if cfg.AutoApprove {
+			msc["auto_approve"] = true
+		}
+		out["media_server_config"] = msc
+	}
+	return out
 }
 
 // ─── Request body shapes ────────────────────────────────
@@ -118,10 +139,94 @@ type instMgmtBody struct {
 	IsDefault         bool               `json:"is_default"`
 	SortOrder         *int               `json:"sort_order"`
 	MediaPathMappings *[]instMgmtMapping `json:"media_path_mappings"` // nil = key omitted
+	// MediaServerConfig is nil when the key is omitted (keep stored),
+	// non-nil when present (replace).
+	MediaServerConfig *instMgmtMediaServerBody `json:"media_server_config"`
+	// PlexLinkPin references a PIN link this admin already approved. The
+	// token it yields is held server-side and never travels to the app.
+	PlexLinkPin int64 `json:"plex_link_pin"`
+}
+
+// instMgmtMediaServerBody is the media-server config as an admin sends it.
+// The server-managed fields (client id, Plex owner) are deliberately absent:
+// they are recorded by the PIN link, never taken from a request.
+type instMgmtMediaServerBody struct {
+	PublicAddress     string   `json:"public_address"`
+	LibraryIDs        []string `json:"library_ids"`
+	MachineIdentifier string   `json:"machine_identifier"`
+	AutoApprove       bool     `json:"auto_approve"`
 }
 
 func instMgmtIsArrType(st string) bool {
 	return st == serviceRadarr || st == serviceSonarr || st == serviceChaptarr
+}
+
+// instMgmtValidateMediaServerConfig turns the request shape into the stored
+// one, or returns the message to answer 400 with. A Plex instance must name
+// the server it shares — without a machine identifier there is nothing to
+// invite anyone to.
+func instMgmtValidateMediaServerConfig(serviceType string, body *instMgmtMediaServerBody) (*DemoMediaServerConfig, string) {
+	if body == nil {
+		return nil, ""
+	}
+	if !isMediaServerType(serviceType) {
+		return nil, "media_server_config is supported only for media servers ('jellyfin', 'emby', 'plex')"
+	}
+	address := strings.TrimRight(strings.TrimSpace(body.PublicAddress), "/")
+	if address != "" {
+		pu, err := url.Parse(address)
+		if err != nil || !pu.IsAbs() || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+			return nil, "invalid media_server_config: public_address must be an absolute http or https URL"
+		}
+		if pu.User != nil || pu.RawQuery != "" || pu.Fragment != "" {
+			return nil, "invalid media_server_config: public_address must not contain credentials, a query string, or a fragment"
+		}
+	}
+	ids := []string{}
+	for _, id := range body.LibraryIDs {
+		if len(id) > 128 {
+			return nil, "invalid media_server_config: library id is too long"
+		}
+		if strings.ContainsAny(id, "/\\ ") {
+			return nil, "invalid media_server_config: library id contains invalid characters"
+		}
+		ids = append(ids, id)
+	}
+	machine := strings.TrimSpace(body.MachineIdentifier)
+	if len(machine) > 128 {
+		return nil, "invalid media_server_config: machine identifier is too long"
+	}
+	if strings.ContainsAny(machine, "/\\ ") {
+		return nil, "invalid media_server_config: machine identifier contains invalid characters"
+	}
+	if serviceType == servicePlex && machine == "" {
+		return nil, "pick the Plex server to share (media_server_config.machine_identifier)"
+	}
+	if serviceType == servicePlex && address == "" {
+		address = plexPublicAddress
+	}
+	return &DemoMediaServerConfig{
+		PublicAddress:     address,
+		LibraryIDs:        ids,
+		MachineIdentifier: machine,
+		AutoApprove:       body.AutoApprove,
+	}, ""
+}
+
+// instMgmtPlexLinkOK reports whether a Plex save carries a usable link: either
+// an approved pin from this session, or a stored token on the instance being
+// edited. Message is "" when it does.
+func instMgmtPlexLinkOK(body *instMgmtBody, existing *DemoInstance) string {
+	if body.PlexLinkPin != 0 {
+		if !instMgmtPlexPinApproved(body.PlexLinkPin) {
+			return "the Plex link is not approved yet"
+		}
+		return ""
+	}
+	if existing != nil && existing.MediaServerConfig != nil && existing.MediaServerConfig.MachineIdentifier != "" {
+		return "" // editing an instance whose token is already stored
+	}
+	return "link a Plex account first"
 }
 
 // instMgmtValidateURL enforces the create/update URL rules and returns the
@@ -176,10 +281,24 @@ func registerInstances(r chi.Router) {
 	admin.Post("/instances", instMgmtHandleCreate)
 	admin.Get("/instances/media-roots", instMgmtHandleMediaRoots)
 	admin.Post("/instances/test", instMgmtHandleTest)
+	// The libraries a media server reports, for the shared-libraries picker.
+	// Same candidate body and credential fallback as /test, so an edit form
+	// can list libraries without retyping the key.
+	admin.Post("/instances/media-server/libraries", instMgmtHandleMediaServerLibraries)
+	// Plex: the PIN link that yields an instance's token (held server-side,
+	// referenced by pin id on save) and the linked account's owned servers.
+	admin.Post("/instances/plex/link/begin", instMgmtHandlePlexLinkBegin)
+	admin.Post("/instances/plex/link/check", instMgmtHandlePlexLinkCheck)
+	admin.Post("/instances/plex/servers", instMgmtHandlePlexServers)
 	admin.Put("/instances/{instanceID}", instMgmtHandleUpdate)
 	admin.Delete("/instances/{instanceID}", instMgmtHandleDelete)
 	admin.Get("/instances/{instanceID}/users", instMgmtHandleGetUsers)
 	admin.Put("/instances/{instanceID}/users", instMgmtHandlePutUsers)
+	// The grant view of the same screen: which users hold an access grant on
+	// which instance of this service type, and (PUT) grant this instance to
+	// an exact set of users WITHOUT moving anyone's default.
+	admin.Get("/instances/{instanceID}/grant-users", instMgmtHandleGetGrantUsers)
+	admin.Put("/instances/{instanceID}/grant-users", instMgmtHandlePutGrantUsers)
 	admin.Post("/instances/{instanceID}/webhook", instMgmtHandleWebhook)
 	admin.Get("/instances/{instanceID}/webhook", instMgmtHandleWebhookStatus)
 
@@ -248,9 +367,30 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	case serviceTransmission:
 		// credentials optional
+	case servicePlex:
+		// Plex carries no api key: the PIN link is the credential.
+		if msg := instMgmtPlexLinkOK(&body, nil); msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
+			return
+		}
 	default:
 		if body.APIKey == "" {
 			writeErr(w, http.StatusBadRequest, "name, url, and api_key are required")
+			return
+		}
+	}
+	mediaServerConfig, msMsg := instMgmtValidateMediaServerConfig(body.ServiceType, body.MediaServerConfig)
+	if msMsg != "" {
+		writeErr(w, http.StatusBadRequest, msMsg)
+		return
+	}
+	if isMediaServerType(body.ServiceType) && mediaServerConfig == nil {
+		// A media server with no config still needs the zero one, so the
+		// stored row is never a half-configured document.
+		mediaServerConfig, msMsg = instMgmtValidateMediaServerConfig(
+			body.ServiceType, &instMgmtMediaServerBody{})
+		if msMsg != "" {
+			writeErr(w, http.StatusBadRequest, msMsg)
 			return
 		}
 	}
@@ -266,8 +406,10 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isDefault := body.IsDefault
-	if body.ServiceType == serviceChaptarr {
-		isDefault = false // chaptarr is never default
+	if body.ServiceType == serviceChaptarr || isMediaServerType(body.ServiceType) {
+		// Chaptarr and the media servers are never a global default: access
+		// to them is the per-user grant, not a fallback everyone inherits.
+		isDefault = false
 	}
 	inst := &DemoInstance{
 		ID:                body.ServiceType + "-" + uuid.NewString()[:8],
@@ -278,6 +420,7 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 		IsDefault:         isDefault,
 		MediaDownloads:    mediaDownloads,
 		MediaPathMappings: mappings,
+		MediaServerConfig: mediaServerConfig,
 	}
 	if isDefault {
 		instMgmtClearDefaults(inst.ServiceType, inst.ID)
@@ -325,8 +468,19 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		newMappings, newDownloads = instMgmtMappingsDerive(*body.MediaPathMappings)
 	}
+	if serviceType == servicePlex {
+		if msg := instMgmtPlexLinkOK(&body, existing); msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
+	mediaServerConfig, msMsg := instMgmtValidateMediaServerConfig(serviceType, body.MediaServerConfig)
+	if msMsg != "" {
+		writeErr(w, http.StatusBadRequest, msMsg)
+		return
+	}
 	isDefault := body.IsDefault
-	if serviceType == serviceChaptarr {
+	if serviceType == serviceChaptarr || isMediaServerType(serviceType) {
 		isDefault = false
 	}
 	if isDefault {
@@ -342,6 +496,9 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 		if body.MediaPathMappings != nil { // omitted key = keep current mappings
 			inst.MediaPathMappings = newMappings
 			inst.MediaDownloads = newDownloads
+		}
+		if mediaServerConfig != nil { // omitted key = keep stored config
+			inst.MediaServerConfig = mediaServerConfig
 		}
 	})
 	if body.SortOrder != nil {
@@ -402,6 +559,10 @@ func instMgmtHandleDelete(w http.ResponseWriter, r *http.Request) {
 	delete(instMgmtSortOrders, id)
 	delete(instMgmtWebhookSet, id)
 	instMgmtMu.Unlock()
+	// Access rows pointing at the deleted instance go with it: the grants,
+	// and any media-server accounts recorded against it.
+	dropInstanceGrants(id)
+	msvDropInstance(id)
 	// Per-user pins pointing at the deleted instance are removed (chaptarr
 	// grants revoked).
 	for _, u := range allUsers() {
@@ -414,6 +575,200 @@ func instMgmtHandleDelete(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── Plex link + media-server libraries ─────────────────
+
+var (
+	// instMgmtPlexApproved records pin ids this admin already approved, so a
+	// save can reference one. A pin is consumed on save, like the real
+	// server's short-lived link record.
+	instMgmtPlexApproved = map[int64]bool{}
+)
+
+// instMgmtPlexPinApproved reports whether a pin was approved and is still
+// usable for a save.
+func instMgmtPlexPinApproved(pinID int64) bool {
+	instMgmtMu.Lock()
+	defer instMgmtMu.Unlock()
+	return instMgmtPlexApproved[pinID]
+}
+
+// instMgmtHandlePlexLinkBegin — POST /api/instances/plex/link/begin. Mints the
+// PIN the admin approves at plex.tv. The token it yields never travels to the
+// app; the save references the pin id instead.
+func instMgmtHandlePlexLinkBegin(w http.ResponseWriter, _ *http.Request) {
+	pinID, code, link := plexBeginPin()
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"pin_id": pinID, "code": code, "url": link})
+}
+
+// instMgmtHandlePlexLinkCheck — POST /api/instances/plex/link/check. linked
+// false means the admin has not approved it yet; an unknown or consumed pin is
+// the same thing plex.tv's own expiry looks like.
+func instMgmtHandlePlexLinkCheck(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PinID int64 `json:"pin_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PinID == 0 {
+		writeErr(w, http.StatusBadRequest, "pin_id required")
+		return
+	}
+	if instMgmtPlexPinApproved(req.PinID) {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, map[string]any{"linked": true, "account": plexDemoAccount})
+		return
+	}
+	approved, found := plexPollPin(req.PinID)
+	if !found {
+		writeErr(w, http.StatusNotFound, "the Plex link has expired; link the account again")
+		return
+	}
+	if !approved {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, map[string]any{"linked": false})
+		return
+	}
+	instMgmtMu.Lock()
+	instMgmtPlexApproved[req.PinID] = true
+	instMgmtMu.Unlock()
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"linked": true, "account": plexDemoAccount})
+}
+
+// instMgmtHandlePlexServers — POST /api/instances/plex/servers. The owned
+// servers of the linked account, for the editor's server picker: by approved
+// pin when creating, by stored instance id when editing.
+func instMgmtHandlePlexServers(w http.ResponseWriter, r *http.Request) {
+	var body instMgmtBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.ID != "" {
+		existing := instMgmtResolve(body.ID)
+		if existing == nil {
+			writeErr(w, http.StatusNotFound, "instance not found")
+			return
+		}
+		if existing.ServiceType != servicePlex {
+			writeErr(w, http.StatusBadRequest, "service_type must be plex")
+			return
+		}
+	} else if body.ServiceType != servicePlex {
+		writeErr(w, http.StatusBadRequest, "service_type must be plex")
+		return
+	} else if !instMgmtPlexPinApproved(body.PlexLinkPin) {
+		writeErr(w, http.StatusBadGateway,
+			"could not list the account's servers; relink the Plex account")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"servers": plexServerChoices()})
+}
+
+// instMgmtHandleMediaServerLibraries — POST /api/instances/media-server/libraries.
+// Asks the server what libraries it has right now, so the picker offers real
+// ones rather than ids typed from memory.
+func instMgmtHandleMediaServerLibraries(w http.ResponseWriter, r *http.Request) {
+	var body instMgmtBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	serviceType := body.ServiceType
+	if body.ID != "" {
+		existing := instMgmtResolve(body.ID)
+		if existing == nil {
+			writeErr(w, http.StatusNotFound, "instance not found")
+			return
+		}
+		serviceType = existing.ServiceType
+	}
+	if !isMediaServerType(serviceType) {
+		writeErr(w, http.StatusBadRequest, instMgmtMediaServerEnumError)
+		return
+	}
+	if serviceType == servicePlex {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"server_name": plexDemoServer,
+			"version":     "1.41.3.9314",
+			"libraries":   plexDemoLibraries,
+		})
+		return
+	}
+	name, version := "Jellyfin", "10.10.7"
+	prefix := "jf"
+	if serviceType == serviceEmby {
+		name, version, prefix = "Emby", "4.9.5.0", "emby"
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"server_name": name + " Demo",
+		"version":     version,
+		"libraries": []map[string]any{
+			{"id": prefix + "-lib-movies", "name": "Movies", "collection_type": "movies"},
+			{"id": prefix + "-lib-shows", "name": "Shows", "collection_type": "tvshows"},
+			{"id": prefix + "-lib-books", "name": "Books", "collection_type": "books"},
+		},
+	})
+}
+
+// ─── Instance-centric grant endpoints ───────────────────
+
+// instMgmtHandleGetGrantUsers — GET /api/instances/{id}/grant-users. Every
+// grant row for this instance's SERVICE TYPE (siblings included), so the
+// editor can show who is on which library. Both keys are hard-required by the
+// app — a null in either blanks the assignment section.
+func instMgmtHandleGetGrantUsers(w http.ResponseWriter, r *http.Request) {
+	inst := instMgmtResolve(chi.URLParam(r, "instanceID"))
+	if inst == nil {
+		writeErr(w, http.StatusNotFound, "instance not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, instMgmtGrantRowsJSON(inst.ServiceType))
+}
+
+func instMgmtGrantRowsJSON(serviceType string) []map[string]any {
+	out := []map[string]any{}
+	for _, row := range instanceGrantRows(serviceType) {
+		out = append(out, map[string]any{
+			"user_id":     row.UserID,
+			"instance_id": row.InstanceID,
+		})
+	}
+	return out
+}
+
+// instMgmtHandlePutGrantUsers — PUT /api/instances/{id}/grant-users. An exact
+// set for THIS instance: listed users gain the grant, unlisted users lose it.
+// Siblings are untouched, which is the whole difference from the pin endpoint
+// next door — granting a library never moves anyone off another one.
+func instMgmtHandlePutGrantUsers(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "instanceID")
+	inst := instMgmtResolve(id)
+	if inst == nil {
+		writeErr(w, http.StatusNotFound, "instance not found")
+		return
+	}
+	if !uaGrantableServiceTypes[inst.ServiceType] {
+		writeErr(w, http.StatusBadRequest,
+			fmt.Sprintf("service_type %s does not support grants", inst.ServiceType))
+		return
+	}
+	var req struct {
+		UserIDs []int `json:"user_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := setInstanceGrantUsers(id, req.UserIDs); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, instMgmtGrantRowsJSON(inst.ServiceType))
 }
 
 // ─── Per-user pin endpoints ─────────────────────────────
@@ -563,8 +918,11 @@ func instMgmtHandleProxy(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusForbidden, "permission denied")
 			return
 		}
-		eff := effectiveInstanceFor(u, inst.ServiceType)
-		if eff == nil || eff.ID != inst.ID {
+		// Grants are additive, so a requester can legitimately read more than
+		// one library of a type. Bind to what they can SEE, not to the single
+		// effective default — otherwise the sibling a Library chip points at
+		// answers 403 the moment they select it.
+		if !userCanSeeInstance(u, inst.ID) {
 			writeErr(w, http.StatusForbidden, "permission denied")
 			return
 		}
@@ -585,8 +943,9 @@ func instMgmtHandleProxy(w http.ResponseWriter, r *http.Request) {
 	case serviceChaptarr:
 		handleChaptarrProxy(w, r, inst, isAdmin, rest)
 	default:
-		// Download clients / tautulli have no fake upstream behind the raw
-		// proxy (the app talks to /api/downloads and /api/tautulli instead).
+		// Download clients, tautulli, and the media servers have no fake
+		// upstream behind the raw proxy: the app talks to /api/downloads,
+		// /api/tautulli, and /api/media-servers instead.
 		writeErr(w, http.StatusBadGateway, "could not reach server: connection refused")
 	}
 }
@@ -649,8 +1008,13 @@ func instMgmtProxyAllowed(serviceType, rest string) bool {
 		}
 	case serviceChaptarr:
 		if tail[0] == "MediaCover" {
-			// MediaCover/Books/{id}/<file...> — owned-book covers only.
-			return len(tail) >= 4 && tail[1] == "Books" && isID(tail[2])
+			// MediaCover/Books/{id}/<file...> — book covers.
+			if len(tail) >= 4 && tail[1] == "Books" && isID(tail[2]) {
+				return true
+			}
+			// MediaCover/{id}/<file...> — author covers. Chaptarr has no
+			// Authors/ subtree, so an author's images hang off the bare id.
+			return len(tail) >= 3 && isID(tail[1])
 		}
 		switch len(tail) {
 		case 1:
@@ -662,7 +1026,7 @@ func instMgmtProxyAllowed(serviceType, rest string) bool {
 			if (tail[0] == "author" || tail[0] == "book" || tail[0] == "bookfile") && isID(tail[1]) {
 				return true
 			}
-			if tail[0] == "book" && tail[1] == "lookup" {
+			if (tail[0] == "book" || tail[0] == "author") && tail[1] == "lookup" {
 				return true
 			}
 			if tail[0] == "wanted" && (tail[1] == "missing" || tail[1] == "cutoff") {

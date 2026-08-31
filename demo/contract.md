@@ -49,8 +49,17 @@ Roles: `roleAdmin` = `"admin"`, `roleUser` = `"user"`.
 Media types: `mediaTypeMovie` `mediaTypeTV` `mediaTypeBook` (= `movie`/`tv`/`book`).
 Service types: `serviceRadarr` `serviceSonarr` `serviceChaptarr` `serviceSabnzbd`
 `serviceNzbget` `serviceQbittorrent` `serviceTransmission` `serviceTautulli`
+`serviceJellyfin` `serviceEmby` `servicePlex`
 (exact strings, lowercase). Media types describe media, service types describe
 services — never conflate.
+
+Media servers (`jellyfin`, `emby`, `plex`) are the types Cantinarr manages user
+ACCESS on, never library routing. They follow the Chaptarr rule: **never a
+global default, granted per user, invisible to arr routing.** Helpers in
+types.go: `mediaServerTypes()`, `isMediaServerType(st)`,
+`mediaServerKindFor(st)` (→ `mediaServerKindAccount` for Jellyfin/Emby,
+`mediaServerKindInvite` for Plex), and `plexPublicAddress`
+(`https://app.plex.tv`).
 
 Request statuses (every REST surface): `statusUnavailable` `statusRequested`
 `statusPending` `statusDenied` `statusDownloading` `statusPartial` (`"partial"`)
@@ -82,6 +91,20 @@ Auth/session constants (state.go): `demoJWTSecret` = `"demo-jwt-secret-cantinarr
 | `instChaptarr` | `chaptarr-9c0d1e2f` | chaptarr | Chaptarr | http://chaptarr:8787 | **false — chaptarr is never default** | true | `/books` → `/media/books` |
 | `instSab` | `sabnzbd-3f4a5b6c` | sabnzbd | SABnzbd | http://sabnzbd:8080 | true | false | `[]` |
 | `instTautulli` | `tautulli-7d8e9f0a` | tautulli | Tautulli | http://tautulli:8181 | true | false | `[]` |
+| `instRadarr4K` | `radarr-2b3c4d5e` | radarr | Radarr 4K | http://radarr-4k:7878 | **false — reached by grant** | true | `/movies-4k` → `/media/movies-4k` |
+| `instSonarrAnime` | `sonarr-6f7a8b9c` | sonarr | Sonarr Anime | http://sonarr-anime:8989 | **false — reached by grant** | true | `/anime` → `/media/anime` |
+| `instJellyfin` | `jellyfin-1f2e3d4c` | jellyfin | Jellyfin | http://jellyfin:8096 | **false — never default** | false | `[]` |
+| `instEmby` | `emby-5b6a7988` | emby | Emby | http://emby:8096 | **false — never default** | false | `[]` |
+| `instPlex` | `plex-0a1b2c3d` | plex | Demo Plex | https://plex.tv | **false — never default** | false | `[]` |
+
+`plexDemoMachineIdentifier` = `d3m0p1exmach1ne0000000000000001` — the Plex
+Media Server the seeded Plex instance shares. `instJellyfin` shares libraries
+`jf-lib-movies` and `jf-lib-shows`; `instEmby` shares every library (empty
+list); `instPlex` shares sections `1` and `2`.
+
+Media-server instances carry `DemoInstance.MediaServerConfig`
+(`PublicAddress`, `LibraryIDs`, `MachineIdentifier`, `AutoApprove`), nil for
+every other type. Only `PublicAddress` ever reaches a requester.
 
 New instance ids use the current format `<service_type>-<8hex>`. The canonical
 media root is **`/media`** (`GET /api/instances/media-roots` → `["/media"]`);
@@ -93,8 +116,20 @@ map to `/media/movies`, `/media/tv`, `/media/books` (cantinarr-side).
 | ID | Username | Password | Role | Flags |
 |---|---|---|---|---|
 | 1 | `admin` | `demo` | admin | `PasswordEnabled` `PasskeyEnabled` `HasPassword` `AISharedEnabled` all true |
-| 2 | `user` | `demo` | user | `PasswordEnabled` `HasPassword` `AISharedEnabled` true; `RequireApproval = &true` (per-user approval override → the approvals loop is demonstrable); `DefaultInstances = {"chaptarr": instChaptarr}` (Books access grant) |
-| 3 | `riley` | — (no password; connect-only) | user | `HasPendingInvite:true` (a live single-use connect token is seeded for riley), `PlexEmail:"riley@example.net"`, `PlexInvitedAt:nil` (drives the "Plex invites waiting" badge), `PasswordEnabled`/`PasskeyEnabled`/`HasPassword` false |
+| 2 | `user` | `demo` | user | `PasswordEnabled` `HasPassword` `AISharedEnabled` true; `RequireApproval = &true` (per-user approval override → the approvals loop is demonstrable); `DefaultInstances = {"chaptarr": instChaptarr}` (Books access grant); `InstanceGrants = {radarr:[instRadarr4K], sonarr:[instSonarrAnime], jellyfin:[instJellyfin]}` (additive — the Library chooser and the sibling status chips) |
+| 3 | `riley` | — (no password; connect-only) | user | `HasPendingInvite:true` (a live single-use connect token is seeded for riley), `PlexEmail:"riley@example.net"` and no share yet (drives the "Plex invites waiting" badge), `InstanceGrants = {plex:[instPlex]}`, `PasswordEnabled`/`PasskeyEnabled`/`HasPassword` false |
+
+User 1 (`admin`) additionally holds `InstanceGrants = {emby:[instEmby]}` with
+**no** Emby account, so the guide's "you already have an account" card has an
+account named `admin` on that server to offer.
+
+### Media-server accounts (mediaaccess.go)
+
+Each media server holds a roster independent of Cantinarr. `instJellyfin`:
+`jf-1 jellyfin-admin` (administrator), `jf-2 user`, `jf-3 morgan`,
+`jf-4 sasha` (disabled). `instEmby`: `emby-1 emby-admin` (administrator),
+`emby-2 admin`, `emby-3 jules`. `instPlex`: `plex-1 demoplex` (the owner),
+`plex-2 casey`. Exactly one Cantinarr link is seeded: user 2 ↔ `jf-2`.
 
 New users minted by connect-token get ids 4+ (`demoNextUserID`).
 
@@ -124,6 +159,7 @@ type DemoUser struct {
     PlexEmail string; PlexInvitedAt *time.Time; CreatedAt time.Time
     AISharedEnabled, HasPendingInvite, PasswordEnabled, PasskeyEnabled, HasPassword bool
     DefaultInstances map[string]string             // service_type -> instance id (pin / chaptarr grant)
+    InstanceGrants map[string][]string             // service_type -> instance ids (ADDITIVE access grants)
     RequireApproval *bool                          // nil = inherit global; &bool = per-user override
 }
 type DemoDevice struct {
@@ -163,8 +199,18 @@ type DemoInstance struct {
 | `instanceByID(string) *DemoInstance` | Lookup or nil |
 | `allInstances() []*DemoInstance` | Stable seed order (radarr, sonarr, chaptarr, sabnzbd, tautulli, then created) |
 | `withInstance(id, fn func(*DemoInstance)) bool` | Mutate instance fields under the state lock |
-| `visibleInstances(u) []*DemoInstance` | Admin: all. User: effective radarr + sonarr + granted chaptarr. Renderers MUST emit `is_default:true` on EVERY entry of a non-admin's list |
-| `effectiveInstanceFor(u, serviceType) *DemoInstance` | Per-user pin → global default → first of type; **chaptarr: pin only, no fallback** (nil = no Books access) |
+| `visibleInstances(u) []*DemoInstance` | Admin: all. User: every access-granted instance PLUS their effective default, across `grantableServiceTypes()`, in registry order. Grants are additive, so a user's list can hold several instances of a type — renderers mark `is_default` with `effectiveInstanceIDFor`, never blanket-true |
+| `grantableServiceTypes() []string` | radarr, sonarr, chaptarr, jellyfin, emby, plex |
+| `effectiveInstanceFor(u, serviceType) *DemoInstance` · `effectiveInstanceIDFor(u, st) string` | Per-user pin → for chaptarr AND every media-server type the first grant with **no** global fallback → otherwise global default → first of type |
+| `grantedInstanceIDs(u, st) []string` | Explicit grants plus the pin, registry order; never nil |
+| `visibleInstanceIDs(u, st) []string` | `grantedInstanceIDs` ∪ the effective default; never nil |
+| `userCanSeeInstance(u, id) bool` | Admin: any live instance. User: the instance is in their visible set for its type |
+| `userInstanceGrants(u) map[string][]string` | Copy of the grant map, empty types omitted; never nil |
+| `setUserInstanceGrants(userID, grants) bool` | Replaces exactly the listed service types; `[]` clears one |
+| `grantInstanceToUser(userID, instanceID)` | Adds one grant, no-op when already held; never moves a default |
+| `instanceGrantRows(serviceType)` | Every grant row for that service type (siblings included), sorted by user then instance |
+| `setInstanceGrantUsers(instanceID, userIDs) error` | Replace-set for ONE instance; siblings untouched |
+| `dropInstanceGrants(instanceID)` | Strips every grant pointing at a deleted instance |
 
 Permission lists (lexicographically sorted, matching the real
 `PermissionsForRole`):
@@ -212,13 +258,15 @@ state accessors from `init()` (cross-file init order is not guaranteed).
    explicitly for SSE (`text/event-stream`) and image bytes (MediaCover).
 
 Register functions `main.go` mounts (must exist, exact names):
-`registerConfig`, `registerUsersAdmin`, `registerPlex`,
-`registerNotifications`, `registerRequests`, `registerRequestsAdmin`,
-`registerBooks`, `registerDiscover`, `registerTrakt`, `registerAI`,
-`registerAIAdmin`, `registerIssues`, `registerRemediation`,
-`registerInstances`, `registerDownloads`, `registerTautulli`,
-`registerMediaFiles` (public — see rule 1). Stage A provides `registerAuth` +
-`registerWS`. `registerInstances` also owns the proxy dispatcher
+`registerConfig`, `registerUsersAdmin`, `registerExternalAddress`,
+`registerMediaAccess`, `registerNotifications`, `registerRequests`,
+`registerRequestsAdmin`, `registerBooks`, `registerDiscover`, `registerTrakt`,
+`registerAI`, `registerAIAdmin`, `registerIssues`, `registerRemediation`,
+`registerProposals`, `registerInstances`, `registerDownloads`,
+`registerTautulli`, `registerMediaFiles` (public — see rule 1). Stage A
+provides `registerAuth` + `registerWS`. (`registerPlex` is gone: the real
+server deleted the `/api/admin/plex/*` console when Plex became an instance,
+and `plex.go` is now only the shared PIN simulation.) `registerInstances` also owns the proxy dispatcher
 `/instances/{instanceID}/*` → `handleRadarrProxy` / `handleSonarrProxy` /
 `handleChaptarrProxy` (hook table, §7).
 
@@ -265,11 +313,21 @@ var demoShows  []*DemoShow    // 6 fictional shows, tmdb 90001–90006, tvdb 390
 discoveryPrefsSaved() bool    // true once seeded/saved (demo seeds SAVED)
 ```
 
-**D1 plex**:
+**D1 media access (mediaaccess.go) + the shared Plex PIN flow (plex.go)**:
 
 ```go
-plexConfigured() bool         // linked + server selected (demo seeds linked)
+plexBeginPin() (pinID int64, code, url string)   // mint a PIN the app polls
+plexPollPin(pinID int64) (approved, found bool)  // approves on the 3rd poll; consumed once
+plexServerChoices() []map[string]any             // the linked account's owned servers
+msvAccountFor(userID int, instanceID string) *msvAccount
+msvUserInviteState(userID int) *time.Time        // backs plex_invited_at, derived live
+msvRosterFor(instanceID string) []*msvRemoteUser // the accounts the server itself holds
+msvDropInstance(instanceID string)               // forget accounts on a deleted instance
 ```
+
+`plexConfigured()` is gone with the `/api/admin/plex/*` console: whether media
+access is configured is now "does a media-server instance exist", which
+config.go asks with `isMediaServerType`.
 
 **D7 arr (radarr + sonarr fakes)**:
 

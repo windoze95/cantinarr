@@ -134,6 +134,12 @@ func reqCreateMovieTV(w http.ResponseWriter, u *DemoUser, body *reqCreateBody) {
 	mt := body.MediaType
 	pol := reqEffectivePolicy(u)
 
+	instanceID, errStatus, errMsg := reqResolveArrInstance(u, mt, body.InstanceID)
+	if errMsg != "" {
+		writeErr(w, errStatus, errMsg)
+		return
+	}
+
 	// Canonical title + tvdb bridge from the catalog.
 	canonicalTitle := strings.TrimSpace(body.Title)
 	tvdbID := body.TvdbID
@@ -194,6 +200,10 @@ func reqCreateMovieTV(w http.ResponseWriter, u *DemoUser, body *reqCreateBody) {
 				ID: reqNextID, UserID: u.ID, TmdbID: body.TmdbID, TvdbID: tvdbID,
 				MediaType: mt, Title: pendingTitle, Status: statusPending,
 				SeasonScope: scopeStr, QualityProfileID: qualityID,
+				// The library this request is waiting FOR. Books always
+				// carried it; movies and TV do now too, so the approval queue
+				// names which library an approval would act on.
+				InstanceID:  instanceID,
 				RequestedAt: time.Now(), Waiters: map[int]string{},
 			})
 			reqNextID++
@@ -218,10 +228,13 @@ func reqCreateMovieTV(w http.ResponseWriter, u *DemoUser, body *reqCreateBody) {
 	if mt == mediaTypeTV && len(seasons) == 0 {
 		seasons = reqSeasonsForScope(body.TmdbID, scope)
 	}
-	status := reqKickTitle(body.TmdbID, mt, seasons)
+	status := reqKickTitle(body.TmdbID, mt, instanceID, seasons)
 	reqUpsertTitleRow(u.ID, body.TmdbID, tvdbID, mt, canonicalTitle, scopeStr, qualityID, status)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true, "status": status, "title": canonicalTitle,
+		// The library the request was routed to, so the app can show which
+		// one answered without guessing.
+		"instance_id": instanceID,
 	})
 }
 
@@ -431,7 +444,7 @@ func reqBookPark(w http.ResponseWriter, u *DemoUser, book *DemoBook, foreignID, 
 
 // reqKickTitle checks live availability and (unless already fully available)
 // starts the download simulation. Returns the immediate REST status.
-func reqKickTitle(tmdbID int, mediaType string, seasons []int) string {
+func reqKickTitle(tmdbID int, mediaType, instanceID string, seasons []int) string {
 	key := reqTitleKey(mediaType, tmdbID)
 	reqMu.Lock()
 	cur := ""
@@ -442,12 +455,39 @@ func reqKickTitle(tmdbID int, mediaType string, seasons []int) string {
 	if cur == statusAvailable {
 		return statusAvailable
 	}
-	instanceID := instRadarr
-	if mediaType == mediaTypeTV {
-		instanceID = instSonarr
+	if instanceID == "" {
+		instanceID = instRadarr
+		if mediaType == mediaTypeTV {
+			instanceID = instSonarr
+		}
 	}
+	reqMu.Lock()
+	reqTitleInstances[key] = instanceID
+	reqMu.Unlock()
 	startDownloadSimulation(tmdbID, mediaType, instanceID, seasons)
 	return statusRequested
+}
+
+// reqResolveArrInstance resolves the library a movie/TV request names. An
+// empty instance_id means the caller's effective default. A library the
+// caller does not hold is refused rather than quietly swapped for theirs.
+func reqResolveArrInstance(u *DemoUser, mediaType, requested string) (instanceID string, errStatus int, errMsg string) {
+	serviceType := serviceRadarr
+	if mediaType == mediaTypeTV {
+		serviceType = serviceSonarr
+	}
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return effectiveInstanceIDFor(u, serviceType), 0, ""
+	}
+	inst := instanceByID(requested)
+	if inst == nil || inst.ServiceType != serviceType {
+		return "", http.StatusBadRequest, "invalid " + serviceType + " instance"
+	}
+	if !userCanSeeInstance(u, requested) {
+		return "", http.StatusForbidden, serviceType + " instance is not available to you"
+	}
+	return requested, 0, ""
 }
 
 // reqUpsertTitleRow records a movie/TV request in the log: the user's latest
@@ -802,6 +842,15 @@ func reqOptionsHandler(w http.ResponseWriter, r *http.Request) {
 	if mediaType == "" {
 		mediaType = mediaTypeMovie
 	}
+	// Quality profiles are per-library, so a named instance scopes them. A
+	// library the caller does not hold is refused rather than answered with
+	// their default library's profiles under someone else's name.
+	if requested := strings.TrimSpace(r.URL.Query().Get("instance_id")); requested != "" && mediaType != mediaTypeBook {
+		if _, errStatus, errMsg := reqResolveArrInstance(u, mediaType, requested); errMsg != "" {
+			writeErr(w, errStatus, errMsg)
+			return
+		}
+	}
 	pol := reqEffectivePolicy(u)
 	canSeason := pol.AllowSeasonChoice && mediaType == mediaTypeTV
 	canQuality := pol.AllowQualityChoice && mediaType != mediaTypeBook
@@ -888,7 +937,101 @@ func reqTmdbStatusHandler(w http.ResponseWriter, r *http.Request) {
 			resp["seasons"] = reqSeasonRows(show, stCopy)
 		}
 	}
+
+	// The requested library, when the caller named one. A library they do not
+	// hold is a 403, not a silent fall back to their default — answering with
+	// someone else's library would be a quiet lie about what they can see.
+	serviceType := serviceRadarr
+	if mediaType == mediaTypeTV {
+		serviceType = serviceSonarr
+	}
+	requested := r.URL.Query().Get("instance_id")
+	if requested != "" {
+		inst := instanceByID(requested)
+		if inst == nil || inst.ServiceType != serviceType {
+			writeErr(w, http.StatusBadRequest, "invalid "+serviceType+" instance")
+			return
+		}
+		if !userCanSeeInstance(u, requested) {
+			writeErr(w, http.StatusForbidden, serviceType+" instance is not available to you")
+			return
+		}
+	}
+
+	// Release dates let a title that reads "Requested" say it is simply not
+	// out yet rather than looking like a stalled download. Movies only, and
+	// only for one already in the library — an unadded title has no arr
+	// record to read dates off.
+	if mediaType == mediaTypeMovie {
+		if releases := reqMovieReleases(tmdbID); releases != nil {
+			resp["releases"] = releases
+		}
+	}
+
+	// Sibling libraries, present only when the user actually holds more than
+	// one of this type. Digest grade: the headline status stays the selected
+	// library's full live read, these are the chips beside it.
+	visible := visibleInstanceIDs(u, serviceType)
+	if len(visible) > 1 {
+		defaultID := effectiveInstanceIDFor(u, serviceType)
+		statuses := map[string]any{}
+		for _, id := range visible {
+			statuses[id] = map[string]any{
+				"status": reqInstanceStatus(id, defaultID, tmdbID, mediaType, resp["status"]),
+			}
+		}
+		resp["instance_statuses"] = statuses
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// reqInstanceStatus is one library's digest-grade answer for a title. The
+// demo tracks availability per title rather than per library, so the library
+// the title was actually routed to reports the live status and every sibling
+// reports what it really holds: nothing.
+func reqInstanceStatus(instanceID, defaultID string, tmdbID int, mediaType string, headline any) string {
+	reqMu.Lock()
+	routed := reqTitleInstances[reqTitleKey(mediaType, tmdbID)]
+	reqMu.Unlock()
+	if routed == "" {
+		// Never routed anywhere. THIS user's effective default is the library
+		// that would take it, so it carries the headline and the siblings
+		// hold nothing — anchoring on the global default instead would credit
+		// the wrong library for anyone holding a pin.
+		if instanceID == defaultID {
+			if s, ok := headline.(string); ok {
+				return s
+			}
+		}
+		return statusUnavailable
+	}
+	if routed != instanceID {
+		return statusUnavailable
+	}
+	if s, ok := headline.(string); ok {
+		return s
+	}
+	return statusUnavailable
+}
+
+// reqMovieReleases reports a movie's theatrical and digital dates as plain
+// YYYY-MM-DD calendar dates — deliberately not timestamps, because a release
+// date has no time of day and serialising one as an instant invites a client
+// to localise it and land a day early. Nil when the library knows neither,
+// so the key drops out entirely.
+func reqMovieReleases(tmdbID int) map[string]string {
+	inCinemas, digital := arrMovieReleaseDates(tmdbID)
+	if inCinemas == "" && digital == "" {
+		return nil
+	}
+	out := map[string]string{}
+	if inCinemas != "" {
+		out["in_cinemas"] = inCinemas
+	}
+	if digital != "" {
+		out["digital"] = digital
+	}
+	return out
 }
 
 // reqSeasonRows builds the TV seasons array: real season_numbers (no season

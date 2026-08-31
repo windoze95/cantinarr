@@ -1,6 +1,6 @@
 // ai_admin.go — admin-side AI surfaces: the shared credentials profile,
-// the shared Codex device flow, AI tool toggles + timed debug logging, and
-// the external-settings-changes configuration history (+revert).
+// the shared Codex and Grok device flows, AI tool toggles + timed debug
+// logging, and the external-settings-changes configuration history (+revert).
 // Shared AI state lives in ai.go (aiMu); configuration-history storage and
 // seeds live in data_ai.go (aiChMu).
 package main
@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,8 +22,9 @@ import (
 
 // registerAIAdmin mounts the admin AI surfaces on the authenticated /api
 // router. The credentials / ai-tools / settings-changes groups use
-// requireAdmin; the codex handlers do their own role check because the real
-// handlers answer 403 {"error":"forbidden"} there (not "permission denied").
+// requireAdmin; the codex and grok handlers do their own role check because
+// the real handlers answer 403 {"error":"forbidden"} there (not "permission
+// denied").
 func registerAIAdmin(r chi.Router) {
 	r.With(requireAdmin).Get("/admin/credentials", aiAdminGetCredentials)
 	r.With(requireAdmin).Put("/admin/credentials", aiAdminPutCredentials)
@@ -32,6 +35,12 @@ func registerAIAdmin(r chi.Router) {
 	r.Get("/admin/ai/codex/device/{flowID}", aiAdminCodexPoll)
 	r.Delete("/admin/ai/codex/device/{flowID}", aiAdminCodexCancel)
 	r.Delete("/admin/ai/codex", aiAdminCodexUnlink)
+
+	r.Get("/admin/ai/grok/status", aiAdminGrokStatus)
+	r.Post("/admin/ai/grok/device/begin", aiAdminGrokBegin)
+	r.Get("/admin/ai/grok/device/{flowID}", aiAdminGrokPoll)
+	r.Delete("/admin/ai/grok/device/{flowID}", aiAdminGrokCancel)
+	r.Delete("/admin/ai/grok", aiAdminGrokUnlink)
 
 	r.With(requireAdmin).Get("/admin/ai-tools", aiAdminGetTools)
 	r.With(requireAdmin).Put("/admin/ai-tools/debug", aiAdminPutToolsDebug)
@@ -59,10 +68,43 @@ func aiAdminOnly(w http.ResponseWriter, r *http.Request) bool {
 
 // ─── /api/admin/credentials ─────────────────────────────
 
-// aiSecretCredentialKeys are the five deletable secret keys; presence
+// aiSecretCredentialKeys are the seven deletable secret keys; presence
 // booleans (never values) are the only thing GET returns.
 var aiSecretCredentialKeys = []string{
-	"tmdb_access_token", "anthropic_key", "openai_key", "gemini_key", "trakt_client_id",
+	"tmdb_access_token", "anthropic_key", "openai_key", "gemini_key",
+	"grok_key", "local_openai_key", "trakt_client_id",
+}
+
+// aiPlainAISettings are the non-secret AI settings the credentials surface
+// carries beside the profile: they are stored and returned in the clear (an
+// endpoint is not a secret), but the local endpoint may name a
+// cluster-internal host, so they live only in this admin-gated response —
+// never in a personal payload. Guarded by aiMu with the rest of the shared
+// profile. Empty effort means auto.
+var (
+	aiOpenAIReasoningEffort      = ""
+	aiLocalOpenAIBaseURL         = ""
+	aiLocalOpenAIReasoningEffort = ""
+)
+
+// aiAdminUpdateMu serializes credential saves so one request's snapshot and
+// its write cannot interleave with another's.
+var aiAdminUpdateMu sync.Mutex
+
+// aiReasoningEfforts is the closed set of admin-settable reasoning efforts,
+// lowest first; "" (auto) is also valid.
+var aiReasoningEfforts = []string{"none", "minimal", "low", "medium", "high"}
+
+func aiIsValidReasoningEffort(value string) bool {
+	if value == "" {
+		return true
+	}
+	for _, effort := range aiReasoningEfforts {
+		if value == effort {
+			return true
+		}
+	}
+	return false
 }
 
 func aiIsSecretCredentialKey(key string) bool {
@@ -94,8 +136,14 @@ func aiAdminGetCredentials(w http.ResponseWriter, r *http.Request) {
 		"tmdb_using_builtin":  false,
 		"trakt_using_builtin": false,
 		"ai": map[string]any{
-			"config":    sharedConfig,
-			"providers": aiProviderCatalog(),
+			"config": sharedConfig,
+			// Flat siblings of config on purpose: the config object also
+			// serializes into non-admin payloads, and endpoint configuration
+			// belongs only in this admin-gated response.
+			"openai_reasoning_effort":       aiOpenAIReasoningEffort,
+			"local_openai_base_url":         aiLocalOpenAIBaseURL,
+			"local_openai_reasoning_effort": aiLocalOpenAIReasoningEffort,
+			"providers":                     aiProviderCatalog(),
 			"health_check": map[string]any{
 				"enabled":         aiHealthEnabled,
 				"interval_hours":  24,
@@ -115,6 +163,50 @@ func aiAdminGetCredentials(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// aiEndpointSettings is one provider's effective base-URL/effort pair for a
+// save: the body's value when the key is present (an empty string is a
+// deliberate clear), else the stored value, with per-field presence so an
+// untouched field never rewrites the stored value.
+type aiEndpointSettings struct {
+	BaseURL    string
+	BaseURLSet bool
+	Effort     string
+	EffortSet  bool
+}
+
+// aiResolveEndpointSettings resolves one provider's endpoint pair from the
+// request body over the stored values, writing the 400 itself and returning
+// ok=false when a supplied value is invalid. An empty baseURLKey means the
+// provider has no endpoint field (hosted openai pins only an effort).
+func aiResolveEndpointSettings(w http.ResponseWriter, body map[string]string,
+	baseURLKey, storedBaseURL, effortKey, storedEffort string) (aiEndpointSettings, bool) {
+	settings := aiEndpointSettings{BaseURL: storedBaseURL, Effort: storedEffort}
+	if value, set := body[baseURLKey]; baseURLKey != "" && set {
+		settings.BaseURLSet = true
+		settings.BaseURL = strings.TrimSpace(value)
+		if len(settings.BaseURL) > 2048 {
+			writeErr(w, http.StatusBadRequest, baseURLKey+" is too long")
+			return settings, false
+		}
+		if settings.BaseURL != "" {
+			parsed, err := url.Parse(settings.BaseURL)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+				writeErr(w, http.StatusBadRequest, baseURLKey+" must be an absolute http or https URL")
+				return settings, false
+			}
+		}
+	}
+	if value, set := body[effortKey]; set {
+		settings.EffortSet = true
+		settings.Effort = strings.ToLower(strings.TrimSpace(value))
+		if !aiIsValidReasoningEffort(settings.Effort) {
+			writeErr(w, http.StatusBadRequest, effortKey+" must be one of none, minimal, low, medium, high, or empty for auto")
+			return settings, false
+		}
+	}
+	return settings, true
+}
+
 func aiAdminPutCredentials(w http.ResponseWriter, r *http.Request) {
 	var body map[string]string
 	r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
@@ -122,11 +214,18 @@ func aiAdminPutCredentials(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Keep the snapshot this save validates against and the write itself
+	// indivisible from another admin settings request in this process.
+	aiAdminUpdateMu.Lock()
+	defer aiAdminUpdateMu.Unlock()
 
 	allowed := map[string]bool{
-		"tmdb_access_token": true, "anthropic_key": true, "openai_key": true,
-		"gemini_key": true, "trakt_client_id": true,
 		"ai_provider": true, "ai_model": true, "ai_health_check_enabled": true,
+		"openai_reasoning_effort": true, "local_openai_base_url": true,
+		"local_openai_reasoning_effort": true,
+	}
+	for _, k := range aiSecretCredentialKeys {
+		allowed[k] = true
 	}
 	for key := range body {
 		if !allowed[key] {
@@ -142,7 +241,7 @@ func aiAdminPutCredentials(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "AI model is too long")
 		return
 	}
-	for _, k := range []string{"anthropic_key", "openai_key", "gemini_key"} {
+	for _, k := range []string{"anthropic_key", "openai_key", "gemini_key", "grok_key", "local_openai_key"} {
 		if len(body[k]) > 32<<10 {
 			writeErr(w, http.StatusBadRequest, "AI credential is too long")
 			return
@@ -160,12 +259,58 @@ func aiAdminPutCredentials(w http.ResponseWriter, r *http.Request) {
 		healthEnabled = parsed
 	}
 
+	aiMu.Lock()
+	currentProvider, currentModel := aiSharedProvider, aiSharedModel
+	storedOpenAIEffort := aiOpenAIReasoningEffort
+	storedLocalBaseURL, storedLocalEffort := aiLocalOpenAIBaseURL, aiLocalOpenAIReasoningEffort
+	aiMu.Unlock()
+
+	// Endpoint settings are provider-scoped: hosted openai and the local
+	// provider never share a slot.
+	openaiEndpoint, ok := aiResolveEndpointSettings(w, body, "", "", "openai_reasoning_effort", storedOpenAIEffort)
+	if !ok {
+		return
+	}
+	localEndpoint, ok := aiResolveEndpointSettings(w, body,
+		"local_openai_base_url", storedLocalBaseURL, "local_openai_reasoning_effort", storedLocalEffort)
+	if !ok {
+		return
+	}
+
+	// The profile this save would leave behind: an unsupplied field keeps the
+	// stored value, and a provider change with no model falls back to that
+	// provider's default.
+	candidateProvider, candidateModel := currentProvider, currentModel
+	if p := body["ai_provider"]; p != "" {
+		if p != currentProvider && body["ai_model"] == "" {
+			candidateModel = aiDefaultModel(p)
+		}
+		candidateProvider = p
+	}
+	if m := body["ai_model"]; m != "" {
+		candidateModel = m
+	}
+	// The local provider is unusable without an endpoint and has no model
+	// catalog to fall back on: selecting it demands both, explicitly.
+	if candidateProvider == "local_openai" {
+		if localEndpoint.BaseURL == "" {
+			writeErr(w, http.StatusBadRequest, "local_openai_base_url is required for the local provider")
+			return
+		}
+		if strings.TrimSpace(candidateModel) == "" {
+			writeErr(w, http.StatusBadRequest, "a model ID is required for the local provider")
+			return
+		}
+	}
+
 	// Simulated validation turn: every supplied AI key plus the selected
 	// candidate is "probed" before anything commits (atomic; the demo always
-	// passes).
+	// passes). An endpoint change alone re-proves the selected provider.
 	aiRelated := body["anthropic_key"] != "" || body["openai_key"] != "" ||
-		body["gemini_key"] != "" || body["ai_provider"] != "" ||
-		body["ai_model"] != "" || healthSupplied
+		body["gemini_key"] != "" || body["grok_key"] != "" ||
+		body["local_openai_key"] != "" || body["ai_provider"] != "" ||
+		body["ai_model"] != "" || healthSupplied ||
+		openaiEndpoint.EffortSet || localEndpoint.BaseURLSet || localEndpoint.EffortSet
 	if aiRelated {
 		time.Sleep(aiValidationDelay)
 	}
@@ -178,14 +323,17 @@ func aiAdminPutCredentials(w http.ResponseWriter, r *http.Request) {
 			aiSharedCreds[k] = true
 		}
 	}
-	if p := body["ai_provider"]; p != "" {
-		if p != aiSharedProvider && body["ai_model"] == "" {
-			aiSharedModel = aiDefaultModel(p)
-		}
-		aiSharedProvider = p
+	aiSharedProvider, aiSharedModel = candidateProvider, candidateModel
+	// Plain settings, in contrast, are written whenever the key is present:
+	// an empty value clears the endpoint rather than skipping it.
+	if openaiEndpoint.EffortSet {
+		aiOpenAIReasoningEffort = openaiEndpoint.Effort
 	}
-	if m := body["ai_model"]; m != "" {
-		aiSharedModel = m
+	if localEndpoint.BaseURLSet {
+		aiLocalOpenAIBaseURL = localEndpoint.BaseURL
+	}
+	if localEndpoint.EffortSet {
+		aiLocalOpenAIReasoningEffort = localEndpoint.Effort
 	}
 	if healthSupplied {
 		aiHealthEnabled = healthEnabled
@@ -331,6 +479,135 @@ func aiAdminCodexUnlink(w http.ResponseWriter, r *http.Request) {
 	aiSharedCodexEmail = ""
 	aiSharedCodexPlan = ""
 	aiSharedCodexLinkedAt = time.Time{}
+	aiConvs = map[int]map[string]bool{} // shared unlink purges all conversations
+	aiMu.Unlock()
+	aiNoStore(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── Shared Grok (xAI OAuth) device flow ────────────────
+
+// Same flow as the shared Codex one, with a narrower status: the admin
+// response carries no personal_selected and no effective — those describe one
+// user's resolution, which a shared account does not have.
+
+func aiAdminGrokStatus(w http.ResponseWriter, r *http.Request) {
+	if !aiAdminOnly(w, r) {
+		return
+	}
+	aiMu.Lock()
+	out := map[string]any{
+		"available": true,
+		"selected":  aiSharedProvider == "grok_oauth",
+		"connected": aiSharedGrokLinked,
+	}
+	if aiSharedGrokLinked {
+		out["account_email"] = aiSharedGrokEmail
+		out["plan_type"] = aiSharedGrokPlan
+		if !aiSharedGrokLinkedAt.IsZero() {
+			out["updated_at"] = aiSharedGrokLinkedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	aiMu.Unlock()
+	aiNoStore(w)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func aiAdminGrokBegin(w http.ResponseWriter, r *http.Request) {
+	if !aiAdminOnly(w, r) {
+		return
+	}
+	u := userFrom(r)
+	aiMu.Lock()
+	if aiSharedGrokLinked {
+		aiMu.Unlock()
+		aiNoStore(w)
+		writeErr(w, http.StatusConflict, "Disconnect the shared xAI account before linking another one")
+		return
+	}
+	flowID := randomHex(16)
+	aiGrokFlows[flowID] = &aiGrokFlow{UserID: u.ID, Shared: true, Created: time.Now()}
+	aiMu.Unlock()
+	aiNoStore(w)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"flow_id":          flowID,
+		"verification_uri": aiGrokVerificationURI,
+		"user_code":        aiNewUserCode(),
+		"expires_in":       900,
+		"interval":         2,
+	})
+}
+
+func aiAdminGrokPoll(w http.ResponseWriter, r *http.Request) {
+	if !aiAdminOnly(w, r) {
+		return
+	}
+	u := userFrom(r)
+	flowID := chi.URLParam(r, "flowID")
+	aiMu.Lock()
+	flow := aiGrokFlows[flowID]
+	// Only the initiating admin may poll a shared flow.
+	if flow == nil || !flow.Shared || flow.UserID != u.ID {
+		aiMu.Unlock()
+		aiNoStore(w)
+		writeErr(w, http.StatusNotFound, "xAI sign-in flow not found")
+		return
+	}
+	if time.Since(flow.Created) > aiGrokFlowTTL {
+		delete(aiGrokFlows, flowID)
+		aiMu.Unlock()
+		aiNoStore(w)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "expired"})
+		return
+	}
+	flow.Polls++
+	if flow.Polls < 2 {
+		aiMu.Unlock()
+		aiNoStore(w)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "pending"})
+		return
+	}
+	// Connected: link the shared account and purge ALL conversations.
+	delete(aiGrokFlows, flowID)
+	aiSharedGrokLinked = true
+	aiSharedGrokEmail = "admin@example.com"
+	aiSharedGrokPlan = "SuperGrok Heavy"
+	aiSharedGrokLinkedAt = time.Now()
+	aiConvs = map[int]map[string]bool{}
+	email, plan := aiSharedGrokEmail, aiSharedGrokPlan
+	aiMu.Unlock()
+	aiNoStore(w)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "connected",
+		"account": map[string]any{"email": email, "plan_type": plan},
+	})
+}
+
+func aiAdminGrokCancel(w http.ResponseWriter, r *http.Request) {
+	if !aiAdminOnly(w, r) {
+		return
+	}
+	flowID := chi.URLParam(r, "flowID")
+	aiMu.Lock()
+	if flow := aiGrokFlows[flowID]; flow != nil && flow.Shared {
+		delete(aiGrokFlows, flowID)
+	}
+	aiMu.Unlock()
+	aiNoStore(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func aiAdminGrokUnlink(w http.ResponseWriter, r *http.Request) {
+	if !aiAdminOnly(w, r) {
+		return
+	}
+	aiMu.Lock()
+	aiSharedGrokLinked = false
+	aiSharedGrokEmail = ""
+	aiSharedGrokPlan = ""
+	aiSharedGrokLinkedAt = time.Time{}
+	// Selection is retained: a selected grok_oauth shared profile now fails
+	// closed with reason shared_grok_disconnected.
 	aiConvs = map[int]map[string]bool{} // shared unlink purges all conversations
 	aiMu.Unlock()
 	aiNoStore(w)

@@ -1,7 +1,8 @@
 // books.go — book-side request surfaces (srv-requests §2, app-requests
-// §5–§7): GET /api/requests/book-status, /book-library, /book-recent, plus
-// the per-format book request lifecycle (gap-plan §4.4) shared with
-// requests.go and requests_admin.go.
+// §5–§7): GET /api/requests/book-status, /book-library, /book-recent, the
+// authors/series browse rows and their detail pages, plus the per-format book
+// request lifecycle (gap-plan §4.4) shared with requests.go and
+// requests_admin.go.
 //
 // Book data comes from the D8 hooks (bookByForeignID / allBooks /
 // chaptarrOnBookRequested / chaptarrOnBookAvailable); the per-format request
@@ -12,6 +13,7 @@ package main
 import (
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +47,10 @@ func registerBooks(r chi.Router) {
 	r.Get("/requests/book-status", bookStatusHandler)
 	r.Get("/requests/book-library", bookLibraryHandler)
 	r.Get("/requests/book-recent", bookRecentHandler)
+	r.Get("/requests/book-authors", bookAuthorsHandler)
+	r.Get("/requests/book-author", bookAuthorHandler)
+	r.Get("/requests/book-series", bookSeriesHandler)
+	r.Get("/requests/book-series-detail", bookSeriesDetailHandler)
 }
 
 // ─── Format helpers ─────────────────────────────────────
@@ -336,18 +342,26 @@ func bookLibraryHandler(w http.ResponseWriter, r *http.Request) {
 		if !tracked {
 			continue
 		}
-		titles = append(titles, map[string]any{
-			"title":           b.Title,
-			"author":          b.AuthorName,
-			"year":            b.Year,
-			"foreign_book_id": b.ForeignID,
-			"status_known":    true,
-			"cover":           b.CoverPath(),
-			"ebook":           bookOwnershipJSON(b.Formats[bookFormatEbook]),
-			"audiobook":       bookOwnershipJSON(b.Formats[bookFormatAudiobook]),
-		})
+		titles = append(titles, bookLibraryTitleJSON(b))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"titles": titles})
+}
+
+// bookLibraryTitleJSON renders one LibraryTitle — the per-title ownership row
+// book-library, book-author and book-series-detail all emit. year is an int so
+// it marshals as a JSON integer; the app parses it as an int and a float
+// throws.
+func bookLibraryTitleJSON(b *DemoBook) map[string]any {
+	return map[string]any{
+		"title":           b.Title,
+		"author":          b.AuthorName,
+		"year":            b.Year,
+		"foreign_book_id": b.ForeignID,
+		"status_known":    true,
+		"cover":           b.CoverPath(),
+		"ebook":           bookOwnershipJSON(b.Formats[bookFormatEbook]),
+		"audiobook":       bookOwnershipJSON(b.Formats[bookFormatAudiobook]),
+	}
 }
 
 // bookOwnershipJSON renders one {monitored,downloaded} block — ALWAYS
@@ -536,4 +550,413 @@ func bookRefreshLogRows(foreignID string) {
 		}
 		row.Status = bookCollapse(statuses)
 	}
+}
+
+// ─── Authors & series browse rows ───────────────────────
+
+// The orders the browse rows can be read in. An unknown value falls back to
+// the default rather than erroring: a newer client asking for a sort this
+// server does not have should get a usable row, not a 400.
+//
+// There is deliberately no "date added" order for series. An author record
+// carries an added date; a series is not a record at all — it exists only as a
+// string on each book — so the only dates in reach are publication and import
+// dates, and neither is "when this series entered your library".
+const (
+	bookSortByBooks = "books"
+	bookSortByName  = "name"
+	bookSortByAdded = "added"
+)
+
+// bookBrowseMaxItems caps both browse rows. These are shelves to scan, not the
+// library — someone after one specific author or series searches for them.
+//
+// The cap is applied AFTER the requested sort, never before: capping first
+// would make "by name" mean "the most-collected, alphabetised", which looks
+// complete while silently omitting everyone below the cut.
+const bookBrowseMaxItems = 200
+
+// bookSeriesCoverDepth is how many covers a series card stacks. A deeper stack
+// renders as a smudge.
+const bookSeriesCoverDepth = 3
+
+// bookBrowseResolve resolves the caller's Chaptarr access for a browse call.
+//
+// ok=false with a zero status means the caller simply has no Chaptarr grant.
+// The browse rows answer that with an empty digest — the row is absent for
+// them, which is not a failure — while the detail pages answer 403: they asked
+// about a library they cannot see at all, and a 404 there would claim this
+// library was searched and came up empty.
+func bookBrowseResolve(u *DemoUser, r *http.Request) (ok bool, status int, msg string) {
+	instanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
+	if instanceID != "" {
+		if _, errStatus, errMsg := bookResolveInstance(u, instanceID); errStatus != 0 {
+			return false, errStatus, errMsg
+		}
+		return true, 0, ""
+	}
+	if u.Role != roleAdmin && effectiveInstanceFor(u, serviceChaptarr) == nil {
+		return false, 0, ""
+	}
+	return true, 0, ""
+}
+
+// ─── GET /api/requests/book-authors ─────────────────────
+
+func bookAuthorsHandler(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	ok, status, msg := bookBrowseResolve(u, r)
+	if !ok {
+		if status != 0 {
+			writeErr(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"authors": []map[string]any{}, "total": 0})
+		return
+	}
+	rows := chapLibraryAuthors()
+	// Total counts the whole library, before the cap: a client showing fewer
+	// than this is showing a truncated row and has to be able to say so.
+	total := len(rows)
+	bookSortAuthorRows(rows, r.URL.Query().Get("sort"))
+	if len(rows) > bookBrowseMaxItems {
+		rows = rows[:bookBrowseMaxItems]
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, bookAuthorJSON(row))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"authors": out, "total": total})
+}
+
+// bookAuthorJSON renders one author row. added is OMITTED when the record
+// carries no date: a missing date makes no recency claim, so the "added" order
+// trails it rather than leading with it as the beginning of time.
+func bookAuthorJSON(v chapAuthorView) map[string]any {
+	m := map[string]any{
+		"foreign_author_id": v.ForeignID,
+		"name":              v.Name,
+		"image":             v.Image,
+		"title_count":       len(v.Titles),
+		"available_count":   v.Available,
+	}
+	if !v.Added.IsZero() {
+		m["added"] = v.Added
+	}
+	return m
+}
+
+// bookSortAuthorRows orders the authors row in place. Every order ends in the
+// same name tie-break so an unchanged library never reshuffles between fetches.
+func bookSortAuthorRows(rows []chapAuthorView, order string) {
+	byName := func(i, j int) bool {
+		return strings.ToLower(rows[i].Name) < strings.ToLower(rows[j].Name)
+	}
+	switch strings.ToLower(strings.TrimSpace(order)) {
+	case bookSortByName:
+		sort.Slice(rows, byName)
+	case bookSortByAdded:
+		sort.Slice(rows, func(i, j int) bool {
+			a, b := rows[i].Added, rows[j].Added
+			if a.IsZero() != b.IsZero() {
+				return b.IsZero()
+			}
+			if !a.IsZero() && !a.Equal(b) {
+				return a.After(b)
+			}
+			return byName(i, j)
+		})
+	default:
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].Available != rows[j].Available {
+				return rows[i].Available > rows[j].Available
+			}
+			if len(rows[i].Titles) != len(rows[j].Titles) {
+				return len(rows[i].Titles) > len(rows[j].Titles)
+			}
+			return byName(i, j)
+		})
+	}
+}
+
+// ─── GET /api/requests/book-author ──────────────────────
+
+func bookAuthorHandler(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	foreignID := strings.TrimSpace(r.URL.Query().Get("foreign_id"))
+	if foreignID == "" {
+		writeErr(w, http.StatusBadRequest, "foreign_id required")
+		return
+	}
+	if ok, status, msg := bookBrowseResolve(u, r); !ok {
+		if status == 0 {
+			status, msg = http.StatusForbidden, "chaptarr instance is not available to you"
+		}
+		writeErr(w, status, msg)
+		return
+	}
+	view, found := chapLibraryAuthorByForeignID(foreignID)
+	if !found {
+		writeErr(w, http.StatusNotFound, "author is not in this book library")
+		return
+	}
+	titles := make([]*DemoBook, len(view.Titles))
+	copy(titles, view.Titles)
+	bookSortBibliography(titles)
+	out := make([]map[string]any, 0, len(titles))
+	for _, b := range titles {
+		out = append(out, bookLibraryTitleJSON(b))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"author": bookAuthorJSON(view), "titles": out})
+}
+
+// bookSortBibliography orders an author's titles newest-first. Undated records
+// sort last rather than leading the page as year zero.
+func bookSortBibliography(titles []*DemoBook) {
+	sort.SliceStable(titles, func(i, j int) bool {
+		a, b := titles[i], titles[j]
+		if (a.Year > 0) != (b.Year > 0) {
+			return a.Year > 0
+		}
+		if a.Year != b.Year {
+			return a.Year > b.Year
+		}
+		return strings.ToLower(a.Title) < strings.ToLower(b.Title)
+	})
+}
+
+// ─── GET /api/requests/book-series ──────────────────────
+
+func bookSeriesHandler(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	ok, status, msg := bookBrowseResolve(u, r)
+	if !ok {
+		if status != 0 {
+			writeErr(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"series": []map[string]any{}, "total": 0})
+		return
+	}
+	rows := []chapSeriesView{}
+	for _, v := range chapLibrarySeries() {
+		// A series the library holds no file of is dropped: adding one author
+		// imports their whole bibliography, so a library knows about several
+		// times more series than it holds, and listing them all would make a
+		// shelf of things you own out of mostly things you do not.
+		if v.Available == 0 {
+			continue
+		}
+		rows = append(rows, v)
+	}
+	total := len(rows)
+	bookSortSeriesRows(rows, r.URL.Query().Get("sort"))
+	if len(rows) > bookBrowseMaxItems {
+		rows = rows[:bookBrowseMaxItems]
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, v := range rows {
+		out = append(out, bookSeriesJSON(v))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"series": out, "total": total})
+}
+
+func bookSeriesJSON(v chapSeriesView) map[string]any {
+	return map[string]any{
+		"name":            v.Name,
+		"covers":          bookSeriesCovers(v),
+		"title_count":     len(v.Titles),
+		"available_count": v.Available,
+	}
+}
+
+// bookSortSeriesRows orders the series row in place, with the same name
+// tie-break the authors row uses.
+func bookSortSeriesRows(rows []chapSeriesView, order string) {
+	byName := func(i, j int) bool {
+		return strings.ToLower(rows[i].Name) < strings.ToLower(rows[j].Name)
+	}
+	if strings.EqualFold(strings.TrimSpace(order), bookSortByName) {
+		sort.Slice(rows, byName)
+		return
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Available != rows[j].Available {
+			return rows[i].Available > rows[j].Available
+		}
+		if len(rows[i].Titles) != len(rows[j].Titles) {
+			return len(rows[i].Titles) > len(rows[j].Titles)
+		}
+		return byName(i, j)
+	})
+}
+
+// bookSeriesCovers picks the covers a series card stacks: the first book the
+// library actually holds, then the run in order behind it.
+//
+// Ownership outranks position, because this row is about a library rather than
+// a bibliography — showing book one's art for a book nobody has is a picture of
+// something you do not own, and the count beside it already says how much of
+// the series is missing. Duplicates are dropped: several records of one title
+// share its art, and the same cover stacked three times reads as a rendering
+// fault rather than a series. The final tie-break is the title, so a series
+// that files several titles at one position picks the same cover every fetch.
+func bookSeriesCovers(v chapSeriesView) []string {
+	type candidate struct {
+		owned bool
+		tier  int
+		key   float64
+		title string
+		cover string
+	}
+	cands := make([]candidate, 0, len(v.Titles))
+	for _, b := range v.Titles {
+		cover := b.CoverPath()
+		if cover == "" {
+			continue
+		}
+		owned := false
+		for _, f := range []string{bookFormatEbook, bookFormatAudiobook} {
+			if rec := b.Formats[f]; rec != nil && rec.Downloaded {
+				owned = true
+				break
+			}
+		}
+		tier, key := bookSeriesCoverRank(v.Positions[b.ForeignID])
+		cands = append(cands, candidate{
+			owned: owned, tier: tier, key: key,
+			title: strings.ToLower(strings.TrimSpace(b.Title)), cover: cover,
+		})
+	}
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].owned != cands[j].owned {
+			return cands[i].owned
+		}
+		if cands[i].tier != cands[j].tier {
+			return cands[i].tier < cands[j].tier
+		}
+		if cands[i].key != cands[j].key {
+			return cands[i].key < cands[j].key
+		}
+		return cands[i].title < cands[j].title
+	})
+	covers := make([]string, 0, bookSeriesCoverDepth)
+	seen := map[string]bool{}
+	for _, c := range cands {
+		if seen[c.cover] {
+			continue
+		}
+		seen[c.cover] = true
+		covers = append(covers, c.cover)
+		if len(covers) == bookSeriesCoverDepth {
+			break
+		}
+	}
+	return covers
+}
+
+// bookSeriesCoverRank places a book in the running for the front of the stack:
+// tier 0 is the numbered run (position >= 1), tier 1 the sub-one positions
+// (0 for boxed sets and companions, 0.5 for a prequel novella), tier 2 the
+// records the series states no position for. Ranking on the raw number alone
+// would put the collections — filed at 0 — in front of book one.
+func bookSeriesCoverRank(position string) (tier int, key float64) {
+	value, ok := bookSeriesPositionKey(position)
+	switch {
+	case !ok:
+		return 2, 0
+	case value >= 1:
+		return 0, value
+	default:
+		return 1, value
+	}
+}
+
+// bookSeriesPositionKey reads the leading number off a position for ordering.
+//
+// Real libraries carry positions like "2A", "1.5, 1.6, 1.7", "5/6" and
+// "3, Part 1 of 2". Their numeric prefix is what places them; the rest is
+// display detail, and a position with no number at all sorts last rather than
+// claiming position zero.
+func bookSeriesPositionKey(position string) (float64, bool) {
+	s := strings.TrimSpace(position)
+	end, seenDot := 0, false
+	for end < len(s) {
+		c := s[end]
+		if c >= '0' && c <= '9' {
+			end++
+			continue
+		}
+		if c == '.' && !seenDot && end+1 < len(s) && s[end+1] >= '0' && s[end+1] <= '9' {
+			seenDot = true
+			end++
+			continue
+		}
+		break
+	}
+	if end == 0 {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(s[:end], 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+// ─── GET /api/requests/book-series-detail ───────────────
+
+func bookSeriesDetailHandler(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		writeErr(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if ok, status, msg := bookBrowseResolve(u, r); !ok {
+		if status == 0 {
+			status, msg = http.StatusForbidden, "chaptarr instance is not available to you"
+		}
+		writeErr(w, status, msg)
+		return
+	}
+	view, found := chapLibrarySeriesByName(name)
+	if !found {
+		writeErr(w, http.StatusNotFound, "series is not in this book library")
+		return
+	}
+	titles := make([]*DemoBook, len(view.Titles))
+	copy(titles, view.Titles)
+	bookSortSeriesTitles(titles, view.Positions)
+	out := make([]map[string]any, 0, len(titles))
+	for _, b := range titles {
+		// Flattened: position sits alongside the title's own fields, not
+		// nested under one of them.
+		row := bookLibraryTitleJSON(b)
+		row["position"] = view.Positions[b.ForeignID]
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"series": bookSeriesJSON(view), "titles": out})
+}
+
+// bookSortSeriesTitles orders a series in reading order: by the numeric prefix
+// of each position, then by the raw position so "2A" and "2B" stay in order,
+// and finally by title. Titles the series states no position for trail the
+// rest rather than claiming the front.
+func bookSortSeriesTitles(titles []*DemoBook, positions map[string]string) {
+	sort.SliceStable(titles, func(i, j int) bool {
+		pi, pj := positions[titles[i].ForeignID], positions[titles[j].ForeignID]
+		a, aOK := bookSeriesPositionKey(pi)
+		b, bOK := bookSeriesPositionKey(pj)
+		if aOK != bOK {
+			return aOK
+		}
+		if aOK && a != b {
+			return a < b
+		}
+		if pi != pj {
+			return pi < pj
+		}
+		return strings.ToLower(titles[i].Title) < strings.ToLower(titles[j].Title)
+	})
 }

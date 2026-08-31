@@ -29,7 +29,7 @@ func handleSonarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInstanc
 	case http.MethodGet:
 		switch {
 		case path == "series":
-			arrSServeSeries(w)
+			arrSServeSeries(w, inst)
 		case strings.HasPrefix(path, "series/"):
 			arrSServeSeriesByID(w, strings.TrimPrefix(path, "series/"))
 		case path == "episode":
@@ -363,10 +363,13 @@ func arrSHistoryJSON(rec *arrHistoryRec) map[string]any {
 
 // ─── GET handlers ───────────────────────────────────────
 
-func arrSServeSeries(w http.ResponseWriter) {
+func arrSServeSeries(w http.ResponseWriter, inst *DemoInstance) {
 	arrMu.Lock()
 	docs := make([]map[string]any, 0, len(arrSSeries))
 	for _, st := range arrSSeries {
+		if !arrInSiblingLibrary(inst, st.TmdbID) {
+			continue
+		}
 		docs = append(docs, arrSSeriesJSON(st))
 	}
 	arrMu.Unlock()

@@ -51,6 +51,26 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 
 	vis := visibleInstances(u)
 
+	// A requester's is_default is resolved per service type, not per row.
+	effectiveDefaults := map[string]string{}
+	if !isAdmin {
+		for _, st := range grantableServiceTypes() {
+			effectiveDefaults[st] = effectiveInstanceIDFor(u, st)
+		}
+	}
+
+	// plex_access_requestable tells a user who holds NO Plex grant that there
+	// is a Plex server to ask for: the guide then offers "share your Plex
+	// email" and admins hear about it. It is computed across every instance,
+	// before per-user filtering, and reveals nothing else about the server.
+	plexRequestable := false
+	for _, inst := range allInstances() {
+		if inst.ServiceType == servicePlex {
+			plexRequestable = true
+			break
+		}
+	}
+
 	services := map[string]bool{
 		"radarr":          false,
 		"sonarr":          false,
@@ -80,9 +100,11 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 
 		isDefault := inst.IsDefault
 		if !isAdmin {
-			// Every entry on a non-admin's list is that user's effective
-			// default.
-			isDefault = true
+			// is_default marks THIS user's effective default, which is how an
+			// older client that expects one instance per type still picks the
+			// right one. Grants are additive, so a requester's list can hold
+			// several instances of a type and exactly one of them is theirs.
+			isDefault = effectiveDefaults[inst.ServiceType] == inst.ID
 		} else if pin, ok := pins[inst.ServiceType]; ok && pin != "" {
 			// An admin's personal pin overrides the global default flag for
 			// that service type.
@@ -107,6 +129,9 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 		"instances":       instances,
 		"issues_enabled":  true,
 		"allow_reporting": true,
+		// True when a Plex server exists at all, so a user without the grant
+		// can still ask for access from the guide.
+		"plex_access_requestable": plexRequestable,
 	})
 }
 
@@ -119,10 +144,14 @@ func cfgSetupItems() []map[string]any {
 	haveType := map[string]bool{}
 	anyDownloadClient := false
 	anyMediaDownloads := false
+	anyMediaServer := false
 	for _, inst := range allInstances() {
 		haveType[inst.ServiceType] = true
 		if inst.MediaDownloads {
 			anyMediaDownloads = true
+		}
+		if isMediaServerType(inst.ServiceType) {
+			anyMediaServer = true
 		}
 		switch inst.ServiceType {
 		case serviceSabnzbd, serviceNzbget, serviceQbittorrent, serviceTransmission:
@@ -162,9 +191,9 @@ func cfgSetupItems() []map[string]any {
 		item("push", "Push notifications",
 			"Approval, issue, and new-content alerts on devices. Set CANTINARR_PUSH_GATEWAY_URL on the server.",
 			false, true),
-		item("plex_invites", "Plex invites",
-			"Link a Plex account to send server invites with one tap — or automatically.",
-			plexConfigured(), true),
+		item("media_servers", "Media server access",
+			"Connect Plex, Jellyfin, or Emby so users can get access from the app: a Plex invite, or an account they create themselves.",
+			anyMediaServer, true),
 		item("trakt", "Trakt discovery",
 			"Trending, popular lists, and the release calendar run on Cantinarr's built-in Trakt app out of the box; add your own client ID in the Discover settings to use yours instead.",
 			true, true),

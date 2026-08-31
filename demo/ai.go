@@ -1,10 +1,10 @@
 // ai.go — the AI chat SSE endpoint, personal AI settings/credentials, and the
-// personal Codex (OpenAI OAuth) device-flow simulation. Admin-side AI surfaces
-// live in ai_admin.go; canned chat scripts and configuration-history seeds
-// live in data_ai.go. All shared AI state (personal + shared profiles,
-// conversations, device flows, chat admission) is guarded by aiMu and is
-// domain-local — the core store is never touched from here except through the
-// contract accessors.
+// personal Codex (OpenAI OAuth) and Grok (xAI OAuth) device-flow simulations.
+// Admin-side AI surfaces live in ai_admin.go; canned chat scripts and
+// configuration-history seeds live in data_ai.go. All shared AI state
+// (personal + shared profiles, conversations, device flows, chat admission) is
+// guarded by aiMu and is domain-local — the core store is never touched from
+// here except through the contract accessors.
 package main
 
 import (
@@ -23,21 +23,37 @@ import (
 
 // aiPersonalState is one user's personal AI configuration: the optional
 // selection override, stored key presence per provider (write-only — values
-// are never kept), and the personal Codex OAuth link.
+// are never kept), and the personal Codex / Grok OAuth links.
 type aiPersonalState struct {
 	Selected bool
 	Provider string
 	Model    string
-	Keys     map[string]bool // anthropic/openai/gemini -> stored-key presence
+	Keys     map[string]bool // anthropic/openai/gemini/grok -> stored-key presence
 	// Personal Codex (OpenAI OAuth) link.
 	CodexLinked   bool
 	CodexEmail    string
 	CodexPlan     string
 	CodexLinkedAt time.Time
+	// Personal Grok (xAI OAuth) link — a separate account from Codex, with
+	// its own link/unlink lifecycle.
+	GrokLinked   bool
+	GrokEmail    string
+	GrokPlan     string
+	GrokLinkedAt time.Time
 }
 
 // aiCodexFlow is one in-flight simulated device-login flow.
 type aiCodexFlow struct {
+	UserID  int
+	Shared  bool // true = admin shared scope
+	Created time.Time
+	Polls   int
+}
+
+// aiGrokFlow is one in-flight simulated xAI device-login flow. Same shape and
+// lifecycle as aiCodexFlow, kept separate because the two accounts link and
+// unlink independently (the real server runs two managers).
+type aiGrokFlow struct {
 	UserID  int
 	Shared  bool // true = admin shared scope
 	Created time.Time
@@ -51,9 +67,13 @@ var (
 
 	// Shared (admin) profile. Seeded per the resolved design decisions:
 	// provider anthropic, anthropic key present, health check on.
-	aiSharedProvider    = "anthropic"
-	aiSharedModel       = "claude-opus-4-8"
-	aiSharedCreds       = map[string]bool{"tmdb_access_token": true, "anthropic_key": true, "openai_key": false, "gemini_key": false, "trakt_client_id": true}
+	aiSharedProvider = "anthropic"
+	aiSharedModel    = "claude-opus-4-8"
+	aiSharedCreds    = map[string]bool{
+		"tmdb_access_token": true, "anthropic_key": true, "openai_key": false,
+		"gemini_key": false, "grok_key": false, "local_openai_key": false,
+		"trakt_client_id": true,
+	}
 	aiHealthEnabled     = true
 	aiHealthLastChecked = time.Now().Add(-6 * time.Hour)
 
@@ -63,12 +83,21 @@ var (
 	aiSharedCodexPlan     = ""
 	aiSharedCodexLinkedAt time.Time
 
+	// Shared Grok (xAI) OAuth account — same honest not-connected default.
+	aiSharedGrokLinked   = false
+	aiSharedGrokEmail    = ""
+	aiSharedGrokPlan     = ""
+	aiSharedGrokLinkedAt time.Time
+
 	// Per-user conversation-id map: known ids are echoed, unknown ids mint a
 	// fresh 32-hex id (spec §1 conversation semantics).
 	aiConvs = map[int]map[string]bool{}
 
 	// Simulated Codex device flows, personal and shared.
 	aiCodexFlows = map[string]*aiCodexFlow{}
+
+	// Simulated Grok (xAI) device flows, personal and shared.
+	aiGrokFlows = map[string]*aiGrokFlow{}
 
 	// Chat admission bookkeeping: one turn per user, 16 server-wide, 4 billed
 	// to the shared source.
@@ -80,25 +109,57 @@ var (
 const (
 	aiCodexVerificationURI = "https://auth.openai.com/activate"
 	aiCodexFlowTTL         = 15 * time.Minute
-	aiValidationDelay      = 1500 * time.Millisecond
-	aiValidationRejected   = "The provider credential or account connection was rejected. Check or reconnect the provider credential. Nothing was saved."
+	// aiGrokVerificationURI must stay on an xAI sign-in host: the app refuses
+	// (FormatException) anything outside ^https://(auth|accounts)\.x\.ai so a
+	// tampered response cannot route a user to a lookalike domain.
+	aiGrokVerificationURI = "https://auth.x.ai/activate"
+	aiGrokFlowTTL         = 15 * time.Minute
+	aiValidationDelay     = 1500 * time.Millisecond
+	aiValidationRejected  = "The provider credential or account connection was rejected. Check or reconnect the provider credential. Nothing was saved."
 )
 
-// aiKeyProviders are the API-key providers; codex is OAuth-only.
+// aiKeyProviders are the API-key providers; codex and grok_oauth are
+// OAuth-only.
 var aiKeyProviders = map[string]string{
-	"anthropic": "anthropic_key",
-	"openai":    "openai_key",
-	"gemini":    "gemini_key",
+	"anthropic":    "anthropic_key",
+	"openai":       "openai_key",
+	"gemini":       "gemini_key",
+	"grok":         "grok_key",
+	"local_openai": "local_openai_key",
 }
+
+// aiSharedOnlyProviders exist only as the admin-configured shared profile:
+// their endpoints can name cluster-internal hosts, which must never ride a
+// non-admin path. They are filtered out of personal payloads and rejected as
+// personal selections.
+var aiSharedOnlyProviders = map[string]bool{"local_openai": true}
+
+// aiOAuthProviders authenticate with a linked account instead of a stored API
+// key, so they never accept an api_key.
+var aiOAuthProviders = map[string]bool{"codex": true, "grok_oauth": true}
+
+// aiKeyOptionalProviders work without a stored API key — local
+// OpenAI-compatible servers usually ignore auth entirely.
+var aiKeyOptionalProviders = map[string]bool{"local_openai": true}
 
 // ─── Provider catalog (spec §10; order matters) ─────────
 
 // aiProviderCatalog builds the full provider/model catalog. The first model
-// of each provider is its default. codex serializes "credential_key": ""
-// (no omitempty on the real struct tag).
+// of each provider is its default. codex and grok_oauth serialize
+// "credential_key": "" (no omitempty on the real struct tag), while
+// supports_base_url / supports_reasoning_effort / shared_only are omitempty
+// and appear only where they are true.
 func aiProviderCatalog() []map[string]any {
 	model := func(id, label, desc string) map[string]any {
 		return map[string]any{"id": id, "label": label, "description": desc}
+	}
+	// Both xAI providers serve the same OpenAI-compatible model catalog: the
+	// API key and the subscription OAuth paths differ only in how they
+	// authenticate.
+	grokModels := []map[string]any{
+		model("grok-4.6", "Grok 4.6", "Latest flagship xAI model"),
+		model("grok-4.5", "Grok 4.5", "Previous-generation flagship model"),
+		model("grok-4.3", "Grok 4.3", "Affordable model with a 1M-token context"),
 	}
 	return []map[string]any{
 		{
@@ -114,14 +175,13 @@ func aiProviderCatalog() []map[string]any {
 		},
 		{
 			"id": "openai", "label": "OpenAI", "auth_type": "api_key",
-			"credential_key": "openai_key",
+			"credential_key": "openai_key", "supports_reasoning_effort": true,
 			"models": []map[string]any{
-				model("gpt-5.5", "GPT-5.5", "Flagship OpenAI model"),
-				model("gpt-5.4", "GPT-5.4", "Affordable frontier model"),
-				model("gpt-5.4-mini", "GPT-5.4 mini", "Lower latency and cost"),
-				model("gpt-5.4-nano", "GPT-5.4 nano", "Smallest current GPT-5.4 model"),
-				model("gpt-4.1", "GPT-4.1", "Stable previous-generation model"),
-				model("gpt-4.1-mini", "GPT-4.1 mini", "Fast previous-generation model"),
+				model("gpt-5.6-sol", "GPT-5.6 Sol", "Frontier model for complex work"),
+				model("gpt-5.6-terra", "GPT-5.6 Terra", "Balances intelligence and cost"),
+				model("gpt-5.6-luna", "GPT-5.6 Luna", "Fast model for high-volume work"),
+				model("gpt-5.5", "GPT-5.5", "Previous-generation flagship"),
+				model("gpt-4.1-mini", "GPT-4.1 mini", "Low-cost older model"),
 			},
 		},
 		{
@@ -134,8 +194,12 @@ func aiProviderCatalog() []map[string]any {
 				model("gemini-3.1-pro-preview-customtools", "Gemini 3.1 Pro Preview Custom Tools", "Gemini 3.1 Pro endpoint tuned for custom tool-heavy workflows"),
 				model("gemini-2.5-pro", "Gemini 2.5 Pro", "Advanced reasoning and coding"),
 				model("gemini-2.5-flash", "Gemini 2.5 Flash", "Low-latency reasoning"),
-				model("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite", "Fastest budget Gemini option"),
 			},
+		},
+		{
+			"id": "grok", "label": "xAI Grok", "auth_type": "api_key",
+			"credential_key": "grok_key",
+			"models":         grokModels,
 		},
 		{
 			"id": "codex", "label": "OpenAI (OAuth)", "auth_type": "user_oauth",
@@ -147,29 +211,63 @@ func aiProviderCatalog() []map[string]any {
 				model("gpt-5.6-luna", "GPT-5.6 Luna", "Fast GPT-5.6 model for clear, repeatable work"),
 			},
 		},
+		{
+			"id": "grok_oauth", "label": "xAI Grok (OAuth)", "auth_type": "user_oauth",
+			"credential_key": "",
+			"models":         grokModels,
+		},
+		{
+			"id": "local_openai", "label": "Local (OpenAI-compatible)", "auth_type": "api_key",
+			"credential_key": "local_openai_key", "supports_base_url": true,
+			"supports_reasoning_effort": true, "shared_only": true,
+			// No catalog on purpose: local model IDs are whatever the server
+			// hosts, so the app offers only the custom-model field. Empty
+			// slice, never null.
+			"models": []map[string]any{},
+		},
 	}
 }
 
-// aiProviderIDs reports whether id is a catalog provider.
+// aiPersonalProviderCatalog is the catalog personal (non-admin) payloads may
+// carry: shared-only entries stay admin-facing.
+func aiPersonalProviderCatalog() []map[string]any {
+	full := aiProviderCatalog()
+	out := make([]map[string]any, 0, len(full))
+	for _, p := range full {
+		if id, _ := p["id"].(string); aiSharedOnlyProviders[id] {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// aiProviderKnown reports whether id is a catalog provider.
 func aiProviderKnown(id string) bool {
 	switch id {
-	case "anthropic", "openai", "gemini", "codex":
+	case "anthropic", "openai", "gemini", "grok", "codex", "grok_oauth", "local_openai":
 		return true
 	}
 	return false
 }
 
-// aiDefaultModel is the first catalog model of a provider.
+// aiDefaultModel is the first catalog model of a provider. A known provider
+// with no catalog (local OpenAI-compatible servers host arbitrary model IDs)
+// returns empty: the model must be chosen explicitly.
 func aiDefaultModel(provider string) string {
 	switch provider {
 	case "anthropic":
 		return "claude-opus-4-8"
 	case "openai":
-		return "gpt-5.5"
+		return "gpt-5.6-sol"
 	case "gemini":
 		return "gemini-3.5-flash"
+	case "grok", "grok_oauth":
+		return "grok-4.6"
 	case "codex":
 		return "default"
+	case "local_openai":
+		return ""
 	}
 	return ""
 }
@@ -190,14 +288,19 @@ func aiLockedPersonal(uid int) *aiPersonalState {
 // aiLockedSharedUsable reports whether the shared profile can serve a turn
 // right now (key present / shared OAuth linked). Callers must hold aiMu.
 func aiLockedSharedUsable() bool {
-	if aiSharedProvider == "codex" {
+	switch aiSharedProvider {
+	case "codex":
 		return aiSharedCodexLinked
+	case "grok_oauth":
+		return aiSharedGrokLinked
 	}
 	key, ok := aiKeyProviders[aiSharedProvider]
 	if !ok {
 		return false
 	}
-	return aiSharedCreds[key]
+	// Key-optional providers (local OpenAI-compatible servers) are complete
+	// without a stored key: the runner sends a placeholder bearer instead.
+	return aiSharedCreds[key] || aiKeyOptionalProviders[aiSharedProvider]
 }
 
 // aiResolution is the effective AI resolution for one user.
@@ -222,11 +325,19 @@ func aiLockedResolveFor(u *DemoUser) aiResolution {
 	p := aiLockedPersonal(u.ID)
 	if p.Selected {
 		res := aiResolution{Source: "personal", Provider: p.Provider, Model: p.Model}
-		if p.Provider == "codex" {
+		switch p.Provider {
+		case "codex":
 			if p.CodexLinked {
 				res.Available = true
 			} else {
 				res.Reason = "personal_codex_disconnected"
+			}
+			return res
+		case "grok_oauth":
+			if p.GrokLinked {
+				res.Available = true
+			} else {
+				res.Reason = "personal_grok_disconnected"
 			}
 			return res
 		}
@@ -241,11 +352,19 @@ func aiLockedResolveFor(u *DemoUser) aiResolution {
 		return aiResolution{Source: "none", Reason: "shared_access_disabled"}
 	}
 	res := aiResolution{Source: "shared", Provider: aiSharedProvider, Model: aiSharedModel}
-	if aiSharedProvider == "codex" {
+	switch aiSharedProvider {
+	case "codex":
 		if aiSharedCodexLinked {
 			res.Available = true
 		} else {
 			res.Reason = "shared_codex_disconnected"
+		}
+		return res
+	case "grok_oauth":
+		if aiSharedGrokLinked {
+			res.Available = true
+		} else {
+			res.Reason = "shared_grok_disconnected"
 		}
 		return res
 	}
@@ -290,7 +409,9 @@ func aiSettingsDocJSON(u *DemoUser) map[string]any {
 		personalConfig = map[string]any{"provider": p.Provider, "model": p.Model}
 	}
 	return map[string]any{
-		"providers": aiProviderCatalog(),
+		// Personal payloads carry only personally selectable providers:
+		// shared-only entries (local_openai) stay admin-facing.
+		"providers": aiPersonalProviderCatalog(),
 		// The zero-config pair the UI preselects when nothing is chosen yet.
 		"default_provider": "codex",
 		"default_model":    "gpt-5.6-luna",
@@ -298,10 +419,12 @@ func aiSettingsDocJSON(u *DemoUser) map[string]any {
 			"selected": p.Selected,
 			"config":   personalConfig,
 			"credentials": map[string]bool{
-				"anthropic": p.Keys["anthropic"],
-				"openai":    p.Keys["openai"],
-				"gemini":    p.Keys["gemini"],
-				"codex":     p.CodexLinked,
+				"anthropic":  p.Keys["anthropic"],
+				"openai":     p.Keys["openai"],
+				"gemini":     p.Keys["gemini"],
+				"grok":       p.Keys["grok"],
+				"codex":      p.CodexLinked,
+				"grok_oauth": p.GrokLinked,
 			},
 			"reason": "",
 		},
@@ -530,7 +653,7 @@ func aiConversationID(uid int, requested string) string {
 
 // registerAI mounts the user-facing AI surfaces on the authenticated /api
 // router: the chat SSE endpoint, availability, personal settings and
-// credentials, and the personal Codex device flow.
+// credentials, and the personal Codex and Grok device flows.
 func registerAI(r chi.Router) {
 	r.Post("/ai/chat", aiHandleChat)
 	r.Get("/ai/available", aiHandleAvailable)
@@ -547,6 +670,12 @@ func registerAI(r chi.Router) {
 	r.Get("/ai/codex/device/{flowID}", aiHandleCodexPoll)
 	r.Delete("/ai/codex/device/{flowID}", aiHandleCodexCancel)
 	r.Delete("/ai/codex", aiHandleCodexUnlink)
+
+	r.Get("/ai/grok/status", aiHandleGrokStatus)
+	r.Post("/ai/grok/device/begin", aiHandleGrokBegin)
+	r.Get("/ai/grok/device/{flowID}", aiHandleGrokPoll)
+	r.Delete("/ai/grok/device/{flowID}", aiHandleGrokCancel)
+	r.Delete("/ai/grok", aiHandleGrokUnlink)
 }
 
 // ─── POST /api/ai/chat ──────────────────────────────────
@@ -650,7 +779,14 @@ func aiHandlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid AI provider or model")
 		return
 	}
-	if body.Provider == "codex" && strings.TrimSpace(body.APIKey) != "" {
+	// Shared-only providers (the local OpenAI-compatible endpoint) never
+	// become personal selections: their endpoints can name cluster-internal
+	// hosts, which must never ride a non-admin path.
+	if aiSharedOnlyProviders[body.Provider] {
+		writeErr(w, http.StatusBadRequest, "this provider is available only as the server's shared profile")
+		return
+	}
+	if aiOAuthProviders[body.Provider] && strings.TrimSpace(body.APIKey) != "" {
 		writeErr(w, http.StatusBadRequest, "OAuth providers do not accept API keys")
 		return
 	}
@@ -665,8 +801,12 @@ func aiHandlePutSettings(w http.ResponseWriter, r *http.Request) {
 
 	aiMu.Lock()
 	p := aiLockedPersonal(u.ID)
-	if body.Provider == "codex" {
-		if !p.CodexLinked {
+	if aiOAuthProviders[body.Provider] {
+		linked := p.CodexLinked
+		if body.Provider == "grok_oauth" {
+			linked = p.GrokLinked
+		}
+		if !linked {
 			aiMu.Unlock()
 			aiNoStore(w)
 			writeErr(w, http.StatusUnprocessableEntity, aiValidationRejected)
@@ -709,7 +849,8 @@ func aiHandleDeleteSettings(w http.ResponseWriter, r *http.Request) {
 func aiHandlePutCredential(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
 	provider := chi.URLParam(r, "provider")
-	if _, ok := aiKeyProviders[provider]; !ok {
+	// Shared-only providers keep their key on the admin credentials surface.
+	if _, ok := aiKeyProviders[provider]; !ok || aiSharedOnlyProviders[provider] {
 		writeErr(w, http.StatusBadRequest, "provider does not accept an API key")
 		return
 	}
@@ -741,7 +882,8 @@ func aiHandlePutCredential(w http.ResponseWriter, r *http.Request) {
 func aiHandleDeleteCredential(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
 	provider := chi.URLParam(r, "provider")
-	if _, ok := aiKeyProviders[provider]; !ok {
+	// Shared-only providers keep their key on the admin credentials surface.
+	if _, ok := aiKeyProviders[provider]; !ok || aiSharedOnlyProviders[provider] {
 		writeErr(w, http.StatusBadRequest, "provider does not accept an API key")
 		return
 	}
@@ -901,6 +1043,139 @@ func aiHandleCodexUnlink(w http.ResponseWriter, r *http.Request) {
 	p.CodexLinkedAt = time.Time{}
 	// Selection is retained: a selected codex profile now fails closed with
 	// reason personal_codex_disconnected (no silent fallback to shared).
+	delete(aiConvs, u.ID)
+	aiMu.Unlock()
+	aiNoStore(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── Personal Grok (xAI OAuth) device flow ──────────────
+
+// The xAI flow mirrors the Codex one — same record shape, same 15-minute TTL,
+// pending on the first poll and connected from the second — because the app
+// drives both screens the same way. Unlike Codex it carries no usage block:
+// the real status returns only email / plan_type / updated_at.
+
+func aiHandleGrokStatus(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	aiMu.Lock()
+	p := aiLockedPersonal(u.ID)
+	res := aiLockedResolveFor(u)
+	personalSelected := p.Selected && p.Provider == "grok_oauth"
+	out := map[string]any{
+		"available": true,
+		// No Codex-style compat quirk here: selected simply mirrors the
+		// personal selection.
+		"selected":          personalSelected,
+		"personal_selected": personalSelected,
+		"connected":         p.GrokLinked,
+		"effective":         res.Available && res.Source == "personal" && res.Provider == "grok_oauth",
+	}
+	if p.GrokLinked {
+		out["account_email"] = p.GrokEmail
+		out["plan_type"] = p.GrokPlan
+		if !p.GrokLinkedAt.IsZero() {
+			out["updated_at"] = p.GrokLinkedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	aiMu.Unlock()
+	aiNoStore(w)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func aiHandleGrokBegin(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	aiMu.Lock()
+	if aiLockedPersonal(u.ID).GrokLinked {
+		aiMu.Unlock()
+		aiNoStore(w)
+		writeErr(w, http.StatusConflict, "Disconnect the current xAI account before linking another one")
+		return
+	}
+	flowID := randomHex(16)
+	aiGrokFlows[flowID] = &aiGrokFlow{UserID: u.ID, Created: time.Now()}
+	aiMu.Unlock()
+	aiNoStore(w)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"flow_id":          flowID,
+		"verification_uri": aiGrokVerificationURI,
+		"user_code":        aiNewUserCode(),
+		"expires_in":       900,
+		"interval":         2,
+	})
+}
+
+func aiHandleGrokPoll(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	flowID := chi.URLParam(r, "flowID")
+	aiMu.Lock()
+	flow := aiGrokFlows[flowID]
+	if flow == nil || flow.Shared || flow.UserID != u.ID {
+		aiMu.Unlock()
+		aiNoStore(w)
+		writeErr(w, http.StatusNotFound, "xAI sign-in flow not found")
+		return
+	}
+	if time.Since(flow.Created) > aiGrokFlowTTL {
+		delete(aiGrokFlows, flowID)
+		aiMu.Unlock()
+		aiNoStore(w)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "expired"})
+		return
+	}
+	flow.Polls++
+	if flow.Polls < 2 {
+		aiMu.Unlock()
+		aiNoStore(w)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "pending"})
+		return
+	}
+	// Connected: link the account, purge the user's conversations (a new
+	// authorization may belong to a different xAI account — never replay a
+	// transcript across that boundary), and auto-select a personal grok_oauth
+	// profile so status, settings, and config flip together.
+	delete(aiGrokFlows, flowID)
+	p := aiLockedPersonal(u.ID)
+	p.GrokLinked = true
+	p.GrokEmail = u.Username + "@example.com"
+	p.GrokPlan = "SuperGrok"
+	p.GrokLinkedAt = time.Now()
+	if !(p.Selected && p.Provider == "grok_oauth") {
+		p.Selected = true
+		p.Provider = "grok_oauth"
+		p.Model = aiDefaultModel("grok_oauth")
+	}
+	delete(aiConvs, u.ID)
+	email, plan := p.GrokEmail, p.GrokPlan
+	aiMu.Unlock()
+	aiNoStore(w)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "connected",
+		"account": map[string]any{"email": email, "plan_type": plan},
+	})
+}
+
+func aiHandleGrokCancel(w http.ResponseWriter, r *http.Request) {
+	flowID := chi.URLParam(r, "flowID")
+	aiMu.Lock()
+	if flow := aiGrokFlows[flowID]; flow != nil && !flow.Shared {
+		delete(aiGrokFlows, flowID)
+	}
+	aiMu.Unlock()
+	aiNoStore(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func aiHandleGrokUnlink(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	aiMu.Lock()
+	p := aiLockedPersonal(u.ID)
+	p.GrokLinked = false
+	p.GrokEmail = ""
+	p.GrokPlan = ""
+	p.GrokLinkedAt = time.Time{}
+	// Selection is retained: a selected grok_oauth profile now fails closed
+	// with reason personal_grok_disconnected (no silent fallback to shared).
 	delete(aiConvs, u.ID)
 	aiMu.Unlock()
 	aiNoStore(w)

@@ -28,9 +28,9 @@ func handleRadarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInstanc
 	case http.MethodGet:
 		switch {
 		case path == "movie":
-			arrRServeMovies(w)
+			arrRServeMovies(w, inst)
 		case strings.HasPrefix(path, "movie/"):
-			arrRServeMovieByID(w, strings.TrimPrefix(path, "movie/"))
+			arrRServeMovieByID(w, inst, strings.TrimPrefix(path, "movie/"))
 		case path == "queue":
 			arrRServeQueue(w, r)
 		case path == "queue/details":
@@ -80,6 +80,31 @@ func handleRadarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInstanc
 	default:
 		writeErr(w, http.StatusNotFound, "not found")
 	}
+}
+
+// arrMovieReleaseDates is the cross-domain read of a movie's theatrical and
+// digital dates, as plain YYYY-MM-DD calendar dates. Both are "" when the
+// library holds no record for the title — an unadded movie has no arr record
+// to read dates off, which is absence of a record, not absence of a release.
+func arrMovieReleaseDates(tmdbID int) (inCinemas, digital string) {
+	arrEnsureSeeded()
+	arrMu.Lock()
+	defer arrMu.Unlock()
+	m := arrRMovieByTmdb[tmdbID]
+	if m == nil {
+		return "", ""
+	}
+	return arrCalendarDate(m.InCinemas), arrCalendarDate(m.Digital)
+}
+
+// arrCalendarDate trims an RFC3339 instant to its YYYY-MM-DD date. A release
+// date has no time of day; serialising one as an instant invites a client to
+// localise it and land a day early or late.
+func arrCalendarDate(iso string) string {
+	if len(iso) < 10 {
+		return ""
+	}
+	return iso[:10]
 }
 
 // ─── Document renderers ─────────────────────────────────
@@ -184,17 +209,36 @@ func arrRHistoryJSON(rec *arrHistoryRec) map[string]any {
 
 // ─── GET handlers ───────────────────────────────────────
 
-func arrRServeMovies(w http.ResponseWriter) {
+func arrRServeMovies(w http.ResponseWriter, inst *DemoInstance) {
 	arrMu.Lock()
 	docs := make([]map[string]any, 0, len(arrRMovies))
 	for _, m := range arrRMovies {
+		if !arrInSiblingLibrary(inst, m.TmdbID) {
+			continue
+		}
 		docs = append(docs, arrRMovieJSON(m))
 	}
 	arrMu.Unlock()
 	writeJSON(w, http.StatusOK, docs)
 }
 
-func arrRServeMovieByID(w http.ResponseWriter, idStr string) {
+// arrInSiblingLibrary decides whether a title is in THIS library. The demo
+// runs one fixture set, so a second library of a type would otherwise be an
+// exact copy of the first and the Library chooser would have nothing to say.
+// A non-default sibling therefore holds a stable subset: enough to look like
+// a real second library, and enough for the per-library chips to differ.
+func arrInSiblingLibrary(inst *DemoInstance, id int) bool {
+	if inst == nil || inst.IsDefault {
+		return true
+	}
+	switch inst.ServiceType {
+	case serviceRadarr, serviceSonarr:
+		return id%3 == 0
+	}
+	return true
+}
+
+func arrRServeMovieByID(w http.ResponseWriter, inst *DemoInstance, idStr string) {
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
@@ -202,6 +246,11 @@ func arrRServeMovieByID(w http.ResponseWriter, idStr string) {
 	}
 	arrMu.Lock()
 	m := arrRMovieByIDLocked(id)
+	// A library that does not list a title must not serve it by id either,
+	// or the drill-down contradicts the list it was opened from.
+	if m != nil && !arrInSiblingLibrary(inst, m.TmdbID) {
+		m = nil
+	}
 	var doc map[string]any
 	if m != nil {
 		doc = arrRMovieJSON(m)

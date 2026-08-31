@@ -46,7 +46,23 @@ const (
 	instChaptarr = "chaptarr-9c0d1e2f"
 	instSab      = "sabnzbd-3f4a5b6c"
 	instTautulli = "tautulli-7d8e9f0a"
+
+	// Sibling arr libraries. They exist so the multi-instance surfaces have
+	// something to show: a requester granted two Radarrs gets the Library
+	// chooser, per-library status chips, and additive grants.
+	instRadarr4K    = "radarr-2b3c4d5e"
+	instSonarrAnime = "sonarr-6f7a8b9c"
+
+	// Media servers. Granted per user, never a global default.
+	instJellyfin = "jellyfin-1f2e3d4c"
+	instEmby     = "emby-5b6a7988"
+	instPlex     = "plex-0a1b2c3d"
 )
+
+// plexDemoMachineIdentifier names the Plex Media Server the seeded Plex
+// instance shares. Frozen: the instance editor's server picker and the
+// media_server_config both quote it.
+const plexDemoMachineIdentifier = "d3m0p1exmach1ne0000000000000001"
 
 // Frozen seed device IDs (one device per real seeded user).
 const (
@@ -73,7 +89,11 @@ type DemoUser struct {
 	PasskeyEnabled   bool
 	HasPassword      bool
 	DefaultInstances map[string]string // service_type -> instance id (per-user pin / chaptarr grant)
-	RequireApproval  *bool
+	// InstanceGrants are ADDITIVE per-user access grants: service_type ->
+	// instance ids. A granted instance appears alongside the user's default so
+	// they can choose a library per request. Never nil.
+	InstanceGrants  map[string][]string
+	RequireApproval *bool
 }
 
 // DemoDevice is one signed-in device. Platform and HardwareID are stored but
@@ -99,6 +119,33 @@ type DemoInstance struct {
 	IsDefault         bool
 	MediaDownloads    bool
 	MediaPathMappings []map[string]string // {"arr_path": ..., "cantinarr_path": ...}; never nil
+	// MediaServerConfig is the jellyfin/emby/plex-only configuration. Zero for
+	// every other type. Only PublicAddress ever reaches a requester, and only
+	// because an admin typed it.
+	MediaServerConfig *DemoMediaServerConfig
+}
+
+// DemoMediaServerConfig is the per-instance configuration of a media server.
+// LibraryIDs are the library identifiers new accounts may see; empty shares
+// every library. MachineIdentifier names the Plex Media Server whose shares
+// the instance manages (Plex only). AutoApprove (Plex) grants the server to
+// anyone who shares a Plex email and sends their invite at once.
+type DemoMediaServerConfig struct {
+	PublicAddress     string
+	LibraryIDs        []string // never nil
+	MachineIdentifier string
+	AutoApprove       bool
+}
+
+// clone copies the config so a caller can never mutate stored state through a
+// returned pointer.
+func (c *DemoMediaServerConfig) clone() *DemoMediaServerConfig {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.LibraryIDs = append([]string{}, c.LibraryIDs...)
+	return &out
 }
 
 type demoConnectTokenRec struct {
@@ -131,6 +178,7 @@ var (
 	errDeviceRevoked       = errors.New("device has been revoked")
 	errUserNotFound        = errors.New("user not found")
 	errLastAdmin           = errors.New("cannot delete the last admin")
+	errInstanceNotFound    = errors.New("instance not found")
 )
 
 func init() {
@@ -150,6 +198,9 @@ func seedCoreState() {
 		PasswordEnabled: true, PasskeyEnabled: true, HasPassword: true,
 		AISharedEnabled:  true,
 		DefaultInstances: map[string]string{},
+		// The admin holds an Emby grant with no account on it yet, so the
+		// guide's "I already have an account" card has something to link.
+		InstanceGrants: map[string][]string{serviceEmby: {instEmby}},
 	}
 	requireApproval := true
 	demoUsers[2] = &DemoUser{
@@ -158,7 +209,15 @@ func seedCoreState() {
 		PasswordEnabled: true, PasskeyEnabled: false, HasPassword: true,
 		AISharedEnabled:  true,
 		DefaultInstances: map[string]string{serviceChaptarr: instChaptarr},
-		RequireApproval:  &requireApproval,
+		// Additive grants: the second Radarr and the second Sonarr sit
+		// ALONGSIDE the global defaults, which is what puts the Library
+		// chooser and the sibling status chips on screen.
+		InstanceGrants: map[string][]string{
+			serviceRadarr:   {instRadarr4K},
+			serviceSonarr:   {instSonarrAnime},
+			serviceJellyfin: {instJellyfin},
+		},
+		RequireApproval: &requireApproval,
 	}
 	demoUsers[3] = &DemoUser{
 		ID: 3, Username: "riley", Role: roleUser, Password: "",
@@ -167,6 +226,7 @@ func seedCoreState() {
 		HasPendingInvite: true,
 		PlexEmail:        "riley@example.net", // shared, never invited — drives the Plex badge demo
 		DefaultInstances: map[string]string{},
+		InstanceGrants:   map[string][]string{servicePlex: {instPlex}},
 	}
 
 	// One device per real user, with a stable refresh token each.
@@ -222,6 +282,48 @@ func seedCoreState() {
 			ID: instTautulli, ServiceType: serviceTautulli, Name: "Tautulli",
 			URL: "http://tautulli:8181", IsDefault: true, MediaDownloads: false,
 			MediaPathMappings: []map[string]string{},
+		},
+		// Sibling arr libraries. Neither carries the global default flag —
+		// they reach a requester through an additive grant, which is exactly
+		// the shape the Library chooser exists for.
+		{
+			ID: instRadarr4K, ServiceType: serviceRadarr, Name: "Radarr 4K",
+			URL: "http://radarr-4k:7878", IsDefault: false, MediaDownloads: true,
+			MediaPathMappings: []map[string]string{{"arr_path": "/movies-4k", "cantinarr_path": "/media/movies-4k"}},
+		},
+		{
+			ID: instSonarrAnime, ServiceType: serviceSonarr, Name: "Sonarr Anime",
+			URL: "http://sonarr-anime:8989", IsDefault: false, MediaDownloads: true,
+			MediaPathMappings: []map[string]string{{"arr_path": "/anime", "cantinarr_path": "/media/anime"}},
+		},
+		// Media servers. Never a global default — access is the grant.
+		{
+			ID: instJellyfin, ServiceType: serviceJellyfin, Name: "Jellyfin",
+			URL: "http://jellyfin:8096", IsDefault: false, MediaDownloads: false,
+			MediaPathMappings: []map[string]string{},
+			MediaServerConfig: &DemoMediaServerConfig{
+				PublicAddress: "https://jellyfin.demo.example",
+				LibraryIDs:    []string{"jf-lib-movies", "jf-lib-shows"},
+			},
+		},
+		{
+			ID: instEmby, ServiceType: serviceEmby, Name: "Emby",
+			URL: "http://emby:8096", IsDefault: false, MediaDownloads: false,
+			MediaPathMappings: []map[string]string{},
+			MediaServerConfig: &DemoMediaServerConfig{
+				PublicAddress: "https://emby.demo.example",
+				LibraryIDs:    []string{},
+			},
+		},
+		{
+			ID: instPlex, ServiceType: servicePlex, Name: "Demo Plex",
+			URL: "https://plex.tv", IsDefault: false, MediaDownloads: false,
+			MediaPathMappings: []map[string]string{},
+			MediaServerConfig: &DemoMediaServerConfig{
+				PublicAddress:     plexPublicAddress,
+				LibraryIDs:        []string{"1", "2"},
+				MachineIdentifier: plexDemoMachineIdentifier,
+			},
 		},
 	}
 }
@@ -281,6 +383,7 @@ func createInvitedUser(name string) *DemoUser {
 		ID: demoNextUserID, Username: name, Role: roleUser,
 		CreatedAt:        time.Now(),
 		DefaultInstances: map[string]string{},
+		InstanceGrants:   map[string][]string{},
 	}
 	demoNextUserID++
 	demoUsers[u.ID] = u
@@ -412,10 +515,23 @@ func userSummaryJSON(u *DemoUser) map[string]any {
 		"has_pending_invite": u.HasPendingInvite,
 		"plex_email":         u.PlexEmail,
 	}
-	if u.PlexInvitedAt != nil {
-		out["plex_invited_at"] = *u.PlexInvitedAt
+	if at := userPlexInvitedAt(u); at != nil {
+		out["plex_invited_at"] = *at
 	}
 	return out
+}
+
+// userPlexInvitedAt is when this user's Plex share was sent, derived from the
+// live account row rather than a stored field — the share is the truth, and a
+// stored copy of it would drift the moment an admin unshared in Plex.
+func userPlexInvitedAt(u *DemoUser) *time.Time {
+	if u == nil {
+		return nil
+	}
+	if at := msvUserInviteState(u.ID); at != nil {
+		return at
+	}
+	return u.PlexInvitedAt
 }
 
 // userAuthJSON renders the TokenResponse "user" object: id, username, role,
@@ -433,8 +549,8 @@ func userAuthJSON(u *DemoUser) map[string]any {
 		"plex_email":       u.PlexEmail,
 		"created_at":       u.CreatedAt,
 	}
-	if u.PlexInvitedAt != nil {
-		out["plex_invited_at"] = *u.PlexInvitedAt
+	if at := userPlexInvitedAt(u); at != nil {
+		out["plex_invited_at"] = *at
 	}
 	return out
 }
@@ -641,8 +757,30 @@ func mintConnectToken(username string) (link string, expiresAt time.Time) {
 	demoConnectTokens[token] = &demoConnectTokenRec{Token: token, UserID: u.ID, ExpiresAt: expiresAt}
 	u.HasPendingInvite = true
 	stateMu.Unlock()
-	link = fmt.Sprintf("cantinarr://connect?token=%s&server=%s", token, url.QueryEscape(demoServerURL))
+	origin, _ := connectLinkOrigin()
+	link = fmt.Sprintf("cantinarr://connect?token=%s&server=%s", token, url.QueryEscape(origin))
 	return link, expiresAt
+}
+
+// grantInstanceToUser adds an access grant, no-op when the user already holds
+// it. Additive: it never moves anyone's default or touches a sibling.
+func grantInstanceToUser(userID int, instanceID string) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	u := demoUsers[userID]
+	inst := lockedInstanceByID(instanceID)
+	if u == nil || inst == nil {
+		return
+	}
+	if u.InstanceGrants == nil {
+		u.InstanceGrants = map[string][]string{}
+	}
+	for _, id := range u.InstanceGrants[inst.ServiceType] {
+		if id == instanceID {
+			return
+		}
+	}
+	u.InstanceGrants[inst.ServiceType] = append(u.InstanceGrants[inst.ServiceType], instanceID)
 }
 
 // redeemConnectToken redeems a connect token for its user. Single-use, except
@@ -738,10 +876,11 @@ func removeInstance(id string) bool {
 }
 
 // visibleInstances returns the instances a user may see: admins get all;
-// regular users get their effective radarr + sonarr instances plus a chaptarr
-// instance only when granted via DefaultInstances. Renderers must emit
-// is_default:true on EVERY entry of a non-admin's list (each one is that
-// user's effective default), regardless of the stored IsDefault flag.
+// a regular user gets every access-granted instance plus their effective
+// default, across the grantable service types (radarr, sonarr, chaptarr and
+// the three media servers). Grants are ADDITIVE — a granted sibling sits
+// beside the default rather than replacing it — so renderers must mark
+// is_default per user with effectiveInstanceFor, not blanket-true.
 func visibleInstances(u *DemoUser) []*DemoInstance {
 	if u != nil && u.Role == roleAdmin {
 		return allInstances()
@@ -750,41 +889,298 @@ func visibleInstances(u *DemoUser) []*DemoInstance {
 	if u == nil {
 		return out
 	}
-	for _, st := range []string{serviceRadarr, serviceSonarr, serviceChaptarr} {
-		if inst := effectiveInstanceFor(u, st); inst != nil {
-			out = append(out, inst)
-		}
-	}
-	return out
-}
-
-// effectiveInstanceFor resolves the user's effective instance for a service
-// type: per-user pin -> global default -> first instance of that type.
-// Chaptarr has NO fallback — the pin IS the access grant (nil without one).
-func effectiveInstanceFor(u *DemoUser, serviceType string) *DemoInstance {
 	stateMu.Lock()
 	defer stateMu.Unlock()
-	if u != nil {
-		if pinned, ok := u.DefaultInstances[serviceType]; ok && pinned != "" {
-			if inst := lockedInstanceByID(pinned); inst != nil && inst.ServiceType == serviceType {
-				return inst
+	seen := map[string]bool{}
+	for _, st := range grantableServiceTypes() {
+		for _, id := range lockedVisibleInstanceIDs(u, st) {
+			if seen[id] {
+				continue
+			}
+			if inst := lockedInstanceByID(id); inst != nil {
+				seen[id] = true
+				out = append(out, inst)
 			}
 		}
 	}
-	if serviceType == serviceChaptarr {
-		return nil
+	// Keep the registry's stable seed order rather than the service-type walk
+	// order, so a user's list reads like a subset of the admin's.
+	order := map[string]int{}
+	for idx, inst := range demoInstances {
+		order[inst.ID] = idx
 	}
-	var first *DemoInstance
+	sort.Slice(out, func(i, j int) bool { return order[out[i].ID] < order[out[j].ID] })
+	return out
+}
+
+// grantableServiceTypes are the types an admin can grant per user. Mirrors
+// the server's instance.grantableServiceTypes.
+func grantableServiceTypes() []string {
+	return append([]string{serviceRadarr, serviceSonarr, serviceChaptarr}, mediaServerTypes()...)
+}
+
+// effectiveInstanceFor resolves the user's effective instance for a service
+// type: per-user pin -> (chaptarr and media servers) first grant, no fallback
+// -> global default -> first instance of that type.
+func effectiveInstanceFor(u *DemoUser, serviceType string) *DemoInstance {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return lockedInstanceByID(lockedEffectiveInstanceID(u, serviceType))
+}
+
+// effectiveInstanceIDFor is effectiveInstanceFor by id ("" when none).
+func effectiveInstanceIDFor(u *DemoUser, serviceType string) string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return lockedEffectiveInstanceID(u, serviceType)
+}
+
+func lockedEffectiveInstanceID(u *DemoUser, serviceType string) string {
+	if u != nil {
+		if pinned, ok := u.DefaultInstances[serviceType]; ok && pinned != "" {
+			if inst := lockedInstanceByID(pinned); inst != nil && inst.ServiceType == serviceType {
+				return inst.ID
+			}
+		}
+	}
+	// Chaptarr and the media servers have NO global fallback — access is the
+	// grant. The first grant stands in as the default so a client that reads
+	// one instance per type still picks a real one.
+	if serviceType == serviceChaptarr || isMediaServerType(serviceType) {
+		if u != nil {
+			for _, id := range u.InstanceGrants[serviceType] {
+				if inst := lockedInstanceByID(id); inst != nil && inst.ServiceType == serviceType {
+					return inst.ID
+				}
+			}
+		}
+		return ""
+	}
+	first := ""
 	for _, inst := range demoInstances {
 		if inst.ServiceType != serviceType {
 			continue
 		}
 		if inst.IsDefault {
-			return inst
+			return inst.ID
 		}
-		if first == nil {
-			first = inst
+		if first == "" {
+			first = inst.ID
 		}
 	}
 	return first
+}
+
+// grantedInstanceIDs is the user's explicit grants for a service type plus
+// their per-user pin, in stable registry order. Never nil.
+func grantedInstanceIDs(u *DemoUser, serviceType string) []string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return lockedGrantedInstanceIDs(u, serviceType)
+}
+
+func lockedGrantedInstanceIDs(u *DemoUser, serviceType string) []string {
+	out := []string{}
+	if u == nil {
+		return out
+	}
+	seen := map[string]bool{}
+	add := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		inst := lockedInstanceByID(id)
+		if inst == nil || inst.ServiceType != serviceType {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for _, id := range u.InstanceGrants[serviceType] {
+		add(id)
+	}
+	add(u.DefaultInstances[serviceType])
+	return out
+}
+
+// visibleInstanceIDs is grantedInstanceIDs plus the effective default. Never
+// nil. Mirrors the server's instance.VisibleInstanceIDs.
+func visibleInstanceIDs(u *DemoUser, serviceType string) []string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return lockedVisibleInstanceIDs(u, serviceType)
+}
+
+func lockedVisibleInstanceIDs(u *DemoUser, serviceType string) []string {
+	out := lockedGrantedInstanceIDs(u, serviceType)
+	def := lockedEffectiveInstanceID(u, serviceType)
+	if def == "" {
+		return out
+	}
+	for _, id := range out {
+		if id == def {
+			return out
+		}
+	}
+	return append(out, def)
+}
+
+// userCanSeeInstance reports whether a non-admin holds this instance. Admins
+// see everything.
+func userCanSeeInstance(u *DemoUser, id string) bool {
+	if u == nil {
+		return false
+	}
+	if u.Role == roleAdmin {
+		return instanceByID(id) != nil
+	}
+	inst := instanceByID(id)
+	if inst == nil {
+		return false
+	}
+	for _, visible := range visibleInstanceIDs(u, inst.ServiceType) {
+		if visible == id {
+			return true
+		}
+	}
+	return false
+}
+
+// userInstanceGrants returns a copy of the user's grant map, keyed by service
+// type. Always a map, never nil; empty types are omitted.
+func userInstanceGrants(u *DemoUser) map[string][]string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	out := map[string][]string{}
+	if u == nil {
+		return out
+	}
+	for _, st := range grantableServiceTypes() {
+		ids := []string{}
+		for _, id := range u.InstanceGrants[st] {
+			if inst := lockedInstanceByID(id); inst != nil && inst.ServiceType == st {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) > 0 {
+			out[st] = ids
+		}
+	}
+	return out
+}
+
+// setUserInstanceGrants replaces the grants for exactly the listed service
+// types, leaving every other type alone.
+func setUserInstanceGrants(userID int, grants map[string][]string) bool {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	u := demoUsers[userID]
+	if u == nil {
+		return false
+	}
+	if u.InstanceGrants == nil {
+		u.InstanceGrants = map[string][]string{}
+	}
+	for st, ids := range grants {
+		if len(ids) == 0 {
+			delete(u.InstanceGrants, st)
+			continue
+		}
+		u.InstanceGrants[st] = append([]string{}, ids...)
+	}
+	return true
+}
+
+// instanceGrantRows lists every grant row for the addressed instance's SERVICE
+// TYPE — not just that instance — sorted by user id then instance id, which is
+// what the instance editor's assignment section reads.
+func instanceGrantRows(serviceType string) []struct {
+	UserID     int
+	InstanceID string
+} {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	type row = struct {
+		UserID     int
+		InstanceID string
+	}
+	out := []row{}
+	for _, u := range demoUsers {
+		for _, id := range lockedGrantedInstanceIDs(u, serviceType) {
+			out = append(out, row{UserID: u.ID, InstanceID: id})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UserID != out[j].UserID {
+			return out[i].UserID < out[j].UserID
+		}
+		return out[i].InstanceID < out[j].InstanceID
+	})
+	return out
+}
+
+// setInstanceGrantUsers is the replace-set for ONE instance: every listed user
+// gains the grant, every unlisted user loses it. Sibling instances of the same
+// type are untouched — grants are additive, so assigning one library never
+// moves anyone off another.
+func setInstanceGrantUsers(instanceID string, userIDs []int) error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	inst := lockedInstanceByID(instanceID)
+	if inst == nil {
+		return errInstanceNotFound
+	}
+	want := map[int]bool{}
+	for _, id := range userIDs {
+		if demoUsers[id] == nil {
+			return fmt.Errorf("unknown user id: %d", id)
+		}
+		want[id] = true
+	}
+	for _, u := range demoUsers {
+		if u.InstanceGrants == nil {
+			u.InstanceGrants = map[string][]string{}
+		}
+		kept := []string{}
+		held := false
+		for _, id := range u.InstanceGrants[inst.ServiceType] {
+			if id == instanceID {
+				held = true
+				continue
+			}
+			kept = append(kept, id)
+		}
+		if want[u.ID] {
+			kept = append(kept, instanceID)
+		} else if !held {
+			continue
+		}
+		if len(kept) == 0 {
+			delete(u.InstanceGrants, inst.ServiceType)
+			continue
+		}
+		u.InstanceGrants[inst.ServiceType] = kept
+	}
+	return nil
+}
+
+// dropInstanceGrants strips every grant pointing at a deleted instance.
+func dropInstanceGrants(instanceID string) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	for _, u := range demoUsers {
+		for st, ids := range u.InstanceGrants {
+			kept := ids[:0:0]
+			for _, id := range ids {
+				if id != instanceID {
+					kept = append(kept, id)
+				}
+			}
+			if len(kept) == 0 {
+				delete(u.InstanceGrants, st)
+				continue
+			}
+			u.InstanceGrants[st] = kept
+		}
+	}
 }

@@ -242,7 +242,9 @@ func reqAdminApproveTitle(w http.ResponseWriter, target *reqLogRow, snapshot *re
 			seasons = reqSeasonsForScope(snapshot.TmdbID, scope)
 		}
 	}
-	status := reqKickTitle(snapshot.TmdbID, snapshot.MediaType, seasons)
+	// Approval acts on the library the request was made for, not on
+	// whatever the global default happens to be today.
+	status := reqKickTitle(snapshot.TmdbID, snapshot.MediaType, snapshot.InstanceID, seasons)
 	reqMu.Lock()
 	target.Status = status
 	if override.QualityProfileID != 0 {

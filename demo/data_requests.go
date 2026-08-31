@@ -98,6 +98,13 @@ var (
 
 	// reqTitleStates is keyed "movie:<tmdb>" / "tv:<tmdb>".
 	reqTitleStates = map[string]*reqTitleState{}
+
+	// reqTitleInstances records WHICH library a title was routed to, same
+	// key. Availability is tracked per title in the demo, so this is what
+	// lets the sibling-library chips say the honest thing: the library that
+	// took it reports the live status, the others report that they hold
+	// nothing.
+	reqTitleInstances = map[string]string{}
 	// reqActiveSims dedupes concurrent download simulations per title key.
 	reqActiveSims = map[string]bool{}
 

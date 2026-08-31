@@ -36,9 +36,12 @@ Full parity with the current Cantinarr API surface:
 
 - **Auth & session** — JWT login, opaque `cnr1.` refresh tokens, connect-link redemption, per-user permissions, device management
 - **Discovery** — trending/popular rows, full-text search, movie/TV/person details, genres, watch providers, Trakt lists/anticipated/calendar
-- **Requests** — movie, TV (per-season), and book (ebook/audiobook) requests with the full approval flow: pending → approve/deny → simulated download progress → available/partial
-- **AI chat** — streaming SSE assistant with tool calls and media results, plus AI settings/credentials surfaces
-- **Admin console** — instance management, arr library browsing (fake Radarr/Sonarr/Chaptarr proxies), download-client queue/history, Tautulli monitoring, issues + AI remediation (agent actions, runs, approval rules), configuration change history, Plex linking + invites, users/devices, the setup checklist, and update status
+- **Requests** — movie, TV (per-season), and book (ebook/audiobook) requests with the full approval flow: pending → approve/deny → simulated download progress → available/partial, routed to a chosen library
+- **Multiple libraries** — two Radarr and two Sonarr instances, reached through additive per-user grants, so the Library chooser, the per-library status chips, and instance-scoped quality profiles all have something to show
+- **Books browsing** — the Chaptarr library by author and by series, with per-format ownership on every title
+- **Media-server access** — Jellyfin, Emby, and Plex as instances: create your own account, link one you already have, sign in with Plex, ask where a title can be watched; admins tag the Users screen, link/unlink, and import a server's existing accounts
+- **AI chat** — streaming SSE assistant with tool calls and media results, plus AI settings/credentials surfaces and the Codex and xAI Grok OAuth device flows
+- **Admin console** — instance management (arrs, download clients, Tautulli, media servers), per-user library grants, arr library browsing (fake Radarr/Sonarr/Chaptarr proxies), download-client queue/history, Tautulli monitoring, issues + AI remediation (agent actions, runs, approval rules), configuration change history, the external address invite links are built from, users/devices, the setup checklist, and update status
 - **Live updates** — WebSocket hub pushing download progress, request status changes, queue snapshots, approvals, issues, agent actions, and Plex invite events to the right audiences
 
 ## File Map
@@ -51,21 +54,24 @@ Full parity with the current Cantinarr API surface:
 | `ws.go` | WebSocket hub: auth, broadcast/admin/user scopes, envelope, pings |
 | `auth.go` | `/api/auth/*` — status, login, refresh, connect, me, logout, password, plex-email, passkey stubs |
 | `config.go` | `/api/config` (per-user visibility), `/api/admin/setup-status`, `/api/admin/update-status` |
-| `users_admin.go` | Admin users, devices, connect tokens, test-push, Plex invites, default instances, per-user request settings |
-| `plex.go` | `/api/admin/plex/*` — link PIN simulation, servers, libraries, settings |
-| `instances.go` | Instance CRUD, media roots, per-instance users, test, proxy dispatch |
+| `users_admin.go` | Admin users, devices, connect tokens, test-push, per-user default instances and access grants |
+| `external_address.go` | `/api/admin/external-address` — the origin invite links are built from |
+| `mediaaccess.go` | `/api/media-servers*` + `/api/admin/media-servers*` — accounts, linking, Plex sign-in, watch links, import |
+| `plex.go` | The simulated plex.tv PIN flow, shared by the instance editor and the user sign-in |
+| `instances.go` | Instance CRUD, media roots, per-instance users and grants, media-server libraries, Plex link, test, proxy dispatch |
 | `requests.go` | `/api/requests*` — create, options, TMDB status, lifecycle machine |
 | `requests_admin.go` | Admin request queue, approve/deny, global request settings |
-| `books.go` | Book status/library/recent + the book request lifecycle |
+| `books.go` | Book status/library/recent/authors/series + the book request lifecycle |
 | `discover.go` | `/api/discover/*`, `/api/search`, `/api/media/*`, genres, providers |
 | `trakt.go` | `/api/trakt/*` — flat lists, anticipated, calendar |
-| `ai.go` | `/api/ai/chat` SSE + AI settings/credentials + personal Codex flow |
-| `ai_admin.go` | Admin credentials, Codex, AI tools, debug, external settings changes |
+| `ai.go` | `/api/ai/chat` SSE + AI settings/credentials + personal Codex and Grok OAuth flows |
+| `ai_admin.go` | Admin credentials, shared Codex/Grok, AI tools, debug, external settings changes |
 | `issues.go` | `/api/issues*` + `/api/admin/issues*` (+ activity) |
 | `remediation.go` | Agent actions, agent runs, approval rules, remediation settings |
+| `proposals.go` | `/api/admin/profile-change-proposals*` — list, detail, approve, reject |
 | `arr_radarr.go` | Fake Radarr v3 behind `/api/instances/{id}/api/v3` + non-admin allowlist |
 | `arr_sonarr.go` | Fake Sonarr v3 |
-| `arr_chaptarr.go` | Fake Chaptarr v1 + MediaCover image bytes |
+| `arr_chaptarr.go` | Fake Chaptarr v1 + generated MediaCover image bytes (book and author covers) |
 | `downloads.go` | `/api/downloads/{instanceID}/*` — queue, history, actions |
 | `tautulli.go` | `/api/tautulli/{instanceID}/*` — activity, history, stats |
 | `mediafiles.go` | Media-file coverage, tickets, ticketed downloads |
@@ -73,13 +79,13 @@ Full parity with the current Cantinarr API surface:
 | `data_movies.go` | 18-film public-domain catalog with poster/backdrop maps |
 | `data_tv.go` | 6 fictional shows with seasons/episodes fixtures |
 | `data_people.go` | Person entries + credits |
-| `data_books.go` | Public-domain authors/books/editions/bookfiles + lookup corpus |
+| `data_books.go` | Public-domain authors/books/editions/bookfiles/series + lookup corpus |
 | `data_arr.go` | Arr queues, history, wanted, calendar, release fixtures |
 | `data_issues.go` | Issues, threads, agent actions/runs/rules seeds |
 | `data_requests.go` | Request-log rows, request policy, availability states, quality-profile fixtures |
 | `data_ai.go` | Canned AI chat scripts + seeded external-settings-changes history |
 | `data_misc.go` | Genres, fictional watch providers, Trakt list fixtures |
-| `assets/` | `go:embed` — book covers, sample download file, landing HTML |
+| `assets/` | `go:embed` — sample download file, landing HTML (covers are generated PNGs, not files) |
 
 ## Branch Workflow
 
@@ -275,17 +281,23 @@ rm cantinarr-demo
 # Health check via HTTPS
 curl -s https://demo.cantinarr.com/api/health
 
-# Auth test
+# Auth test. The token field is access_token, NOT token — a script keyed on
+# "token" silently reads "" and every later call runs unauthenticated, which
+# looks like an empty or broken server rather than a bad script.
 curl -s -X POST https://demo.cantinarr.com/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"demo"}'
 
-# Confirm direct IP access is blocked
-curl --max-time 5 http://164.90.148.150:8484/api/health  # should timeout
+# Confirm direct IP access is blocked (substitute the droplet's own address —
+# `doctl compute droplet get cantinarr-demo --format PublicIPv4`)
+curl --max-time 5 http://<droplet-ip>:8484/api/health  # should timeout
 
 # Confirm Authenticated Origin Pulls rejects non-CF clients
-curl -k --max-time 5 https://164.90.148.150/api/health   # should fail
+curl -k --max-time 5 https://<droplet-ip>/api/health   # should fail
 ```
+
+Cloudflare stamps its own `Last-Modified` on cached objects, so never read one
+as a deploy timestamp — check the binary's mtime on the droplet instead.
 
 ### Tear Down
 
