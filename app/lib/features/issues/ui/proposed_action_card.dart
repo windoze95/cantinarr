@@ -899,7 +899,9 @@ class _ActionCopy {
   /// (files gone versus files gone *and* that release stood down), so it is
   /// never folded away.
   static String _deleteSummary(AgentActionParams p) {
-    final one = p.mediaType != 'tv' || p.episodes.length == 1;
+    // A book delete covers every file the record holds — plural, count unknown.
+    final one = p.mediaType == 'movie' ||
+        (p.mediaType == 'tv' && p.episodes.length == 1);
     final files = one ? 'file' : 'files';
     final replacements = one ? 'a replacement' : 'replacements';
     if (!p.blocklist) {
@@ -965,10 +967,13 @@ class _ActionCopy {
   static String _deleteConfirmation(AgentActionParams p) {
     final episodes = p.episodes;
     final isTv = p.mediaType == 'tv';
-    final one = !isTv || episodes.length == 1;
+    // A book delete covers every file the record holds — plural, count unknown.
+    final one = p.mediaType == 'movie' || (isTv && episodes.length == 1);
 
     final String target;
-    if (isTv && episodes.isNotEmpty) {
+    if (p.mediaType == 'book') {
+      target = 'every file this book holds in your library';
+    } else if (isTv && episodes.isNotEmpty) {
       final season = p.season;
       target = '${one ? '1 file' : '${episodes.length} files'} from your '
           'library — ${season == null ? '' : 'season $season, '}'
@@ -1119,6 +1124,7 @@ class _ActionCopy {
       case AgentActionKind.deleteMediaFiles:
         if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
         if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
+        if (p.bookId != null) rows.add(('Book id', '${p.bookId}', false));
         if (p.season != null) rows.add(('Season', '${p.season}', false));
         final toDelete = p.episodes;
         if (toDelete.isNotEmpty) {

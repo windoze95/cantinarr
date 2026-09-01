@@ -451,12 +451,56 @@ void main() {
       expect(action.canTakeAction, isTrue);
     });
 
+    test('a book deletion is addressed by the record id and stays actionable',
+        () {
+      // The wrong-book repair: the server proposes {media_type, book_id,
+      // blocklist} and nothing else, and the app must let an admin approve it.
+      final action = _delete(
+        {'media_type': 'book', 'book_id': 912, 'blocklist': true},
+        issueMediaType: 'book',
+        serviceType: 'chaptarr',
+      );
+
+      expect(action.params.bookId, 912);
+      expect(action.params.blocklist, isTrue);
+      expect(action.params.validationProblem(action.kind), isNull);
+      expect(action.canTakeAction, isTrue);
+
+      // Blocklist stays optional, exactly like the video deletions.
+      final filesOnly = _delete(
+        {'media_type': 'book', 'book_id': 912},
+        issueMediaType: 'book',
+        serviceType: 'chaptarr',
+      );
+      expect(filesOnly.params.blocklist, isFalse);
+      expect(filesOnly.params.validationProblem(filesOnly.kind), isNull);
+      expect(filesOnly.canTakeAction, isTrue);
+    });
+
     test('every malformed or under-specified deletion is refused', () {
       // (params, expected message fragment). One rejection path per row; each
       // row is otherwise valid so the fragment proves which gate fired.
       final cases = <(Map<String, dynamic>, String)>[
-        // Chaptarr has no equivalent delete/mark-failed pair.
-        ({'media_type': 'book'}, 'books'),
+        // A book delete is addressed by the durable record id alone.
+        ({'media_type': 'book'}, 'book whose files'),
+        ({'media_type': 'book', 'book_id': 0}, 'book whose files'),
+        // A numeric-looking string is never coerced into an identifier.
+        ({'media_type': 'book', 'book_id': '912'}, 'book whose files'),
+        // …and takes only book_id and blocklist; video scope is a category
+        // error, exactly as the server refuses it.
+        (
+          {'media_type': 'book', 'book_id': 912, 'tmdb_id': 27205},
+          'invalid media details'
+        ),
+        (
+          {'media_type': 'book', 'book_id': 912, 'season': 1},
+          'invalid media details'
+        ),
+        // The converse: a video deletion must not carry a book id.
+        (
+          {'media_type': 'movie', 'tmdb_id': 27205, 'book_id': 912},
+          'book details'
+        ),
         // No title to resolve the library record from.
         ({'media_type': 'movie'}, 'title'),
         ({'media_type': 'movie', 'tmdb_id': 0}, 'title'),
@@ -865,7 +909,11 @@ AgentAction _delete(
       'can_decide': true,
       'issue_status': 'awaiting_approval',
       'issue_media_type': issueMediaType,
-      'instance_id': serviceType == 'radarr' ? 'radarr-main' : 'sonarr-main',
-      'instance_name': serviceType == 'radarr' ? 'Main Movies' : 'Main TV',
+      'instance_id': '$serviceType-main',
+      'instance_name': switch (serviceType) {
+        'radarr' => 'Main Movies',
+        'chaptarr' => 'Main Books',
+        _ => 'Main TV',
+      },
       'instance_service_type': serviceType,
     });

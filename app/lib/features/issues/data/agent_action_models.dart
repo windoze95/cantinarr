@@ -599,6 +599,7 @@ class AgentActionParams {
           'season',
           'episodes',
           'blocklist',
+          'book_id',
         },
       AgentActionKind.unknown => const <String>{},
     };
@@ -709,35 +710,48 @@ class AgentActionParams {
         // Deleting is irreversible, so every part of the target is required and
         // strictly typed here — an under-specified proposal stays readable as
         // history but must never reach an Approve button.
-        if (media == 'book') {
-          return 'Deleting library files is not supported for books.';
-        }
-        if (!_isInt('tmdb_id') || (tmdbId ?? 0) <= 0) {
-          return 'The title whose files would be deleted is missing.';
-        }
         if (_raw.containsKey('blocklist') && _raw['blocklist'] is! bool) {
           return 'The proposed deletion options are malformed.';
         }
-        if (media == 'movie') {
-          if (_raw.containsKey('season') || _raw.containsKey('episodes')) {
-            return 'The proposed movie deletion contains TV episode details.';
+        if (media == 'book') {
+          // A book delete addresses the durable Chaptarr record id; book_id
+          // and the blocklist choice are the entire target.
+          if (!_isInt('book_id') || (bookId ?? 0) <= 0) {
+            return 'The book whose files would be deleted is missing.';
+          }
+          if ((tmdbId ?? 0) != 0 ||
+              _raw.containsKey('season') ||
+              _raw.containsKey('episodes')) {
+            return 'The proposed book deletion contains invalid media details.';
           }
         } else {
-          if (!_isInt('season') || season == null) {
-            return 'The proposed TV season is invalid.';
+          if (_raw.containsKey('book_id')) {
+            return 'The proposed deletion contains book details.';
           }
-          if (!_isIntList('episodes', optional: true)) {
-            return 'The list of episodes to delete is malformed.';
+          if (!_isInt('tmdb_id') || (tmdbId ?? 0) <= 0) {
+            return 'The title whose files would be deleted is missing.';
           }
-          final numbers = episodes;
-          if (numbers.isEmpty) {
-            return 'The episodes whose files would be deleted are missing.';
-          }
-          if (numbers.any((n) => n <= 0)) {
-            return 'The proposed episode numbers are invalid.';
-          }
-          if (numbers.length > _maxDeleteEpisodes) {
-            return 'The proposed deletion covers too many episodes to review.';
+          if (media == 'movie') {
+            if (_raw.containsKey('season') || _raw.containsKey('episodes')) {
+              return 'The proposed movie deletion contains TV episode details.';
+            }
+          } else {
+            if (!_isInt('season') || season == null) {
+              return 'The proposed TV season is invalid.';
+            }
+            if (!_isIntList('episodes', optional: true)) {
+              return 'The list of episodes to delete is malformed.';
+            }
+            final numbers = episodes;
+            if (numbers.isEmpty) {
+              return 'The episodes whose files would be deleted are missing.';
+            }
+            if (numbers.any((n) => n <= 0)) {
+              return 'The proposed episode numbers are invalid.';
+            }
+            if (numbers.length > _maxDeleteEpisodes) {
+              return 'The proposed deletion covers too many episodes to review.';
+            }
           }
         }
       case AgentActionKind.unknown:
