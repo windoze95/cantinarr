@@ -1760,6 +1760,8 @@ func (s *ToolServer) triggerSearch(input json.RawMessage, callInstanceID string)
 		AiredOnly     bool   `json:"aired_only"`
 		AuthorID      int    `json:"author_id"`
 		BookID        int    `json:"book_id"`
+		ArtistID      int    `json:"artist_id"`
+		AlbumID       int    `json:"album_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -1769,11 +1771,15 @@ func (s *ToolServer) triggerSearch(input json.RawMessage, callInstanceID string)
 	if params.BookID != 0 {
 		bookIDs = []int{params.BookID}
 	}
-	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	var albumIDs []int
+	if params.AlbumID != 0 {
+		albumIDs = []int{params.AlbumID}
+	}
+	radarrClient, sonarrClient, chaptarrClient, lidarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
 	if refusal != "" {
 		return &ToolResult{Text: refusal}, nil
 	}
-	text, err := TriggerSearchHelper(s.bridge, radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.TmdbID, params.SeasonNumber, params.EpisodeNumber, params.AiredOnly, params.AuthorID, bookIDs)
+	text, err := TriggerSearchHelper(s.bridge, radarrClient, sonarrClient, chaptarrClient, lidarrClient, params.MediaType, params.TmdbID, params.SeasonNumber, params.EpisodeNumber, params.AiredOnly, params.AuthorID, bookIDs, params.ArtistID, albumIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -2090,7 +2096,7 @@ func (s *ToolServer) grabRelease(input json.RawMessage, callInstanceID string) (
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	radarrClient, sonarrClient, chaptarrClient, lidarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
 	if refusal != "" {
 		return &ToolResult{Text: refusal}, nil
 	}
@@ -2098,6 +2104,7 @@ func (s *ToolServer) grabRelease(input json.RawMessage, callInstanceID string) (
 		radarrClient,
 		sonarrClient,
 		chaptarrClient,
+		lidarrClient,
 		params,
 	)
 	if err != nil {
@@ -2118,11 +2125,11 @@ func (s *ToolServer) removeQueueItem(input json.RawMessage, callInstanceID strin
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	radarrClient, sonarrClient, chaptarrClient, lidarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
 	if refusal != "" {
 		return &ToolResult{Text: refusal}, nil
 	}
-	text, err := RemoveQueueItemHelper(radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.QueueID, params.Blocklist)
+	text, err := RemoveQueueItemHelper(radarrClient, sonarrClient, chaptarrClient, lidarrClient, params.MediaType, params.QueueID, params.Blocklist)
 	if err != nil {
 		return nil, err
 	}

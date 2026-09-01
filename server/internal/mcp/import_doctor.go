@@ -66,6 +66,22 @@ func chaptarrSignal(item chaptarr.QueueItem) arr.QueueSignal {
 	}
 }
 
+// lidarrSignal is chaptarrSignal's music sibling.
+func lidarrSignal(item lidarr.QueueItem) arr.QueueSignal {
+	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
+	for _, m := range item.StatusMessages {
+		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
+	}
+	return arr.QueueSignal{
+		Status:                item.Status,
+		TrackedDownloadStatus: item.TrackedDownloadStatus,
+		TrackedDownloadState:  item.TrackedDownloadState,
+		ErrorMessage:          item.ErrorMessage,
+		StatusMessages:        messages,
+		Protocol:              item.Protocol,
+	}
+}
+
 func sonarrQueueTitle(item sonarr.DetailedQueueItem) string {
 	if item.Series != nil {
 		if item.Episode != nil {
@@ -104,6 +120,20 @@ func chaptarrQueueTitle(item chaptarr.QueueItem) string {
 		return item.Title
 	}
 	return fmt.Sprintf("book %d", item.BookID)
+}
+
+// lidarrQueueTitle is chaptarrQueueTitle's music sibling.
+func lidarrQueueTitle(item lidarr.QueueItem) string {
+	if item.Album != nil && item.Album.Title != "" {
+		if item.Artist != nil && item.Artist.ArtistName != "" {
+			return fmt.Sprintf("%s — %s", item.Artist.ArtistName, item.Album.Title)
+		}
+		return item.Album.Title
+	}
+	if item.Title != "" {
+		return item.Title
+	}
+	return fmt.Sprintf("album %d", item.AlbumID)
 }
 
 // resolveGrabProvenance fills in who asked for a download, but only when the
@@ -499,6 +529,19 @@ func findChaptarrQueueItem(client *chaptarr.Client, queueID int) (*chaptarr.Deta
 	return nil, nil
 }
 
+func findLidarrQueueItem(client *lidarr.Client, queueID int) (*lidarr.DetailedQueueItem, error) {
+	items, err := client.GetQueueDetailed()
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		if items[i].ID == queueID {
+			return &items[i], nil
+		}
+	}
+	return nil, nil
+}
+
 // --- get_manual_import_candidates ---
 
 func formatRejections(rejections []arr.ManualImportRejectionView) string {
@@ -688,7 +731,7 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, callInstan
 	}
 }
 
-func toRejectionViews[T sonarr.ManualImportRejection | radarr.ManualImportRejection | chaptarr.ManualImportRejection](rejections []T) []arr.ManualImportRejectionView {
+func toRejectionViews[T sonarr.ManualImportRejection | radarr.ManualImportRejection | chaptarr.ManualImportRejection | lidarr.ManualImportRejection](rejections []T) []arr.ManualImportRejectionView {
 	out := make([]arr.ManualImportRejectionView, 0, len(rejections))
 	for _, r := range rejections {
 		switch v := any(r).(type) {
@@ -697,6 +740,8 @@ func toRejectionViews[T sonarr.ManualImportRejection | radarr.ManualImportReject
 		case radarr.ManualImportRejection:
 			out = append(out, arr.ManualImportRejectionView{Reason: v.Reason, Type: v.Type})
 		case chaptarr.ManualImportRejection:
+			out = append(out, arr.ManualImportRejectionView{Reason: v.Reason, Type: v.Type})
+		case lidarr.ManualImportRejection:
 			out = append(out, arr.ManualImportRejectionView{Reason: v.Reason, Type: v.Type})
 		}
 	}
@@ -725,11 +770,11 @@ func (s *ToolServer) executeManualImport(input json.RawMessage, callInstanceID s
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	radarrClient, sonarrClient, chaptarrClient, lidarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
 	if refusal != "" {
 		return &ToolResult{Text: refusal}, nil
 	}
-	text, err := ExecuteManualImportHelper(radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.QueueID, params.Force, nil)
+	text, err := ExecuteManualImportHelper(radarrClient, sonarrClient, chaptarrClient, lidarrClient, params.MediaType, params.QueueID, params.Force, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -776,11 +821,11 @@ func (s *ToolServer) remediateQueueItem(input json.RawMessage, callInstanceID st
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	radarrClient, sonarrClient, chaptarrClient, lidarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
 	if refusal != "" {
 		return &ToolResult{Text: refusal}, nil
 	}
-	text, err := RemediateQueueItemHelper(radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.QueueID, params.Action)
+	text, err := RemediateQueueItemHelper(radarrClient, sonarrClient, chaptarrClient, lidarrClient, params.MediaType, params.QueueID, params.Action)
 	if err != nil {
 		return nil, err
 	}
@@ -795,15 +840,16 @@ func (s *ToolServer) rescanMedia(input json.RawMessage, callInstanceID string) (
 		MediaType  string `json:"media_type"`
 		InstanceID string `json:"instance_id"`
 		AuthorID   int    `json:"author_id"`
+		ArtistID   int    `json:"artist_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	radarrClient, sonarrClient, chaptarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
+	radarrClient, sonarrClient, chaptarrClient, lidarrClient, refusal := s.arrClientsFor(params.InstanceID, callInstanceID)
 	if refusal != "" {
 		return &ToolResult{Text: refusal}, nil
 	}
-	text, err := RescanMediaHelper(s.bridge, radarrClient, sonarrClient, chaptarrClient, params.MediaType, params.TmdbID, params.AuthorID)
+	text, err := RescanMediaHelper(s.bridge, radarrClient, sonarrClient, chaptarrClient, lidarrClient, params.MediaType, params.TmdbID, params.AuthorID, params.ArtistID)
 	if err != nil {
 		return nil, err
 	}

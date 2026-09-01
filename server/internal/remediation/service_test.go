@@ -338,12 +338,11 @@ func TestCreateUserIssueValidation(t *testing.T) {
 	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "podcast", TmdbID: 1, Category: CategoryOther}); err == nil {
 		t.Fatal("expected error for unsupported media type")
 	}
-	// Music is a real media type elsewhere in the server, but issues for it
-	// are deliberately unsupported in the module's first wave: the app never
-	// offers Report a problem on music surfaces and this gate is the backstop.
-	// Widening validMediaType to music is the issue-parity wave's job.
-	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "music", TmdbID: 1, Category: CategoryOther}); err == nil {
-		t.Fatal("expected error: music issues are unsupported until the music issue-parity wave")
+	// Music passed the media-type gate in the issue-parity wave. This call
+	// still fails — the fixture instance is a Radarr, not a music library —
+	// but it must no longer be refused as an unsupported type.
+	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "music", TmdbID: 1, Category: CategoryOther}); err == nil || strings.Contains(err.Error(), "unsupported media type") {
+		t.Fatalf("music must pass the media-type gate (got %v)", err)
 	}
 	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{InstanceID: testRadarrInstanceID, MediaType: "movie", TmdbID: 1, Category: "nonsense"}); err == nil {
 		t.Fatal("expected error for invalid category")

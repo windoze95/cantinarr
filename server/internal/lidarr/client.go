@@ -899,3 +899,174 @@ func (c *Client) UpdateCustomFormatRawContext(ctx context.Context, id int, body 
 	raw, _, err := arrcommon.DoSettingsWrite(ctx, c.httpClient, "lidarr", c.baseURL, c.apiKey, http.MethodPut, path, body)
 	return raw, err
 }
+
+// Release is one interactive-search result from Lidarr's release endpoint.
+type Release struct {
+	GUID       string          `json:"guid"`
+	IndexerID  int             `json:"indexerId"`
+	Indexer    string          `json:"indexer"`
+	Title      string          `json:"title"`
+	Size       int64           `json:"size"`
+	Seeders    *int            `json:"seeders"`
+	Leechers   *int            `json:"leechers"`
+	Protocol   string          `json:"protocol"`
+	AgeHours   float64         `json:"ageHours"`
+	Quality    json.RawMessage `json:"quality"`
+	Rejected   bool            `json:"rejected"`
+	Rejections []string        `json:"rejections"`
+}
+
+// SearchReleases runs an interactive release search for an album. It queries
+// every configured indexer, so it rides the long-timeout client.
+func (c *Client) SearchReleases(albumID int) ([]Release, error) {
+	var releases []Release
+	path := fmt.Sprintf("/api/v1/release?albumId=%d", albumID)
+	if err := c.doWith(libraryFetchClient(), "GET", path, nil, &releases); err != nil {
+		return nil, fmt.Errorf("lidarr release search: %w", err)
+	}
+	return releases, nil
+}
+
+// GrabRelease tells Lidarr to send a previously searched release to the
+// download client.
+func (c *Client) GrabRelease(guid string, indexerID int) error {
+	body := map[string]any{"guid": guid, "indexerId": indexerID}
+	if err := c.do("POST", "/api/v1/release", body, nil); err != nil {
+		return fmt.Errorf("lidarr grab release: %w", err)
+	}
+	return nil
+}
+
+// ManualImportRejection is a single reason Lidarr would not auto-import a
+// file, plus whether the rejection is permanent.
+type ManualImportRejection struct {
+	Reason string `json:"reason"`
+	Type   string `json:"type"`
+}
+
+// ManualImportCandidate is a file Lidarr found for a download, as returned by
+// GET /manualimport. Quality is kept as raw JSON so it can be round-tripped
+// verbatim back into the ManualImport command. The nested artist/album ids and
+// matched track ids are lifted for the mapping checks.
+type ManualImportCandidate struct {
+	ID           int                     `json:"id"`
+	Path         string                  `json:"path"`
+	FolderName   string                  `json:"folderName"`
+	Name         string                  `json:"name"`
+	Size         int64                   `json:"size"`
+	ArtistID     int                     `json:"-"`
+	AlbumID      int                     `json:"-"`
+	TrackIDs     []int                   `json:"-"`
+	AlbumRelease int                     `json:"-"`
+	Quality      json.RawMessage         `json:"quality"`
+	ReleaseGroup string                  `json:"releaseGroup"`
+	DownloadID   string                  `json:"downloadId"`
+	Rejections   []ManualImportRejection `json:"rejections"`
+}
+
+// UnmarshalJSON lifts the nested artist/album ids, the albumReleaseId, and the
+// matched track ids out of Lidarr's nested shapes.
+func (m *ManualImportCandidate) UnmarshalJSON(data []byte) error {
+	type alias ManualImportCandidate
+	aux := struct {
+		*alias
+		Artist *struct {
+			ID int `json:"id"`
+		} `json:"artist"`
+		Album *struct {
+			ID int `json:"id"`
+		} `json:"album"`
+		AlbumReleaseID int `json:"albumReleaseId"`
+		Tracks         []struct {
+			ID int `json:"id"`
+		} `json:"tracks"`
+	}{alias: (*alias)(m)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Artist != nil {
+		m.ArtistID = aux.Artist.ID
+	}
+	if aux.Album != nil {
+		m.AlbumID = aux.Album.ID
+	}
+	m.AlbumRelease = aux.AlbumReleaseID
+	for _, t := range aux.Tracks {
+		if t.ID > 0 {
+			m.TrackIDs = append(m.TrackIDs, t.ID)
+		}
+	}
+	return nil
+}
+
+// ManualImportFile is one file to import via the ManualImport command. Quality
+// is passed back verbatim from the candidate. Artist, album, and track ids
+// must be set or Lidarr silently skips the file.
+type ManualImportFile struct {
+	Path           string          `json:"path"`
+	FolderName     string          `json:"folderName,omitempty"`
+	ArtistID       int             `json:"artistId"`
+	AlbumID        int             `json:"albumId"`
+	AlbumReleaseID int             `json:"albumReleaseId,omitempty"`
+	TrackIDs       []int           `json:"trackIds,omitempty"`
+	Quality        json.RawMessage `json:"quality,omitempty"`
+	ReleaseGroup   string          `json:"releaseGroup,omitempty"`
+	DownloadID     string          `json:"downloadId,omitempty"`
+}
+
+// GetManualImportCandidates lists the files Lidarr found for a download,
+// including any rejection reasons, without importing existing files.
+func (c *Client) GetManualImportCandidates(downloadID string) ([]ManualImportCandidate, error) {
+	var candidates []ManualImportCandidate
+	path := fmt.Sprintf("/api/v1/manualimport?downloadId=%s&filterExistingFiles=false", url.QueryEscape(downloadID))
+	if err := c.doWith(libraryFetchClient(), "GET", path, nil, &candidates); err != nil {
+		return nil, fmt.Errorf("lidarr manual import candidates: %w", err)
+	}
+	return candidates, nil
+}
+
+// ExecuteManualImport tells Lidarr to import the given files. importMode must
+// be lowercase (move/copy/auto); the PascalCase form is silently ignored.
+func (c *Client) ExecuteManualImport(files []ManualImportFile) error {
+	payload := map[string]any{
+		"name":       "ManualImport",
+		"importMode": "auto",
+		"files":      files,
+	}
+	if err := c.do("POST", "/api/v1/command", payload, nil); err != nil {
+		return fmt.Errorf("lidarr command: %w", err)
+	}
+	return nil
+}
+
+// DeleteTrackFile removes one imported music file from disk and the library —
+// the DELETE /trackfile/{id} the wrong-album repair needs.
+func (c *Client) DeleteTrackFile(id int) error {
+	path := fmt.Sprintf("/api/v1/trackfile/%d", id)
+	if err := c.do("DELETE", path, nil, nil); err != nil {
+		return fmt.Errorf("lidarr delete track file: %w", err)
+	}
+	return nil
+}
+
+// MarkHistoryFailed marks one grab record as a failed download — the only
+// route to blocklist a release that already imported.
+func (c *Client) MarkHistoryFailed(historyID int64) error {
+	path := fmt.Sprintf("/api/v1/history/failed/%d", historyID)
+	if err := c.do("POST", path, nil, nil); err != nil {
+		return fmt.Errorf("lidarr mark history failed: %w", err)
+	}
+	return nil
+}
+
+// GetFailedDownloadPolicy reports autoRedownloadFailed: whether Lidarr itself
+// searches for a replacement when a grab is marked failed.
+func (c *Client) GetFailedDownloadPolicy() (autoRedownloadFailed bool, err error) {
+	var config struct {
+		AutoRedownloadFailed bool `json:"autoRedownloadFailed"`
+	}
+	if err := c.do("GET", "/api/v1/config/downloadclient", nil, &config); err != nil {
+		return false, fmt.Errorf("lidarr download client config: %w", err)
+	}
+	return config.AutoRedownloadFailed, nil
+}

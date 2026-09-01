@@ -9,6 +9,8 @@ import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
+import '../../auth/logic/auth_provider.dart';
+import '../../issues/ui/report_problem_sheet.dart';
 import '../../lidarr/data/lidarr_api_service.dart';
 import '../../lidarr/data/lidarr_image.dart';
 import '../../lidarr/data/lidarr_models.dart';
@@ -161,6 +163,19 @@ class _RequesterAlbumDetailScreenState
     setState(() => _canonicalForeignId = canonical);
   }
 
+  /// A problem can be reported only for an album the library actually holds
+  /// (the ownership digest row is the requester-visible proof) and when the
+  /// server allows reporting — the same shape as the book gate.
+  bool _canReportAlbum(OwnedAlbum? owned) {
+    final allow = ref
+            .watch(authProvider)
+            .valueOrNull
+            ?.connection
+            ?.allowReporting ??
+        false;
+    return allow && _instanceId != null && owned != null;
+  }
+
   Future<void> _onRequestCompleted() async {
     // The request may have created the library record immediately. Refresh
     // the ownership digest in place.
@@ -311,6 +326,18 @@ class _RequesterAlbumDetailScreenState
             onCanonicalForeignId: _onCanonicalForeignId,
             onRequestCompleted: _onRequestCompleted,
           ),
+          if (_canReportAlbum(owned)) ...[
+            const SizedBox(height: 18),
+            // Music has no format axis, so the shared button suffices — no
+            // picker between records.
+            ReportProblemButton(
+              scope: ReportScope.album(
+                instanceId: _instanceId!,
+                foreignId: _effectiveForeignId,
+                title: title,
+              ),
+            ),
+          ],
           if (genres.isNotEmpty) ...[
             const SizedBox(height: 22),
             Wrap(

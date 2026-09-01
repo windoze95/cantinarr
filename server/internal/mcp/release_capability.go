@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -77,6 +78,7 @@ type scopedReleaseGrabParams struct {
 	SeasonNumber  *int   `json:"season_number"`
 	EpisodeNumber *int   `json:"episode_number"`
 	BookID        int    `json:"book_id"`
+	AlbumID       int    `json:"album_id"`
 }
 
 type releaseCapability struct {
@@ -135,10 +137,18 @@ func chaptarrReleaseCapabilities(releases []chaptarr.Release) []releaseCapabilit
 	return out
 }
 
+func lidarrReleaseCapabilities(releases []lidarr.Release) []releaseCapability {
+	out := make([]releaseCapability, 0, len(releases))
+	for _, release := range releases {
+		out = append(out, releaseCapability{guid: release.GUID, indexerID: release.IndexerID})
+	}
+	return out
+}
+
 // grabFreshScopedRelease performs the mandatory fresh search and immediate
 // dispatch for the ordinary admin MCP tool. Scope is supplied by the caller,
 // not recovered from prior chat state, and every mismatch fails before POST.
-func grabFreshScopedRelease(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, params scopedReleaseGrabParams) (string, error) {
+func grabFreshScopedRelease(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, lc *lidarr.Client, params scopedReleaseGrabParams) (string, error) {
 	if !isReleaseGUIDReference(params.GUID) {
 		return mutationNotStarted("guid must be the exact one-way release reference returned by search_releases")
 	}
@@ -175,7 +185,7 @@ func grabFreshScopedRelease(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.C
 		if err != nil {
 			return "", err
 		}
-		return GrabReleaseHelper(rc, nil, nil, params.MediaType, guid, params.IndexerID, 0)
+		return GrabReleaseHelper(rc, nil, nil, nil, params.MediaType, guid, params.IndexerID, 0)
 
 	case "tv":
 		if params.TmdbID <= 0 || params.SeasonNumber == nil || *params.SeasonNumber < 0 || params.BookID != 0 ||
@@ -225,7 +235,7 @@ func grabFreshScopedRelease(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.C
 		if err != nil {
 			return "", err
 		}
-		return GrabReleaseHelper(nil, sc, nil, params.MediaType, guid, params.IndexerID, 0)
+		return GrabReleaseHelper(nil, sc, nil, nil, params.MediaType, guid, params.IndexerID, 0)
 
 	case "book":
 		if params.BookID <= 0 || params.TmdbID != 0 || params.SeasonNumber != nil || params.EpisodeNumber != nil {
@@ -242,9 +252,26 @@ func grabFreshScopedRelease(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.C
 		if err != nil {
 			return "", err
 		}
-		return GrabReleaseHelper(nil, nil, cc, params.MediaType, guid, params.IndexerID, 0)
+		return GrabReleaseHelper(nil, nil, cc, nil, params.MediaType, guid, params.IndexerID, 0)
+
+	case "music":
+		if params.AlbumID <= 0 || params.TmdbID != 0 || params.BookID != 0 || params.SeasonNumber != nil || params.EpisodeNumber != nil {
+			return mutationNotStarted("music grab_release requires only a positive album_id as its media scope")
+		}
+		if lc == nil {
+			return mutationNotStarted("Lidarr is not configured for the selected instance")
+		}
+		releases, err := lc.SearchReleases(params.AlbumID)
+		if err != nil {
+			return "", fmt.Errorf("refresh scoped album releases before grab: %w", err)
+		}
+		guid, err := resolveFreshReleaseGUID(params.GUID, params.IndexerID, lidarrReleaseCapabilities(releases))
+		if err != nil {
+			return "", err
+		}
+		return GrabReleaseHelper(nil, nil, nil, lc, params.MediaType, guid, params.IndexerID, 0)
 
 	default:
-		return mutationNotStarted("media_type must be \"movie\", \"tv\", or \"book\"")
+		return mutationNotStarted("media_type must be \"movie\", \"tv\", \"book\", or \"music\"")
 	}
 }

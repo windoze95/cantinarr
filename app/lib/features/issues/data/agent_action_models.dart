@@ -548,6 +548,8 @@ class AgentActionParams {
 
   int? get authorId => _int('author_id');
   int? get bookId => _int('book_id');
+  int? get artistId => _int('artist_id');
+  int? get albumId => _int('album_id');
 
   /// Mirrors the server's strict action schemas. This is defense in depth: a
   /// future or malformed payload remains visible as history but cannot become
@@ -587,11 +589,14 @@ class AgentActionParams {
           'episode',
           'author_id',
           'book_id',
+          'artist_id',
+          'album_id',
         },
       AgentActionKind.rescan => const {
           'media_type',
           'tmdb_id',
           'author_id',
+          'artist_id',
         },
       AgentActionKind.deleteMediaFiles => const {
           'media_type',
@@ -600,6 +605,7 @@ class AgentActionParams {
           'episodes',
           'blocklist',
           'book_id',
+          'album_id',
         },
       AgentActionKind.unknown => const <String>{},
     };
@@ -609,7 +615,10 @@ class AgentActionParams {
 
     final media = mediaType;
     if (_raw['media_type'] is! String ||
-        (media != 'movie' && media != 'tv' && media != 'book')) {
+        (media != 'movie' &&
+            media != 'tv' &&
+            media != 'book' &&
+            media != 'music')) {
       return 'The proposed fix has an invalid media type.';
     }
     switch (kind) {
@@ -666,7 +675,9 @@ class AgentActionParams {
             !_isInt('season', optional: true) ||
             !_isInt('episode', optional: true) ||
             !_isInt('author_id', optional: true) ||
-            !_isInt('book_id', optional: true)) {
+            !_isInt('book_id', optional: true) ||
+            !_isInt('artist_id', optional: true) ||
+            !_isInt('album_id', optional: true)) {
           return 'The proposed search details are malformed.';
         }
         if (media == 'book') {
@@ -674,11 +685,27 @@ class AgentActionParams {
             return 'The book or author needed for this search is missing.';
           }
           if ((tmdbId ?? 0) != 0 ||
+              (artistId ?? 0) != 0 ||
+              (albumId ?? 0) != 0 ||
               _raw.containsKey('season') ||
               _raw.containsKey('episode')) {
             return 'The proposed book search contains invalid media details.';
           }
+        } else if (media == 'music') {
+          if ((artistId ?? 0) <= 0 && (albumId ?? 0) <= 0) {
+            return 'The album or artist needed for this search is missing.';
+          }
+          if ((tmdbId ?? 0) != 0 ||
+              (authorId ?? 0) != 0 ||
+              (bookId ?? 0) != 0 ||
+              _raw.containsKey('season') ||
+              _raw.containsKey('episode')) {
+            return 'The proposed music search contains invalid media details.';
+          }
         } else {
+          if ((artistId ?? 0) != 0 || (albumId ?? 0) != 0) {
+            return 'The proposed search contains music details.';
+          }
           if ((tmdbId ?? 0) <= 0) {
             return 'The title needed for this search is missing.';
           }
@@ -696,14 +723,25 @@ class AgentActionParams {
         }
       case AgentActionKind.rescan:
         if (!_isInt('tmdb_id', optional: true) ||
-            !_isInt('author_id', optional: true)) {
+            !_isInt('author_id', optional: true) ||
+            !_isInt('artist_id', optional: true)) {
           return 'The proposed rescan details are malformed.';
         }
         if (media == 'book') {
-          if ((authorId ?? 0) <= 0 || (tmdbId ?? 0) != 0) {
+          if ((authorId ?? 0) <= 0 ||
+              (tmdbId ?? 0) != 0 ||
+              (artistId ?? 0) != 0) {
             return 'The author needed for this rescan is missing.';
           }
-        } else if ((tmdbId ?? 0) <= 0) {
+        } else if (media == 'music') {
+          if ((artistId ?? 0) <= 0 ||
+              (tmdbId ?? 0) != 0 ||
+              (authorId ?? 0) != 0) {
+            return 'The artist needed for this rescan is missing.';
+          }
+        } else if ((tmdbId ?? 0) <= 0 ||
+            (authorId ?? 0) != 0 ||
+            (artistId ?? 0) != 0) {
           return 'The title needed for this rescan is missing.';
         }
       case AgentActionKind.deleteMediaFiles:
@@ -720,13 +758,29 @@ class AgentActionParams {
             return 'The book whose files would be deleted is missing.';
           }
           if ((tmdbId ?? 0) != 0 ||
+              (albumId ?? 0) != 0 ||
               _raw.containsKey('season') ||
               _raw.containsKey('episodes')) {
             return 'The proposed book deletion contains invalid media details.';
           }
+        } else if (media == 'music') {
+          // The wrong-album repair mirrors the book one over the durable
+          // Lidarr record id; album_id and blocklist are the entire target.
+          if (!_isInt('album_id') || (albumId ?? 0) <= 0) {
+            return 'The album whose files would be deleted is missing.';
+          }
+          if ((tmdbId ?? 0) != 0 ||
+              (bookId ?? 0) != 0 ||
+              _raw.containsKey('season') ||
+              _raw.containsKey('episodes')) {
+            return 'The proposed music deletion contains invalid media details.';
+          }
         } else {
           if (_raw.containsKey('book_id')) {
             return 'The proposed deletion contains book details.';
+          }
+          if (_raw.containsKey('album_id')) {
+            return 'The proposed deletion contains music details.';
           }
           if (!_isInt('tmdb_id') || (tmdbId ?? 0) <= 0) {
             return 'The title whose files would be deleted is missing.';

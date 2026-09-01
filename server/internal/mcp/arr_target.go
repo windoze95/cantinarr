@@ -99,24 +99,25 @@ func (s *ToolServer) lidarrTargetFor(modelID, callID string) (*lidarr.Client, st
 	return client, s.arrTargetLabel("lidarr", instanceID), ""
 }
 
-// arrClientsFor resolves all three service clients for the helper-style tools
+// arrClientsFor resolves all four service clients for the helper-style tools
 // that branch on media_type themselves. Only a model-supplied id matching no
 // instance of any service earns a refusal here; a wrong-service id for the
 // requested media type keeps each helper's historic "not configured" text,
 // which is also the trusted-id behavior.
-func (s *ToolServer) arrClientsFor(modelID, callID string) (*radarr.Client, *sonarr.Client, *chaptarr.Client, string) {
+func (s *ToolServer) arrClientsFor(modelID, callID string) (*radarr.Client, *sonarr.Client, *chaptarr.Client, *lidarr.Client, string) {
 	instanceID := arrToolInstanceID(modelID, callID)
 	radarrClient := s.GetRadarrFor(instanceID)
 	sonarrClient := s.GetSonarrFor(instanceID)
 	chaptarrClient := s.GetChaptarrFor(instanceID)
+	lidarrClient := s.GetLidarrFor(instanceID)
 	if instanceID != "" && callID == "" && s.registry != nil &&
-		radarrClient == nil && sonarrClient == nil && chaptarrClient == nil {
-		for _, service := range []string{"radarr", "sonarr", "chaptarr"} {
+		radarrClient == nil && sonarrClient == nil && chaptarrClient == nil && lidarrClient == nil {
+		for _, service := range []string{"radarr", "sonarr", "chaptarr", "lidarr"} {
 			if s.arrInstanceName(service, instanceID) != "" {
-				return nil, nil, nil, s.instanceResolveFailureText(service, instanceID)
+				return nil, nil, nil, nil, s.instanceResolveFailureText(service, instanceID)
 			}
 		}
-		return nil, nil, nil, fmt.Sprintf("No Radarr, Sonarr, or Chaptarr instance with ID %q. Call list_arr_instances to see the configured instances.", instanceID)
+		return nil, nil, nil, nil, fmt.Sprintf("No Radarr, Sonarr, Chaptarr, or Lidarr instance with ID %q. Call list_arr_instances to see the configured instances.", instanceID)
 	}
-	return radarrClient, sonarrClient, chaptarrClient, ""
+	return radarrClient, sonarrClient, chaptarrClient, lidarrClient, ""
 }

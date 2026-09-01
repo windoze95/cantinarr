@@ -106,7 +106,91 @@ void main() {
         reason: 'an outage must not mint requests');
     expect(find.textContaining('could not be read'), findsOneWidget);
   });
+
+  testWidgets('an owned album offers Report a problem when reporting is on',
+      (tester) async {
+    final adapter = _MusicAdapter(
+      owned: const [
+        {
+          'title': 'Pinkerton',
+          'artist': 'Weezer',
+          'year': 1996,
+          'foreign_album_id': 'mb-1',
+          'cover': '',
+          'monitored': true,
+          'downloaded': true,
+        },
+      ],
+    );
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: adapter,
+      state: _musicReportingState,
+    );
+
+    router.go('/detail/album/mb-1?title=Pinkerton');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Report a problem'), findsOneWidget);
+  });
+
+  testWidgets(
+      'no report entry without the server toggle or without a library record',
+      (tester) async {
+    // Reporting off: an owned album still shows no entry.
+    final adapter = _MusicAdapter(
+      owned: const [
+        {
+          'title': 'Pinkerton',
+          'artist': 'Weezer',
+          'year': 1996,
+          'foreign_album_id': 'mb-1',
+          'cover': '',
+          'monitored': true,
+          'downloaded': true,
+        },
+      ],
+    );
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    router.go('/detail/album/mb-1?title=Pinkerton');
+    await tester.pumpAndSettle();
+    expect(find.text('Report a problem'), findsNothing);
+  });
+
+  testWidgets('an unowned album cannot be reported even with reporting on',
+      (tester) async {
+    // No library record means nothing to remediate; the gate mirrors books.
+    final adapter = _MusicAdapter();
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: adapter,
+      state: _musicReportingState,
+    );
+    router.go('/detail/album/mb-1?title=Pinkerton');
+    await tester.pumpAndSettle();
+    expect(find.text('Report a problem'), findsNothing);
+  });
 }
+
+/// The reporting-enabled twin of [_musicState].
+const _musicReportingState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(lidarr: true),
+    allowReporting: true,
+    instances: [
+      ServiceInstance(
+        id: 'music-1',
+        serviceType: 'lidarr',
+        name: 'Music',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
 
 const _musicState = AuthState(
   connection: BackendConnection(
@@ -129,6 +213,7 @@ const _musicState = AuthState(
 Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
   WidgetTester tester, {
   required _MusicAdapter adapter,
+  AuthState state = _musicState,
 }) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
@@ -140,7 +225,7 @@ Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(() => _FakeAuthNotifier(_musicState)),
+      authProvider.overrideWith(() => _FakeAuthNotifier(state)),
       backendClientProvider.overrideWithValue(dio),
     ],
   );

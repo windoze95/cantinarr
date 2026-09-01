@@ -1502,8 +1502,8 @@ func TestTriggerSearchAiredOnlySearchesOnlyAiredMissingEpisodes(t *testing.T) {
 	fake := &sonarrFileFake{t: t, series: futuramaSeries(), episodes: airedOnlySeasonEpisodes()}
 	server := fake.start()
 
-	text, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil,
-		"tv", 615, intPtr(11), nil, true, 0, nil)
+	text, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil, nil,
+		"tv", 615, intPtr(11), nil, true, 0, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("TriggerSearchHelper(aired_only): %v", err)
 	}
@@ -1534,8 +1534,8 @@ func TestTriggerSearchAiredOnlySkipsEpisodesWithNoAirDate(t *testing.T) {
 	}}
 	server := fake.start()
 
-	text, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil,
-		"tv", 615, intPtr(11), nil, true, 0, nil)
+	text, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil, nil,
+		"tv", 615, intPtr(11), nil, true, 0, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("TriggerSearchHelper(aired_only): %v", err)
 	}
@@ -1564,8 +1564,8 @@ func TestTriggerSearchAiredOnlyWithNothingAiredSearchesNothing(t *testing.T) {
 	fake := &sonarrFileFake{t: t, series: futuramaSeries(), episodes: episodes}
 	server := fake.start()
 
-	text, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil,
-		"tv", 615, intPtr(11), nil, true, 0, nil)
+	text, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil, nil,
+		"tv", 615, intPtr(11), nil, true, 0, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("an empty aired set is not a failure: %v", err)
 	}
@@ -1593,8 +1593,8 @@ func TestTriggerSearchAiredOnlyDistinguishesAiredButStillHeld(t *testing.T) {
 	fake := &sonarrFileFake{t: t, series: futuramaSeries(), episodes: episodes}
 	server := fake.start()
 
-	text, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil,
-		"tv", 615, intPtr(11), nil, true, 0, nil)
+	text, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil, nil,
+		"tv", 615, intPtr(11), nil, true, 0, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("TriggerSearchHelper(aired_only): %v", err)
 	}
@@ -1616,8 +1616,8 @@ func TestTriggerSearchWithoutAiredOnlyStillSearchesTheWholeSeason(t *testing.T) 
 	fake := &sonarrFileFake{t: t, series: futuramaSeries(), episodes: airedOnlySeasonEpisodes()}
 	server := fake.start()
 
-	if _, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil,
-		"tv", 615, intPtr(11), nil, false, 0, nil); err != nil {
+	if _, err := TriggerSearchHelper(nil, nil, sonarr.NewClient(server.URL, "key"), nil, nil,
+		"tv", 615, intPtr(11), nil, false, 0, nil, 0, nil); err != nil {
 		t.Fatalf("TriggerSearchHelper: %v", err)
 	}
 	commands := fake.commandsSeen()

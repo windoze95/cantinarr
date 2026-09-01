@@ -1240,6 +1240,61 @@ func (h *Hub) autoDispatchChaptarr(instanceID string, client *chaptarr.Client) {
 	h.dispatchDetailedItems("chaptarr", instanceID, observations)
 }
 
+// autoDispatchLidarr is autoDispatchChaptarr's music sibling: it feeds
+// complete diagnosed queue snapshots to remediation, whose music support
+// arrived with the issue-parity wave.
+func (h *Hub) autoDispatchLidarr(instanceID string, client *lidarr.Client) {
+	if !h.autoDispatchEnabled() {
+		return
+	}
+	items, err := client.GetQueueDetailed()
+	if err != nil {
+		log.Printf("websocket: auto-dispatch lidarr detailed queue (%s): %v", instanceID, err)
+		return
+	}
+	observations := make([]arr.QueueObservation, 0, len(items))
+	for _, item := range items {
+		observations = append(observations, lidarrQueueSignal(item))
+	}
+	h.dispatchDetailedItems("lidarr", instanceID, observations)
+}
+
+// lidarrQueueSignal is chaptarrQueueSignal's music sibling: the artist and
+// album record ids ride the generic AuthorID/BookID context fields.
+func lidarrQueueSignal(item lidarr.DetailedQueueItem) arr.QueueObservation {
+	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
+	for _, m := range item.StatusMessages {
+		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
+	}
+	media := arr.QueueMediaContext{QueueID: item.ID, Title: item.Title, AuthorID: item.ArtistID, BookID: item.AlbumID}
+	if item.Album != nil {
+		if item.Album.Title != "" {
+			media.Title = item.Album.Title
+		}
+		if media.BookID == 0 {
+			media.BookID = item.Album.ID
+		}
+	}
+	if item.Artist != nil && media.AuthorID == 0 {
+		media.AuthorID = item.Artist.ID
+	}
+	return arr.QueueObservation{
+		DownloadID: item.DownloadID,
+		AddedAt:    item.Added,
+		Media:      media,
+		Signal: arr.QueueSignal{
+			Status:                item.Status,
+			TrackedDownloadStatus: item.TrackedDownloadStatus,
+			TrackedDownloadState:  item.TrackedDownloadState,
+			ErrorMessage:          item.ErrorMessage,
+			StatusMessages:        messages,
+			Protocol:              item.Protocol,
+			Size:                  item.Size,
+			SizeLeft:              item.Sizeleft,
+		},
+	}
+}
+
 func (h *Hub) pollAllRadarr() {
 	if h.store == nil || h.registry == nil {
 		return
@@ -1338,6 +1393,9 @@ func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 	h.lastPollAt[instanceID] = time.Now()
 
 	h.noteArrQueueComposition(instanceID, "lidarr", tuples)
+
+	// Auto-dispatch pass (see pollRadarrInstance). No-op when the opener is nil.
+	h.autoDispatchLidarr(instanceID, client)
 }
 
 func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {

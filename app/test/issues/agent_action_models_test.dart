@@ -477,6 +477,20 @@ void main() {
       expect(filesOnly.canTakeAction, isTrue);
     });
 
+    test('a music deletion is addressed by the album id and stays actionable',
+        () {
+      // The wrong-album repair: {media_type, album_id, blocklist} and nothing
+      // else, riding the same approval card as books.
+      final action = _delete(
+        {'media_type': 'music', 'album_id': 314, 'blocklist': true},
+        issueMediaType: 'music',
+        serviceType: 'lidarr',
+      );
+      expect(action.params.albumId, 314);
+      expect(action.params.validationProblem(action.kind), isNull);
+      expect(action.canTakeAction, isTrue);
+    });
+
     test('every malformed or under-specified deletion is refused', () {
       // (params, expected message fragment). One rejection path per row; each
       // row is otherwise valid so the fragment proves which gate fired.
@@ -500,6 +514,21 @@ void main() {
         (
           {'media_type': 'movie', 'tmdb_id': 27205, 'book_id': 912},
           'book details'
+        ),
+        // The same fences for music: an album delete takes only its id, and a
+        // video deletion never carries one.
+        ({'media_type': 'music'}, 'album whose files'),
+        (
+          {'media_type': 'music', 'album_id': 314, 'tmdb_id': 5},
+          'invalid media details'
+        ),
+        (
+          {'media_type': 'music', 'album_id': 314, 'book_id': 9},
+          'invalid media details'
+        ),
+        (
+          {'media_type': 'movie', 'tmdb_id': 27205, 'album_id': 314},
+          'music details'
         ),
         // No title to resolve the library record from.
         ({'media_type': 'movie'}, 'title'),
@@ -913,6 +942,7 @@ AgentAction _delete(
       'instance_name': switch (serviceType) {
         'radarr' => 'Main Movies',
         'chaptarr' => 'Main Books',
+        'lidarr' => 'Main Music',
         _ => 'Main TV',
       },
       'instance_service_type': serviceType,

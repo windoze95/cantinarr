@@ -16,6 +16,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
@@ -143,6 +144,12 @@ func incidentScopeKey(instanceID, mediaType, downloadID string, media arr.QueueM
 		// so the book record id alone is an exact incident scope.
 		if media.BookID > 0 {
 			scope = fmt.Sprintf("%s|book|book:%d", instanceID, media.BookID)
+		}
+	case "lidarr", "music":
+		// One album is one Lidarr record; the album id (riding the generic
+		// BookID field) is an exact incident scope.
+		if media.BookID > 0 {
+			scope = fmt.Sprintf("%s|music|album:%d", instanceID, media.BookID)
 		}
 	}
 	if scope == "" && downloadID != "" {
@@ -358,7 +365,7 @@ func mediaScopeMatches(want, got arr.QueueMediaContext, mediaType string) bool {
 func (s *Service) observeQueueSnapshot(serviceType, instanceID string, items []arr.QueueObservation, now time.Time) error {
 	s.observationMu.Lock()
 	defer s.observationMu.Unlock()
-	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" {
+	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" && serviceType != "lidarr" {
 		return fmt.Errorf("unsupported observation service %q", serviceType)
 	}
 	if strings.TrimSpace(instanceID) == "" {
@@ -1382,6 +1389,27 @@ func (s *Service) exactIssueFileState(issue *Issue) (exactFileState, error) {
 			}
 		}
 		return exactFileState{hasFile: len(files) > 0, fileID: newest, mediaID: issue.BookID, known: true}, nil
+	case "music":
+		if issue.BookID <= 0 {
+			return exactFileState{}, nil
+		}
+		client, err := s.registry.GetLidarrClient(issue.InstanceID)
+		if err != nil {
+			return exactFileState{}, err
+		}
+		// An album owns many track files, so the witness tracks the newest
+		// file id, exactly like books: a fresh import always raises it.
+		files, err := client.GetTrackFilesForAlbum(issue.BookID)
+		if err != nil {
+			return exactFileState{}, err
+		}
+		var newest int64
+		for _, f := range files {
+			if int64(f.ID) > newest {
+				newest = int64(f.ID)
+			}
+		}
+		return exactFileState{hasFile: len(files) > 0, fileID: newest, mediaID: issue.BookID, known: true}, nil
 	default:
 		return exactFileState{}, nil
 	}
@@ -1742,6 +1770,57 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 				return importReceipt{historyID: int64(record.ID), downloadID: record.DownloadID, fileID: currentFileID}, nil
 			}
 		}
+	case "music":
+		if issue.BookID <= 0 {
+			return importReceipt{}, nil
+		}
+		client, err := s.registry.GetLidarrClient(issue.InstanceID)
+		if err != nil {
+			return importReceipt{}, err
+		}
+		for _, download := range downloadIDs {
+			downloadID := download.id
+			history, err := client.GetImportHistory(issue.BookID, downloadID, 20)
+			if err != nil {
+				return importReceipt{}, err
+			}
+			for _, record := range history {
+				// Identity binds via the exact album record + download. Lidarr
+				// emits "trackFileImported" for a completed import (its event 3).
+				if !strings.EqualFold(record.EventType, "trackFileImported") ||
+					!strings.EqualFold(record.DownloadID, downloadID) ||
+					record.AlbumID != issue.BookID || record.ID <= 0 {
+					continue
+				}
+				if fileID, present := historyFileID(record.Data); present {
+					// A supplied fileId corroborates only when it names the exact
+					// current (newest) file; a mismatch — one track of many —
+					// fails closed to "no receipt", never a false close.
+					if fileID != currentFileID {
+						continue
+					}
+				} else {
+					// No fileId to bind: require the receipt to postdate this
+					// download's attempt so a reused download id cannot
+					// resurrect a months-old import as proof.
+					boundary := download.firstSeenAt
+					if download.addedAt.Valid {
+						boundary = download.addedAt.Time
+					}
+					if boundary.IsZero() || record.Date == nil || record.Date.Before(boundary) {
+						continue
+					}
+				}
+				if requireAttemptBoundary && (!download.addedAt.Valid ||
+					record.Date == nil || record.Date.Before(download.addedAt.Time.Add(-importReceiptSkewTolerance))) {
+					continue
+				}
+				if record.Album != nil && record.Album.ID != issue.BookID {
+					continue
+				}
+				return importReceipt{historyID: int64(record.ID), downloadID: record.DownloadID, fileID: currentFileID}, nil
+			}
+		}
 	}
 	return importReceipt{}, nil
 }
@@ -1986,6 +2065,20 @@ func (s *Service) fetchQueueSnapshot(serviceType, instanceID string) ([]arr.Queu
 			out = append(out, chaptarrObservation(item))
 		}
 		return out, nil
+	case "lidarr":
+		client, err := s.registry.GetLidarrClient(instanceID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := client.GetQueueDetailed()
+		if err != nil {
+			return nil, err
+		}
+		out := make([]arr.QueueObservation, 0, len(items))
+		for _, item := range items {
+			out = append(out, lidarrObservation(item))
+		}
+		return out, nil
 	default:
 		return nil, fmt.Errorf("unsupported queue service %q", serviceType)
 	}
@@ -2103,7 +2196,7 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 		return arrRecoveryProbe{}, nil
 	}
 	serviceType := mediaServiceType(issue.MediaType)
-	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" {
+	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" && serviceType != "lidarr" {
 		return arrRecoveryProbe{}, nil
 	}
 	// A pre-air season issue is not a queue incident: it deliberately has no
@@ -2536,6 +2629,36 @@ func chaptarrObservation(item chaptarr.DetailedQueueItem) arr.QueueObservation {
 	// Chaptarr queue payloads never embed the book's current file id, so
 	// FileIDAtSnapshot stays nil (unknown) and boundary-dependent proofs fail
 	// closed rather than guessing.
+	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
+}
+
+// lidarrObservation is chaptarrObservation's music sibling: the artist and
+// album record ids ride the generic AuthorID/BookID context fields.
+func lidarrObservation(item lidarr.DetailedQueueItem) arr.QueueObservation {
+	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
+	for _, message := range item.StatusMessages {
+		messages = append(messages, arr.StatusMessage{Title: message.Title, Messages: message.Messages})
+	}
+	media := arr.QueueMediaContext{QueueID: item.ID, Title: item.Title, AuthorID: item.ArtistID, BookID: item.AlbumID}
+	if item.Album != nil {
+		if item.Album.Title != "" {
+			media.Title = item.Album.Title
+		}
+		if media.BookID == 0 {
+			media.BookID = item.Album.ID
+		}
+	}
+	if item.Artist != nil && media.AuthorID == 0 {
+		media.AuthorID = item.Artist.ID
+	}
+	signal := arr.QueueSignal{
+		Status: item.Status, TrackedDownloadStatus: item.TrackedDownloadStatus,
+		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
+		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
+	}
+	// Lidarr queue payloads never embed the album's current file ids either,
+	// so FileIDAtSnapshot stays nil (unknown) and boundary-dependent proofs
+	// fail closed rather than guessing.
 	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
 }
 

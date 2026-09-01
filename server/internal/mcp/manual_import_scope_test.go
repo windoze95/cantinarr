@@ -50,7 +50,7 @@ func TestScopedManualImportNeverDispatchesUnrelatedEpisodeCandidate(t *testing.T
 	}))
 	defer server.Close()
 
-	result, err := ExecuteManualImportHelper(nil, sonarr.NewClient(server.URL, "test"), nil,
+	result, err := ExecuteManualImportHelper(nil, sonarr.NewClient(server.URL, "test"), nil, nil,
 		"tv", 7, true, &ManualImportScope{
 			DownloadID: "download-7", SeriesID: 1, SeasonNumber: 2, EpisodeNumber: 7,
 		})
@@ -90,7 +90,7 @@ func TestScopedManualImportWithOnlyUnrelatedCandidatesFailsBeforeDispatch(t *tes
 	}))
 	defer server.Close()
 
-	_, err := ExecuteManualImportHelper(nil, sonarr.NewClient(server.URL, "test"), nil,
+	_, err := ExecuteManualImportHelper(nil, sonarr.NewClient(server.URL, "test"), nil, nil,
 		"tv", 7, true, &ManualImportScope{DownloadID: "download-7", SeriesID: 1, SeasonNumber: 2, EpisodeNumber: 7})
 	if err == nil {
 		t.Fatal("unrelated-only candidates were accepted")
