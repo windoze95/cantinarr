@@ -23,6 +23,7 @@ class PagedFeed {
   final PagedLoader _loader = PagedLoader();
   final Set<int> _seen = {};
   int _generation = 0;
+  Object? _lastError;
 
   /// Whether another page can be asked for.
   bool get hasMore => _loader.hasMore && _loader.page <= maxPage;
@@ -32,6 +33,12 @@ class PagedFeed {
 
   /// The page the next fetch will ask for.
   int get page => _loader.page;
+
+  /// Why the last [nextPage] came back empty, when a fetch threw; null after
+  /// a call that fetched cleanly. An empty answer with an error behind it is
+  /// blindness, not absence, and a surface must not render it as "nothing
+  /// here".
+  Object? get lastError => _lastError;
 
   /// Start over from page one. A [nextPage] call still awaiting its fetch
   /// resolves to null rather than delivering a page of the old run.
@@ -54,14 +61,16 @@ class PagedFeed {
     Future<TmdbPage<MediaItem>> Function(int page) fetch,
   ) async {
     final generation = _generation;
+    _lastError = null;
     var emptyPages = 0;
     while (emptyPages < maxEmptyPages && hasMore && _loader.beginLoading()) {
       final TmdbPage<MediaItem> page;
       try {
         page = await fetch(_loader.page);
-      } catch (_) {
+      } catch (error) {
         if (generation != _generation) return null;
         _loader.cancelLoading();
+        _lastError = error;
         return const [];
       }
       if (generation != _generation) return null;

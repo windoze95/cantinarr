@@ -1138,6 +1138,7 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   static String _secondaryRouteLabel(String path) {
+    if (path.startsWith('/browse/')) return 'Browse';
     if (path.startsWith('/detail/')) return 'Media details';
     if (path.startsWith('/settings')) return 'Settings';
     if (path.startsWith('/approvals')) return 'Approvals';

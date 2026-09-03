@@ -8,6 +8,9 @@ import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/data/tmdb_models.dart';
+import '../../discover/logic/browse_query.dart';
+import '../../discover/logic/library_snapshot_provider.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/category_row.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
@@ -94,6 +97,8 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
     // each fail independently, and browse-row badges must survive either
     // outage since the series list they depend on already arrived.
     setState(() => _librarySeries = series);
+    // A grid opened from this tab badges its posters from the same list.
+    ref.read(librarySnapshotProvider.notifier).seed(series: series);
 
     try {
       final imports = await service.getHistory(
@@ -136,6 +141,11 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
     ]);
   }
 
+  /// Opens a discovery row's feed as a full grid.
+  void _seeAll(BrowseFeed feed, String title) => context.push(
+        BrowseQuery(type: MediaType.tv, feed: feed, title: title).toLocation(),
+      );
+
   @override
   Widget build(BuildContext context) {
     final discover = ref.watch(tvDiscoverProvider);
@@ -172,6 +182,9 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
             isLoading: discover.isLoadingFeatured,
             isTvRow: true,
             libraryStatus: libraryStatus,
+            onSeeAll: discover.featuredSource.isEmpty
+                ? null
+                : () => _seeAll(BrowseFeed.featured, discover.featuredTitle),
           ),
           if (discover.anticipated.isNotEmpty)
             CategoryRow(
@@ -181,6 +194,8 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
               isTvRow: true,
               libraryStatus: libraryStatus,
               onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
+              onSeeAll: () =>
+                  _seeAll(BrowseFeed.anticipated, 'Most Anticipated'),
             ),
 
           // Sonarr library rows (same style as discovery)

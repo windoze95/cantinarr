@@ -120,8 +120,11 @@ void main() {
 
       expect(await feed.nextPage(fetch), isEmpty);
       expect(feed.isLoading, isFalse);
+      // An empty answer with a failure behind it says so.
+      expect(feed.lastError, isA<StateError>());
       fail = false;
       expect(_ids(await feed.nextPage(fetch)), [1]);
+      expect(feed.lastError, isNull);
       expect(requested, [1, 1]);
     });
   });

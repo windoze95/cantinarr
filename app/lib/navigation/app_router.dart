@@ -40,6 +40,8 @@ import '../features/dashboard/ui/requester_author_detail_screen.dart';
 import '../features/dashboard/ui/requester_book_detail_screen.dart';
 import '../features/dashboard/ui/requester_series_detail_screen.dart';
 import '../features/discover/data/tmdb_models.dart';
+import '../features/discover/logic/browse_query.dart';
+import '../features/discover/ui/browse_grid_screen.dart';
 import '../features/downloads/ui/downloads_history_screen.dart';
 import '../features/downloads/ui/downloads_module_shell.dart';
 import '../features/downloads/ui/downloads_queue_screen.dart';
@@ -548,6 +550,30 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/assistant',
             builder: (_, __) =>
                 const AppAmbientBackground(child: AiChatScreen()),
+          ),
+          // A feed as a full grid: the "See all" behind every discovery
+          // row and the Browse page. Everything it needs is in the URL, so
+          // web deep links and pushes are the same thing.
+          GoRoute(
+            path: '/browse/:type/:feed',
+            redirect: (_, state) => BrowseQuery.tryParse(state.uri) == null
+                ? (state.pathParameters['type'] == 'tv'
+                    ? '/dashboard/tv'
+                    : '/dashboard/movies')
+                : null,
+            builder: (_, state) {
+              final query = BrowseQuery.tryParse(state.uri);
+              if (query == null) {
+                return const AppAmbientBackground(
+                  child: _InvalidRouteScreen(
+                    message: 'This browse link is invalid.',
+                  ),
+                );
+              }
+              return AppAmbientBackground(
+                child: BrowseGridScreen(query: query),
+              );
+            },
           ),
           GoRoute(
             path: '/detail/:type/:id',

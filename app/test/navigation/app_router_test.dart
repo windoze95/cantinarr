@@ -14,6 +14,7 @@ import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_shell.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_album_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
+import 'package:cantinarr/features/discover/ui/browse_grid_screen.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/monitoring/ui/monitoring_module_shell.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
@@ -398,15 +399,22 @@ void main() {
       '/detail/movie/not-a-number',
       '/detail/movie/0',
       '/detail/podcast/12',
+      '/browse/podcast/top-rated',
+      '/browse/movie/bogus',
+      '/browse/movie/recommendations',
     ]) {
       router.go(path);
       await tester.pumpAndSettle();
       expect(
         router.routeInformationProvider.value.uri.path,
         '/dashboard/movies',
-        reason: '$path must not reach MediaDetailScreen',
+        reason: '$path must not reach a detail or browse screen',
       );
     }
+
+    router.go('/browse/tv/top-rated');
+    await tester.pumpAndSettle();
+    expect(router.routeInformationProvider.value.uri.path, '/dashboard/tv');
 
     router.go('/settings/users/not-a-number/request-settings');
     await tester.pumpAndSettle();
@@ -456,6 +464,28 @@ void main() {
       ),
       findsNWidgets(2),
     );
+
+    router.push('/browse/movie/top-rated');
+    await tester.pumpAndSettle();
+    expect(
+      find.ancestor(
+        of: find.byType(BrowseGridScreen),
+        matching: find.byType(AppAmbientBackground),
+      ),
+      findsNWidgets(2),
+    );
+  });
+
+  testWidgets('a requester can open a browse grid from a bare link',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.push('/browse/movie/discover?genres=28');
+    await tester.pumpAndSettle();
+    expect(find.byType(BrowseGridScreen), findsOneWidget);
+    // The query string reached the grid.
+    final grid = tester.widget<BrowseGridScreen>(find.byType(BrowseGridScreen));
+    expect(grid.query.filters.genreIds, [28]);
   });
 
   testWidgets('the login page paints its own opaque ambient backdrop',
