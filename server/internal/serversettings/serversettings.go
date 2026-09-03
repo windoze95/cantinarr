@@ -36,9 +36,9 @@ const (
 )
 
 // DefaultDiscoveryEnglishOnly is the language filter a server ships with until
-// an admin decides otherwise. On by default because the rows are a shelf, not a
-// catalogue: an untranslated title a household cannot watch costs one of twenty
-// slots, and the cost of the default being wrong is asymmetric — an admin who
+// an admin decides otherwise. On by default because an untranslated title a
+// household cannot watch costs a slot on every row and every page of the grids
+// under them, and the cost of the default being wrong is asymmetric — an admin who
 // wants everything flips one switch, while an admin who never opens the screen
 // would otherwise never learn the filter exists. Search and detail lookups are
 // never filtered either way.

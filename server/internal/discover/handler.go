@@ -70,6 +70,25 @@ func queryInt(r *http.Request, key string, fallback int) int {
 	return n
 }
 
+// maxTMDBPage is the last page TMDB serves; it reports total_pages above it
+// and refuses requests past it.
+const maxTMDBPage = 500
+
+// queryPage reads `page` clamped to 1..maxTMDBPage. Clamping rather than
+// rejecting lets a client scrolling off the end stop cleanly: the body
+// reports the page actually served, and anything past the cap answers as
+// the cap instead of as an upstream error.
+func queryPage(r *http.Request) int {
+	page := queryInt(r, "page", 1)
+	if page < 1 {
+		return 1
+	}
+	if page > maxTMDBPage {
+		return maxTMDBPage
+	}
+	return page
+}
+
 // cachedTMDB checks credentials, then cache, then calls TMDB on miss. The body
 // comes back verbatim — use it for lookups the admin's row preferences must not
 // touch (search, details, genres, providers).
@@ -137,28 +156,28 @@ func (h *Handler) Trending(w http.ResponseWriter, r *http.Request) {
 	if tw == "" {
 		tw = "day"
 	}
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("trending:%s:%d", tw, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
 	h.cachedTMDBFeed(w, key, ttlTrending, fmt.Sprintf("/trending/all/%s", tw), params)
 }
 
 func (h *Handler) PopularMovies(w http.ResponseWriter, r *http.Request) {
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("pop_movies:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
 	h.cachedTMDBFeed(w, key, ttlTrending, "/movie/popular", params)
 }
 
 func (h *Handler) PopularTV(w http.ResponseWriter, r *http.Request) {
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("pop_tv:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
 	h.cachedTMDBFeed(w, key, ttlTrending, "/tv/popular", params)
 }
 
 func (h *Handler) TopRatedMovies(w http.ResponseWriter, r *http.Request) {
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("top_movies:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
 	h.cachedTMDBFeed(w, key, ttlTrending, "/movie/top_rated", params)
@@ -171,7 +190,7 @@ func (h *Handler) TopRatedMovies(w http.ResponseWriter, r *http.Request) {
 // released anywhere yet, and the three-month cap leaves far-future titles to
 // the Most Anticipated row.
 func (h *Handler) UpcomingMovies(w http.ResponseWriter, r *http.Request) {
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	now := time.Now()
 	from := now.Format("2006-01-02")
 	to := now.AddDate(0, 3, 0).Format("2006-01-02")
@@ -182,42 +201,29 @@ func (h *Handler) UpcomingMovies(w http.ResponseWriter, r *http.Request) {
 		"primary_release_date.gte": {from},
 		"primary_release_date.lte": {to},
 	}
+	// A discover query, so the language preference goes upstream and the
+	// row's page arrives full (see discoverQuery).
+	if _, englishOnly := h.discoveryPrefs(); englishOnly {
+		params.Set("with_original_language", "en")
+	}
 	h.cachedTMDBFeed(w, key, ttlTrending, "/discover/movie", params)
 }
 
 func (h *Handler) NowPlayingMovies(w http.ResponseWriter, r *http.Request) {
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("now_playing:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
 	h.cachedTMDBFeed(w, key, ttlTrending, "/movie/now_playing", params)
 }
 
+// DiscoverMovies and DiscoverTV are the filterable browse feeds; the
+// allowlist, validation, and guards live in browse.go.
 func (h *Handler) DiscoverMovies(w http.ResponseWriter, r *http.Request) {
-	params := url.Values{}
-	for _, k := range []string{"page", "with_genres", "sort_by", "primary_release_year", "with_watch_providers", "watch_region"} {
-		if v := r.URL.Query().Get(k); v != "" {
-			params.Set(k, v)
-		}
-	}
-	if params.Get("page") == "" {
-		params.Set("page", "1")
-	}
-	key := "disc_movies:" + params.Encode()
-	h.cachedTMDBFeed(w, key, ttlTrending, "/discover/movie", params)
+	h.discover(w, r, movieDiscover)
 }
 
 func (h *Handler) DiscoverTV(w http.ResponseWriter, r *http.Request) {
-	params := url.Values{}
-	for _, k := range []string{"page", "with_genres", "sort_by", "first_air_date_year", "with_watch_providers", "watch_region"} {
-		if v := r.URL.Query().Get(k); v != "" {
-			params.Set(k, v)
-		}
-	}
-	if params.Get("page") == "" {
-		params.Set("page", "1")
-	}
-	key := "disc_tv:" + params.Encode()
-	h.cachedTMDBFeed(w, key, ttlTrending, "/discover/tv", params)
+	h.discover(w, r, tvDiscover)
 }
 
 func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +232,7 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"query parameter required"}`, http.StatusBadRequest)
 		return
 	}
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("search:%s:%d", query, page)
 	params := url.Values{"query": {query}, "page": {strconv.Itoa(page)}}
 	h.cachedTMDB(w, key, ttlTrending, "/search/multi", params)
@@ -260,7 +266,7 @@ func (h *Handler) PersonCredits(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) MovieRecommendations(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("movie_rec:%s:%d", id, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
 	h.cachedTMDBFeed(w, key, ttlRecommendation, fmt.Sprintf("/movie/%s/recommendations", id), params)
@@ -268,7 +274,7 @@ func (h *Handler) MovieRecommendations(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) TVRecommendations(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("tv_rec:%s:%d", id, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
 	h.cachedTMDBFeed(w, key, ttlRecommendation, fmt.Sprintf("/tv/%s/recommendations", id), params)
@@ -276,7 +282,7 @@ func (h *Handler) TVRecommendations(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) SimilarMovies(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("movie_sim:%s:%d", id, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
 	h.cachedTMDBFeed(w, key, ttlRecommendation, fmt.Sprintf("/movie/%s/similar", id), params)
@@ -284,7 +290,7 @@ func (h *Handler) SimilarMovies(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) SimilarTV(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("tv_sim:%s:%d", id, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
 	h.cachedTMDBFeed(w, key, ttlRecommendation, fmt.Sprintf("/tv/%s/similar", id), params)
@@ -319,7 +325,7 @@ func (h *Handler) TraktTrending(w http.ResponseWriter, r *http.Request) {
 	if typ == "" {
 		typ = "movies"
 	}
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("trakt_trend:%s:%d", typ, page)
 	params := url.Values{"page": {strconv.Itoa(page)}, "limit": {"20"}, "extended": {"full"}}
 	h.cachedTrakt(w, key, ttlTrakt, fmt.Sprintf("/%s/trending", typ), params)
@@ -334,7 +340,7 @@ func (h *Handler) TraktPopular(w http.ResponseWriter, r *http.Request) {
 	if typ == "" {
 		typ = "movies"
 	}
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("trakt_pop:%s:%d", typ, page)
 	params := url.Values{"page": {strconv.Itoa(page)}, "limit": {"20"}, "extended": {"full"}}
 	h.cachedTrakt(w, key, ttlTrakt, fmt.Sprintf("/%s/popular", typ), params)
@@ -345,7 +351,7 @@ func (h *Handler) TraktPopularLists(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"trakt not configured"}`, http.StatusServiceUnavailable)
 		return
 	}
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("trakt_lists:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}, "limit": {"20"}}
 	h.cachedTrakt(w, key, ttlTrakt, "/lists/popular", params)
@@ -383,7 +389,7 @@ func (h *Handler) TraktAnticipated(w http.ResponseWriter, r *http.Request) {
 	if typ == "" {
 		typ = "movies"
 	}
-	page := queryInt(r, "page", 1)
+	page := queryPage(r)
 	key := fmt.Sprintf("trakt_anticipated:%s:%d", typ, page)
 	params := url.Values{"page": {strconv.Itoa(page)}, "limit": {"20"}, "extended": {"full"}}
 	h.cachedTrakt(w, key, ttlTrakt, fmt.Sprintf("/%s/anticipated", typ), params)
