@@ -234,6 +234,27 @@ void main() {
     expect(h.notifier.error, isNull);
   });
 
+  test('an anchored feed pages its title\'s endpoint', () async {
+    final h = _harness(
+      const BrowseQuery(
+        type: MediaType.movie,
+        feed: BrowseFeed.recommendations,
+        id: 603,
+      ),
+      (uri) => _page(_pageOf(uri), [_pageOf(uri)], totalPages: 2),
+    );
+    await h.notifier.load();
+    await h.notifier.loadMore();
+    expect(
+      [for (final u in h.adapter.requested) '${u.path}?page=${_pageOf(u)}'],
+      [
+        '/api/media/movie/603/recommendations?page=1',
+        '/api/media/movie/603/recommendations?page=2',
+      ],
+    );
+    expect(_ids(h.notifier.items), [1, 2]);
+  });
+
   test('the headline feed remembers which source answered', () async {
     final h = _harness(
       const BrowseQuery(type: MediaType.movie, feed: BrowseFeed.featured),
