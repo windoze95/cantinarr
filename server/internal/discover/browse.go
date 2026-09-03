@@ -36,7 +36,7 @@ var (
 			"page", "sort_by", "with_genres", "primary_release_year",
 			"primary_release_date.gte", "primary_release_date.lte",
 			"vote_average.gte", "vote_count.gte", "with_original_language",
-			"with_watch_providers", "watch_region",
+			"with_watch_providers", "watch_region", "with_keywords", "with_companies",
 		},
 		sortFields: []string{
 			"original_title", "popularity", "primary_release_date", "revenue",
@@ -51,7 +51,7 @@ var (
 			"page", "sort_by", "with_genres", "first_air_date_year",
 			"first_air_date.gte", "first_air_date.lte",
 			"vote_average.gte", "vote_count.gte", "with_original_language",
-			"with_watch_providers", "watch_region",
+			"with_watch_providers", "watch_region", "with_keywords", "with_companies",
 		},
 		sortFields: []string{
 			"first_air_date", "name", "original_name", "popularity",

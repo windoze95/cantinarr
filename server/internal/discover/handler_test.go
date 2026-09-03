@@ -180,6 +180,12 @@ func newEnv(t *testing.T, configured bool) *env {
 	router.Get("/discover/tv/featured", handler.FeaturedTV)
 	router.Get("/discover/movies/featured", handler.FeaturedMovies)
 	router.Get("/search", handler.Search)
+	router.Get("/search/keyword", handler.SearchKeywords)
+	router.Get("/search/company", handler.SearchCompanies)
+	router.Get("/languages", handler.Languages)
+	router.Get("/providers/movie", handler.MovieWatchProviders)
+	router.Get("/providers/tv", handler.TVWatchProviders)
+	router.Get("/providers/regions", handler.WatchProviderRegions)
 	router.Get("/media/movie/{id}", handler.MovieDetail)
 	router.Get("/media/tv/{id}", handler.TVDetail)
 	router.Get("/trakt/trending", handler.TraktTrending)
@@ -318,6 +324,11 @@ func TestAdjacentQueriesNeverShareCacheEntries(t *testing.T) {
 		// The headline feed pages: page 1 (the row) and page 2 (its grid)
 		// are different entries of the same source.
 		{"/discover/movies/featured?page=1", "/discover/movies/featured?page=2"},
+		// The type-ahead lookups share a query with multi-search and with each
+		// other, and the provider lists share a region across media types.
+		{"/search?query=heat", "/search/keyword?query=heat"},
+		{"/search/keyword?query=heist", "/search/company?query=heist"},
+		{"/providers/movie?region=GB", "/providers/tv?region=GB"},
 	}
 
 	expectedHits := 0
@@ -441,9 +452,15 @@ func TestTraktPassthroughCacheAndAuth(t *testing.T) {
 func TestUnconfiguredCredentialsReturn503(t *testing.T) {
 	e := newEnv(t, false)
 
+	for _, path := range []string{"/discover/trending", "/languages", "/search/keyword?query=x"} {
+		rec := e.do(t, path)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "TMDB is not configured") {
+			t.Errorf("GET %s status = %d body = %s, want 503 not-configured", path, rec.Code, rec.Body.String())
+		}
+	}
 	rec := e.do(t, "/discover/trending")
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "TMDB is not configured") {
-		t.Errorf("TMDB status = %d body = %s, want 503 not-configured", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("TMDB status = %d, want 503 not-configured", rec.Code)
 	}
 	rec = e.do(t, "/trakt/trending")
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "trakt not configured") {

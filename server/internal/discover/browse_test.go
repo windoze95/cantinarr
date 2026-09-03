@@ -18,7 +18,8 @@ func TestDiscoverForwardsBrowseFiltersVerbatim(t *testing.T) {
 	e.doOK(t, "/discover/movies?page=2&sort_by=primary_release_date.desc&with_genres=28,12"+
 		"&primary_release_year=2019&primary_release_date.gte=2019-01-01&primary_release_date.lte=2019-12-31"+
 		"&vote_average.gte=7&vote_count.gte=50&with_watch_providers=8|9&watch_region=GB"+
-		"&include_adult=true&language=fr&region=GB&with_keywords=1&with_original_language=ko")
+		"&with_keywords=1,2&with_companies=3|4"+
+		"&include_adult=true&language=fr&region=GB&with_people=7&with_original_language=ko")
 
 	hit := e.upstream.hit(t, 0)
 	if hit.path != "/3/discover/movie" {
@@ -36,13 +37,15 @@ func TestDiscoverForwardsBrowseFiltersVerbatim(t *testing.T) {
 		"with_watch_providers":     "8|9",
 		"watch_region":             "GB",
 		"with_original_language":   "ko",
+		"with_keywords":            "1,2",
+		"with_companies":           "3|4",
 	}
 	for k, v := range want {
 		if got := hit.query.Get(k); got != v {
 			t.Errorf("upstream %s = %q, want %q", k, got, v)
 		}
 	}
-	for _, k := range []string{"include_adult", "region", "with_keywords"} {
+	for _, k := range []string{"include_adult", "region", "with_people"} {
 		if _, ok := hit.query[k]; ok {
 			t.Errorf("upstream carried %s=%q, want it dropped", k, hit.query.Get(k))
 		}
@@ -59,7 +62,7 @@ func TestDiscoverTVForwardsAirDateFilters(t *testing.T) {
 	e := newEnv(t, true)
 
 	e.doOK(t, "/discover/tv?first_air_date_year=2020&first_air_date.gte=2020-01-01"+
-		"&sort_by=first_air_date.desc&primary_release_year=2019")
+		"&sort_by=first_air_date.desc&primary_release_year=2019&with_keywords=5&with_companies=6")
 
 	hit := e.upstream.hit(t, 0)
 	if hit.path != "/3/discover/tv" {
@@ -69,6 +72,8 @@ func TestDiscoverTVForwardsAirDateFilters(t *testing.T) {
 		"first_air_date_year": "2020",
 		"first_air_date.gte":  "2020-01-01",
 		"sort_by":             "first_air_date.desc",
+		"with_keywords":       "5",
+		"with_companies":      "6",
 	} {
 		if got := hit.query.Get(k); got != v {
 			t.Errorf("upstream %s = %q, want %q", k, got, v)

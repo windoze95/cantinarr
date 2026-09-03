@@ -255,6 +255,49 @@ void main() {
     expect(_ids(h.notifier.items), [1, 2]);
   });
 
+  test('language, services, keywords and studios travel as TMDB parameters',
+      () async {
+    final h = _harness(
+      const BrowseQuery(
+        type: MediaType.movie,
+        feed: BrowseFeed.discover,
+        filters: BrowseFilters(
+          language: 'ko',
+          providerIds: [8, 9],
+          watchRegion: 'GB',
+          keywords: [TaggedId(id: 1), TaggedId(id: 2)],
+          companies: [TaggedId(id: 3), TaggedId(id: 4)],
+        ),
+      ),
+      (_) => _page(1, [1]),
+    );
+    await h.notifier.load();
+    final q = h.adapter.requested.single.queryParameters;
+    expect(q['with_original_language'], 'ko');
+    expect(q['with_watch_providers'], '8|9');
+    expect(q['watch_region'], 'GB');
+    expect(q['with_keywords'], '1,2');
+    expect(q['with_companies'], '3|4');
+  });
+
+  test('services without a region are asked for in the US', () async {
+    final h = _harness(
+      const BrowseQuery(
+        type: MediaType.tv,
+        feed: BrowseFeed.discover,
+        filters: BrowseFilters(providerIds: [8]),
+      ),
+      (_) => _page(1, [1]),
+    );
+    await h.notifier.load();
+    final q = h.adapter.requested.single.queryParameters;
+    expect(q['with_watch_providers'], '8');
+    expect(q['watch_region'], 'US');
+    expect(q.containsKey('with_keywords'), isFalse);
+    expect(q.containsKey('with_companies'), isFalse);
+    expect(q.containsKey('with_original_language'), isFalse);
+  });
+
   test('the headline feed remembers which source answered', () async {
     final h = _harness(
       const BrowseQuery(type: MediaType.movie, feed: BrowseFeed.featured),

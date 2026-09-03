@@ -75,6 +75,15 @@ enum BrowseSort {
   }
 }
 
+/// The streaming region to browse in for a device country code: two ASCII
+/// letters uppercased, else the US. The country comes from the device's own
+/// locale (the app resolves no locales of its own, so a widget-level locale
+/// is always en_US).
+String watchRegionFor(String? countryCode) {
+  final code = countryCode?.trim().toUpperCase() ?? '';
+  return RegExp(r'^[A-Z]{2}$').hasMatch(code) ? code : 'US';
+}
+
 /// The filters the Browse page applies to the discover feed.
 class BrowseFilters {
   const BrowseFilters({
@@ -82,6 +91,11 @@ class BrowseFilters {
     this.yearFrom,
     this.yearTo,
     this.minRating,
+    this.language,
+    this.providerIds = const [],
+    this.watchRegion,
+    this.keywords = const [],
+    this.companies = const [],
   });
 
   static const none = BrowseFilters();
@@ -96,31 +110,75 @@ class BrowseFilters {
   /// Minimum TMDB score, 0 to 10.
   final int? minRating;
 
+  /// Original language as an ISO 639-1 code. Naming one is an explicit ask
+  /// the server never English-filters.
+  final String? language;
+
+  /// Streaming services (TMDB provider ids); any of them may carry the title.
+  final List<int> providerIds;
+
+  /// The country [providerIds] applies to. Meaningless on its own, so it is
+  /// neither a filter group nor part of [isEmpty].
+  final String? watchRegion;
+
+  /// Keywords a title must all carry.
+  final List<TaggedId> keywords;
+
+  /// Production companies, any of which may apply.
+  final List<TaggedId> companies;
+
   bool get isEmpty =>
-      genreIds.isEmpty && yearFrom == null && yearTo == null && minRating == null;
+      genreIds.isEmpty &&
+      yearFrom == null &&
+      yearTo == null &&
+      minRating == null &&
+      language == null &&
+      providerIds.isEmpty &&
+      keywords.isEmpty &&
+      companies.isEmpty;
 
   /// How many filter groups are active, for the Filters button's count.
   int get count =>
       (genreIds.isNotEmpty ? 1 : 0) +
       (yearFrom != null || yearTo != null ? 1 : 0) +
-      (minRating != null ? 1 : 0);
+      (minRating != null ? 1 : 0) +
+      (language != null ? 1 : 0) +
+      (providerIds.isNotEmpty ? 1 : 0) +
+      (keywords.isNotEmpty ? 1 : 0) +
+      (companies.isNotEmpty ? 1 : 0);
 
   BrowseFilters copyWith({
     List<int>? genreIds,
     int? Function()? yearFrom,
     int? Function()? yearTo,
     int? Function()? minRating,
+    String? Function()? language,
+    List<int>? providerIds,
+    String? Function()? watchRegion,
+    List<TaggedId>? keywords,
+    List<TaggedId>? companies,
   }) =>
       BrowseFilters(
         genreIds: genreIds ?? this.genreIds,
         yearFrom: yearFrom == null ? this.yearFrom : yearFrom(),
         yearTo: yearTo == null ? this.yearTo : yearTo(),
         minRating: minRating == null ? this.minRating : minRating(),
+        language: language == null ? this.language : language(),
+        providerIds: providerIds ?? this.providerIds,
+        watchRegion: watchRegion == null ? this.watchRegion : watchRegion(),
+        keywords: keywords ?? this.keywords,
+        companies: companies ?? this.companies,
       );
 
   /// The filters in words, so an empty grid can say what it looked for:
-  /// `Action, Comedy · 2010 to 2019 · rated 7+`.
-  String describe(Map<int, String> genreNames) {
+  /// `Action, Comedy · 2010 to 2019 · rated 7+ · in Korean · on Netflix ·
+  /// about heist · from A24`. Names come from the lists the screen loaded;
+  /// a value with no name is spoken by its id rather than dropped.
+  String describe(
+    Map<int, String> genreNames, {
+    Map<String, String> languageNames = const {},
+    Map<int, String> providerNames = const {},
+  }) {
     final parts = <String>[];
     if (genreIds.isNotEmpty) {
       parts.add(genreIds.map((id) => genreNames[id] ?? 'genre $id').join(', '));
@@ -133,6 +191,22 @@ class BrowseFilters {
       parts.add('up to $yearTo');
     }
     if (minRating != null) parts.add('rated $minRating+');
+    if (language != null) parts.add('in ${languageNames[language] ?? language}');
+    if (providerIds.isNotEmpty) {
+      parts.add(
+        'on ${providerIds.map((id) => providerNames[id] ?? 'service $id').join(', ')}',
+      );
+    }
+    if (keywords.isNotEmpty) {
+      parts.add(
+        'about ${keywords.map((k) => k.name ?? 'keyword ${k.id}').join(', ')}',
+      );
+    }
+    if (companies.isNotEmpty) {
+      parts.add(
+        'from ${companies.map((c) => c.name ?? 'studio ${c.id}').join(', ')}',
+      );
+    }
     return parts.join(' · ');
   }
 }
@@ -176,6 +250,8 @@ class BrowseQuery {
       );
 
   /// `/browse/movie/discover?genres=28,12&sort=top-rated&from=2010&to=2019&rating=7&title=Action`
+  /// plus `lang`, `prov` with `region`, `kw`, and `co` when set. Keywords and
+  /// studios travel as ids only.
   String toLocation() {
     final params = <String, String>{
       if (id != null) 'id': '$id',
@@ -184,6 +260,14 @@ class BrowseQuery {
       if (filters.yearFrom != null) 'from': '${filters.yearFrom}',
       if (filters.yearTo != null) 'to': '${filters.yearTo}',
       if (filters.minRating != null) 'rating': '${filters.minRating}',
+      if (filters.language != null) 'lang': filters.language!,
+      if (filters.providerIds.isNotEmpty) 'prov': filters.providerIds.join(','),
+      if (filters.providerIds.isNotEmpty && filters.watchRegion != null)
+        'region': filters.watchRegion!,
+      if (filters.keywords.isNotEmpty)
+        'kw': filters.keywords.map((k) => k.id).join(','),
+      if (filters.companies.isNotEmpty)
+        'co': filters.companies.map((c) => c.id).join(','),
       if (title != null && title!.isNotEmpty) 'title': title!,
     };
     return Uri(
@@ -219,13 +303,15 @@ class BrowseQuery {
       id: feed.needsId ? id : null,
       sort: BrowseSort.fromSlug(q['sort'] ?? '') ?? BrowseSort.popular,
       filters: BrowseFilters(
-        genreIds: [
-          for (final raw in (q['genres'] ?? '').split(','))
-            if (_positiveInt(raw) case final genre?) genre,
-        ],
+        genreIds: _idList(q['genres']),
         yearFrom: _year(q['from']),
         yearTo: _year(q['to']),
         minRating: _rating(q['rating']),
+        language: _languageCode(q['lang']),
+        providerIds: _idList(q['prov']),
+        watchRegion: _region(q['region']),
+        keywords: [for (final id in _idList(q['kw'])) TaggedId(id: id)],
+        companies: [for (final id in _idList(q['co'])) TaggedId(id: id)],
       ),
     );
   }
@@ -233,6 +319,25 @@ class BrowseQuery {
   static int? _positiveInt(String? raw) {
     final value = int.tryParse(raw?.trim() ?? '');
     return value != null && value > 0 ? value : null;
+  }
+
+  /// Comma-separated positive ids; junk entries drop out.
+  static List<int> _idList(String? raw) => [
+        for (final part in (raw ?? '').split(','))
+          if (_positiveInt(part) case final id?) id,
+      ];
+
+  static final _languagePattern = RegExp(r'^[a-z]{2,3}$');
+  static final _regionPattern = RegExp(r'^[A-Z]{2}$');
+
+  static String? _languageCode(String? raw) {
+    final code = raw?.trim().toLowerCase() ?? '';
+    return _languagePattern.hasMatch(code) ? code : null;
+  }
+
+  static String? _region(String? raw) {
+    final code = raw?.trim().toUpperCase() ?? '';
+    return _regionPattern.hasMatch(code) ? code : null;
   }
 
   static int? _year(String? raw) {

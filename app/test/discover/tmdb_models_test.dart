@@ -109,4 +109,51 @@ void main() {
       expect(detail.trailerKey, 'xyz789');
     });
   });
+
+  group('filter lookups', () {
+    test('a language labels itself in English, then natively, then by code',
+        () {
+      expect(
+        TmdbLanguage.fromJson(
+                {'iso_639_1': 'ko', 'english_name': 'Korean', 'name': '한국어'})
+            .englishName,
+        'Korean',
+      );
+      expect(
+        TmdbLanguage.fromJson({'iso_639_1': 'xx', 'english_name': '', 'name': 'Xx'})
+            .englishName,
+        'Xx',
+      );
+      expect(TmdbLanguage.fromJson({'iso_639_1': 'xx'}).englishName, 'xx');
+    });
+
+    test('a region reads its English name', () {
+      final region = WatchRegion.fromJson({
+        'iso_3166_1': 'GB',
+        'english_name': 'United Kingdom',
+        'native_name': 'United Kingdom',
+      });
+      expect(region.code, 'GB');
+      expect(region.name, 'United Kingdom');
+    });
+
+    test('a tagged id keeps a missing name null and compares by value', () {
+      expect(TaggedId.fromJson({'id': 1, 'name': 'heist'}),
+          const TaggedId(id: 1, name: 'heist'));
+      expect(TaggedId.fromJson({'id': 2}).name, isNull);
+      expect(const TaggedId(id: 2), TaggedId.fromJson({'id': 2}));
+    });
+
+    test('a provider carries its display order', () {
+      final provider = WatchProvider.fromJson({
+        'provider_id': 8,
+        'provider_name': 'Netflix',
+        'logo_path': '/n.jpg',
+        'display_priority': 3,
+      });
+      expect(provider.displayPriority, 3);
+      expect(WatchProvider.fromJson({'provider_id': 9, 'provider_name': 'X'})
+          .displayPriority, 0);
+    });
+  });
 }

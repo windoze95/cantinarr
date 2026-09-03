@@ -43,6 +43,19 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
   late final BrowseGridNotifier _notifier;
   final ScrollController _scrollController = ScrollController();
   List<Genre> _genres = const [];
+  List<TmdbLanguage> _languages = const [];
+  List<WatchRegion> _regions = const [];
+
+  /// Service lists by region, kept for the life of the screen so a region
+  /// picked in the sheet is loaded once and the empty state can name a
+  /// service whatever region it came from.
+  final Map<String, List<WatchProvider>> _providersByRegion = {};
+
+  /// The region the sheet opens on when the query names none: the device's
+  /// own country, or the US.
+  late final String _deviceRegion = watchRegionFor(
+    WidgetsBinding.instance.platformDispatcher.locale.countryCode,
+  );
 
   @override
   void initState() {
@@ -57,7 +70,7 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
       // Badges come from the shared library snapshot: free when a tab just
       // filled it, one fetch on a deep link or once it has gone stale.
       ref.read(librarySnapshotProvider.notifier).refresh();
-      if (widget.query.feed.isFilterable) _loadGenres();
+      if (widget.query.feed.isFilterable) _loadFilterLists();
     });
   }
 
@@ -90,23 +103,68 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
     }
   }
 
-  Future<void> _loadGenres() async {
+  /// The lists the filter sheet labels its sections from. Each is a
+  /// convenience: one that fails to load hides its section and never blocks
+  /// the others, and the sheet still offers years and rating.
+  Future<void> _loadFilterLists() async {
     final api = ref.read(discoverServiceProvider);
+    final tv = widget.query.type == MediaType.tv;
+    final region = widget.query.filters.watchRegion ?? _deviceRegion;
+    var genres = const <Genre>[];
+    var languages = const <TmdbLanguage>[];
+    var regions = const <WatchRegion>[];
+    await Future.wait([
+      _load(() => tv ? api.tvGenres() : api.movieGenres(), (v) => genres = v),
+      _load(api.languages, (v) => languages = v),
+      _load(api.watchRegions, (v) => regions = v),
+      _load(() => _providersFor(region), (_) {}),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _genres = genres;
+      _languages = languages;
+      _regions = regions;
+    });
+  }
+
+  static Future<void> _load<T>(
+    Future<T> Function() fetch,
+    void Function(T value) assign,
+  ) async {
     try {
-      final genres = widget.query.type == MediaType.tv
-          ? await api.tvGenres()
-          : await api.movieGenres();
-      if (mounted) setState(() => _genres = genres);
-    } catch (_) {
-      // The sheet still offers years and rating; genres are a convenience.
-    }
+      assign(await fetch());
+    } catch (_) {}
+  }
+
+  /// The services TMDB knows for a region, loaded once per region.
+  Future<List<WatchProvider>> _providersFor(String region) async {
+    final cached = _providersByRegion[region];
+    if (cached != null) return cached;
+    final api = ref.read(discoverServiceProvider);
+    final providers = widget.query.type == MediaType.tv
+        ? await api.tvWatchProviders(region: region)
+        : await api.movieWatchProviders(region: region);
+    _providersByRegion[region] = providers;
+    return providers;
   }
 
   Future<void> _openFilters() async {
+    final api = ref.read(discoverServiceProvider);
+    final filters = _notifier.query.filters;
+    final region = filters.watchRegion ?? _deviceRegion;
     final result = await FilterSheet.show(
       context,
       genres: _genres,
-      initial: _notifier.query.filters,
+      initial: filters,
+      languages: _languages,
+      regions: _regions,
+      providers: _providersByRegion[region] ?? const [],
+      region: region,
+      lookups: FilterLookups(
+        providersFor: _providersFor,
+        searchKeywords: api.searchKeywords,
+        searchCompanies: api.searchCompanies,
+      ),
     );
     if (result == null || !mounted) return;
     await _notifier.setQuery(_notifier.query.copyWith(filters: result));
@@ -148,8 +206,21 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
     if (query.filters.isEmpty) {
       return 'No titles came back for this browse.';
     }
-    final names = {for (final genre in _genres) genre.id: genre.name};
-    return 'No titles matched ${query.filters.describe(names)}.';
+    final genreNames = {for (final genre in _genres) genre.id: genre.name};
+    final languageNames = {
+      for (final language in _languages) language.code: language.englishName,
+    };
+    final providerNames = {
+      for (final providers in _providersByRegion.values)
+        for (final provider in providers)
+          provider.providerId: provider.providerName,
+    };
+    final described = query.filters.describe(
+      genreNames,
+      languageNames: languageNames,
+      providerNames: providerNames,
+    );
+    return 'No titles matched $described.';
   }
 
   @override
