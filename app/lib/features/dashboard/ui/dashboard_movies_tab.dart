@@ -131,6 +131,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
   @override
   Widget build(BuildContext context) {
     final discover = ref.watch(movieDiscoverProvider);
+    final discoverNotifier = ref.watch(movieDiscoverProvider.notifier);
     // searchResults is genuinely unused here: buildSearchLibraryStatus keys
     // movies straight off the Radarr list and returns early when series is
     // empty, so passing the browse-row items would build a list for nothing.
@@ -166,6 +167,17 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
             isTvRow: false,
             libraryStatus: libraryStatus,
           ),
+          // Every row below grows as it is scrolled toward its end; the
+          // headline row above is the one server-capped page.
+          if (discover.nowPlaying.isNotEmpty)
+            CategoryRow(
+              title: 'In Theaters',
+              items: discover.nowPlaying,
+              isLoading: discover.isLoadingNowPlaying,
+              isTvRow: false,
+              libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreNowPlaying(),
+            ),
           if (discover.topRated.isNotEmpty)
             CategoryRow(
               title: 'Top Rated',
@@ -173,6 +185,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               isLoading: discover.isLoadingTopRated,
               isTvRow: false,
               libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreTopRated(),
             ),
           if (discover.upcoming.isNotEmpty)
             CategoryRow(
@@ -181,6 +194,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               isLoading: discover.isLoadingUpcoming,
               isTvRow: false,
               libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreUpcoming(),
             ),
           if (discover.anticipated.isNotEmpty)
             CategoryRow(
@@ -189,6 +203,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               isLoading: discover.isLoadingAnticipated,
               isTvRow: false,
               libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
             ),
 
           // Radarr library rows (same style as discovery)

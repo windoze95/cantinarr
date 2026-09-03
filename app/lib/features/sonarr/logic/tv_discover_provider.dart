@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../discover/data/tmdb_models.dart';
+import '../../discover/logic/paged_feed.dart';
 
 /// Discovery state for the TV Shows tab.
 class TvDiscoverState {
@@ -41,8 +42,12 @@ class TvDiscoverState {
 }
 
 /// Fetches TV discovery rows (the headline feed + Most Anticipated).
+///
+/// The headline row is a single server-capped page; Most Anticipated is a
+/// [PagedFeed] that grows as the row is scrolled toward its end.
 class TvDiscoverNotifier extends StateNotifier<TvDiscoverState> {
   final DiscoverApiService _api;
+  final PagedFeed _anticipated = PagedFeed();
 
   TvDiscoverNotifier(this._api) : super(const TvDiscoverState());
 
@@ -68,16 +73,27 @@ class TvDiscoverNotifier extends StateNotifier<TvDiscoverState> {
   }
 
   Future<void> _fetchAnticipatedShows() async {
+    _anticipated.reset();
     state = state.copyWith(isLoadingAnticipated: true);
-    try {
-      final items = await _api.getTraktAnticipated('shows');
-      state = state.copyWith(
-        anticipated: items.map((t) => t.toMediaItem()).toList(),
-        isLoadingAnticipated: false,
-      );
-    } catch (_) {
-      state = state.copyWith(isLoadingAnticipated: false);
-    }
+    final fresh = await _anticipated.nextPage(_fetchAnticipatedPage);
+    if (fresh == null) return;
+    state = state.copyWith(anticipated: fresh, isLoadingAnticipated: false);
+  }
+
+  Future<void> loadMoreAnticipated() async {
+    if (_anticipated.isLoading || !_anticipated.hasMore) return;
+    state = state.copyWith(isLoadingAnticipated: true);
+    final fresh = await _anticipated.nextPage(_fetchAnticipatedPage);
+    if (fresh == null) return;
+    state = state.copyWith(
+      anticipated: [...state.anticipated, ...fresh],
+      isLoadingAnticipated: false,
+    );
+  }
+
+  Future<TmdbPage<MediaItem>> _fetchAnticipatedPage(int page) async {
+    final items = await _api.getTraktAnticipated('shows', page: page);
+    return openEndedPage(page, [for (final item in items) item.toMediaItem()]);
   }
 }
 
