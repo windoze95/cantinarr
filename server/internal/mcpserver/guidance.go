@@ -63,7 +63,7 @@ func registerAgentPrompts(mcpServer *server.MCPServer, toolServer *internalmcp.T
 %s
 
 Workflow:
-1. Ground recommendations in tools. Use search_movie_collections for movie franchise/count/list asks, search_movies/search_tv_shows for specific title asks, search_books for book/author asks, search_music for album/artist asks, or get_trending for trending/general discovery.
+1. Ground recommendations in tools. Use search_movie_collections for movie franchise/count/list asks, search_movies/search_tv_shows for specific title asks, search_books for book/author asks, search_music for album/artist asks, get_trending for trending/general discovery, or browse_titles when the ask names a genre, year or decade, rating, language, streaming service, keyword, or studio (media_type "movie" or "tv", once per type for a mix; pass plain names and correct any it reports as unresolved).
 2. If the user did not ask specifically for only movies or only TV, use get_trending with media_type "all". That returns a balanced movie/TV mix.
 3. Choose the items you actually want to show, then call display_media in the same order you will mention them in text. Prefer exact TMDB IDs, media_type values, titles, and years copied from prior tool output; if you only have exact title/year values, omit tmdb_id and let display_media resolve them.
 4. Search/get_trending results alone are not enough for the native carousel. display_media is what prepares the rich visual result set, including franchise/title-list and count answers that enumerate concrete titles.
@@ -187,6 +187,7 @@ Tools may be hidden or disabled by RBAC and administrator settings. If a tool re
 - For general trending requests, or when the user mentions both movies and shows/TV, call get_trending with media_type "all".
 - Only use media_type "movie" or "tv" when the user asks for that category specifically.
 - get_trending with media_type "all" returns a balanced movie/TV mix.
+- When the ask names filters (genre, year or decade, minimum rating, original language, streaming service, keyword or theme, or studio), call browse_titles with media_type "movie" or "tv" rather than get_trending; pass plain names, ask for the next page for more of the same, and correct any name it reports as unresolved from the options it lists.
 - For movie franchise/count/list answers, use search_movie_collections before search_movies so you do not miss sequels, prequels, current-year releases, or upcoming entries.
 - Search or trending results alone do not prepare the native visual carousel. After selecting the items to show, call display_media in the same order you will mention them in text, with exact TMDB IDs, media_type values, titles, and years copied from prior tool results when available.
 - Franchise/title-list and count answers that enumerate concrete movies or shows should call display_media for those titles in the enumerated order.

@@ -18,6 +18,7 @@ var carouselSourceTools = map[string]bool{
 	"search_books":        true,
 	"search_music":        true,
 	"get_trending":        true,
+	"browse_titles":       true,
 	"get_recommendations": true,
 }
 

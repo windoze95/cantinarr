@@ -383,3 +383,136 @@ func (c *Client) GetRecommendations(tmdbID int, mediaType string) ([]SearchResul
 	}
 	return result.Results, nil
 }
+
+// DiscoverPage is one page of /discover/{movie,tv}.
+type DiscoverPage struct {
+	Page         int            `json:"page"`
+	TotalPages   int            `json:"total_pages"`
+	TotalResults int            `json:"total_results"`
+	Results      []SearchResult `json:"results"`
+}
+
+// Discover runs a filtered browse over TMDB's catalogue for one media type.
+// params are discover keys the caller has already validated; the request
+// goes through DoGetRaw so it carries the client's locale and auth.
+func (c *Client) Discover(mediaType string, params url.Values) (*DiscoverPage, error) {
+	if mediaType != "movie" && mediaType != "tv" {
+		return nil, fmt.Errorf("discover: unknown media type %q", mediaType)
+	}
+	data, err := c.DoGetRaw("/discover/"+mediaType, params)
+	if err != nil {
+		return nil, fmt.Errorf("discover %s: %w", mediaType, err)
+	}
+	var page DiscoverPage
+	if err := json.Unmarshal(data, &page); err != nil {
+		return nil, fmt.Errorf("decode discover %s: %w", mediaType, err)
+	}
+	setSearchResultMediaType(page.Results, mediaType)
+	return &page, nil
+}
+
+// Genre is one entry of a media type's genre list.
+type Genre struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// GenreList is /genre/{movie,tv}/list.
+func (c *Client) GenreList(mediaType string) ([]Genre, error) {
+	data, err := c.DoGetRaw("/genre/"+mediaType+"/list", nil)
+	if err != nil {
+		return nil, fmt.Errorf("genre list %s: %w", mediaType, err)
+	}
+	var out struct {
+		Genres []Genre `json:"genres"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode genre list: %w", err)
+	}
+	return out.Genres, nil
+}
+
+// Keyword is one /search/keyword result.
+type Keyword struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// SearchKeyword is /search/keyword, first page.
+func (c *Client) SearchKeyword(query string) ([]Keyword, error) {
+	data, err := c.DoGetRaw("/search/keyword", url.Values{"query": {query}})
+	if err != nil {
+		return nil, fmt.Errorf("search keyword: %w", err)
+	}
+	var out struct {
+		Results []Keyword `json:"results"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode keyword search: %w", err)
+	}
+	return out.Results, nil
+}
+
+// Company is one /search/company result.
+type Company struct {
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	OriginCountry string `json:"origin_country"`
+}
+
+// SearchCompany is /search/company, first page.
+func (c *Client) SearchCompany(query string) ([]Company, error) {
+	data, err := c.DoGetRaw("/search/company", url.Values{"query": {query}})
+	if err != nil {
+		return nil, fmt.Errorf("search company: %w", err)
+	}
+	var out struct {
+		Results []Company `json:"results"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode company search: %w", err)
+	}
+	return out.Results, nil
+}
+
+// WatchProvider is one streaming service TMDB lists for a region.
+type WatchProvider struct {
+	ID              int    `json:"provider_id"`
+	Name            string `json:"provider_name"`
+	DisplayPriority int    `json:"display_priority"`
+}
+
+// WatchProviders is /watch/providers/{movie,tv} for one region.
+func (c *Client) WatchProviders(mediaType, region string) ([]WatchProvider, error) {
+	data, err := c.DoGetRaw("/watch/providers/"+mediaType, url.Values{"watch_region": {region}})
+	if err != nil {
+		return nil, fmt.Errorf("watch providers %s/%s: %w", mediaType, region, err)
+	}
+	var out struct {
+		Results []WatchProvider `json:"results"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode watch providers: %w", err)
+	}
+	return out.Results, nil
+}
+
+// Language is one entry of /configuration/languages.
+type Language struct {
+	Code        string `json:"iso_639_1"`
+	EnglishName string `json:"english_name"`
+	Name        string `json:"name"`
+}
+
+// Languages is /configuration/languages, a bare array.
+func (c *Client) Languages() ([]Language, error) {
+	data, err := c.DoGetRaw("/configuration/languages", nil)
+	if err != nil {
+		return nil, fmt.Errorf("languages: %w", err)
+	}
+	var out []Language
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode languages: %w", err)
+	}
+	return out, nil
+}

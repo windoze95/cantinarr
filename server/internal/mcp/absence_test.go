@@ -116,3 +116,20 @@ func TestSearchedScopeNarrowsToTheMostExactThingKnown(t *testing.T) {
 		}
 	}
 }
+
+func TestNoBrowseResultsTextNamesFiltersAndLanguageBlindness(t *testing.T) {
+	text := noBrowseResultsText("movies", "genres Western + Animation; years 1950 to 1955", true, 1, 0)
+	for _, want := range []string{"No movies matched genres Western + Animation; years 1950 to 1955", "rules out nothing outside them", "loosen one filter", "Only English-language originals were searched"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text lacks %q: %q", want, text)
+		}
+	}
+	unfiltered := noBrowseResultsText("movies", "genres Western", false, 1, 0)
+	if strings.Contains(unfiltered, "English-language") {
+		t.Errorf("text mentions the language preference when it was not applied: %q", unfiltered)
+	}
+	past := noBrowseResultsText("TV shows", "genres Comedy", false, 40, 37)
+	if !strings.Contains(past, "Page 40 is past the last page (37)") || strings.Contains(past, "loosen one filter") {
+		t.Errorf("a page past the end must say so instead of suggesting looser filters: %q", past)
+	}
+}

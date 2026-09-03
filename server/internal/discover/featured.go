@@ -391,8 +391,8 @@ func decodeListPage(data []byte) ([]json.RawMessage, int, error) {
 		return nil, 0, fmt.Errorf("decode tmdb results: %w", err)
 	}
 	totalPages := envelope.TotalPages
-	if totalPages > maxTMDBPage {
-		totalPages = maxTMDBPage
+	if totalPages > MaxTMDBPage {
+		totalPages = MaxTMDBPage
 	}
 	if totalPages < 1 {
 		totalPages = 1

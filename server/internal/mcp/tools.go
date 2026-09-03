@@ -80,6 +80,7 @@ var toolDefinitions = []Tool{
 			"required": []string{"media_type", "time_window"},
 		},
 	},
+	browseTitlesTool,
 	{
 		Name:        "get_movie_details",
 		Permission:  auth.PermissionMediaDiscover,
