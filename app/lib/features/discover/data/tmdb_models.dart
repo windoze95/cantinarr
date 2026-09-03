@@ -135,17 +135,87 @@ class WatchProvider {
   final String providerName;
   final String? logoPath;
 
+  /// TMDB's ordering hint for the region; lower comes first.
+  final int displayPriority;
+
   const WatchProvider({
     required this.providerId,
     required this.providerName,
     this.logoPath,
+    this.displayPriority = 0,
   });
 
   factory WatchProvider.fromJson(Map<String, dynamic> json) => WatchProvider(
         providerId: json['provider_id'] as int,
         providerName: json['provider_name'] as String,
         logoPath: json['logo_path'] as String?,
+        displayPriority: json['display_priority'] as int? ?? 0,
       );
+}
+
+/// A language TMDB can filter on, labelled for a picker.
+class TmdbLanguage {
+  final String code;
+  final String englishName;
+
+  const TmdbLanguage({required this.code, required this.englishName});
+
+  factory TmdbLanguage.fromJson(Map<String, dynamic> json) {
+    final code = json['iso_639_1'] as String;
+    final english = json['english_name'] as String?;
+    final native = json['name'] as String?;
+    return TmdbLanguage(
+      code: code,
+      englishName: english != null && english.isNotEmpty
+          ? english
+          : (native != null && native.isNotEmpty ? native : code),
+    );
+  }
+}
+
+/// A country TMDB tracks streaming availability for.
+class WatchRegion {
+  final String code;
+  final String name;
+
+  const WatchRegion({required this.code, required this.name});
+
+  factory WatchRegion.fromJson(Map<String, dynamic> json) {
+    final code = json['iso_3166_1'] as String;
+    final english = json['english_name'] as String?;
+    final native = json['native_name'] as String?;
+    return WatchRegion(
+      code: code,
+      name: english != null && english.isNotEmpty
+          ? english
+          : (native != null && native.isNotEmpty ? native : code),
+    );
+  }
+}
+
+/// A TMDB keyword or production company: the id a filter sends and the name
+/// a chip shows. The name is null when only the id is known (a browse link),
+/// and a surface then names it by number.
+class TaggedId {
+  final int id;
+  final String? name;
+
+  const TaggedId({required this.id, this.name});
+
+  factory TaggedId.fromJson(Map<String, dynamic> json) => TaggedId(
+        id: json['id'] as int,
+        name: json['name'] as String?,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is TaggedId && other.id == id && other.name == name;
+
+  @override
+  int get hashCode => Object.hash(id, name);
+
+  @override
+  String toString() => 'TaggedId($id, $name)';
 }
 
 /// Full movie detail from TMDB.

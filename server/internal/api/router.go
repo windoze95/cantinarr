@@ -412,6 +412,8 @@ func NewRouter(
 
 			// Search
 			r.Get("/search", discoverHandler.Search)
+			r.Get("/search/keyword", discoverHandler.SearchKeywords)
+			r.Get("/search/company", discoverHandler.SearchCompanies)
 
 			// Media details
 			r.Get("/media/movie/{id}", discoverHandler.MovieDetail)
@@ -427,6 +429,9 @@ func NewRouter(
 			r.Get("/genres/movie", discoverHandler.MovieGenres)
 			r.Get("/genres/tv", discoverHandler.TVGenres)
 			r.Get("/providers/movie", discoverHandler.MovieWatchProviders)
+			r.Get("/providers/tv", discoverHandler.TVWatchProviders)
+			r.Get("/providers/regions", discoverHandler.WatchProviderRegions)
+			r.Get("/languages", discoverHandler.Languages)
 
 			// Trakt
 			r.Get("/trakt/trending", discoverHandler.TraktTrending)

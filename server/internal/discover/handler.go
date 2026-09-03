@@ -304,14 +304,59 @@ func (h *Handler) TVGenres(w http.ResponseWriter, r *http.Request) {
 	h.cachedTMDB(w, "genres_tv", ttlGenresProvider, "/genre/tv/list", nil)
 }
 
+// Languages serves TMDB's language table, a bare array of
+// {iso_639_1, english_name, name}; the browse filter sheet labels its
+// Language menu from it.
+func (h *Handler) Languages(w http.ResponseWriter, r *http.Request) {
+	h.cachedTMDB(w, "languages", ttlGenresProvider, "/configuration/languages", nil)
+}
+
 func (h *Handler) MovieWatchProviders(w http.ResponseWriter, r *http.Request) {
+	h.watchProviders(w, r, "movie")
+}
+
+func (h *Handler) TVWatchProviders(w http.ResponseWriter, r *http.Request) {
+	h.watchProviders(w, r, "tv")
+}
+
+// watchProviders lists the streaming services TMDB knows for one media type
+// in one region. The movie and TV sets differ, so each keys its own entry.
+func (h *Handler) watchProviders(w http.ResponseWriter, r *http.Request, kind string) {
 	region := r.URL.Query().Get("region")
 	if region == "" {
 		region = "US"
 	}
-	key := "providers_movie:" + region
+	key := "providers_" + kind + ":" + region
 	params := url.Values{"watch_region": {region}}
-	h.cachedTMDB(w, key, ttlGenresProvider, "/watch/providers/movie", params)
+	h.cachedTMDB(w, key, ttlGenresProvider, "/watch/providers/"+kind, params)
+}
+
+// WatchProviderRegions lists the countries TMDB tracks streaming
+// availability for, so the sheet can offer a region other than the device's.
+func (h *Handler) WatchProviderRegions(w http.ResponseWriter, r *http.Request) {
+	h.cachedTMDB(w, "providers_regions", ttlGenresProvider, "/watch/providers/regions", nil)
+}
+
+func (h *Handler) SearchKeywords(w http.ResponseWriter, r *http.Request) {
+	h.lookupSearch(w, r, "keyword")
+}
+
+func (h *Handler) SearchCompanies(w http.ResponseWriter, r *http.Request) {
+	h.lookupSearch(w, r, "company")
+}
+
+// lookupSearch is Search for TMDB's single-kind lookups behind the filter
+// sheet's type-ahead fields: query required, page clamped, body verbatim.
+func (h *Handler) lookupSearch(w http.ResponseWriter, r *http.Request, kind string) {
+	query := r.URL.Query().Get("query")
+	if query == "" {
+		http.Error(w, `{"error":"query parameter required"}`, http.StatusBadRequest)
+		return
+	}
+	page := queryPage(r)
+	key := fmt.Sprintf("search_%s:%s:%d", kind, query, page)
+	params := url.Values{"query": {query}, "page": {strconv.Itoa(page)}}
+	h.cachedTMDB(w, key, ttlTrending, "/search/"+kind, params)
 }
 
 // ─── Trakt Endpoints ────────────────────────────────────

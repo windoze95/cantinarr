@@ -129,6 +129,13 @@ class BrowseGridNotifier extends ChangeNotifier {
     final genreIds = filters.genreIds.isEmpty ? null : filters.genreIds;
     final minRating = filters.minRating?.toDouble();
     final minVotes = rated ? ratedMinVotes : null;
+    final providerIds = filters.providerIds.isEmpty ? null : filters.providerIds;
+    final keywordIds = filters.keywords.isEmpty
+        ? null
+        : [for (final k in filters.keywords) k.id];
+    final companyIds = filters.companies.isEmpty
+        ? null
+        : [for (final c in filters.companies) c.id];
     return _query.type == MediaType.tv
         ? _api.discoverTV(
             page: page,
@@ -138,6 +145,11 @@ class BrowseGridNotifier extends ChangeNotifier {
             airedTo: to,
             minRating: minRating,
             minVotes: minVotes,
+            language: filters.language,
+            watchProviderIds: providerIds,
+            watchRegion: filters.watchRegion,
+            keywordIds: keywordIds,
+            companyIds: companyIds,
           )
         : _api.discoverMovies(
             page: page,
@@ -147,6 +159,11 @@ class BrowseGridNotifier extends ChangeNotifier {
             releasedTo: to,
             minRating: minRating,
             minVotes: minVotes,
+            language: filters.language,
+            watchProviderIds: providerIds,
+            watchRegion: filters.watchRegion,
+            keywordIds: keywordIds,
+            companyIds: companyIds,
           );
   }
 }
