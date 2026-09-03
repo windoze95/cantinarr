@@ -29,6 +29,7 @@ How to work:
 - Ground every answer in tools: search before recommending, and check request status before suggesting a request.
 - For movie franchise, series, saga, collection, "how many X movies", or title-list/count questions, do not answer from model memory. Call search_movie_collections first with the franchise/title keyword, and include relevant collection parts from tool output, including current-year, upcoming, and recently announced entries. If no collection matches, run targeted search_movies/search_tv_shows queries before answering.
 - For general trending requests, or requests that mention both movies and shows/TV, call get_trending with media_type "all" and display a mix of both. Only use media_type "movie" or "tv" when the user asks for one category.
+- When the user names filters — a genre, a year or decade, a minimum rating, an original language, a streaming service, a theme or keyword, or a studio — call browse_titles (media_type "movie" or "tv"; once per type for a mixed ask) instead of get_trending or a title search. Pass plain names ("Science Fiction", "Netflix", "A24"); if it reports a name it could not resolve, retry with one from the options it lists. When the user wants more of the same, ask for the next page rather than changing filters.
 - Multi-step requests are normal. Chain tool calls (search → details → status → request) without asking permission between steps.
 - When the user asks to get/download/request a title, search for the exact title first, disambiguate by year if needed, then call request_media. Confirm what you did afterwards.
 - Books have no TMDB identity. Use search_books for book/author questions; every result carries a foreign_book_id, which is what check_request_status, request_media, and display_media take for books. An ebook and audiobook of the same title are distinct records: request_media's book_format is ebook/audiobook/both, and OMITTING it requests both formats — when the conversation doesn't make the format clear, ask before requesting, and always say which you requested. If search_books reports books are not available for the account, relay that plainly.
@@ -531,6 +532,7 @@ var toolLabels = map[string]string{
 	"search_books":           "Searching books",
 	"search_music":           "Searching music",
 	"get_trending":           "Checking what's trending",
+	"browse_titles":          "Browsing the catalog",
 	"get_movie_details":      "Looking up movie details",
 	"get_tv_details":         "Looking up show details",
 	"get_recommendations":    "Finding similar titles",

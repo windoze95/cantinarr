@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/serversettings"
 )
 
 // A discover query is the one place a client composes TMDB parameters itself,
@@ -68,18 +70,74 @@ const ratingSortMinVotes = "200"
 
 var errInvalidSort = errors.New("invalid sort_by")
 
-// discoverQuery builds the upstream query from the allowlisted parameters.
-// It also reports whether the caller named a language of their own: that
-// query is an explicit ask, served the way a search is, never thinned by the
-// admin's English-only preference.
-func discoverQuery(r *http.Request, spec discoverSpec, englishOnly bool) (params url.Values, explicitLanguage bool, err error) {
+// MaxTMDBPage is the last page TMDB serves; it reports total_pages above it
+// and refuses requests past it.
+const MaxTMDBPage = 500
+
+// ClampPage folds any page number into TMDB's 1..MaxTMDBPage, so a caller
+// running off either end asks for a real page instead of earning an
+// upstream error.
+func ClampPage(page int) int {
+	if page < 1 {
+		return 1
+	}
+	if page > MaxTMDBPage {
+		return MaxTMDBPage
+	}
+	return page
+}
+
+// EnglishOnly reads the admin's language preference, with the shipped
+// default when no settings service is wired in (the same fallback the
+// handler uses).
+func EnglishOnly(prefs DiscoveryPrefs) bool {
+	if prefs == nil {
+		return serversettings.DefaultDiscoveryEnglishOnly
+	}
+	return prefs.Get().DiscoveryEnglishOnly
+}
+
+func browseSpec(mediaType string) (discoverSpec, bool) {
+	switch mediaType {
+	case "movie":
+		return movieDiscover, true
+	case "tv":
+		return tvDiscover, true
+	}
+	return discoverSpec{}, false
+}
+
+// BuildBrowseQuery is the discover query for a caller that is not an HTTP
+// request (the assistant's browse tool): the same allowlist, sort and date
+// validation, rating floor, and English-only handling the browse routes
+// apply, keyed by media type. It reports whether the caller named a language
+// of its own, which the routes serve unfiltered.
+func BuildBrowseQuery(mediaType string, in url.Values, page int, englishOnly bool) (params url.Values, explicitLanguage bool, err error) {
+	spec, ok := browseSpec(mediaType)
+	if !ok {
+		return nil, false, fmt.Errorf("unknown media type %q", mediaType)
+	}
+	return buildDiscoverQuery(in, page, spec, englishOnly)
+}
+
+// discoverQuery builds the upstream query from a request's allowlisted
+// parameters; see buildDiscoverQuery.
+func discoverQuery(r *http.Request, spec discoverSpec, englishOnly bool) (url.Values, bool, error) {
+	return buildDiscoverQuery(r.URL.Query(), queryPage(r), spec, englishOnly)
+}
+
+// buildDiscoverQuery builds the upstream query from the allowlisted
+// parameters in `in`. It also reports whether the caller named a language of
+// its own: that query is an explicit ask, served the way a search is, never
+// thinned by the admin's English-only preference.
+func buildDiscoverQuery(in url.Values, page int, spec discoverSpec, englishOnly bool) (params url.Values, explicitLanguage bool, err error) {
 	params = url.Values{}
 	for _, k := range spec.keys {
-		if v := r.URL.Query().Get(k); v != "" {
+		if v := in.Get(k); v != "" {
 			params.Set(k, v)
 		}
 	}
-	params.Set("page", strconv.Itoa(queryPage(r)))
+	params.Set("page", strconv.Itoa(ClampPage(page)))
 
 	if sort := params.Get("sort_by"); sort != "" {
 		if !validSortBy(sort, spec.sortFields) {

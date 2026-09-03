@@ -288,6 +288,31 @@ func TestResolveDisplayMediaSearchResultRejectsWrongYear(t *testing.T) {
 	}
 }
 
+// browse_titles has no "all": TMDB has no combined discover endpoint, and a
+// model that sends it is corrected by the executor rather than guessed at.
+func TestBrowseTitlesSchemaIsMovieOrTV(t *testing.T) {
+	var def *Tool
+	for i := range toolDefinitions {
+		if toolDefinitions[i].Name == "browse_titles" {
+			def = &toolDefinitions[i]
+		}
+	}
+	if def == nil {
+		t.Fatal("browse_titles is not registered")
+	}
+	props := def.InputSchema["properties"].(map[string]interface{})
+	mediaType := props["media_type"].(map[string]interface{})
+	if got := mediaType["enum"].([]string); len(got) != 2 || got[0] != "movie" || got[1] != "tv" {
+		t.Errorf("media_type enum = %v, want exactly movie, tv", got)
+	}
+	if got := def.InputSchema["required"].([]string); len(got) != 1 || got[0] != "media_type" {
+		t.Errorf("required = %v, want exactly media_type", got)
+	}
+	if def.Permission != auth.PermissionMediaDiscover || def.AdminOnly || def.InAppChatOnly {
+		t.Errorf("browse_titles gating = %+v, want a plain discover tool", *def)
+	}
+}
+
 func TestToolDefinitionsDeclarePermissions(t *testing.T) {
 	for _, tool := range toolDefinitions {
 		if tool.RequiredPermission() == "" {
@@ -368,6 +393,9 @@ func TestGetToolsForRoleFiltersOperationalTools(t *testing.T) {
 	}
 	if !hasTool(userTools, "search_movie_collections") {
 		t.Fatal("user tools should include movie collection discovery")
+	}
+	if !hasTool(userTools, "browse_titles") {
+		t.Fatal("user tools should include catalog browsing")
 	}
 	if hasTool(userTools, "get_queue") {
 		t.Fatal("user tools should not include operational queue access")

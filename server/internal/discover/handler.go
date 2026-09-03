@@ -70,23 +70,12 @@ func queryInt(r *http.Request, key string, fallback int) int {
 	return n
 }
 
-// maxTMDBPage is the last page TMDB serves; it reports total_pages above it
-// and refuses requests past it.
-const maxTMDBPage = 500
-
-// queryPage reads `page` clamped to 1..maxTMDBPage. Clamping rather than
+// queryPage reads `page` clamped to 1..MaxTMDBPage. Clamping rather than
 // rejecting lets a client scrolling off the end stop cleanly: the body
 // reports the page actually served, and anything past the cap answers as
 // the cap instead of as an upstream error.
 func queryPage(r *http.Request) int {
-	page := queryInt(r, "page", 1)
-	if page < 1 {
-		return 1
-	}
-	if page > maxTMDBPage {
-		return maxTMDBPage
-	}
-	return page
+	return ClampPage(queryInt(r, "page", 1))
 }
 
 // cachedTMDB checks credentials, then cache, then calls TMDB on miss. The body

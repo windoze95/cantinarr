@@ -326,6 +326,8 @@ func main() {
 	apiCache := cache.New()
 	defer apiCache.Close()
 	discoverHandler := discover.NewHandler(creds, apiCache, serverSettings)
+	// browse_titles honors the same English-only default the browse grid does.
+	toolServer.SetDiscoveryPrefs(serverSettings)
 
 	// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook): pushes
 	// out-of-band library changes (manual imports, deletes) into the same WS

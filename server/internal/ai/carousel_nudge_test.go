@@ -33,6 +33,14 @@ func TestCarouselWatchDecisionTable(t *testing.T) {
 		}
 	})
 
+	t.Run("a browse result owes a carousel like a search does", func(t *testing.T) {
+		w := &carouselWatch{}
+		w.observe("browse_titles", trendingItems)
+		if !w.shouldNudge("Try Dune Part Three.") {
+			t.Fatal("shouldNudge = false after browse_titles returned items")
+		}
+	})
+
 	t.Run("display_media call settles the debt", func(t *testing.T) {
 		w := &carouselWatch{}
 		w.observe("get_trending", trendingItems)

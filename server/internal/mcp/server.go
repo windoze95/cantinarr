@@ -12,9 +12,10 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
-	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -106,6 +107,15 @@ type ToolServer struct {
 	// change awaiting their approval. nil when push is not configured — the
 	// proposal still parks and the app's approval screen still lists it.
 	adminNotifier AdminNotifier
+
+	// discoveryPrefs is the admin's discovery settings, read per call so
+	// browse_titles applies the same English-only default the app's browse
+	// grid does. nil reads as the shipped default.
+	discoveryPrefs discover.DiscoveryPrefs
+
+	// browseCatalog caches the genre, language, and streaming-service tables
+	// browse_titles resolves plain names against.
+	browseCatalog *browseCatalog
 }
 
 // AdminNotifier pushes an admin-scoped event. *push.Notifier satisfies it;
@@ -145,7 +155,15 @@ func NewToolServer(creds *credentials.Registry, requestSvc *request.Service, reg
 		bridge:                bridge,
 		settingsMutationLocks: make(map[string]chan struct{}),
 		profileChanges:        newProfileChangeStore(),
+		browseCatalog:         newBrowseCatalog(),
 	}
+}
+
+// SetDiscoveryPrefs wires the admin's discovery preferences so browse_titles
+// applies the same English-only default the app's browse grid does. Optional:
+// unset reads as the shipped default.
+func (s *ToolServer) SetDiscoveryPrefs(prefs discover.DiscoveryPrefs) {
+	s.discoveryPrefs = prefs
 }
 
 // authorizeCall re-checks the current device-bound role for an interactive
@@ -378,6 +396,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.searchTVShows(input)
 	case "get_trending":
 		return s.getTrending(input)
+	case "browse_titles":
+		return s.browseTitles(input)
 	case "get_movie_details":
 		return s.getMovieDetails(input)
 	case "get_tv_details":
