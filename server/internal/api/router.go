@@ -407,6 +407,9 @@ func NewRouter(
 			r.Get("/discover/movies/top-rated", discoverHandler.TopRatedMovies)
 			r.Get("/discover/movies/upcoming", discoverHandler.UpcomingMovies)
 			r.Get("/discover/movies/now-playing", discoverHandler.NowPlayingMovies)
+			r.Get("/discover/tv/on-the-air", discoverHandler.OnTheAirTV)
+			r.Get("/discover/tv/top-rated", discoverHandler.TopRatedTV)
+			r.Get("/discover/tv/upcoming", discoverHandler.UpcomingTV)
 			r.Get("/discover/movies", discoverHandler.DiscoverMovies)
 			r.Get("/discover/tv", discoverHandler.DiscoverTV)
 

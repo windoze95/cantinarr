@@ -189,6 +189,7 @@ class _BrowseGridScreenState extends ConsumerState<BrowseGridScreen> {
       BrowseFeed.topRated => 'Top Rated',
       BrowseFeed.upcoming => 'Coming Soon',
       BrowseFeed.nowPlaying => 'In Theaters',
+      BrowseFeed.onTheAir => 'Airing This Week',
       BrowseFeed.anticipated => 'Most Anticipated',
       BrowseFeed.discover => tv ? 'Browse TV Shows' : 'Browse Movies',
       BrowseFeed.recommendations => 'Recommended',

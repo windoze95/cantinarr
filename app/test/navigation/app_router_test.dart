@@ -402,6 +402,7 @@ void main() {
       '/browse/podcast/top-rated',
       '/browse/movie/bogus',
       '/browse/movie/recommendations',
+      '/browse/movie/on-the-air',
     ]) {
       router.go(path);
       await tester.pumpAndSettle();
@@ -412,7 +413,7 @@ void main() {
       );
     }
 
-    router.go('/browse/tv/top-rated');
+    router.go('/browse/tv/now-playing');
     await tester.pumpAndSettle();
     expect(router.routeInformationProvider.value.uri.path, '/dashboard/tv');
 

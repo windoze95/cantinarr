@@ -7,6 +7,7 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/horizontal_item_row.dart';
 import 'package:cantinarr/core/widgets/media_card.dart';
+import 'package:cantinarr/core/widgets/see_all_button.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_tv_tab.dart';
 import 'package:cantinarr/features/discover/data/tmdb_models.dart';
@@ -15,6 +16,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 /// Covers the wiring the pure row builders in library_rows_test.dart cannot
 /// see: that the tab asks Sonarr for import history at all, and that the row
@@ -203,6 +205,223 @@ void main() {
         _browseRowCards(tester).where((c) => c.statusLabel != null);
     expect(badged, isNotEmpty);
   });
+
+  testWidgets(
+      'Airing This Week renders the on-the-air feed as a badged browse row',
+      (tester) async {
+    final adapter = _SonarrAdapter(
+      series: [
+        _series(
+          id: 301,
+          title: 'Partial Series',
+          files: 18,
+          episodes: 18,
+          totalEpisodeCount: 24,
+        ),
+      ],
+      history: const [],
+      calendar: const [],
+      featured: [_tvFeatured(id: 200, name: 'Hero Series')],
+      // Only this row carries the partial series: the badge proves the row's
+      // items reach the library join, not just the headline's.
+      onTheAir: [
+        _tvFeatured(id: 301, name: 'Partial Series'),
+        _tvFeatured(id: 302, name: 'Airing Series'),
+      ],
+    );
+
+    await _pumpTvTab(tester, adapter);
+
+    expect(find.text('Airing This Week'), findsOneWidget);
+    final byTitle = {for (final c in _browseRowCards(tester)) c.title: c};
+    expect(byTitle['Airing Series'], isNotNull);
+    expect(byTitle['Partial Series']?.statusLabel, 'Partial');
+    expect(byTitle['Partial Series']?.subtitle, '18/24 eps');
+    for (final row in tester.widgetList<HorizontalItemRow<MediaItem>>(
+        find.byType(HorizontalItemRow<MediaItem>))) {
+      expect(row.height, 108.0 * 1.5 + MediaCard.subtitleRowExtraHeight);
+    }
+  });
+
+  testWidgets('Coming Soon renders the upcoming feed as a browse row',
+      (tester) async {
+    final adapter = _SonarrAdapter(
+      series: const [],
+      history: const [],
+      calendar: const [],
+      featured: [_tvFeatured(id: 200, name: 'Hero Series')],
+      upcoming: [_tvFeatured(id: 501, name: 'Premiere Series')],
+    );
+
+    await _pumpTvTab(tester, adapter);
+
+    expect(find.text('Coming Soon'), findsOneWidget);
+    expect(_browseRowCards(tester).map((c) => c.title),
+        contains('Premiere Series'));
+  });
+
+  testWidgets(
+      'Top Rated keeps loading toward its end without repeating a title',
+      (tester) async {
+    final adapter = _SonarrAdapter(
+      series: const [],
+      history: const [],
+      calendar: const [],
+      featured: [_tvFeatured(id: 200, name: 'Hero Series')],
+      topRatedPages: {
+        1: [
+          _tvFeatured(id: 201, name: 'First Page Series'),
+          _tvFeatured(id: 202, name: 'Shared Series'),
+        ],
+        2: [
+          _tvFeatured(id: 202, name: 'Shared Series'),
+          _tvFeatured(id: 203, name: 'Second Page Series'),
+        ],
+      },
+    );
+
+    // Two posters do not fill a 390px row, so the row asks for its next page
+    // on first layout: the same trigger a scroll to the end fires.
+    await _pumpTvTab(tester, adapter);
+
+    final titles = _browseRowCards(tester).map((c) => c.title).toList();
+    expect(titles, containsAll(['First Page Series', 'Shared Series', 'Second Page Series']));
+    expect(titles.where((t) => t == 'Shared Series'), hasLength(1));
+    expect(adapter.topRatedPagesRequested, [1, 2]);
+  });
+
+  testWidgets(
+      'every discovery row offers See all, and the headline one continues the feed that answered',
+      (tester) async {
+    final adapter = _SonarrAdapter(
+      series: const [],
+      history: const [],
+      calendar: const [],
+      featured: [
+        _tvFeatured(id: 200, name: 'Hero Series'),
+        _tvFeatured(id: 201, name: 'Row Series'),
+      ],
+      onTheAir: [_tvFeatured(id: 301, name: 'Airing Series')],
+      topRatedPages: {
+        1: [_tvFeatured(id: 401, name: 'Rated Series')],
+      },
+    );
+    // Tall enough that the lazily built list holds all three rows at once;
+    // TV rows are taller than movie rows and the third sits below a phone's
+    // fold.
+    final (:opened, :router) = await _pumpTvTabWithRouter(
+      tester,
+      adapter,
+      size: const Size(390, 1800),
+    );
+
+    // Headline, Airing This Week, Top Rated are showing; Coming Soon and
+    // Most Anticipated are empty and hidden, and the library rows never
+    // offer it.
+    expect(find.byType(SeeAllButton), findsNWidgets(3));
+
+    await tester.tap(_seeAllFor('Trending This Week'));
+    await tester.pumpAndSettle();
+    expect(opened.last.path, '/browse/tv/featured');
+    expect(opened.last.queryParameters['title'], 'Trending This Week');
+
+    router.pop();
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(_seeAllFor('Top Rated'));
+    await tester.pumpAndSettle();
+    await tester.tap(_seeAllFor('Top Rated'));
+    await tester.pumpAndSettle();
+    expect(opened.last.path, '/browse/tv/top-rated');
+    expect(opened.last.queryParameters['title'], 'Top Rated');
+  });
+
+  testWidgets('a genre chip opens the TV Browse grid filtered to that genre',
+      (tester) async {
+    final adapter = _SonarrAdapter(
+      series: const [],
+      history: const [],
+      calendar: const [],
+      featured: [_tvFeatured(id: 200, name: 'Hero Series')],
+      genres: const [
+        {'id': 18, 'name': 'Drama'},
+      ],
+    );
+    final (:opened, :router) = await _pumpTvTabWithRouter(tester, adapter);
+    expect(find.text('Browse by genre'), findsOneWidget);
+
+    await tester.ensureVisible(find.widgetWithText(ActionChip, 'Drama'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ActionChip, 'Drama'));
+    await tester.pumpAndSettle();
+    expect(opened.last.path, '/browse/tv/discover');
+    expect(opened.last.queryParameters['genres'], '18');
+    expect(opened.last.queryParameters['title'], 'Drama');
+
+    router.pop();
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.widgetWithText(ActionChip, 'All shows'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ActionChip, 'All shows'));
+    await tester.pumpAndSettle();
+    expect(opened.last.path, '/browse/tv/discover');
+    expect(opened.last.queryParameters.containsKey('genres'), isFalse);
+  });
+}
+
+Finder _seeAllFor(String rowTitle) => find.byWidgetPredicate(
+      (w) => w is SeeAllButton && w.rowTitle == rowTitle,
+    );
+
+/// Pumps the tab inside a router whose browse route records every location
+/// it was asked to open.
+Future<({List<Uri> opened, GoRouter router})> _pumpTvTabWithRouter(
+  WidgetTester tester,
+  _SonarrAdapter adapter, {
+  Size size = const Size(390, 844),
+}) async {
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1;
+  addTearDown(() {
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+
+  final opened = <Uri>[];
+  final router = GoRouter(
+    routes: [
+      GoRoute(
+        path: '/',
+        builder: (_, __) => const Scaffold(body: DashboardTvTab()),
+      ),
+      GoRoute(
+        path: '/browse/:type/:feed',
+        builder: (_, state) {
+          opened.add(state.uri);
+          return const Scaffold(body: Text('grid'));
+        },
+      ),
+    ],
+  );
+
+  final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+  dio.httpClientAdapter = adapter;
+  final container = ProviderContainer(
+    overrides: [
+      authProvider.overrideWith(() => _FakeAuthNotifier(_tvState)),
+      backendClientProvider.overrideWithValue(dio),
+    ],
+  );
+  addTearDown(container.dispose);
+
+  await container.read(authProvider.future);
+  await tester.pumpWidget(
+    UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  await tester.pumpAndSettle();
+  return (opened: opened, router: router);
 }
 
 /// The MediaCards rendered by Discover browse rows (CategoryRow), as opposed
@@ -337,6 +556,10 @@ class _SonarrAdapter implements HttpClientAdapter {
     required this.calendar,
     this.failHistory = false,
     this.featured = const [],
+    this.onTheAir = const [],
+    this.upcoming = const [],
+    this.topRatedPages = const {},
+    this.genres = const [],
   });
 
   final List<Map<String, dynamic>> series;
@@ -347,6 +570,13 @@ class _SonarrAdapter implements HttpClientAdapter {
   /// TV Discover's headline feed. Defaults empty so the existing library-row
   /// tests, which don't care about Discover at all, keep working unchanged.
   final List<Map<String, dynamic>> featured;
+  final List<Map<String, dynamic>> onTheAir;
+  final List<Map<String, dynamic>> upcoming;
+
+  /// Top Rated by page number; the feed reports as many pages as there are.
+  final Map<int, List<Map<String, dynamic>>> topRatedPages;
+  final List<int> topRatedPagesRequested = [];
+  final List<Map<String, dynamic>> genres;
   Map<String, dynamic> historyQuery = const {};
 
   static const _base = '/api/instances/tv/api/v3';
@@ -379,6 +609,21 @@ class _SonarrAdapter implements HttpClientAdapter {
         'total_pages': 1,
         'total_results': featured.length,
       };
+    } else if (options.path == '/api/discover/tv/on-the-air') {
+      body = _onePage(onTheAir);
+    } else if (options.path == '/api/discover/tv/upcoming') {
+      body = _onePage(upcoming);
+    } else if (options.path == '/api/discover/tv/top-rated') {
+      final page = int.parse(options.uri.queryParameters['page'] ?? '1');
+      topRatedPagesRequested.add(page);
+      body = {
+        'page': page,
+        'results': topRatedPages[page] ?? <Object>[],
+        'total_pages': topRatedPages.length,
+        'total_results': 0,
+      };
+    } else if (options.path == '/api/genres/tv') {
+      body = {'genres': genres};
     } else {
       // Discovery rows: empty is enough, and every fetch there is guarded.
       body = {
@@ -396,6 +641,13 @@ class _SonarrAdapter implements HttpClientAdapter {
       },
     );
   }
+
+  static Map<String, dynamic> _onePage(List<Map<String, dynamic>> results) => {
+        'page': 1,
+        'results': results,
+        'total_pages': results.isEmpty ? 0 : 1,
+        'total_results': results.length,
+      };
 
   @override
   void close({bool force = false}) {}

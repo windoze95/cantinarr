@@ -143,7 +143,7 @@ func TestDiscoverRejectsMalformedDates(t *testing.T) {
 func TestPageIsClampedToTMDBRange(t *testing.T) {
 	e := newEnv(t, true)
 
-	for _, route := range []string{"/discover/movies", "/discover/trending", "/discover/tv/popular", "/discover/movies/featured"} {
+	for _, route := range []string{"/discover/movies", "/discover/trending", "/discover/tv/popular", "/discover/movies/featured", "/discover/tv/on-the-air", "/discover/tv/top-rated"} {
 		t.Run(route, func(t *testing.T) {
 			before := e.upstream.hitCount()
 
@@ -244,15 +244,20 @@ func TestBrowseExplicitLanguageIsNeverFiltered(t *testing.T) {
 	}
 }
 
-// TestUpcomingRowPushesEnglishOnlyUpstream: Coming Soon is a discover query
-// too, so it fills the same way.
+// TestUpcomingRowPushesEnglishOnlyUpstream: both Coming Soon rows are
+// discover queries, so they fill the same way.
 func TestUpcomingRowPushesEnglishOnlyUpstream(t *testing.T) {
 	e := newEnv(t, true)
 	e.prefs.set(serversettings.DefaultDiscoverySource, true)
 
-	e.doOK(t, "/discover/movies/upcoming")
-	hit := e.upstream.hit(t, 0)
-	if hit.path != "/3/discover/movie" || hit.query.Get("with_original_language") != "en" {
-		t.Errorf("upstream = %s %v, want /3/discover/movie with with_original_language=en", hit.path, hit.query)
+	for i, row := range []struct{ route, path string }{
+		{"/discover/movies/upcoming", "/3/discover/movie"},
+		{"/discover/tv/upcoming", "/3/discover/tv"},
+	} {
+		e.doOK(t, row.route)
+		hit := e.upstream.hit(t, i)
+		if hit.path != row.path || hit.query.Get("with_original_language") != "en" {
+			t.Errorf("%s upstream = %s %v, want %s with with_original_language=en", row.route, hit.path, hit.query, row.path)
+		}
 	}
 }
