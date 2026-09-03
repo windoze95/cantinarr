@@ -35,13 +35,14 @@ func TestDiscoverForwardsBrowseFiltersVerbatim(t *testing.T) {
 		"vote_count.gte":           "50",
 		"with_watch_providers":     "8|9",
 		"watch_region":             "GB",
+		"with_original_language":   "ko",
 	}
 	for k, v := range want {
 		if got := hit.query.Get(k); got != v {
 			t.Errorf("upstream %s = %q, want %q", k, got, v)
 		}
 	}
-	for _, k := range []string{"include_adult", "region", "with_keywords", "with_original_language"} {
+	for _, k := range []string{"include_adult", "region", "with_keywords"} {
 		if _, ok := hit.query[k]; ok {
 			t.Errorf("upstream carried %s=%q, want it dropped", k, hit.query.Get(k))
 		}
@@ -208,6 +209,33 @@ func TestBrowsePushesEnglishOnlyUpstream(t *testing.T) {
 	}
 	if _, ok := e.upstream.hit(t, 1).query["with_original_language"]; ok {
 		t.Error("with_original_language sent with english_only off, want none")
+	}
+}
+
+// TestBrowseExplicitLanguageIsNeverFiltered: a language the caller named is
+// an explicit ask, like a search term. English-only neither replaces it nor
+// thins the page it returns, and the unnamed browse keeps its own entry.
+func TestBrowseExplicitLanguageIsNeverFiltered(t *testing.T) {
+	e := newEnv(t, true)
+	e.prefs.set(serversettings.DefaultDiscoverySource, true)
+	e.upstream.setRespond(func(*http.Request) (int, string) {
+		return http.StatusOK, mixedLanguageFeed
+	})
+
+	body := e.doOK(t, "/discover/movies?with_original_language=ko")
+	if got := e.upstream.hit(t, 0).query["with_original_language"]; len(got) != 1 || got[0] != "ko" {
+		t.Errorf("upstream with_original_language = %v, want exactly [ko]", got)
+	}
+	if body != mixedLanguageFeed {
+		t.Errorf("body = %s, want the upstream payload verbatim, never English-filtered", body)
+	}
+
+	e.doOK(t, "/discover/movies")
+	if got := e.upstream.hit(t, 1).query.Get("with_original_language"); got != "en" {
+		t.Errorf("unnamed browse carried with_original_language=%q, want the admin's en", got)
+	}
+	if e.upstream.hitCount() != 2 {
+		t.Errorf("upstream hits = %d, want 2 (named and unnamed are separate entries)", e.upstream.hitCount())
 	}
 }
 
