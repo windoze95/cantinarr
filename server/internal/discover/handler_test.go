@@ -315,6 +315,9 @@ func TestAdjacentQueriesNeverShareCacheEntries(t *testing.T) {
 		// disc_movies uses params.Encode(): a with_genres VALUE containing a
 		// literal "&page=2" must not collide with a genuine page=2 request.
 		{"/discover/movies?with_genres=28&page=2", "/discover/movies?with_genres=28%26page%3D2"},
+		// The headline feed pages: page 1 (the row) and page 2 (its grid)
+		// are different entries of the same source.
+		{"/discover/movies/featured?page=1", "/discover/movies/featured?page=2"},
 	}
 
 	expectedHits := 0
