@@ -14,6 +14,9 @@ class MovieDiscoverState {
   final List<MediaItem> topRated;
   final List<MediaItem> upcoming;
   final List<MediaItem> anticipated;
+
+  /// TMDB's movie genres, for the Browse-by-genre strip; empty until read.
+  final List<Genre> genres;
   final bool isLoadingFeatured;
   final bool isLoadingNowPlaying;
   final bool isLoadingTopRated;
@@ -27,6 +30,7 @@ class MovieDiscoverState {
     this.topRated = const [],
     this.upcoming = const [],
     this.anticipated = const [],
+    this.genres = const [],
     this.isLoadingFeatured = false,
     this.isLoadingNowPlaying = false,
     this.isLoadingTopRated = false,
@@ -44,6 +48,7 @@ class MovieDiscoverState {
     List<MediaItem>? topRated,
     List<MediaItem>? upcoming,
     List<MediaItem>? anticipated,
+    List<Genre>? genres,
     bool? isLoadingFeatured,
     bool? isLoadingNowPlaying,
     bool? isLoadingTopRated,
@@ -57,6 +62,7 @@ class MovieDiscoverState {
         topRated: topRated ?? this.topRated,
         upcoming: upcoming ?? this.upcoming,
         anticipated: anticipated ?? this.anticipated,
+        genres: genres ?? this.genres,
         isLoadingFeatured: isLoadingFeatured ?? this.isLoadingFeatured,
         isLoadingNowPlaying: isLoadingNowPlaying ?? this.isLoadingNowPlaying,
         isLoadingTopRated: isLoadingTopRated ?? this.isLoadingTopRated,
@@ -111,6 +117,7 @@ class MovieDiscoverNotifier extends StateNotifier<MovieDiscoverState> {
   Future<void> bootstrap() async {
     await Future.wait([
       _fetchFeatured(),
+      _fetchGenres(),
       for (final row in _Row.values) _restart(row),
     ]);
   }
@@ -132,6 +139,19 @@ class MovieDiscoverNotifier extends StateNotifier<MovieDiscoverState> {
     } catch (_) {
       state = state.copyWith(isLoadingFeatured: false);
     }
+  }
+
+  /// The genre strip is a convenience over the Browse page, so a failed read
+  /// simply leaves it out rather than marking the tab as broken.
+  Future<void> _fetchGenres() async {
+    if (state.genres.isNotEmpty) return;
+    try {
+      // Read the genres before touching state: `state.copyWith(await ...)`
+      // would capture the state from before the await and write that stale
+      // snapshot back over every row that resolved in the meantime.
+      final genres = await _api.movieGenres();
+      state = state.copyWith(genres: genres);
+    } catch (_) {}
   }
 
   /// Reloads a row from its first page, replacing what it showed.
