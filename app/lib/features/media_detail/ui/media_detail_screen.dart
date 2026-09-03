@@ -16,10 +16,12 @@ import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/phone_apps_sheet.dart';
 import '../../../core/widgets/section_header.dart';
+import '../../../core/widgets/see_all_button.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
+import '../../discover/logic/browse_query.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_access/data/media_access_service.dart';
@@ -59,6 +61,22 @@ class MediaDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
+  /// Opens a browse grid anchored on this title or on one of its genres.
+  void _browse(
+    BrowseFeed feed, {
+    required String title,
+    BrowseFilters filters = BrowseFilters.none,
+  }) =>
+      context.push(
+        BrowseQuery(
+          type: widget.mediaType,
+          feed: feed,
+          id: feed.needsId ? widget.id : null,
+          title: title,
+          filters: filters,
+        ).toLocation(),
+      );
+
   late final MediaDetailNotifier _detailNotifier;
   late final RequestNotifier _requestNotifier;
 
@@ -448,7 +466,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           ),
                           const SizedBox(height: 16),
 
-                          // Genres
+                          // Genres: each opens the Browse grid for that genre.
                           if (state.genres.isNotEmpty)
                             Padding(
                               padding:
@@ -457,10 +475,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                 spacing: 6,
                                 runSpacing: 6,
                                 children: state.genres
-                                    .map((g) => Chip(
+                                    .map((g) => ActionChip(
                                           label: Text(g.name,
                                               style: const TextStyle(
                                                   fontSize: 12)),
+                                          tooltip: 'Browse ${g.name}',
                                           backgroundColor:
                                               AppTheme.surfaceVariant,
                                           side: const BorderSide(
@@ -468,6 +487,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                           materialTapTargetSize:
                                               MaterialTapTargetSize.shrinkWrap,
                                           visualDensity: VisualDensity.compact,
+                                          onPressed: () => _browse(
+                                            BrowseFeed.discover,
+                                            title: g.name,
+                                            filters: BrowseFilters(
+                                                genreIds: [g.id]),
+                                          ),
                                         ))
                                     .toList(),
                               ),
@@ -604,6 +629,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                             _SectionRow(
                               title: 'Recommended',
                               items: state.recommendations,
+                              onSeeAll: () => _browse(
+                                BrowseFeed.recommendations,
+                                title: 'Recommended',
+                              ),
                             ),
                           ],
 
@@ -613,6 +642,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                             _SectionRow(
                               title: 'Similar',
                               items: state.similar,
+                              onSeeAll: () =>
+                                  _browse(BrowseFeed.similar, title: 'Similar'),
                             ),
                           ],
 
@@ -1394,9 +1425,13 @@ class _SectionRow extends StatelessWidget {
   final String title;
   final List<MediaItem> items;
 
+  /// Opens the row's feed as a full grid that pages past this first page.
+  final VoidCallback? onSeeAll;
+
   const _SectionRow({
     required this.title,
     required this.items,
+    this.onSeeAll,
   });
 
   @override
@@ -1406,7 +1441,12 @@ class _SectionRow extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: SectionHeader(title: title),
+          child: SectionHeader(
+            title: title,
+            trailing: onSeeAll == null
+                ? null
+                : SeeAllButton(rowTitle: title, onPressed: onSeeAll!),
+          ),
         ),
         const SizedBox(height: 12),
         HorizontalItemRow<MediaItem>(
