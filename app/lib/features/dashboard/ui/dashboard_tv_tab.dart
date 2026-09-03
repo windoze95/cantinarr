@@ -139,6 +139,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
   @override
   Widget build(BuildContext context) {
     final discover = ref.watch(tvDiscoverProvider);
+    final discoverNotifier = ref.watch(tvDiscoverProvider.notifier);
     // Unlike the Movies tab, searchResults is load-bearing here: the TV
     // branch of buildSearchLibraryStatus looks each result up by tmdbId
     // (falling back to a title+year match), so it needs the browse-row items
@@ -179,6 +180,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
               isLoading: discover.isLoadingAnticipated,
               isTvRow: true,
               libraryStatus: libraryStatus,
+              onLoadMore: (_) => discoverNotifier.loadMoreAnticipated(),
             ),
 
           // Sonarr library rows (same style as discovery)

@@ -97,8 +97,13 @@ class TraktItem {
   }
 
   /// Convert to the app's shared MediaItem model for UI reuse.
+  ///
+  /// A MediaItem's id is a TMDB id everywhere in the app (detail routes and
+  /// library matching key on it), so a title Trakt knows and TMDB does not
+  /// gets no id at all rather than a Trakt id that would open some unrelated
+  /// TMDB title; feeds drop id-less entries.
   MediaItem toMediaItem() => MediaItem(
-        id: tmdbId ?? ids.trakt ?? 0,
+        id: tmdbId ?? 0,
         title: title,
         posterPath: posterUrl,
         mediaType: mediaType == 'movie' ? MediaType.movie : MediaType.tv,

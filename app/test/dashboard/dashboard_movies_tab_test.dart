@@ -90,6 +90,48 @@ void main() {
     expect(unreachable, isNotEmpty);
     expect(unreachable.first.statusLabel, isNull);
   });
+
+  testWidgets('In Theaters renders the now-playing feed as a browse row',
+      (tester) async {
+    final adapter = _RadarrAdapter(
+      movies: const [],
+      featured: [_featured(id: 100, title: 'Hero Movie')],
+      nowPlaying: [_featured(id: 301, title: 'Theater Movie')],
+    );
+
+    await _pumpMoviesTab(tester, adapter);
+
+    expect(find.text('In Theaters'), findsOneWidget);
+    expect(_browseRowCards(tester).map((c) => c.title), contains('Theater Movie'));
+  });
+
+  testWidgets(
+      'Top Rated keeps loading toward its end without repeating a title',
+      (tester) async {
+    final adapter = _RadarrAdapter(
+      movies: const [],
+      featured: [_featured(id: 100, title: 'Hero Movie')],
+      topRatedPages: {
+        1: [
+          _featured(id: 201, title: 'First Page Movie'),
+          _featured(id: 202, title: 'Shared Movie'),
+        ],
+        2: [
+          _featured(id: 202, title: 'Shared Movie'),
+          _featured(id: 203, title: 'Second Page Movie'),
+        ],
+      },
+    );
+
+    // Two posters do not fill a 390px row, so the row is already within
+    // reach of its end on first layout: the same trigger a scroll fires.
+    await _pumpMoviesTab(tester, adapter);
+
+    final titles = _browseRowCards(tester).map((c) => c.title).toList();
+    expect(titles, containsAll(['First Page Movie', 'Shared Movie', 'Second Page Movie']));
+    expect(titles.where((t) => t == 'Shared Movie'), hasLength(1));
+    expect(adapter.topRatedPagesRequested, [1, 2]);
+  });
 }
 
 /// The MediaCards rendered by Discover browse rows (CategoryRow), as opposed
@@ -194,11 +236,18 @@ class _RadarrAdapter implements HttpClientAdapter {
   _RadarrAdapter({
     required this.movies,
     required this.featured,
+    this.nowPlaying = const [],
+    this.topRatedPages = const {},
     this.failMovies = false,
   });
 
   final List<Map<String, dynamic>> movies;
   final List<Map<String, dynamic>> featured;
+  final List<Map<String, dynamic>> nowPlaying;
+
+  /// Top Rated by page number; the feed reports as many pages as there are.
+  final Map<int, List<Map<String, dynamic>>> topRatedPages;
+  final List<int> topRatedPagesRequested = [];
   final bool failMovies;
 
   static const _base = '/api/instances/movies/api/v3';
@@ -228,9 +277,25 @@ class _RadarrAdapter implements HttpClientAdapter {
         'total_pages': 1,
         'total_results': featured.length,
       };
+    } else if (options.path == '/api/discover/movies/now-playing') {
+      body = {
+        'page': 1,
+        'results': nowPlaying,
+        'total_pages': nowPlaying.isEmpty ? 0 : 1,
+        'total_results': nowPlaying.length,
+      };
+    } else if (options.path == '/api/discover/movies/top-rated') {
+      final page = int.parse(options.uri.queryParameters['page'] ?? '1');
+      topRatedPagesRequested.add(page);
+      body = {
+        'page': page,
+        'results': topRatedPages[page] ?? <Object>[],
+        'total_pages': topRatedPages.length,
+        'total_results': 0,
+      };
     } else {
-      // Top Rated, Coming Soon, Most Anticipated: empty is enough, and every
-      // fetch there is guarded.
+      // Coming Soon, Most Anticipated: empty is enough, and every fetch there
+      // is guarded.
       body = {
         'page': 1,
         'results': <Object>[],
