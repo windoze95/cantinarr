@@ -264,7 +264,8 @@ chk GET $L/diskspace admin 200 'type=="array"'
 chk GET $L/health admin 200 'type=="array"'
 chk GET $L/system/status user 403 ''
 # ── downloads ────────────────────────────────────────────
-chk GET /api/downloads/sabnzbd-3f4a5b6c/queue admin 200 '(.items|type=="array") and ([.items[]|select(.category=="music")]|length)>=1'
+# the seeded music download finishes within seconds of boot and moves to history, so only the shape is asserted here
+chk GET /api/downloads/sabnzbd-3f4a5b6c/queue admin 200 '(.items|type=="array") and (.paused|type=="boolean")'
 chk GET /api/downloads/sabnzbd-3f4a5b6c/history admin 200 '(.items|type=="array") and ([.items[]|select(.category=="music")]|length)>=1'
 chk GET /api/downloads/qbittorrent-4b5c6d7e/queue admin 200 '(.items|length)==5 and ([.items[].status]|index("stalledDL")!=null) and (all(.items[]; (.progress|type=="number") and has("eta_seconds") and has("size_left_bytes"))) and (.paused==false)'
 chk GET /api/downloads/qbittorrent-4b5c6d7e/history admin 200 '(.items|length)==5 and ([.items[]|select(.error!=null and .error!="")]|length)==1'
