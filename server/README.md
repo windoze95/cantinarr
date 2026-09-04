@@ -103,6 +103,8 @@ Optional env vars for deployment tuning (a `.env` file next to the binary is aut
 | `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Comma-separated Android signing cert SHA-256 fingerprints for `/.well-known/assetlinks.json` and Android WebAuthn origins |
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Additional WebAuthn origins to trust (e.g. non-standard HTTPS ports) |
 | `CANTINARR_DISABLE_UPDATE_CHECK` | unset | Set to `1` to disable the periodic GitHub release check behind the admin update-status endpoint |
+| `PUID` | unset (runs as root) | Container image only. Run the server as this user id: on every start the image takes ownership of `/config` for it, so the database and encryption key it writes are owned by that user on the host (the linuxserver-style convention Synology and Unraid stacks expect). Ignored when the container is already started as a non-root user (compose `user:`, TrueNAS) |
+| `PGID` | same as `PUID` | Group id to pair with `PUID`; ignored without it |
 
 OpenAI OAuth source deployments use Codex app-server and are supported only on Linux; non-Linux hosts report this provider unavailable even when a Codex binary is installed. The runtime directory's parent must exist, and the directory must be on tmpfs or ramfs—not persistent storage. Give each concurrently running Cantinarr process its own runtime directory; startup removes stale `session-*` entries from that dedicated root. The official container uses its private Docker `/dev/shm` tmpfs. Use the tested Codex 0.144.3 release or a protocol-compatible build.
 
