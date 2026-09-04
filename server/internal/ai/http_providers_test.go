@@ -45,7 +45,7 @@ func TestCredentialHTTPClientDoesNotFollowRedirects(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer provider-secret")
 	req.Header.Set("X-Goog-Api-Key", "gemini-secret")
-	resp, err := newCredentialHTTPClient(time.Second).Do(req)
+	resp, err := newHostedProviderHTTPClient(time.Second).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}

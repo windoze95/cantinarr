@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 // validTraktImageHost accepts any *.trakt.tv subdomain rather than naming CDN
@@ -37,11 +38,12 @@ func validTraktImageHost(host string) bool {
 	return true
 }
 
-// traktImageClient has a zero Transport on purpose: it consults
-// http.DefaultTransport per request, which is how the test harness intercepts
-// outbound traffic. The timeout is generous because fanart files run larger
-// than poster thumbs.
-var traktImageClient = &http.Client{Timeout: 15 * time.Second}
+// traktImageClient rides the internet-bound transport class (the Trakt CDN is
+// exactly the kind of host an admin proxies). With no admin proxy that class
+// delegates to http.DefaultTransport per request, which is how the test
+// harness intercepts outbound traffic. The timeout is generous because fanart
+// files run larger than poster thumbs.
+var traktImageClient = &http.Client{Transport: httpx.External(), Timeout: 15 * time.Second}
 
 // TraktImage relays one Trakt CDN image to the client. Trakt artwork URLs are
 // public CDN assets, but unlike TMDB's CDN they carry no

@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 // Client talks to the push gateway's /v1 API using a per-app bearer key.
@@ -32,6 +34,7 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		httpClient: &http.Client{
+			Transport:     httpx.External(),
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
@@ -64,6 +67,7 @@ func Enroll(baseURL, name, enrollToken string) (EnrollResponse, error) {
 		req.Header.Set("X-Enroll-Token", enrollToken)
 	}
 	client := &http.Client{
+		Transport:     httpx.External(),
 		Timeout:       15 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}

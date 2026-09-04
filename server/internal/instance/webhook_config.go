@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 const (
@@ -260,7 +261,8 @@ func newArrConfigurationClient(baseURL, apiKey string, redact ...string) *arrCon
 		apiKey:  apiKey,
 		redact:  secrets,
 		httpClient: &http.Client{
-			Timeout: 20 * time.Second,
+			Transport: httpx.Internal(),
+			Timeout:   20 * time.Second,
 			// Never carry an instance API key to a redirect target.
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse

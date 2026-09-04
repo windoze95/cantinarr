@@ -16,6 +16,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 )
 
 // ErrAlreadyShared reports that the invited account already has access to the
@@ -46,6 +48,7 @@ const BaseURL = "https://plex.tv"
 func NewClientAt(baseURL string) *Client {
 	return &Client{
 		http: &http.Client{
+			Transport:     httpx.External(),
 			Timeout:       15 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},

@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
@@ -222,7 +223,7 @@ func (m *Manager) startSession(authJSON []byte) (*appSession, error) {
 	args := appServerArgs(m.args)
 	cmd := exec.Command(m.binary, args...)
 	cmd.Dir = work
-	cmd.Env = isolatedEnvironment(home, tmp)
+	cmd.Env = isolatedEnvironment(home, tmp, httpx.OutboundProxyString())
 	configureChildProcess(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -304,19 +305,33 @@ func appServerArgs(base []string) []string {
 	return args
 }
 
-func isolatedEnvironment(home, tmp string) []string {
+// isolatedEnvironment builds the app-server's environment from scratch: the
+// allowlisted parent variables (PATH, locale, TLS trust) plus the sandbox
+// paths. The standard proxy variables are inherited too, so an env-var proxy
+// reaches the subprocess the way it reaches the server's own clients -- unless
+// the admin has configured an outbound proxy, which then replaces every
+// inherited proxy variable: the app-server talks only to OpenAI, an
+// internet-bound host, and the in-app setting wins over the environment
+// exactly as it does on the Go side (internal/httpx).
+func isolatedEnvironment(home, tmp, proxy string) []string {
 	allowed := map[string]bool{
 		"PATH": true, "LANG": true, "LC_ALL": true, "TZ": true,
 		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
-		"HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true,
-		"http_proxy": true, "https_proxy": true, "all_proxy": true, "no_proxy": true,
 	}
-	env := make([]string, 0, len(allowed)+6)
+	if proxy == "" {
+		for _, name := range proxyEnvironmentVariables {
+			allowed[name] = true
+		}
+	}
+	env := make([]string, 0, len(allowed)+10)
 	for _, entry := range os.Environ() {
 		key, _, ok := strings.Cut(entry, "=")
 		if ok && allowed[key] {
 			env = append(env, entry)
 		}
+	}
+	if proxy != "" {
+		env = append(env, "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "http_proxy="+proxy, "https_proxy="+proxy)
 	}
 	env = append(env,
 		"CODEX_HOME="+home,
@@ -840,4 +855,12 @@ func validAuthJSON(data []byte) bool {
 	}
 	var extra any
 	return errors.Is(decoder.Decode(&extra), io.EOF)
+}
+
+// proxyEnvironmentVariables are the names the app-server reads a proxy from,
+// in both spellings; they pass through from the parent only while no in-app
+// outbound proxy is configured.
+var proxyEnvironmentVariables = []string{
+	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/httpx"
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/plex"
@@ -876,6 +877,7 @@ func validateConnection(inst *Instance) error {
 // on v1) is reachable by hitting its system/status endpoint.
 func validateArrURL(baseURL, apiKey, apiVersion string) error {
 	client := &http.Client{
+		Transport:     httpx.Internal(),
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
