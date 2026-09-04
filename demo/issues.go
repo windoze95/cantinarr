@@ -79,6 +79,11 @@ func issHandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "foreign_id required for a book report")
 			return
 		}
+	} else if req.MediaType == mediaTypeMusic {
+		if strings.TrimSpace(req.ForeignID) == "" {
+			writeErr(w, http.StatusBadRequest, "foreign_id required for a music report")
+			return
+		}
 	} else if req.TmdbID == 0 && req.TvdbID == 0 {
 		writeErr(w, http.StatusBadRequest, "tmdb_id or tvdb_id required")
 		return
@@ -89,6 +94,7 @@ func issHandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		mediaTypeMovie: serviceRadarr,
 		mediaTypeTV:    serviceSonarr,
 		mediaTypeBook:  serviceChaptarr,
+		mediaTypeMusic: serviceLidarr,
 	}[req.MediaType]
 	if expectedService == "" {
 		writeErr(w, http.StatusBadRequest, "unsupported media type: "+req.MediaType)
@@ -140,16 +146,35 @@ func issHandleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			title = book.Title
 		}
 	}
+	// Music mirrors books with the format axis removed: the report is scoped
+	// to a library album record (the requester-visible proof is the ownership
+	// digest row), resolved live rather than trusted from the client.
+	if req.MediaType == mediaTypeMusic {
+		if strings.TrimSpace(req.BookFormat) != "" {
+			writeErr(w, http.StatusBadRequest, "music has no book_format")
+			return
+		}
+		req.ForeignID = strings.TrimSpace(req.ForeignID)
+		album, ok := albumByForeignID(req.ForeignID)
+		if !ok || album == nil || !album.InLibrary {
+			writeErr(w, http.StatusBadRequest, "no library album matches this report; it may have been removed")
+			return
+		}
+		if title == "" {
+			title = album.Title
+		}
+	}
 
-	// Normalization: non-TV reports zero out season/episode; movies zero tvdb.
+	// Normalization: non-TV reports zero out season/episode; movies zero tvdb;
+	// books and music carry no TMDB/TVDB identity at all.
 	if req.MediaType != mediaTypeTV {
 		req.SeasonNumber, req.EpisodeNumber = 0, 0
 	}
 	if req.MediaType == mediaTypeMovie {
 		req.TvdbID = 0
 	}
-	if req.MediaType == mediaTypeBook {
-		req.TmdbID = 0
+	if req.MediaType == mediaTypeBook || req.MediaType == mediaTypeMusic {
+		req.TmdbID, req.TvdbID = 0, 0
 	}
 
 	now := time.Now().UTC()
