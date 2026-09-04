@@ -62,15 +62,18 @@ type rawGetter interface {
 // FeaturedTV serves the configured headline TV feed. Page one is the row;
 // later pages continue the same feed for the grid under it.
 func (h *Handler) FeaturedTV(w http.ResponseWriter, r *http.Request) {
-	h.featured(w, "tv", queryPage(r))
+	h.featured(w, r, "tv", queryPage(r))
 }
 
 // FeaturedMovies serves the configured headline movie feed.
 func (h *Handler) FeaturedMovies(w http.ResponseWriter, r *http.Request) {
-	h.featured(w, "movie", queryPage(r))
+	h.featured(w, r, "movie", queryPage(r))
 }
 
-func (h *Handler) featured(w http.ResponseWriter, mediaType string, page int) {
+// featured builds or reads the cached page, then hands it to the caller's
+// content policy like every other feed: the cache holds everyone's row, a
+// kids account sees its own cut of it.
+func (h *Handler) featured(w http.ResponseWriter, r *http.Request, mediaType string, page int) {
 	source, englishOnly := h.discoveryPrefs()
 
 	// Trakt is optional. Falling back keeps the landing screen populated
@@ -82,7 +85,7 @@ func (h *Handler) featured(w http.ResponseWriter, mediaType string, page int) {
 
 	key := fmt.Sprintf("featured:%s:%s:%t:%d", mediaType, source, englishOnly, page)
 	if data, ok := h.cache.Get(key); ok {
-		writeJSON(w, data)
+		h.writeForCaller(w, r, listShape(mediaType), data)
 		return
 	}
 
@@ -135,7 +138,7 @@ func (h *Handler) featured(w http.ResponseWriter, mediaType string, page int) {
 		return
 	}
 	h.cache.Set(key, payload, ttlTrending)
-	writeJSON(w, payload)
+	h.writeForCaller(w, r, listShape(mediaType), payload)
 }
 
 // tmdbFeatured serves one page of a TMDB list feed. Page one is the row,

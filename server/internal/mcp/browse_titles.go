@@ -542,7 +542,7 @@ func (s *ToolServer) browseTitles(input json.RawMessage) (*ToolResult, error) {
 
 	page := discover.ClampPage(in.Page)
 	englishOnly := discover.EnglishOnly(s.discoveryPrefs)
-	query, explicitLanguage, err := discover.BuildBrowseQuery(mediaType, params, page, englishOnly)
+	query, explicitLanguage, err := discover.BuildBrowseQuery(mediaType, params, page, englishOnly, nil)
 	if err != nil {
 		return nil, err
 	}
