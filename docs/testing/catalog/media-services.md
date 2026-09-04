@@ -8,6 +8,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 - [ ] `RAD-005` · P0 · LIVE — Open interactive movie release search; verify sorting, quality, size, protocol, indexer, seeders/leechers, rejection reasons, and grab the selected release only.
 - [ ] `RAD-014` · P0 · LIVE — Exercise remove, blocklist + re-search, category hand-off, and rescan fixes; verify confirmation/parameters and resulting queue/library state.
+- [ ] `RAD-015` · P1 · UI/LIVE — Open a movie's page against a real Radarr; verify the External links sheet opens the movie on IMDb, TMDB, and Trakt, Edit Movie round-trips profile, minimum availability, path, and tags at Radarr with every unmodelled field intact, the action menu's monitor toggle and Refresh Movie reflect at Radarr, and Remove Movie keeps files by default and deletes them only on opt-in.
 
 ## Sonarr administration
 

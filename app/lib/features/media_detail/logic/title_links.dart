@@ -24,19 +24,23 @@ class TitleLink {
 /// field is not a page to send someone to.
 final _imdbId = RegExp(r'^tt\d+$');
 
-/// The Links line of a title page's Details, in a fixed order: IMDb when
-/// TMDB knows the title's IMDb id, TMDB itself always (the page is built from
-/// its record), then Trakt, which resolves an IMDb id under its own
-/// `/movies/` and `/shows/` paths, so no Trakt id is needed. Trakt's older
+/// The sites a movie or show can be looked up on, in a fixed order: IMDb
+/// when the IMDb id is known, TMDB when its id is known (always, on a page
+/// built from TMDB's own record; a Radarr movie normally carries it too),
+/// then Trakt, which resolves an IMDb id under its own `/movies/` and
+/// `/shows/` paths, so no Trakt id is needed. Trakt's older
 /// `/search/imdb/<id>` form is gone -- it answers 404 -- and its app renders
-/// client-side, so a link there has to name the media type up front.
+/// client-side, so a link there has to name the media type up front. Shared
+/// by the requester title page's Links row and the Radarr movie page's
+/// links sheet, so the two never drift apart again.
 List<TitleLink> titleLinks({
   required MediaType type,
-  required int tmdbId,
+  int? tmdbId,
   String? imdbId,
 }) {
   final imdb = imdbId?.trim() ?? '';
   final known = _imdbId.hasMatch(imdb);
+  final tmdb = tmdbId ?? 0;
   final isShow = type == MediaType.tv;
   // The two sites name the same thing differently: TMDB's path segment is
   // `tv`, Trakt's is `shows`.
@@ -44,7 +48,7 @@ List<TitleLink> titleLinks({
   final traktKind = isShow ? 'shows' : 'movies';
   return [
     if (known) TitleLink('IMDb', 'https://www.imdb.com/title/$imdb/'),
-    TitleLink('TMDB', 'https://www.themoviedb.org/$tmdbKind/$tmdbId'),
+    if (tmdb > 0) TitleLink('TMDB', 'https://www.themoviedb.org/$tmdbKind/$tmdb'),
     if (known) TitleLink('Trakt', 'https://trakt.tv/$traktKind/$imdb'),
   ];
 }

@@ -40,6 +40,17 @@ void main() {
     );
   });
 
+  test('without a TMDB id only the IMDb-derived links remain', () {
+    expect(
+      titleLinks(type: MediaType.movie, imdbId: 'tt0133093'),
+      const [
+        TitleLink('IMDb', 'https://www.imdb.com/title/tt0133093/'),
+        TitleLink('Trakt', 'https://trakt.tv/movies/tt0133093'),
+      ],
+    );
+    expect(titleLinks(type: MediaType.movie, tmdbId: 0), isEmpty);
+  });
+
   test('an id that is not IMDb-shaped is treated as unknown', () {
     expect(
       titleLinks(type: MediaType.movie, tmdbId: 603, imdbId: 'nm0000206'),

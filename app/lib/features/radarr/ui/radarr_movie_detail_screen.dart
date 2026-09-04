@@ -1,28 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/action_sheet.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/data/tmdb_models.dart' show MediaType;
 import '../../issues/ui/report_problem_sheet.dart';
+import '../../media_detail/logic/title_links.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../data/radarr_api_service.dart';
 import '../data/radarr_models.dart';
+import 'edit_movie_screen.dart';
+import 'movie_actions.dart';
 import 'radarr_import_doctor_sheet.dart';
 import 'radarr_releases_screen.dart';
 import 'widgets/radarr_queue_item_card.dart';
 
 /// Movie detail: poster/overview, the downloaded file's quality+size, the
 /// active download (with the Import Doctor affordance) and recent history, plus
-/// an Automatic/Interactive search action bar. The movie-side mirror of the
-/// Sonarr series → season → episode drill-down (movies are single items, so the
-/// whole picture fits on one screen).
+/// an Automatic/Interactive search action bar. The app bar carries external
+/// links, Edit Movie, and the movie action menu, the same set the series page
+/// has. The movie-side mirror of the Sonarr series → season → episode
+/// drill-down (movies are single items, so the whole picture fits on one
+/// screen).
 class RadarrMovieDetailScreen extends ConsumerStatefulWidget {
   final String instanceId;
   final RadarrMovie movie;
@@ -125,6 +133,64 @@ class _RadarrMovieDetailScreenState
     );
   }
 
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _openEdit() async {
+    final saved = await Navigator.of(context, rootNavigator: true).push<bool>(
+      AmbientPageRoute(
+        builder: (_) => EditMovieScreen(
+          instanceId: widget.instanceId,
+          movie: _movie,
+        ),
+      ),
+    );
+    if (saved == true && mounted) _load();
+  }
+
+  void _showMovieMenu() {
+    showMovieActions(
+      context,
+      service: _service,
+      instanceId: widget.instanceId,
+      movie: _movie,
+      onChanged: _load,
+      onRemoved: () {
+        if (mounted) Navigator.of(context).pop();
+      },
+    );
+  }
+
+  /// External sites for this movie; entries appear only when the matching id
+  /// is known. The same sites and URL forms as the requester title page.
+  Future<void> _openLinks() async {
+    final links = [
+      for (final link in titleLinks(
+        type: MediaType.movie,
+        tmdbId: _movie.tmdbId,
+        imdbId: _movie.imdbId,
+      ))
+        SheetAction(link.url, _linkIcon(link.label), link.label),
+    ];
+    if (links.isEmpty) {
+      _toast('No external links available');
+      return;
+    }
+    final url = await showActionSheet<String>(context,
+        title: _movie.title, actions: links);
+    if (url == null) return;
+    launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
+  static IconData _linkIcon(String site) => switch (site) {
+        'IMDb' => Icons.movie_outlined,
+        'Trakt' => Icons.track_changes_outlined,
+        _ => Icons.theaters_outlined,
+      };
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -134,9 +200,19 @@ class _RadarrMovieDetailScreenState
         title: Text(_movie.title, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh, color: AppTheme.textPrimary),
-            tooltip: 'Refresh',
-            onPressed: _isLoading ? null : _load,
+            icon: const Icon(Icons.link, color: AppTheme.textPrimary),
+            tooltip: 'External links',
+            onPressed: _openLinks,
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, color: AppTheme.textPrimary),
+            tooltip: 'Edit movie',
+            onPressed: _openEdit,
+          ),
+          IconButton(
+            icon: const Icon(Icons.more_vert, color: AppTheme.textPrimary),
+            tooltip: 'Movie actions',
+            onPressed: _showMovieMenu,
           ),
         ],
       ),
