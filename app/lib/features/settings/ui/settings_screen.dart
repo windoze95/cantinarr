@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
+import '../../../core/models/user_profile.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
@@ -161,7 +162,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             _SettingsTile(
               icon: Icons.person_outline,
               title: user?.username ?? 'Unknown',
-              subtitle: user?.isAdmin == true ? 'Administrator' : 'User',
+              subtitle: _accountSubtitle(user),
             ),
             if (user?.canUsePassword == true)
               _SettingsTile(
@@ -825,6 +826,20 @@ String _serviceLabel(String serviceType) {
     default:
       return serviceType;
   }
+}
+
+/// The role line under the username. A kids account says so, with its
+/// limits when the profile carries them, in the account's own words.
+String _accountSubtitle(UserProfile? user) {
+  if (user == null) return 'User';
+  if (user.isAdmin) return 'Administrator';
+  if (user.child) {
+    final limits = user.contentLimits;
+    if (limits == null) return 'Kids account';
+    return 'Kids account · movies up to ${limits.maxMovieRating} · '
+        'shows up to ${limits.maxTvRating}';
+  }
+  return 'User';
 }
 
 String _aiAccessSubtitle(AiSettings? settings) {

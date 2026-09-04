@@ -74,6 +74,25 @@ CREATE TABLE IF NOT EXISTS user_request_settings (
     quality_profile_sonarr INTEGER
 );
 
+-- Kids accounts. A row makes the user a child account and holds the content
+-- policy every title surface applies after its shared-cache read: discover
+-- rows, search, details, people, Trakt feeds, the Radarr/Sonarr proxy reads,
+-- the AI tools, request creation, and new-content pushes (internal/contentpolicy).
+-- No row = unrestricted. Admins never have a row: the store refuses one and
+-- the role change refuses to promote a child. Approval is deliberately NOT
+-- here; user_request_settings.require_approval stays the one control.
+CREATE TABLE IF NOT EXISTS user_content_policies (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    max_movie_rating TEXT NOT NULL,             -- a certification of rating_region's movie scheme, e.g. 'PG'
+    max_tv_rating TEXT NOT NULL,                -- e.g. 'TV-PG'
+    rating_region TEXT NOT NULL DEFAULT 'US',   -- ISO 3166-1 alpha-2; must exist in both TMDB schemes
+    block_unrated BOOLEAN NOT NULL DEFAULT 1,   -- hide a title with no certification in the region
+    blocked_movie_genres TEXT NOT NULL DEFAULT '[]',  -- JSON array of TMDB movie genre ids
+    blocked_tv_genres TEXT NOT NULL DEFAULT '[]',     -- JSON array of TMDB tv genre ids
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS tmdb_tvdb_cache (
     tmdb_id INTEGER PRIMARY KEY,
     tvdb_id INTEGER,

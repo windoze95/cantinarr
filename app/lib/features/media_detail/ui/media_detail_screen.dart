@@ -258,6 +258,26 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
           );
         }
 
+        // A title the server keeps from this account is an answer, not a
+        // failure: a plain line rather than the red error.
+        if (state.titleUnavailable &&
+            state.movieDetail == null &&
+            state.tvDetail == null) {
+          return Scaffold(
+            appBar: AppBar(),
+            body: const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  "This title isn't available on this account.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppTheme.textSecondary),
+                ),
+              ),
+            ),
+          );
+        }
+
         if (state.error != null &&
             state.movieDetail == null &&
             state.tvDetail == null) {

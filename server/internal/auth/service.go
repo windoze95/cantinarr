@@ -44,6 +44,10 @@ var (
 	ErrInvalidPlexEmail      = errors.New("invalid email address")
 	ErrSharedAIAccessRevoked = errors.New("shared AI access has been revoked")
 	ErrPermissionDenied      = errors.New("permission denied")
+	// ErrChildCannotBeAdmin refuses to promote a kids account: an admin
+	// manages every title, so the account's limits come off first, on
+	// purpose, before the role changes.
+	ErrChildCannotBeAdmin = errors.New("turn off the kids account first")
 	// ErrAuthUnavailable marks a failure to *evaluate* credentials (DB error,
 	// signing error) as opposed to a rejection of them. Handlers must map it to
 	// a 5xx, never a 401: clients treat a 401 as "this session is dead" and
@@ -766,7 +770,8 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
 				WHERE ct.user_id = u.id AND ct.redeemed_at IS NULL AND ct.expires_at > ?
-			) AS has_pending_invite
+			) AS has_pending_invite,
+			EXISTS(SELECT 1 FROM user_content_policies p WHERE p.user_id = u.id) AS child
 		FROM users u
 		ORDER BY u.id
 	`, time.Now())
@@ -781,7 +786,7 @@ func (s *Service) ListUsers() ([]UserSummary, error) {
 		if err := rows.Scan(
 			&u.ID, &u.Username, &u.Role, &u.CreatedAt,
 			&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail,
-			&u.DeviceCount, &u.HasPendingInvite,
+			&u.DeviceCount, &u.HasPendingInvite, &u.Child,
 		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
@@ -844,6 +849,19 @@ func (s *Service) UpdateUserRole(userID int64, role string) (*UserSummary, error
 		}
 		if adminCount <= 1 {
 			return nil, ErrLastAdmin
+		}
+	}
+
+	// A kids account is never promoted in place: the policy store refuses a
+	// row for an admin inside its own transaction, and this check inside
+	// ours closes the other direction, so no account is ever both.
+	if role == RoleAdmin && currentRole != RoleAdmin {
+		var child bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM user_content_policies WHERE user_id = ?)", userID).Scan(&child); err != nil {
+			return nil, fmt.Errorf("check kids account: %w", err)
+		}
+		if child {
+			return nil, ErrChildCannotBeAdmin
 		}
 	}
 
@@ -978,13 +996,14 @@ func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
 			EXISTS(
 				SELECT 1 FROM connect_tokens ct
 				WHERE ct.user_id = u.id AND ct.redeemed_at IS NULL AND ct.expires_at > ?
-			) AS has_pending_invite
+			) AS has_pending_invite,
+			EXISTS(SELECT 1 FROM user_content_policies p WHERE p.user_id = u.id) AS child
 		FROM users u
 		WHERE u.id = ?
 	`, time.Now(), userID).Scan(
 		&u.ID, &u.Username, &u.Role, &u.CreatedAt,
 		&u.HasPassword, &u.PasswordEnabled, &u.PasskeyEnabled, &u.AISharedEnabled, &u.PlexEmail,
-		&u.DeviceCount, &u.HasPendingInvite,
+		&u.DeviceCount, &u.HasPendingInvite, &u.Child,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1231,28 +1250,39 @@ func userWithPermissions(user *User) User {
 	return out
 }
 
-func (s *Service) getUserByUsername(username string) (*User, error) {
-	var user User
-	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, created_at FROM users WHERE username = ?", username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt)
+// userSelect loads a user with the kids-account columns joined in: every
+// authenticated request rehydrates the user through here, so the child
+// flag rides along at no extra read and the discover, proxy, and request
+// paths can branch on it without touching the database again.
+const userSelect = `SELECT u.id, u.username, u.password_hash, u.role, u.password_enabled, u.passkey_enabled, u.plex_email, u.created_at,
+		p.user_id IS NOT NULL, p.max_movie_rating, p.max_tv_rating, p.rating_region
+	FROM users u LEFT JOIN user_content_policies p ON p.user_id = u.id`
+
+func (s *Service) scanUser(row *sql.Row) (*User, error) {
+	var (
+		user                 User
+		child                bool
+		movieCap, tvCap, reg sql.NullString
+	)
+	err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt,
+		&child, &movieCap, &tvCap, &reg)
 	if err != nil {
 		return nil, err
+	}
+	if child {
+		user.Child = true
+		user.ContentLimits = &ContentLimits{MaxMovieRating: movieCap.String, MaxTVRating: tvCap.String, RatingRegion: reg.String}
 	}
 	user.PlexInvitedAt = s.plexInvitedAt(user.ID)
 	return &user, nil
 }
 
+func (s *Service) getUserByUsername(username string) (*User, error) {
+	return s.scanUser(s.db.QueryRow(userSelect+" WHERE u.username = ?", username))
+}
+
 func (s *Service) getUserByID(id int64) (*User, error) {
-	var user User
-	err := s.db.QueryRow(
-		"SELECT id, username, password_hash, role, password_enabled, passkey_enabled, plex_email, created_at FROM users WHERE id = ?", id,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.PasswordEnabled, &user.PasskeyEnabled, &user.PlexEmail, &user.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	user.PlexInvitedAt = s.plexInvitedAt(user.ID)
-	return &user, nil
+	return s.scanUser(s.db.QueryRow(userSelect+" WHERE u.id = ?", id))
 }
 
 func generateCode(length int) (string, error) {

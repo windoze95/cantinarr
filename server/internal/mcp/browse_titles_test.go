@@ -112,7 +112,7 @@ func newBrowseToolServer(t *testing.T, fake *fakeBrowseTMDB) *ToolServer {
 
 func browse(t *testing.T, s *ToolServer, input string) *ToolResult {
 	t.Helper()
-	result, err := s.browseTitles(json.RawMessage(input))
+	result, err := s.browseTitles(context.Background(), json.RawMessage(input), nil)
 	if err != nil {
 		t.Fatalf("browse_titles(%s): %v", input, err)
 	}
@@ -320,7 +320,7 @@ func TestBrowseTitlesRejectsBadInputWithoutDialingOut(t *testing.T) {
 
 	// A tool server with no registry at all answers rather than panics.
 	bare := NewToolServer(nil, nil, nil, nil)
-	result, err := bare.browseTitles(json.RawMessage(`{}`))
+	result, err := bare.browseTitles(context.Background(), json.RawMessage(`{}`), nil)
 	if err != nil || !strings.Contains(result.Text, "not configured") {
 		t.Errorf("nil registry: result = %v, err = %v; want the not-configured text", result, err)
 	}

@@ -18,7 +18,7 @@ func TestBuildBrowseQueryMirrorsTheRoute(t *testing.T) {
 		"language":         {"fr"},
 		"vote_average.gte": {"7"},
 	}
-	params, explicit, err := BuildBrowseQuery("movie", in, 9999, true)
+	params, explicit, err := BuildBrowseQuery("movie", in, 9999, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestBuildBrowseQueryMirrorsTheRoute(t *testing.T) {
 		t.Error("explicitLanguage = true with no language named")
 	}
 
-	params, explicit, err = BuildBrowseQuery("tv", url.Values{"with_original_language": {"ko"}, "sort_by": {"vote_average.desc"}}, 0, true)
+	params, explicit, err = BuildBrowseQuery("tv", url.Values{"with_original_language": {"ko"}, "sort_by": {"vote_average.desc"}}, 0, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,13 +54,13 @@ func TestBuildBrowseQueryMirrorsTheRoute(t *testing.T) {
 		t.Errorf("params = %v, want the rating floor and page 1", params)
 	}
 
-	if _, _, err := BuildBrowseQuery("podcast", nil, 1, false); err == nil || !strings.Contains(err.Error(), "podcast") {
+	if _, _, err := BuildBrowseQuery("podcast", nil, 1, false, nil); err == nil || !strings.Contains(err.Error(), "podcast") {
 		t.Errorf("unknown media type err = %v, want it named", err)
 	}
-	if _, _, err := BuildBrowseQuery("movie", url.Values{"sort_by": {"rating.desc"}}, 1, false); err == nil {
+	if _, _, err := BuildBrowseQuery("movie", url.Values{"sort_by": {"rating.desc"}}, 1, false, nil); err == nil {
 		t.Error("invalid sort_by accepted")
 	}
-	if _, _, err := BuildBrowseQuery("movie", url.Values{"primary_release_date.gte": {"2019"}}, 1, false); err == nil {
+	if _, _, err := BuildBrowseQuery("movie", url.Values{"primary_release_date.gte": {"2019"}}, 1, false, nil); err == nil {
 		t.Error("malformed date accepted")
 	}
 }

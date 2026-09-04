@@ -193,7 +193,7 @@ func TestOpenUpgradesOldestShippedSchema(t *testing.T) {
 
 	// Spot-check tables that did not exist in the old schema: created by
 	// today's initSQL and empty.
-	for _, table := range []string{"issues", "notification_prefs", "user_default_instances", "webauthn_credentials", "user_ai_settings", "arr_queue_witness", "content_alert_claims", "user_media_server_accounts"} {
+	for _, table := range []string{"issues", "notification_prefs", "user_default_instances", "webauthn_credentials", "user_ai_settings", "arr_queue_witness", "content_alert_claims", "user_media_server_accounts", "user_content_policies"} {
 		var count int
 		if err := database.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			t.Fatalf("new table %s missing after upgrade: %v", table, err)

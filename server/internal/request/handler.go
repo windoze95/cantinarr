@@ -401,6 +401,13 @@ func requestErrorStatus(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, ErrBookAuthorNotFound), errors.Is(err, ErrBookSeriesNotFound), errors.Is(err, ErrMusicArtistNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, ErrTitleNotAvailable):
+		// The same answer the detail route gives a kids account for the same
+		// title, so the app keeps one "not available" branch. A 403 here
+		// means "library not granted", a different thing.
+		return http.StatusNotFound
+	case errors.Is(err, ErrContentPolicyUnavailable):
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}

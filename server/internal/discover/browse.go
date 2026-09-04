@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
 )
 
@@ -20,6 +21,7 @@ import (
 
 // discoverSpec is what one media type's discover route accepts.
 type discoverSpec struct {
+	mediaType string
 	path      string
 	keyPrefix string
 	// keys is the allowlist. `language` is never on it: the TMDB client welds
@@ -32,6 +34,7 @@ type discoverSpec struct {
 
 var (
 	movieDiscover = discoverSpec{
+		mediaType: contentpolicy.MediaMovie,
 		path:      "/discover/movie",
 		keyPrefix: "disc_movies:",
 		keys: []string{
@@ -47,6 +50,7 @@ var (
 		dateKeys: []string{"primary_release_date.gte", "primary_release_date.lte"},
 	}
 	tvDiscover = discoverSpec{
+		mediaType: contentpolicy.MediaTV,
 		path:      "/discover/tv",
 		keyPrefix: "disc_tv:",
 		keys: []string{
@@ -111,26 +115,27 @@ func browseSpec(mediaType string) (discoverSpec, bool) {
 // request (the assistant's browse tool): the same allowlist, sort and date
 // validation, rating floor, and English-only handling the browse routes
 // apply, keyed by media type. It reports whether the caller named a language
-// of its own, which the routes serve unfiltered.
-func BuildBrowseQuery(mediaType string, in url.Values, page int, englishOnly bool) (params url.Values, explicitLanguage bool, err error) {
+// of its own, which the routes serve unfiltered. A kids account's policy
+// (nil for everyone else) is pushed upstream so its pages arrive full.
+func BuildBrowseQuery(mediaType string, in url.Values, page int, englishOnly bool, policy *contentpolicy.Policy) (params url.Values, explicitLanguage bool, err error) {
 	spec, ok := browseSpec(mediaType)
 	if !ok {
 		return nil, false, fmt.Errorf("unknown media type %q", mediaType)
 	}
-	return buildDiscoverQuery(in, page, spec, englishOnly)
+	return buildDiscoverQuery(in, page, spec, englishOnly, policy)
 }
 
 // discoverQuery builds the upstream query from a request's allowlisted
 // parameters; see buildDiscoverQuery.
-func discoverQuery(r *http.Request, spec discoverSpec, englishOnly bool) (url.Values, bool, error) {
-	return buildDiscoverQuery(r.URL.Query(), queryPage(r), spec, englishOnly)
+func discoverQuery(r *http.Request, spec discoverSpec, englishOnly bool, policy *contentpolicy.Policy) (url.Values, bool, error) {
+	return buildDiscoverQuery(r.URL.Query(), queryPage(r), spec, englishOnly, policy)
 }
 
 // buildDiscoverQuery builds the upstream query from the allowlisted
 // parameters in `in`. It also reports whether the caller named a language of
 // its own: that query is an explicit ask, served the way a search is, never
 // thinned by the admin's English-only preference.
-func buildDiscoverQuery(in url.Values, page int, spec discoverSpec, englishOnly bool) (params url.Values, explicitLanguage bool, err error) {
+func buildDiscoverQuery(in url.Values, page int, spec discoverSpec, englishOnly bool, policy *contentpolicy.Policy) (params url.Values, explicitLanguage bool, err error) {
 	params = url.Values{}
 	for _, k := range spec.keys {
 		if v := in.Get(k); v != "" {
@@ -162,7 +167,41 @@ func buildDiscoverQuery(in url.Values, page int, spec discoverSpec, englishOnly 
 	if englishOnly && !explicitLanguage {
 		params.Set("with_original_language", "en")
 	}
+	applyPolicyToQuery(params, spec.mediaType, policy)
 	return params, explicitLanguage, nil
+}
+
+// applyPolicyToQuery pushes a kids account's limits into a discover query
+// so the page arrives full instead of thinned afterwards: adult titles out,
+// hidden genres out, and — for movies, where TMDB has a certification
+// filter — the rating cap, but only while unrated titles are hidden, since
+// TMDB drops every uncertified title the moment a certification filter is
+// set. The per-item pass still runs on the way out; this is the page
+// fullness, not the safeguard. The params are part of the cache key, so a
+// child's page never collides with an adult's.
+func applyPolicyToQuery(params url.Values, mediaType string, policy *contentpolicy.Policy) {
+	if policy == nil {
+		return
+	}
+	params.Set("include_adult", "false")
+	var blocked []int
+	switch mediaType {
+	case contentpolicy.MediaMovie:
+		blocked = policy.BlockedMovieGenres
+	case contentpolicy.MediaTV:
+		blocked = policy.BlockedTVGenres
+	}
+	if len(blocked) > 0 {
+		ids := make([]string, 0, len(blocked))
+		for _, id := range blocked {
+			ids = append(ids, strconv.Itoa(id))
+		}
+		params.Set("without_genres", strings.Join(ids, ","))
+	}
+	if mediaType == contentpolicy.MediaMovie && policy.BlockUnrated && policy.MaxMovieRating != "" && policy.RatingRegion != "" {
+		params.Set("certification_country", policy.RatingRegion)
+		params.Set("certification.lte", policy.MaxMovieRating)
+	}
 }
 
 // validSortBy accepts `<field>.asc` or `<field>.desc` over the media type's
@@ -178,17 +217,23 @@ func validSortBy(sort string, fields []string) bool {
 // discover serves a filterable discover route.
 func (h *Handler) discover(w http.ResponseWriter, r *http.Request, spec discoverSpec) {
 	_, englishOnly := h.discoveryPrefs()
-	params, explicitLanguage, err := discoverQuery(r, spec, englishOnly)
+	policy, err := h.viewerPolicy(r)
+	if err != nil {
+		writePolicyError(w, err)
+		return
+	}
+	params, explicitLanguage, err := discoverQuery(r, spec, englishOnly, policy)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 	key := spec.keyPrefix + params.Encode()
+	shape := listShape(spec.mediaType)
 	if explicitLanguage {
 		// Asking for Korean films is as explicit as searching for one: the
 		// page comes back as TMDB sent it, whatever the admin's preference.
-		h.cachedTMDB(w, key, ttlTrending, spec.path, params)
+		h.cachedTMDB(w, r, key, ttlTrending, spec.path, params, shape)
 		return
 	}
-	h.cachedTMDBFeed(w, key, ttlTrending, spec.path, params)
+	h.cachedTMDBFeed(w, r, key, ttlTrending, spec.path, params, shape)
 }

@@ -2,6 +2,8 @@ package discover
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
@@ -129,6 +132,15 @@ type env struct {
 	prefs    *stubPrefs
 	creds    *credentials.Registry
 	router   chi.Router
+	database *sql.DB
+	cache    *cache.Cache
+	handler  *Handler
+	// identity, when set, is injected into every request's context the way
+	// AuthMiddleware does, so a kids account can be exercised. claimsOnly
+	// injects the claims without the user, the shape an older middleware
+	// or another harness produces.
+	identity   *auth.User
+	claimsOnly bool
 }
 
 // setTMDBOnly configures TMDB and deliberately leaves Trakt unset, which is the
@@ -175,6 +187,18 @@ func newEnv(t *testing.T, configured bool) *env {
 	router.Get("/discover/trending", handler.Trending)
 	router.Get("/discover/movies", handler.DiscoverMovies)
 	router.Get("/discover/movies/upcoming", handler.UpcomingMovies)
+	router.Get("/discover/movies/popular", handler.PopularMovies)
+	router.Get("/genres/movie", handler.MovieGenres)
+	router.Get("/genres/tv", handler.TVGenres)
+	router.Get("/media/movie/{id}/similar", handler.SimilarMovies)
+	router.Get("/media/person/{id}", handler.PersonDetail)
+	router.Get("/media/person/{id}/credits", handler.PersonCredits)
+	router.Get("/trakt/popular", handler.TraktPopular)
+	router.Get("/trakt/anticipated", handler.TraktAnticipated)
+	router.Get("/trakt/calendar", handler.TraktCalendar)
+	router.Get("/trakt/recommendations", handler.TraktRecommendations)
+	router.Get("/trakt/lists", handler.TraktPopularLists)
+	router.Get("/trakt/lists/{user}/{slug}/items", handler.TraktListItems)
 	router.Get("/discover/tv", handler.DiscoverTV)
 	router.Get("/discover/tv/popular", handler.PopularTV)
 	router.Get("/discover/tv/on-the-air", handler.OnTheAirTV)
@@ -199,12 +223,19 @@ func newEnv(t *testing.T, configured bool) *env {
 	http.DefaultTransport = upstream
 	t.Cleanup(func() { http.DefaultTransport = previous })
 
-	return &env{upstream: upstream, prefs: prefs, creds: creds, router: router}
+	return &env{upstream: upstream, prefs: prefs, creds: creds, router: router, database: database, cache: responseCache, handler: handler}
 }
 
 func (e *env) do(t *testing.T, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if e.identity != nil {
+		ctx := context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{UserID: e.identity.ID, Username: e.identity.Username, Role: e.identity.Role})
+		if !e.claimsOnly {
+			ctx = context.WithValue(ctx, auth.UserKey, e.identity)
+		}
+		req = req.WithContext(ctx)
+	}
 	rec := httptest.NewRecorder()
 	e.router.ServeHTTP(rec, req)
 	return rec

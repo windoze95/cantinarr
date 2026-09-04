@@ -682,7 +682,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               final username = state.extra as String? ?? '';
               return AppAmbientBackground(
                 child: UserRequestSettingsScreen(
-                    userId: userId, username: username),
+                  userId: userId,
+                  username: username,
+                  targetIsAdmin: state.uri.queryParameters['admin'] == '1',
+                ),
               );
             },
           ),

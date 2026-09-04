@@ -493,6 +493,9 @@ class UserSummary {
   final String plexEmail;
   final String? plexInvitedAt;
 
+  /// A kids account (a content policy row exists for the user).
+  final bool child;
+
   const UserSummary({
     required this.id,
     required this.username,
@@ -505,6 +508,7 @@ class UserSummary {
     required this.passkeyEnabled,
     required this.hasPendingInvite,
     this.sharedAiEnabled = false,
+    this.child = false,
     this.plexEmail = '',
     this.plexInvitedAt,
   });
@@ -526,6 +530,7 @@ class UserSummary {
         passkeyEnabled: json['passkey_enabled'] as bool? ?? false,
         hasPendingInvite: json['has_pending_invite'] as bool? ?? false,
         sharedAiEnabled: json['ai_shared_enabled'] as bool? ?? false,
+        child: json['child'] as bool? ?? false,
         plexEmail: json['plex_email'] as String? ?? '',
         plexInvitedAt: json['plex_invited_at'] as String?,
       );

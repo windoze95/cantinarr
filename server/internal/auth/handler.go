@@ -275,6 +275,8 @@ func (h *Handler) HandleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
 		case errors.Is(err, ErrLastAdmin):
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "cannot demote the last admin"})
+		case errors.Is(err, ErrChildCannotBeAdmin):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "turn off the kids account first"})
 		default:
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update role"})
 		}
@@ -452,6 +454,8 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		"passkey_enabled":  user.PasskeyEnabled,
 		"plex_email":       user.PlexEmail,
 		"plex_invited_at":  user.PlexInvitedAt,
+		"child":            user.Child,
+		"content_limits":   user.ContentLimits,
 	})
 }
 

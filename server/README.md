@@ -123,7 +123,8 @@ POST   /api/auth/refresh                   # public: mint access token (refresh 
 POST   /api/auth/connect                   # public: redeem a connect-link token -> session
 POST   /api/auth/passkey/login/begin|finish   # public: WebAuthn login
 POST   /api/auth/passkey/setup/begin|finish   # public: passkey setup via short-lived link
-GET    /api/auth/me                        # user: profile + permissions
+GET    /api/auth/me                        # user: profile + permissions; child + content_limits for a kids account
+                                           #   (the same two fields ride the login/refresh/connect user object)
 POST   /api/auth/password                  # user: set password (admin-enabled users only)
 POST   /api/auth/plex-email                # user: share the email for a Plex invite (sends the invites their grants owe, auto-approves where enabled, notifies admins)
 POST   /api/auth/passkey/register/begin|finish  # user: add passkey (admin-enabled only)
@@ -142,10 +143,21 @@ PUT    /api/admin/external-address         # set it ({ external_url }, http(s) o
 GET    /api/admin/devices                  # all connected devices
 DELETE /api/admin/devices/{deviceID}       # revoke a device (kills its sessions + MCP tokens)
 GET    /api/admin/users
-PATCH  /api/admin/users/{userID}                 # change role
+PATCH  /api/admin/users/{userID}                 # change role (409 for a kids account: turn it off first)
 PATCH  /api/admin/users/{userID}/auth-methods    # enable/disable password & passkey per user
 PUT    /api/admin/users/{userID}/ai-access       # grant/revoke use of the admin-funded AI profile
 DELETE /api/admin/users/{userID}
+GET|PUT|DELETE /api/admin/users/{userID}/content-policy  # kids account: GET 404 when the user is not one;
+                                                 # PUT { max_movie_rating, max_tv_rating, rating_region,
+                                                 #   block_unrated, blocked_movie_genres, blocked_tv_genres }
+                                                 # creates/replaces it (400 a rating the region does not
+                                                 # know, 409 an admin, 503 lists unreachable for a non-US
+                                                 # region); DELETE turns it off (idempotent). Every title
+                                                 # surface then filters that user server-side (see Discover)
+GET    /api/admin/certifications                 # every region's movie and TV rating schemes (TMDB's lists,
+                                                 # last good copy, or the built-in US scheme; `source` says
+                                                 # which), `default: true` on the suggested starting caps.
+                                                 # Also the app's probe for kids-account support
 POST   /api/admin/users/{userID}/test-push       # delivery diagnostics for one user
 GET|PUT /api/admin/users/{userID}/default-instances  # pin per-user default arr instances;
                                                      # for Chaptarr this doubles as the access grant
@@ -243,8 +255,11 @@ The consent surface for quality-profile changes proposed over external MCP. The 
 POST   /api/requests                       # user: create (movie/tv by tmdb_id; books by foreign_id +
                                            #   book_format; music by foreign_id — the MusicBrainz
                                            #   release-group id; optional instance_id for every media
-                                           #   type — see the library-selection notes)
-GET    /api/requests                       # user: own request history
+                                           #   type — see the library-selection notes). A kids account
+                                           #   asking for a movie/show outside its limits gets 404
+                                           #   "not available" (503 when the limit could not be checked)
+GET    /api/requests                       # user: own request history (a kids account's hidden
+                                           #   movie/show rows are left out)
 GET    /api/requests/options               # user: what this user may choose (seasons, quality);
                                            #   optional instance_id scopes quality profiles to that library
 GET    /api/requests/book-status           # user: per-format live state by foreign_id; optional instance_id
@@ -370,6 +385,8 @@ GET /api/trakt/images/{host}/*                       # Trakt artwork relay for t
 ```
 TMDB and Trakt are proxied server-side -- client devices never hold those keys. `/featured` serves whichever feed the admin selected (see [Discovery settings](#discovery-settings-admin)), normalized to the TMDB page shape plus a `source` field so one client parser handles every source and the row can name what it is showing. It takes `page` too: page 1 is the row itself (refilled to twenty when the language filter thins it), and each later page is the next upstream page of the same feed, filtered but never refilled, so a grid can continue the row without a second route. The envelope's `total_pages` says how far the feed goes; for Trakt, whose page count this server does not read, another page is reported for as long as the one served had entries. The discovery and recommendation feeds also honor the admin's `english_only` preference; search and detail lookups never do.
 
+**Kids accounts.** Every body these routes write passes the caller's content policy (`internal/contentpolicy`) *after* the shared-cache read: the cache stays server-wide and unfiltered (the English-only preference is one setting for everyone and is baked in before caching; a child's limits are theirs alone). For a kids account the list feeds, search (including people flagged adult and their `known_for`), the headline feed from either source, Similar and Recommended, and every Trakt passthrough drop the titles above the caps, in a hidden genre, flagged adult, or -- while unrated titles are hidden -- carrying no certification in the policy's region; `total_pages` still describes the upstream feed, so pages arrive thinner and the client keeps walking them. The genre lists drop hidden genres. A movie or show detail outside the limits is `404 {"error":"not available"}` (the detail body carries the ratings -- `release_dates`, and `content_ratings` now appended to TV -- and primes the rating cache); an adult-film performer's person page is 404 and their credits are filtered. The browse routes push the limits upstream (`include_adult=false`, `without_genres`, and for movies with unrated titles hidden `certification_country` + `certification.lte`) under their own cache key, so a child's pages arrive full. Ratings come from `/movie/{id}/release_dates` (theatrical first) and `/tv/{id}/content_ratings`, cached a day per title, through one server-wide bound of eight concurrent lookups with a single retry on 429. Failures are never thinner rows: a body the filter cannot read or a rating lookup that fails is `502 {"error":"content limits could not be applied"}`, and a policy that cannot be read or ranked is 503. Admins and unrestricted users see the verbatim body.
+
 `/discover/movies` and `/discover/tv` are the browse feeds. Each forwards an allowlist of TMDB discover parameters and drops everything else: `page`, `sort_by`, `with_genres`, `vote_average.gte`, `vote_count.gte`, `with_original_language`, `with_watch_providers` + `watch_region`, `with_keywords` (comma-joined ids that must all match), `with_companies` (pipe-joined ids of which any may match), and the media type's own date keys (`primary_release_year`, `primary_release_date.gte`, `primary_release_date.lte` for movies; `first_air_date_year`, `first_air_date.gte`, `first_air_date.lte` for TV). `language` is never forwarded: the TMDB client fixes it to `en-US`. Values TMDB would refuse are answered `400` here instead of surfacing as a `502` that reads like an outage: `sort_by` must be one of that type's fields (`original_title`, `popularity`, `primary_release_date`, `revenue`, `title`, `vote_average`, `vote_count` for movies; `first_air_date`, `name`, `original_name`, `popularity`, `vote_average`, `vote_count` for TV) followed by `.asc` or `.desc`, and dates must be `YYYY-MM-DD`. A rating sort with no `vote_count.gte` of its own gets a floor of 200 votes, because ordered by rating alone TMDB's catalogue is a wall of one-vote 10.0s. On every list route `page` is clamped to TMDB's 1..500, and the body reports the page actually served.
 
 With `english_only` on, discover queries (the browse feeds and both Coming Soon rows) carry `with_original_language=en` upstream, so every page arrives full with an exact page count. A browse query that names a language of its own (`with_original_language=ko`) is an explicit ask, like a search term: it is forwarded as given and that page is never English-filtered. The list feeds (popular, top rated, now playing, on the air, trending, recommendations, similar) have no such parameter and are filtered after the fact, so their pages can arrive thinner while `total_pages` still describes the upstream feed; a client keeps paging and drops what it has already shown.
@@ -432,6 +449,9 @@ PUT    /api/admin/ai-tools/debug    # toggle tool debug mode
 Tool debug mode records names, timing, status, and payload sizes only; tool inputs, outputs, and error bodies are never written to logs. Every MCP tool result also crosses a shared credential scrubber before it can reach chat, `/mcp`, or the remediation agent, including nested JSON, authorization/cookie headers, URL userinfo, and secret-bearing query parameters.
 
 ### Instances & arr proxy
+
+A kids account's Radarr and Sonarr reads through the proxy are cut to the records the account may see, judged from the record's own `certification` and `genres` (the policy region's scheme first, then the US scheme; a string neither knows is unrated): library and calendar arrays, `wanted`, and the `records` of `queue` and `history` by their embedded movie or series -- `includeMovie=true` / `includeSeries=true` is forced onto those requests so every row carries a parent to judge, and a row without one is dropped. A single blocked `movie/{id}`, `series/{id}`, or `episode/{id}` is `404 {"error":"not found"}`; a gated body the proxy cannot judge (not JSON, an unexpected shape) is the same opaque 502 as any unsanitizable response. Chaptarr and Lidarr carry no ratings and are not gated: those modules are granted per user.
+
 ```
 GET|POST /api/instances                      # admin: list/create
 GET    /api/instances/media-roots             # admin: deployment-approved Cantinarr roots for the mapping editor
@@ -673,8 +693,8 @@ Notification categories (per-user preferences; admin-scoped ones are enforced in
 |---|---|---|---|
 | `request_decision` | off | requester | their request is approved/denied |
 | `request_pending` | on | admins | a new request needs review (badge = queue depth) |
-| `new_movie` | on | the importing library's visible users (pinned or granted there, or unpinned users when it is the default library; an admin with no radarr rows hears every library) | a movie finishes importing (collapse-keyed per title) |
-| `new_episode` | on | same library-visibility rule as `new_movie`, over sonarr rows | new episode(s) import for a series |
+| `new_movie` | on | the importing library's visible users (pinned or granted there, or unpinned users when it is the default library; an admin with no radarr rows hears every library), minus the kids accounts the title is hidden from (a title that cannot be identified or rated reaches no child) | a movie finishes importing (collapse-keyed per title) |
+| `new_episode` | on | same library-visibility rule as `new_movie`, over sonarr rows, minus the kids accounts the series is hidden from | new episode(s) import for a series |
 | `new_book` | on | that instance's assigned users (pinned or access-granted) — an assignment scopes admins too; an admin with no books assignment hears every instance | a Chaptarr book import lands (witnessed by queue polling; per format, since a title's ebook and audiobook are separate records) |
 | `new_music` | on | that instance's assigned users — exactly the `new_book` rule over lidarr rows | a Lidarr album import lands (webhook or queue-departure witness; one record per album, no format axis, and the body names the artist) |
 | `issue_created` | on | admins | a tracked problem becomes actionable after the quiet recovery window, or durable status proof remains unavailable — held behind a 3-minute confirmation and coalesced per source (see below) |
@@ -730,6 +750,8 @@ Authenticated MCP request observability records only bounded protocol metadata: 
 ```
 
 ### MCP tools
+
+Every discover tool filters its titles through the caller's kids-account policy (resolved once per call in `ExecuteTool`): searches, trending, recommendations, browse (limits pushed upstream too), collections (parts cut, an emptied collection dropped), and `display_media` drop what the account may not see and tell the model how many titles the limits removed; `get_movie_details` / `get_tv_details` answer "That title is not available for this account." rather than describe it. A policy that cannot be read fails the call. Admins and the server-owned remediation runner are never filtered.
 
 The registry contains 41 in-app AI tools; 40 are also exposed through `/mcp`. `apply_profile_change` alone is hidden from external MCP: its one-use handoff depends on authenticated in-app chat-turn provenance, and no external path may complete a profile write itself. `preview_profile_change` **is** exposed externally, where it parks an admin-approval proposal instead of arming the same-turn apply (see the profile-change proposals section below). The remediation agent receives a constrained read-only subset plus issue-scoped human gates. Every shared tool can be disabled from Settings > AI Tools. Interactive execution reauthorizes the current device and role immediately before each tool and rechecks the included-AI grant when shared billing is in use. Tools marked **admin** require the admin role (either flagged directly or gated by a permission the user role doesn't hold). Every arr-facing tool (`get_queue` through `rescan_media`, plus the settings tools) accepts an optional `instance_id` from `list_arr_instances` to target any configured library instead of the default; library-read answers name the library they read, an unknown id is refused rather than quietly served by the default, and the remediation runner's issue scope always overrides the model's choice:
 
@@ -793,7 +815,7 @@ The pool holds **exactly one connection** (SQLite is single-writer), so every qu
 
 | Area | Tables |
 |---|---|
-| Accounts & sessions | `users`, `refresh_tokens`, `connect_tokens`, `devices` (hardware-id deduped), `webauthn_credentials` |
+| Accounts & sessions | `users`, `refresh_tokens`, `connect_tokens`, `devices` (hardware-id deduped), `webauthn_credentials`, `user_content_policies` (a row makes the user a kids account: rating caps per media type in a region's scheme, hide-unrated, hidden genre ids; cascades with the user; never for an admin) |
 | Requests | `request_log` (approval + season/quality/book-format/instance capture, the fulfilled arr record id in `book_record_id` — Chaptarr book or Lidarr album — so status survives foreign-id re-keys, `park_reason` marking server-owned author-import parks, and `add_failure_reason` marking an approval-queue row whose automatic add already failed), `book_request_waiters` (shared pending book subscribers + their concrete format coverage; music rows are per-user and need none), `user_request_settings` |
 | Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials + per-instance media path mappings/legacy mode + the Jellyfin/Emby `media_server_config` document), `user_default_instances`, `user_instance_grants` (additional per-user access grants beside the default, so one person can hold e.g. an HD and a 4K library; for Jellyfin, Emby, and Plex the grant is access eligibility), `user_media_server_accounts` (one row per user × media-server instance: remote id and name -- on Plex the canonical email of the share -- whether Cantinarr created it, `disabled_at`), `arr_queue_witness` (durable per-instance queue-departure completion witness; its `observed_at` doubles as the import-history catch-up cursor; one row per instance, ignored past 6h) |
 | Push | `push_tokens` (one per device), `notification_prefs`, `content_alert_claims` (durable new-content dedupe, 10-minute window; also counted as the 12-per-window alert storm breaker, per `storm_scope` — broadcast and upgrade alerts spend separate budgets, silent upgrade claims spend none) |
@@ -819,6 +841,7 @@ server/
 │   ├── lidarr/               # Lidarr (v1) client for the music module
 │   ├── codexapp/             # Scoped personal/shared Codex auth, chat, usage + lifecycle
 │   ├── config/               # Env config (port, name, passkey/push/Codex settings)
+│   ├── contentpolicy/        # Kids accounts: per-user content policy, TMDB rating lookups, the decision every title surface applies
 │   ├── credentials/          # External credential registry + lazy client caching
 │   ├── db/db.go              # SQLite setup, WAL, THE live schema + in-code migrations
 │   ├── db/stallwatch.go      # watches the single connection; logs a wedged pool + its holder

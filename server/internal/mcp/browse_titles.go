@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
@@ -330,7 +332,7 @@ func (r *browseResolution) fail(format string, args ...any) {
 	r.unresolved = append(r.unresolved, fmt.Sprintf(format, args...))
 }
 
-func (s *ToolServer) browseTitles(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) browseTitles(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	if s.creds == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
 	}
@@ -542,7 +544,7 @@ func (s *ToolServer) browseTitles(input json.RawMessage) (*ToolResult, error) {
 
 	page := discover.ClampPage(in.Page)
 	englishOnly := discover.EnglishOnly(s.discoveryPrefs)
-	query, explicitLanguage, err := discover.BuildBrowseQuery(mediaType, params, page, englishOnly)
+	query, explicitLanguage, err := discover.BuildBrowseQuery(mediaType, params, page, englishOnly, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -563,6 +565,14 @@ func (s *ToolServer) browseTitles(input json.RawMessage) (*ToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	kept, hidden, err := s.filterResults(ctx, policy, result.Results, mediaType)
+	if err != nil {
+		return nil, err
+	}
+	result.Results = kept
+	if policy != nil {
+		res.apply("this account's content limits")
+	}
 
 	applied := strings.Join(res.applied, "; ")
 	var sb strings.Builder
@@ -574,6 +584,7 @@ func (s *ToolServer) browseTitles(input json.RawMessage) (*ToolResult, error) {
 	}
 	if len(result.Results) == 0 {
 		sb.WriteString(noBrowseResultsText(mediaLabel, applied, englishApplied, page, result.TotalPages))
+		sb.WriteString(hiddenNote(hidden))
 		return &ToolResult{Text: sb.String()}, nil
 	}
 	shown := len(result.Results)
@@ -590,6 +601,7 @@ func (s *ToolServer) browseTitles(input json.RawMessage) (*ToolResult, error) {
 	}
 	sb.WriteString(".\n")
 	sb.WriteString(formatSearchResults(result.Results, browsePageSize))
+	sb.WriteString(hiddenNote(hidden))
 	return &ToolResult{
 		Text:           sb.String(),
 		StructuredData: toMediaResultItems(result.Results, browsePageSize),

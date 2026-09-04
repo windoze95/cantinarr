@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -61,6 +62,9 @@ type MovieDetails struct {
 	PosterPath  string  `json:"poster_path,omitempty"`
 	Overview    string  `json:"overview,omitempty"`
 	VoteAverage float64 `json:"vote_average,omitempty"`
+	// Adult and Genres feed a kids account's content policy.
+	Adult  bool    `json:"adult,omitempty"`
+	Genres []Genre `json:"genres,omitempty"`
 }
 
 type TVDetails struct {
@@ -70,6 +74,22 @@ type TVDetails struct {
 	PosterPath  string  `json:"poster_path,omitempty"`
 	Overview    string  `json:"overview,omitempty"`
 	VoteAverage float64 `json:"vote_average,omitempty"`
+	Adult       bool    `json:"adult,omitempty"`
+	Genres      []Genre `json:"genres,omitempty"`
+}
+
+// GenreIDs lists the detail's genre ids.
+func (m *MovieDetails) GenreIDs() []int { return genreIDs(m.Genres) }
+
+// GenreIDs lists the detail's genre ids.
+func (t *TVDetails) GenreIDs() []int { return genreIDs(t.Genres) }
+
+func genreIDs(genres []Genre) []int {
+	ids := make([]int, 0, len(genres))
+	for _, g := range genres {
+		ids = append(ids, g.ID)
+	}
+	return ids
 }
 
 // DoGetRaw fetches a TMDB API path and returns the raw JSON bytes.
@@ -85,10 +105,36 @@ func (c *Client) DoGetRaw(path string, params url.Values) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("TMDB API returned status %d", resp.StatusCode)
+		return nil, newStatusError(resp)
 	}
 	return io.ReadAll(resp.Body)
 }
+
+// StatusError is a non-200 answer from TMDB. Callers that must tell a
+// missing title (404) or rate limiting (429) from an outage inspect it; its
+// text is unchanged from the plain error it replaced.
+type StatusError struct {
+	StatusCode int
+	RetryAfter time.Duration
+}
+
+func newStatusError(resp *http.Response) *StatusError {
+	e := &StatusError{StatusCode: resp.StatusCode}
+	if secs, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && secs > 0 {
+		e.RetryAfter = time.Duration(secs) * time.Second
+	}
+	return e
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("TMDB API returned status %d", e.StatusCode)
+}
+
+// HTTPStatus is the upstream status code.
+func (e *StatusError) HTTPStatus() int { return e.StatusCode }
+
+// RetryAfterDuration is the upstream Retry-After, zero when absent.
+func (e *StatusError) RetryAfterDuration() time.Duration { return e.RetryAfter }
 
 func (c *Client) GetTVExternalIDs(tmdbID int) (*ExternalIDs, error) {
 	u := fmt.Sprintf("%s/tv/%d/external_ids", c.baseURL, tmdbID)
@@ -158,6 +204,10 @@ type SearchResult struct {
 	FirstAirDate string  `json:"first_air_date,omitempty"`
 	VoteAverage  float64 `json:"vote_average"`
 	MediaType    string  `json:"media_type,omitempty"`
+	// Adult and GenreIDs let a kids account's content policy hide a title
+	// without a rating lookup.
+	Adult    bool  `json:"adult,omitempty"`
+	GenreIDs []int `json:"genre_ids,omitempty"`
 }
 
 type searchResponse struct {
