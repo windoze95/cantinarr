@@ -21,7 +21,7 @@ The management side goes as deep as you want:
 
 • Approve or deny requests from the queue or straight from the push notification, with per-user policies for seasons and quality
 • Drill into Radarr and Sonarr: series → season → episode, batch searches, Edit Series, interactive release search
-• One download queue across SABnzbd, qBittorrent, NZBGet, Transmission, and Deluge
+• One download queue across SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, and ruTorrent
 • Import Doctor: stuck downloads explain themselves in plain English, with one-click fixes
 • See what's playing through Tautulli or Tracearr — active streams, history, top stats
 • Plex invites, Jellyfin and Emby accounts, a guided setup checklist, per-user defaults, and device management

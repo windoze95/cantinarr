@@ -311,6 +311,7 @@ func TestRequireArrProxyAccess_ServiceBoundary(t *testing.T) {
 		{"nzbget rejects arr-shaped path", "nzbget", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"transmission rejects arr-shaped path", "transmission", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"deluge rejects arr-shaped path", "deluge", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
+		{"rutorrent rejects arr-shaped path", "rutorrent", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"tautulli rejects arr-shaped path", "tautulli", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"tracearr rejects arr-shaped path", "tracearr", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"jellyfin rejects arr-shaped path", "jellyfin", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},

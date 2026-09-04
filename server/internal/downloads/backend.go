@@ -35,7 +35,7 @@ func (e *badItemIDError) Error() string { return e.msg }
 
 // downloadClientTypes is the one list of service types the downloads API
 // serves. The websocket poller and the setup checklist read it too.
-var downloadClientTypes = []string{"sabnzbd", "qbittorrent", "nzbget", "transmission", "deluge"}
+var downloadClientTypes = []string{"sabnzbd", "qbittorrent", "nzbget", "transmission", "deluge", "rutorrent"}
 
 // DownloadClientTypes returns the download-client service types in menu
 // order: usenet clients first, then torrent clients.
@@ -90,6 +90,12 @@ func backendFor(reg *instance.Registry, inst instance.Instance) (backend, error)
 			return nil, err
 		}
 		return delugeBackend{client}, nil
+	case "rutorrent":
+		client, err := reg.GetRutorrentClient(inst.ID)
+		if err != nil {
+			return nil, err
+		}
+		return rutorrentBackend{client}, nil
 	}
 	return nil, fmt.Errorf("instance %s is not a download client", inst.ID)
 }

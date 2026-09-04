@@ -210,6 +210,7 @@ func TestLookupServiceTypeUsesServiceMetadata(t *testing.T) {
 		"nzbget",
 		"transmission",
 		"deluge",
+		"rutorrent",
 		"tautulli",
 		"tracearr",
 		"jellyfin",

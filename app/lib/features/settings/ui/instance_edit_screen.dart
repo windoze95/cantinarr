@@ -155,6 +155,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     ('nzbget', 'NZBGet'),
     ('transmission', 'Transmission'),
     ('deluge', 'Deluge'),
+    ('rutorrent', 'ruTorrent'),
     ('tautulli', 'Tautulli'),
     ('tracearr', 'Tracearr'),
     ('jellyfin', 'Jellyfin'),
@@ -169,6 +170,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'nzbget' ||
       _serviceType == 'transmission' ||
       _serviceType == 'deluge' ||
+      _serviceType == 'rutorrent' ||
       (_serviceType == 'qbittorrent' && _qbitAuth == _QbitAuth.password);
 
   /// Editing a qBittorrent instance onto its other credential shape: the
@@ -179,8 +181,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'qbittorrent' &&
       _qbitAuth != _storedQbitAuth;
 
-  /// Transmission auth is optional (only when the daemon requires it).
-  bool get _credentialsOptional => _serviceType == 'transmission';
+  /// Transmission and ruTorrent auth is optional: Transmission only when
+  /// the daemon requires it, ruTorrent only when its web server sits
+  /// behind HTTP Basic authentication.
+  bool get _credentialsOptional =>
+      _serviceType == 'transmission' || _serviceType == 'rutorrent';
 
   /// Deluge's web UI has a password and no username, so the form shows one
   /// field.
@@ -191,7 +196,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'qbittorrent' ||
       _serviceType == 'nzbget' ||
       _serviceType == 'transmission' ||
-      _serviceType == 'deluge';
+      _serviceType == 'deluge' ||
+      _serviceType == 'rutorrent';
 
   bool get _supportsWebhook =>
       _serviceType == 'radarr' ||
@@ -1420,6 +1426,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://transmission:9091';
       case 'deluge':
         return 'http://deluge:8112';
+      case 'rutorrent':
+        return 'http://rutorrent:8080';
       case 'tautulli':
         return 'http://tautulli:8181';
       case 'tracearr':
@@ -2473,12 +2481,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // shape (API key vs username/password), so the prompted form shows
           // nothing here until one is picked.
           //
-          // NZBGet and Transmission authenticate with username/password;
-          // Deluge with only its web UI password; qBittorrent with either
-          // username/password or, on 5.2 and newer, an API key, chosen by
-          // the toggle; Plex links a plex.tv account with a PIN; everything
-          // else uses an API key. Credentials are write-only: when editing,
-          // blank keeps the existing value.
+          // NZBGet authenticates with username/password, and so do
+          // Transmission and ruTorrent, optionally, since either may run
+          // with authentication off; Deluge with only its web UI password;
+          // qBittorrent with either username/password or, on 5.2 and newer,
+          // an API key, chosen by the toggle; Plex links a plex.tv account
+          // with a PIN; everything else uses an API key. Credentials are
+          // write-only: when editing, blank keeps the existing value.
           if (_serviceType == 'qbittorrent') ...[
             _buildQbitAuthToggle(),
             const SizedBox(height: 16),

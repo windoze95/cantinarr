@@ -575,6 +575,7 @@ func TestValidateConnectionDoesNotFollowServiceRedirects(t *testing.T) {
 		"nzbget",
 		"transmission",
 		"deluge",
+		"rutorrent",
 		"tautulli",
 		"tracearr",
 		"jellyfin",
@@ -865,5 +866,74 @@ func TestDelugeCredentialShape(t *testing.T) {
 	}
 	if rec := do(http.MethodPost, "/instances/test", `{"service_type":"deluge","name":"Torrents","url":"`+deluge.URL+`"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "password is required") {
 		t.Fatalf("test without password = %d %s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRutorrentCredentialShape pins ruTorrent's optional Basic-auth
+// credentials: nothing is required, and the connection test reaches
+// rTorrent through ruTorrent's httprpc plugin.
+func TestRutorrentCredentialShape(t *testing.T) {
+	var paths []string
+	var mu sync.Mutex
+	rt := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		if u, p, ok := r.BasicAuth(); ok && (u != "rt-user" || p != "rt-secret") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path != "/plugins/httprpc/action.php" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/xml")
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><methodResponse><params><param><value><string>0.16.21</string></value></param></params></methodResponse>`))
+	}))
+	t.Cleanup(rt.Close)
+
+	for _, tc := range []struct {
+		name string
+		inst Instance
+	}{
+		{"no credentials", Instance{}},
+		{"credentials", Instance{Username: "rt-user", Password: "rt-secret"}},
+	} {
+		inst := tc.inst
+		inst.ServiceType, inst.Name, inst.URL = "rutorrent", "Torrents", rt.URL
+		if err := validateRequiredFields(&inst); err != nil {
+			t.Fatalf("validateRequiredFields(%s) = %v, want nil", tc.name, err)
+		}
+	}
+
+	store := newTestStore(t)
+	h := NewHandler(store, NewRegistry(store))
+	router := chi.NewRouter()
+	router.Post("/instances", h.Create)
+	router.Post("/instances/test", h.TestConnection)
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rec
+	}
+
+	rec := do(http.MethodPost, "/instances", `{"service_type":"rutorrent","name":"Torrents","url":"`+rt.URL+`/"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create without credentials = %d %s", rec.Code, rec.Body.String())
+	}
+	mu.Lock()
+	got := strings.Join(paths, ",")
+	mu.Unlock()
+	if got != "/plugins/httprpc/action.php" {
+		t.Fatalf("connection test hit %s, want the httprpc plugin once", got)
+	}
+
+	rec = do(http.MethodPost, "/instances/test", `{"service_type":"rutorrent","name":"Torrents","url":"`+rt.URL+`","username":"rt-user","password":"wrong-secret"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "refused the credentials") || strings.Contains(rec.Body.String(), "wrong-secret") {
+		t.Fatalf("test with wrong credentials = %d %s, want 400 naming the refusal without the password", rec.Code, rec.Body.String())
+	}
+	if rec := do(http.MethodPost, "/instances/test", `{"service_type":"rutorrent","name":"Torrents","url":"`+rt.URL+`","username":"rt-user","password":"rt-secret"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("test with credentials = %d %s", rec.Code, rec.Body.String())
 	}
 }
