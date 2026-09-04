@@ -4,6 +4,13 @@
 // handleRadarrProxy runs. Every response is application/json; JSON exactness
 // rules (integer counters, fractional ratings.value, non-null arrays) are
 // the whole game — see contract.md §1 and app-arr.md §4.
+//
+// Kids accounts: the real server's proxy gate (proxy/contentgate.go) cuts a
+// child's Radarr reads to the records their content policy allows — array
+// elements and paged records are dropped, a single blocked record answers
+// the arr's own 404. The GET handlers here take the gated user (nil for
+// admins and unrestricted users) and apply the same rule through
+// policyAllowsMovieRecord, resolving each record's title via findMovie.
 package main
 
 import (
@@ -24,38 +31,55 @@ func handleRadarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInstanc
 	}
 	path := strings.Trim(strings.TrimPrefix(rest, "api/v3/"), "/")
 
+	// The content gate. Admins are never kids accounts and unrestricted
+	// users pass every check, so the handlers only ever consult the policy
+	// for a non-admin — the policy hooks answer "allowed" for everyone else.
+	var gate *DemoUser
+	if !isAdmin {
+		gate = userFrom(r)
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		switch {
 		case path == "movie":
-			arrRServeMovies(w, inst)
+			arrRServeMovies(w, inst, gate)
 		case strings.HasPrefix(path, "movie/"):
-			arrRServeMovieByID(w, inst, strings.TrimPrefix(path, "movie/"))
+			arrRServeMovieByID(w, inst, gate, strings.TrimPrefix(path, "movie/"))
 		case path == "queue":
-			arrRServeQueue(w, r)
+			arrRServeQueue(w, r, gate)
 		case path == "queue/details":
-			arrRServeQueueDetails(w, r)
+			arrRServeQueueDetails(w, r, gate)
 		case path == "history":
-			arrRServeHistory(w, r)
+			arrRServeHistory(w, r, gate)
 		case path == "history/movie":
-			arrRServeMovieHistory(w, r)
+			arrRServeMovieHistory(w, r, gate)
 		case path == "wanted/missing":
-			arrRServeWanted(w, r, false)
+			arrRServeWanted(w, r, gate, false)
 		case path == "wanted/cutoff":
-			arrRServeWanted(w, r, true)
+			arrRServeWanted(w, r, gate, true)
 		case path == "calendar":
-			arrRServeCalendar(w, r)
+			arrRServeCalendar(w, r, gate)
 		case path == "release":
 			arrRServeReleases(w, r)
 		case path == "manualimport":
 			arrRServeManualImport(w, r)
 		case path == "qualityprofile":
 			writeJSON(w, http.StatusOK, arrQualityProfilesJSON())
+		case path == "tag":
+			writeJSON(w, http.StatusOK, arrRadarrTagsJSON())
 		case path == "rootfolder":
 			writeJSON(w, http.StatusOK, []map[string]any{{
 				"id": 1, "path": "/movies", "accessible": true,
 				"freeSpace": int64(3_500_000_000_000), "unmappedFolders": []map[string]any{},
 			}})
+		default:
+			writeErr(w, http.StatusNotFound, "not found")
+		}
+	case http.MethodPut:
+		switch {
+		case strings.HasPrefix(path, "movie/"):
+			arrRUpdateMovie(w, r, inst, strings.TrimPrefix(path, "movie/"))
 		default:
 			writeErr(w, http.StatusNotFound, "not found")
 		}
@@ -122,9 +146,35 @@ func arrCalendarDate(iso string) string {
 	return iso[:10]
 }
 
+// ─── Content gate ───────────────────────────────────────
+
+// arrRVisible reports whether a library record may be shown to gate (nil =
+// no gate, everything is visible). The real proxy gate judges the record's
+// own certification and genres; the demo resolves the same title through the
+// catalog and asks the policy. A record the catalog cannot resolve has
+// nothing to judge: it is hidden from a kids account (fail closed) and shown
+// to everyone else. A missing record (a queue or history row whose movie is
+// gone) cannot be judged either and is dropped, like the real gate drops
+// parentless rows.
+func arrRVisible(gate *DemoUser, m *arrRadarrMovie) bool {
+	if gate == nil {
+		return true
+	}
+	if m == nil {
+		return false
+	}
+	mv, ok := findMovie(m.TmdbID)
+	if !ok {
+		return !cpIsChild(gate.ID)
+	}
+	return policyAllowsMovieRecord(gate, mv)
+}
+
 // ─── Document renderers ─────────────────────────────────
 
-// arrRMovieJSON builds one full Radarr movie document. Call under arrMu.
+// arrRMovieJSON builds one full, round-trippable Radarr movie document
+// (the app GETs it, merges its edits, and PUTs the whole thing back). Call
+// under arrMu.
 func arrRMovieJSON(m *arrRadarrMovie) map[string]any {
 	mv, ok := findMovie(m.TmdbID)
 	if !ok {
@@ -133,6 +183,18 @@ func arrRMovieJSON(m *arrRadarrMovie) map[string]any {
 	genres := make([]string, 0, len(mv.Genres))
 	for _, g := range mv.Genres {
 		genres = append(genres, g.Name)
+	}
+	path := m.Path
+	if path == "" {
+		path = arrMoviePath(mv)
+	}
+	availability := m.MinimumAvailability
+	if availability == "" {
+		availability = "released"
+	}
+	profileID := m.QualityProfileID
+	if profileID == 0 {
+		profileID = arrDefaultQualityProfileID
 	}
 	doc := map[string]any{
 		"id":                  m.ID,
@@ -147,16 +209,17 @@ func arrRMovieJSON(m *arrRadarrMovie) map[string]any {
 		"monitored":           m.Monitored,
 		"hasFile":             m.HasFile,
 		"isAvailable":         m.IsAvailable,
-		"path":                arrMoviePath(mv),
-		"folderName":          arrMoviePath(mv),
+		"path":                path,
+		"folderName":          path,
 		"runtime":             mv.Runtime,
-		"minimumAvailability": "released",
-		"qualityProfileId":    6,
+		"minimumAvailability": availability,
+		"qualityProfileId":    profileID,
 		"sizeOnDisk":          m.FileSize,
 		"status":              "released",
 		"added":               arrISO(m.Added),
 		"studio":              "",
 		"genres":              genres,
+		"tags":                append([]int{}, m.Tags...),
 		"images":              arrImages(mv.PosterPath, mv.BackdropPath),
 		"ratings": map[string]any{
 			"votes": mv.VoteCount,
@@ -183,11 +246,15 @@ func arrRMovieJSON(m *arrRadarrMovie) map[string]any {
 // app-side, path feeds the media-files coverage check).
 func arrRMovieFileJSON(m *arrRadarrMovie, mv *DemoMovie) map[string]any {
 	name := arrMovieFileName(mv, m.QualityName)
+	path := m.Path
+	if path == "" {
+		path = arrMoviePath(mv)
+	}
 	return map[string]any{
 		"id":                  9000 + m.ID,
 		"movieId":             m.ID,
 		"relativePath":        name,
-		"path":                arrMoviePath(mv) + "/" + name,
+		"path":                path + "/" + name,
 		"size":                m.FileSize,
 		"dateAdded":           arrISO(m.FileDate),
 		"quality":             arrQualityBlob(m.QualityName),
@@ -224,11 +291,11 @@ func arrRHistoryJSON(rec *arrHistoryRec) map[string]any {
 
 // ─── GET handlers ───────────────────────────────────────
 
-func arrRServeMovies(w http.ResponseWriter, inst *DemoInstance) {
+func arrRServeMovies(w http.ResponseWriter, inst *DemoInstance, gate *DemoUser) {
 	arrMu.Lock()
 	docs := make([]map[string]any, 0, len(arrRMovies))
 	for _, m := range arrRMovies {
-		if !arrInSiblingLibrary(inst, m.TmdbID) {
+		if !arrInSiblingLibrary(inst, m.TmdbID) || !arrRVisible(gate, m) {
 			continue
 		}
 		docs = append(docs, arrRMovieJSON(m))
@@ -253,21 +320,32 @@ func arrInSiblingLibrary(inst *DemoInstance, id int) bool {
 	return true
 }
 
-func arrRServeMovieByID(w http.ResponseWriter, inst *DemoInstance, idStr string) {
+// arrRMovieInLibraryLocked resolves a movie id within THIS library: nil when
+// the id is unknown or the title is not part of the sibling's subset. Call
+// under arrMu.
+func arrRMovieInLibraryLocked(inst *DemoInstance, id int) *arrRadarrMovie {
+	m := arrRMovieByIDLocked(id)
+	// A library that does not list a title must not serve it by id either,
+	// or the drill-down contradicts the list it was opened from.
+	if m != nil && !arrInSiblingLibrary(inst, m.TmdbID) {
+		return nil
+	}
+	return m
+}
+
+func arrRServeMovieByID(w http.ResponseWriter, inst *DemoInstance, gate *DemoUser, idStr string) {
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 	arrMu.Lock()
-	m := arrRMovieByIDLocked(id)
-	// A library that does not list a title must not serve it by id either,
-	// or the drill-down contradicts the list it was opened from.
-	if m != nil && !arrInSiblingLibrary(inst, m.TmdbID) {
-		m = nil
-	}
+	m := arrRMovieInLibraryLocked(inst, id)
 	var doc map[string]any
-	if m != nil {
+	// A blocked record answers exactly what an absent one does, so a kids
+	// account cannot tell the two apart (the real gate's 404 is byte-identical
+	// to the arr's own).
+	if m != nil && arrRVisible(gate, m) {
 		doc = arrRMovieJSON(m)
 	}
 	arrMu.Unlock()
@@ -278,23 +356,31 @@ func arrRServeMovieByID(w http.ResponseWriter, inst *DemoInstance, idStr string)
 	writeJSON(w, http.StatusOK, doc)
 }
 
-func arrRServeQueue(w http.ResponseWriter, r *http.Request) {
+func arrRServeQueue(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	page, size := arrPageParams(r)
 	arrMu.Lock()
 	records := make([]map[string]any, 0, len(arrRQueue))
 	for _, q := range arrRQueue {
+		// A queue row is judged by its embedded movie (the real gate forces
+		// includeMovie=true for exactly this).
+		if gate != nil && !arrRVisible(gate, arrRMovieByIDLocked(q.MovieID)) {
+			continue
+		}
 		records = append(records, arrRQueueItemJSON(q))
 	}
 	arrMu.Unlock()
 	writeJSON(w, http.StatusOK, arrPaged(records, page, size))
 }
 
-func arrRServeQueueDetails(w http.ResponseWriter, r *http.Request) {
+func arrRServeQueueDetails(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	movieID := queryInt(r, "movieId", 0)
 	arrMu.Lock()
 	records := make([]map[string]any, 0, len(arrRQueue))
 	for _, q := range arrRQueue {
 		if movieID != 0 && q.MovieID != movieID {
+			continue
+		}
+		if gate != nil && !arrRVisible(gate, arrRMovieByIDLocked(q.MovieID)) {
 			continue
 		}
 		records = append(records, arrRQueueItemJSON(q))
@@ -303,26 +389,33 @@ func arrRServeQueueDetails(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, records)
 }
 
-func arrRServeHistory(w http.ResponseWriter, r *http.Request) {
+func arrRServeHistory(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	page, size := arrPageParams(r)
 	arrMu.Lock()
 	sorted := arrHistorySorted(arrRHistory)
 	records := make([]map[string]any, 0, len(sorted))
 	for _, rec := range sorted {
+		// History rows carry movieId but no embedded movie; judging by the
+		// record is what the real gate gets by forcing includeMovie=true.
+		if gate != nil && !arrRVisible(gate, arrRMovieByIDLocked(rec.MovieID)) {
+			continue
+		}
 		records = append(records, arrRHistoryJSON(rec))
 	}
 	arrMu.Unlock()
 	writeJSON(w, http.StatusOK, arrPaged(records, page, size))
 }
 
-func arrRServeMovieHistory(w http.ResponseWriter, r *http.Request) {
+func arrRServeMovieHistory(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	movieID := queryInt(r, "movieId", 0)
 	arrMu.Lock()
 	sorted := arrHistorySorted(arrRHistory)
 	records := make([]map[string]any, 0, 8)
-	for _, rec := range sorted {
-		if rec.MovieID == movieID {
-			records = append(records, arrRHistoryJSON(rec))
+	if gate == nil || arrRVisible(gate, arrRMovieByIDLocked(movieID)) {
+		for _, rec := range sorted {
+			if rec.MovieID == movieID {
+				records = append(records, arrRHistoryJSON(rec))
+			}
 		}
 	}
 	arrMu.Unlock()
@@ -331,11 +424,14 @@ func arrRServeMovieHistory(w http.ResponseWriter, r *http.Request) {
 
 // arrRServeWanted serves wanted/missing (cutoff=false) and wanted/cutoff
 // (cutoff=true); records are full movie documents.
-func arrRServeWanted(w http.ResponseWriter, r *http.Request, cutoff bool) {
+func arrRServeWanted(w http.ResponseWriter, r *http.Request, gate *DemoUser, cutoff bool) {
 	page, size := arrPageParams(r)
 	arrMu.Lock()
 	matched := make([]*arrRadarrMovie, 0, len(arrRMovies))
 	for _, m := range arrRMovies {
+		if !arrRVisible(gate, m) {
+			continue
+		}
 		if cutoff {
 			if m.HasFile && m.CutoffNotMet {
 				matched = append(matched, m)
@@ -362,7 +458,7 @@ func arrRServeWanted(w http.ResponseWriter, r *http.Request, cutoff bool) {
 
 // arrRServeCalendar returns a BARE array of movie documents with a release
 // date inside [start, end].
-func arrRServeCalendar(w http.ResponseWriter, r *http.Request) {
+func arrRServeCalendar(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	start, end := arrParseWindow(r.URL.Query().Get("start"), r.URL.Query().Get("end"))
 	inWindow := func(iso string) bool {
 		if iso == "" {
@@ -377,6 +473,9 @@ func arrRServeCalendar(w http.ResponseWriter, r *http.Request) {
 	arrMu.Lock()
 	docs := make([]map[string]any, 0, len(arrRMovies))
 	for _, m := range arrRMovies {
+		if !arrRVisible(gate, m) {
+			continue
+		}
 		if inWindow(m.InCinemas) || inWindow(m.Digital) || inWindow(m.Physical) {
 			docs = append(docs, arrRMovieJSON(m))
 		}
@@ -508,6 +607,58 @@ func arrRServeManualImport(w http.ResponseWriter, r *http.Request) {
 
 // ─── Mutating handlers ──────────────────────────────────
 
+// arrRUpdateMovie handles the app's whole-document PUT /movie/{id}
+// (updateMovieFields GETs the document, merges its edits, and PUTs the whole
+// thing back, movieFile/images/ratings included). Unknown keys are ignored;
+// the editable fields — monitored, qualityProfileId, minimumAvailability,
+// path, tags — are applied, and the re-rendered document answers with
+// Radarr's own 202. Nothing is emitted on WS: the movie page reloads itself.
+func arrRUpdateMovie(w http.ResponseWriter, r *http.Request, inst *DemoInstance, idStr string) {
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid movie body")
+		return
+	}
+	arrMu.Lock()
+	m := arrRMovieInLibraryLocked(inst, id)
+	var doc map[string]any
+	if m != nil {
+		if v, ok := body["monitored"].(bool); ok {
+			m.Monitored = v
+		}
+		if v, ok := body["qualityProfileId"].(float64); ok && int(v) > 0 {
+			m.QualityProfileID = int(v)
+		}
+		if v, ok := body["minimumAvailability"].(string); ok && v != "" {
+			m.MinimumAvailability = v
+		}
+		if v, ok := body["path"].(string); ok && v != "" {
+			m.Path = v
+		}
+		if raw, ok := body["tags"].([]any); ok {
+			tags := []int{}
+			for _, t := range raw {
+				if n, ok := t.(float64); ok {
+					tags = append(tags, int(n))
+				}
+			}
+			m.Tags = tags
+		}
+		doc = arrRMovieJSON(m)
+	}
+	arrMu.Unlock()
+	if doc == nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, doc)
+}
+
 // arrRGrabRelease handles POST /release {guid, indexerId}: a no-op grab
 // that seeds a queue item so the Queue tab shows the grabbed release.
 func arrRGrabRelease(w http.ResponseWriter, r *http.Request, inst *DemoInstance) {
@@ -550,7 +701,8 @@ func arrRGrabRelease(w http.ResponseWriter, r *http.Request, inst *DemoInstance)
 
 // arrRCommand handles POST /command. ManualImport and
 // ProcessMonitoredDownloads actually import (so the Import Doctor showcase
-// resolves the stuck item); the search/rescan commands are accepted no-ops.
+// resolves the stuck item); the search/refresh/rescan commands are accepted
+// no-ops.
 func arrRCommand(w http.ResponseWriter, r *http.Request, inst *DemoInstance) {
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -569,7 +721,7 @@ func arrRCommand(w http.ResponseWriter, r *http.Request, inst *DemoInstance) {
 		changed = arrRApplyManualImport(files)
 	case "ProcessMonitoredDownloads":
 		changed = arrRProcessMonitored()
-	case "MoviesSearch", "RescanMovie":
+	case "MoviesSearch", "RefreshMovie", "RescanMovie":
 		// Accepted no-ops.
 	}
 	if changed {

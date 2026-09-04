@@ -1,8 +1,9 @@
 package main
 
 // config.go — GET /api/config (the per-user gating payload the app builds its
-// whole UI from), plus the admin setup checklist (GET /api/admin/setup-status)
-// and the update banner (GET|PUT /api/admin/update-status).
+// whole UI from), plus the admin setup checklist (GET /api/admin/setup-status,
+// PUT /api/admin/setup-status/skips) and the update banner
+// (GET|PUT /api/admin/update-status).
 
 import (
 	"encoding/json"
@@ -14,17 +15,24 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// cfgMu guards config-domain mutable state (the saved management URL).
+// cfgMu guards config-domain mutable state (the saved management URL and
+// the checklist skips).
 var cfgMu sync.Mutex
 
 // cfgManagementURL is the admin-saved management-portal URL ("" = unset).
 var cfgManagementURL string
+
+// cfgSkipped is the set of optional checklist items an admin acknowledged
+// and dismissed (the real server's setup_skipped_items settings row).
+// Server-wide, reversible in place, lost on restart.
+var cfgSkipped = map[string]bool{}
 
 // registerConfig mounts the config-domain routes on the authenticated /api
 // subrouter. Admin gating is applied per route.
 func registerConfig(r chi.Router) {
 	r.Get("/config", cfgHandleConfig)
 	r.With(requireAdmin).Get("/admin/setup-status", cfgHandleSetupStatus)
+	r.With(requireAdmin).Put("/admin/setup-status/skips", cfgHandleSetupSkip)
 	r.With(requireAdmin).Get("/admin/update-status", cfgHandleUpdateStatusGet)
 	r.With(requireAdmin).Put("/admin/update-status", cfgHandleUpdateStatusPut)
 }
@@ -32,9 +40,11 @@ func registerConfig(r chi.Router) {
 // ─── GET /api/config ────────────────────────────────────
 
 // cfgHandleConfig answers the per-user server config. Visibility rules:
-// admins see every instance (incl. download clients + tautulli); non-admins
-// see only their effective radarr/sonarr defaults plus a granted chaptarr —
-// and every entry on a non-admin's list carries is_default:true.
+// admins see every instance (incl. the download clients and the
+// watch-history providers); non-admins see only their effective
+// radarr/sonarr defaults, their granted siblings, and a granted chaptarr /
+// lidarr / media server — with is_default marking THEIR effective default
+// per service type.
 func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
 	isAdmin := u.Role == roleAdmin
@@ -140,14 +150,17 @@ func cfgHandleConfig(w http.ResponseWriter, r *http.Request) {
 
 // ─── GET /api/admin/setup-status ────────────────────────
 
-// cfgSetupItems derives the 13-item setup checklist from live state on every
+// cfgSetupItems derives the 14-item setup checklist from live state on every
 // request (never stored). Titles/descriptions are verbatim from the real
-// server; configured flags are truthful for the demo.
+// server (api/setup_status.go buildSetupItems, same order); configured flags
+// are truthful for the demo. skipped rides only on optional items an admin
+// dismissed — the key is absent otherwise, like the real omitempty field.
 func cfgSetupItems() []map[string]any {
 	haveType := map[string]bool{}
 	anyDownloadClient := false
 	anyMediaDownloads := false
 	anyMediaServer := false
+	anyWatchHistory := false
 	for _, inst := range allInstances() {
 		haveType[inst.ServiceType] = true
 		if inst.MediaDownloads {
@@ -156,11 +169,21 @@ func cfgSetupItems() []map[string]any {
 		if isMediaServerType(inst.ServiceType) {
 			anyMediaServer = true
 		}
+		if isWatchHistoryType(inst.ServiceType) {
+			anyWatchHistory = true
+		}
 		switch inst.ServiceType {
 		case serviceSabnzbd, serviceNzbget, serviceQbittorrent, serviceTransmission:
 			anyDownloadClient = true
 		}
 	}
+
+	cfgMu.Lock()
+	skipped := make(map[string]bool, len(cfgSkipped))
+	for k, v := range cfgSkipped {
+		skipped[k] = v
+	}
+	cfgMu.Unlock()
 
 	// discovery_prefs description is dynamic: the demo seeds discovery
 	// settings as SAVED, so the static description applies; if prefs were
@@ -172,13 +195,20 @@ func cfgSetupItems() []map[string]any {
 	}
 
 	item := func(key, title, description string, configured, optional bool) map[string]any {
-		return map[string]any{
+		out := map[string]any{
 			"key":         key,
 			"title":       title,
 			"description": description,
 			"configured":  configured,
 			"optional":    optional,
 		}
+		// Optional-only: a skip stored against an essential fails toward
+		// showing the item rather than silencing something the server cannot
+		// work without.
+		if optional && skipped[key] {
+			out["skipped"] = true
+		}
+		return out
 	}
 
 	return []map[string]any{
@@ -207,14 +237,19 @@ func cfgSetupItems() []map[string]any {
 			"See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, or Transmission).",
 			anyDownloadClient, true),
 		item("media_downloads", "Completed media downloads",
-			"Mount media read-only on the server, then map paths inside each Radarr, Sonarr, or Chaptarr instance.",
+			"Mount media read-only on the server, then map paths inside each Radarr, Sonarr, Chaptarr, or Lidarr instance.",
 			anyMediaDownloads, true),
-		item("tautulli", "Plex monitoring (Tautulli)",
-			"Watch live Plex streams, history, and stats from the app.",
-			haveType[serviceTautulli], true),
+		// The key predates Tracearr and stays: admins' dismissals are stored
+		// against it. Satisfied by either watch-history provider.
+		item("tautulli", "Monitoring (Tautulli or Tracearr)",
+			"See live streams, watch history, and stats in the Monitoring module. Tautulli covers Plex; Tracearr covers Plex, Jellyfin, and Emby.",
+			anyWatchHistory, true),
 		item("books", "Books (Chaptarr)",
 			"Let users request ebooks and audiobooks; access is granted per user.",
 			haveType[serviceChaptarr], true),
+		item("music", "Music (Lidarr)",
+			"Let users request albums; access is granted per user.",
+			haveType[serviceLidarr], true),
 		item("ai", "AI assistant",
 			"Conversational discovery, requests, and server management. Configure a shared provider; users may override it with their own credentials.",
 			true, true),
@@ -227,6 +262,9 @@ func cfgSetupItems() []map[string]any {
 	}
 }
 
+// cfgHandleSetupStatus answers the checklist. configured counts configured
+// items regardless of skips and total is the whole list; the app subtracts
+// the skipped-and-unconfigured items itself (setup_status_service.dart).
 func cfgHandleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	items := cfgSetupItems()
 	configured := 0
@@ -240,6 +278,46 @@ func cfgHandleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		"configured": configured,
 		"total":      len(items),
 	})
+}
+
+// cfgHandleSetupSkip — PUT /api/admin/setup-status/skips {key, skipped}.
+// Records or clears one checklist skip. Only keys the checklist actually
+// contains may be written, and only optional ones: an essential can never be
+// acknowledged away. Echoes the pair (api/setup_status.go setupSkipHandler).
+func cfgHandleSetupSkip(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Key     string `json:"key"`
+		Skipped bool   `json:"skipped"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Keys and optionality are static facts about the item list.
+	valid := false
+	for _, it := range cfgSetupItems() {
+		if it["key"] != body.Key {
+			continue
+		}
+		if optional, _ := it["optional"].(bool); !optional {
+			writeErr(w, http.StatusBadRequest, "only optional setup items can be skipped")
+			return
+		}
+		valid = true
+		break
+	}
+	if !valid {
+		writeErr(w, http.StatusBadRequest, "unknown setup item")
+		return
+	}
+	cfgMu.Lock()
+	if body.Skipped {
+		cfgSkipped[body.Key] = true
+	} else {
+		delete(cfgSkipped, body.Key)
+	}
+	cfgMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"key": body.Key, "skipped": body.Skipped})
 }
 
 // ─── GET|PUT /api/admin/update-status ───────────────────

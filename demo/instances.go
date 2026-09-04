@@ -5,7 +5,9 @@
 // Created/deleted instances go straight into the shared registry
 // (registerInstance/removeInstance) so config, per-user defaults, pins, and
 // the proxy stay coherent. All rendering goes through copies so no shared
-// pointer escapes a lock.
+// pointer escapes a lock. Credentials are never stored or served: the only
+// credential STATE the demo keeps is which qBittorrent instances are in the
+// API-key shape (instMgmtQbitKeyed), because the editor opens on it.
 package main
 
 import (
@@ -43,7 +45,31 @@ var (
 	instMgmtMu         sync.Mutex
 	instMgmtSortOrders = map[string]int{}  // instance id -> sort_order (absent = 0)
 	instMgmtWebhookSet = map[string]bool{} // instance id -> webhook already configured
+	// instMgmtQbitKeyed records which qBittorrent instances are stored in the
+	// API-key credential shape (qBittorrent 5.2+) rather than the WebUI
+	// username+password shape. The demo stores no credential values, so the
+	// shape IS the stored state: it is what has_api_key reports, and what the
+	// create/update/test rules merge the submitted fields against.
+	instMgmtQbitKeyed = map[string]bool{instQbittorrent: true}
 )
+
+// instMgmtQbitKeyedOf reports whether a qBittorrent instance holds an API key.
+func instMgmtQbitKeyedOf(id string) bool {
+	instMgmtMu.Lock()
+	defer instMgmtMu.Unlock()
+	return instMgmtQbitKeyed[id]
+}
+
+// instMgmtSetQbitKeyed records the credential shape a save landed on.
+func instMgmtSetQbitKeyed(id string, keyed bool) {
+	instMgmtMu.Lock()
+	defer instMgmtMu.Unlock()
+	if keyed {
+		instMgmtQbitKeyed[id] = true
+		return
+	}
+	delete(instMgmtQbitKeyed, id)
+}
 
 // instMgmtResolve returns a defensive copy of the instance with the given id,
 // or nil when unknown.
@@ -82,7 +108,10 @@ func instMgmtSortOrderOf(id string) int {
 }
 
 // instMgmtJSON renders one instanceResponse. url/username/media_path_mappings
-// keys are always present (editor prefill); secrets never appear.
+// keys are always present (editor prefill); secrets never appear. has_api_key
+// rides only on qBittorrent rows stored in the API-key shape (the real field
+// is omitempty and the editor reads only == true), so the editor opens on the
+// right credential form without ever seeing the key.
 func instMgmtJSON(inst *DemoInstance) map[string]any {
 	mappings := make([]map[string]string, 0, len(inst.MediaPathMappings))
 	for _, m := range inst.MediaPathMappings {
@@ -101,6 +130,9 @@ func instMgmtJSON(inst *DemoInstance) map[string]any {
 		"sort_order":          instMgmtSortOrderOf(inst.ID),
 		"media_downloads":     inst.MediaDownloads,
 		"media_path_mappings": mappings,
+	}
+	if inst.ServiceType == serviceQbittorrent && instMgmtQbitKeyedOf(inst.ID) {
+		out["has_api_key"] = true
 	}
 	// media_server_config is present only for media servers, and only in its
 	// public shape — the server-managed link identity (client id, the Plex
@@ -358,26 +390,18 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	switch body.ServiceType {
-	case serviceQbittorrent, serviceNzbget:
-		if body.Username == "" || body.Password == "" {
-			writeErr(w, http.StatusBadRequest,
-				fmt.Sprintf("username and password are required for %s", body.ServiceType))
-			return
-		}
-	case serviceTransmission:
-		// credentials optional
-	case servicePlex:
+	// A create has nothing stored to merge against: the credentials are
+	// exactly what was submitted.
+	creds := instMgmtCredentialsFrom(body.ServiceType, &body, nil)
+	if body.ServiceType == servicePlex {
 		// Plex carries no api key: the PIN link is the credential.
 		if msg := instMgmtPlexLinkOK(&body, nil); msg != "" {
 			writeErr(w, http.StatusBadRequest, msg)
 			return
 		}
-	default:
-		if body.APIKey == "" {
-			writeErr(w, http.StatusBadRequest, "name, url, and api_key are required")
-			return
-		}
+	} else if msg := instMgmtValidateCredentials(body.ServiceType, creds); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
 	}
 	mediaServerConfig, msMsg := instMgmtValidateMediaServerConfig(body.ServiceType, body.MediaServerConfig)
 	if msMsg != "" {
@@ -416,7 +440,7 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 		ServiceType:       body.ServiceType,
 		Name:              body.Name,
 		URL:               trimmedURL,
-		Username:          body.Username,
+		Username:          creds.username,
 		IsDefault:         isDefault,
 		MediaDownloads:    mediaDownloads,
 		MediaPathMappings: mappings,
@@ -431,8 +455,94 @@ func instMgmtHandleCreate(w http.ResponseWriter, r *http.Request) {
 		instMgmtSortOrders[inst.ID] = *body.SortOrder
 		instMgmtMu.Unlock()
 	}
+	if inst.ServiceType == serviceQbittorrent {
+		instMgmtSetQbitKeyed(inst.ID, creds.hasKey)
+	}
 
 	writeJSON(w, http.StatusCreated, instMgmtJSON(instMgmtResolve(inst.ID)))
+}
+
+// ─── Credential rules ───────────────────────────────────
+
+// instMgmtCredentials is the credential state a save or test validates:
+// presence of a key and a password (the demo never stores the values) and
+// the username. Mirrors the merged *Instance the real handler validates.
+type instMgmtCredentials struct {
+	hasKey      bool
+	username    string
+	hasPassword bool
+}
+
+// instMgmtCredentialsFrom merges the submitted credentials over the stored
+// ones the way the real Update/TestConnection do: credentials are write-only,
+// so a blank field keeps the stored value. existing is nil on a create.
+//
+// For qBittorrent the shape the admin sent then wins (applyQbittorrentAuthMode,
+// instance/handler.go): a submitted key clears the stored username and
+// password, a submitted username or password clears the stored key, and a
+// request carrying neither keeps what is stored. The demo stores no password,
+// so "a password is stored" is modelled as "the instance is in the password
+// shape" — which is why a key→password switch must carry both the username
+// and the password in one request, exactly the real outcome.
+func instMgmtCredentialsFrom(serviceType string, body *instMgmtBody, existing *DemoInstance) instMgmtCredentials {
+	creds := instMgmtCredentials{
+		hasKey:      body.APIKey != "",
+		username:    body.Username,
+		hasPassword: body.Password != "",
+	}
+	if existing != nil {
+		storedKeyed := true
+		if serviceType == serviceQbittorrent {
+			storedKeyed = instMgmtQbitKeyedOf(existing.ID)
+		}
+		// Every stored instance was saved with the credential its type
+		// requires, so a blank field falls back to a present stored value.
+		if !creds.hasKey {
+			creds.hasKey = storedKeyed
+		}
+		if creds.username == "" {
+			creds.username = existing.Username
+		}
+		if !creds.hasPassword {
+			creds.hasPassword = !storedKeyed || serviceType != serviceQbittorrent
+		}
+	}
+	if serviceType == serviceQbittorrent {
+		switch {
+		case body.APIKey != "":
+			creds.username, creds.hasPassword = "", false
+		case body.Username != "" || body.Password != "":
+			creds.hasKey = false
+		}
+	}
+	return creds
+}
+
+// instMgmtValidateCredentials enforces the per-type required credentials
+// (validateRequiredFields, instance/handler.go); "" when satisfied. Plex is
+// validated by its PIN link instead (instMgmtPlexLinkOK).
+func instMgmtValidateCredentials(serviceType string, creds instMgmtCredentials) string {
+	switch serviceType {
+	case serviceQbittorrent:
+		// Either shape: an API key (qBittorrent 5.2+) or the WebUI username
+		// and password. Storage holds one or the other, never both.
+		if !creds.hasKey && (creds.username == "" || !creds.hasPassword) {
+			return "an API key, or a username and password, is required for qbittorrent"
+		}
+	case serviceNzbget:
+		if creds.username == "" || !creds.hasPassword {
+			return fmt.Sprintf("username and password are required for %s", serviceType)
+		}
+	case serviceTransmission:
+		// Username/password are optional: Transmission RPC may run without auth.
+	case servicePlex:
+		// The PIN link is the credential.
+	default: // radarr, sonarr, chaptarr, lidarr, sabnzbd, tautulli, tracearr
+		if !creds.hasKey {
+			return "name, url, and api_key are required"
+		}
+	}
+	return ""
 }
 
 func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -468,11 +578,18 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		newMappings, newDownloads = instMgmtMappingsDerive(*body.MediaPathMappings)
 	}
+	// Credentials are write-only: blank fields keep the stored values, then
+	// the per-type rule runs on the merged result (for qBittorrent, the
+	// submitted shape wins first).
+	creds := instMgmtCredentialsFrom(serviceType, &body, existing)
 	if serviceType == servicePlex {
 		if msg := instMgmtPlexLinkOK(&body, existing); msg != "" {
 			writeErr(w, http.StatusBadRequest, msg)
 			return
 		}
+	} else if msg := instMgmtValidateCredentials(serviceType, creds); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
 	}
 	mediaServerConfig, msMsg := instMgmtValidateMediaServerConfig(serviceType, body.MediaServerConfig)
 	if msMsg != "" {
@@ -489,9 +606,9 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 	instMgmtWith(id, func(inst *DemoInstance) {
 		inst.Name = body.Name
 		inst.URL = trimmedURL
-		if body.Username != "" { // blank credentials keep the stored values
-			inst.Username = body.Username
-		}
+		// The merged username: the submitted one, else the stored one — and
+		// for a qBittorrent instance that just moved to an API key, "".
+		inst.Username = creds.username
 		inst.IsDefault = isDefault
 		if body.MediaPathMappings != nil { // omitted key = keep current mappings
 			inst.MediaPathMappings = newMappings
@@ -506,25 +623,58 @@ func instMgmtHandleUpdate(w http.ResponseWriter, r *http.Request) {
 		instMgmtSortOrders[id] = *body.SortOrder
 		instMgmtMu.Unlock()
 	}
+	if serviceType == serviceQbittorrent {
+		instMgmtSetQbitKeyed(id, creds.hasKey)
+	}
+	// The re-rendered row, so the editor reopens on the shape it just saved.
 	writeJSON(w, http.StatusOK, instMgmtJSON(instMgmtResolve(id)))
 }
 
+// instMgmtHandleTest — POST /api/instances/test. Mirrors resolveTestInstance:
+// with an id, the stored service type and credentials are merged under the
+// candidate first; without one, the enum and the per-type credential rule
+// are checked on the body alone. The demo never dials anything, so a valid
+// candidate always passes.
 func instMgmtHandleTest(w http.ResponseWriter, r *http.Request) {
 	var body instMgmtBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	serviceType := body.ServiceType
+	var existing *DemoInstance
 	if body.ID != "" {
-		if instMgmtResolve(body.ID) == nil {
+		existing = instMgmtResolve(body.ID)
+		if existing == nil {
 			writeErr(w, http.StatusNotFound, "instance not found")
 			return
 		}
-	} else if !instMgmtServiceTypes[body.ServiceType] {
+		serviceType = existing.ServiceType
+	}
+	if !instMgmtServiceTypes[serviceType] {
 		writeErr(w, http.StatusBadRequest, instMgmtEnumError)
 		return
 	}
-	// The demo never dials anything: every test succeeds.
+	// The test doesn't need a name (the real handler defaults it), so the
+	// shared validation only enforces the URL and the credentials.
+	if body.URL == "" {
+		writeErr(w, http.StatusBadRequest, "name and url are required")
+		return
+	}
+	if _, msg := instMgmtValidateURL(body.URL); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
+	creds := instMgmtCredentialsFrom(serviceType, &body, existing)
+	if serviceType == servicePlex {
+		if msg := instMgmtPlexLinkOK(&body, existing); msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
+			return
+		}
+	} else if msg := instMgmtValidateCredentials(serviceType, creds); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -558,6 +708,7 @@ func instMgmtHandleDelete(w http.ResponseWriter, r *http.Request) {
 	instMgmtMu.Lock()
 	delete(instMgmtSortOrders, id)
 	delete(instMgmtWebhookSet, id)
+	delete(instMgmtQbitKeyed, id)
 	instMgmtMu.Unlock()
 	// Access rows pointing at the deleted instance go with it: the grants,
 	// and any media-server accounts recorded against it.
