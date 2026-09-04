@@ -1002,6 +1002,13 @@ func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body 
 		resp, err := client.SendWithOptions(ctx, userIDs, title, body, data, opts)
 		if err != nil {
 			n.logger.Error("push: send notification", "err", err, "title", title)
+			if IsUnauthorized(err) {
+				// The gateway does not know this key. The manager replaces an
+				// auto-enrolled key (re-enrolling and re-registering every
+				// device) or logs the refusal of an explicit one; the failure
+				// still counts below so the delivery-health issue reports it.
+				n.mgr.ReportUnauthorized(client)
+			}
 			n.recordDeliveryFailure(err)
 			return
 		}

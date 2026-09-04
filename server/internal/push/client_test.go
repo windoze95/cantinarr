@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -158,5 +159,52 @@ func TestClientSendNon2xxIsError(t *testing.T) {
 	}
 	if resp != nil {
 		t.Errorf("response = %+v, want nil on error", resp)
+	}
+}
+
+// TestClientUnauthorizedIsTyped pins the one status the manager acts on: a 401
+// is a refused key and nothing else is, and the error text is unchanged.
+func TestClientUnauthorizedIsTyped(t *testing.T) {
+	var got capturedRequest
+	const envelope = `{"error":{"code":"unauthorized","message":"invalid tenant key"}}`
+	srv := newMockGateway(t, http.StatusUnauthorized, envelope, &got)
+
+	_, err := NewClient(srv.URL, "pgk_stale").Send(context.Background(), []int64{1}, "t", "b", nil)
+	if err == nil {
+		t.Fatal("expected an error for a 401 reply, got nil")
+	}
+	if !IsUnauthorized(err) {
+		t.Errorf("IsUnauthorized(%v) = false, want true", err)
+	}
+	var se *StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("error %T is not a *StatusError", err)
+	}
+	if se.Status != http.StatusUnauthorized || se.Method != http.MethodPost || se.Path != "/v1/notifications" || se.Body != envelope {
+		t.Errorf("StatusError = %+v, want 401 POST /v1/notifications with the gateway's envelope", se)
+	}
+	if want := "push gateway POST /v1/notifications returned status 401: " + envelope; err.Error() != want {
+		t.Errorf("error text = %q, want %q", err.Error(), want)
+	}
+
+	// A disabled tenant (403) and an outage (502) are failures, not a lost key.
+	for _, tc := range []struct {
+		status int
+		body   string
+	}{
+		{http.StatusForbidden, `{"error":{"code":"tenant_disabled"}}`},
+		{http.StatusBadGateway, "upstream down"},
+	} {
+		srv := newMockGateway(t, tc.status, tc.body, &got)
+		err := NewClient(srv.URL, "pgk_stale").RegisterDevice(context.Background(), 1, "dev-1", "ios", "tok")
+		if err == nil {
+			t.Fatalf("status %d: expected an error, got nil", tc.status)
+		}
+		if IsUnauthorized(err) {
+			t.Errorf("status %d: IsUnauthorized = true, want false", tc.status)
+		}
+	}
+	if IsUnauthorized(nil) || IsUnauthorized(errors.New("gateway unreachable")) {
+		t.Error("IsUnauthorized reported a refused key for nil or a transport error")
 	}
 }
