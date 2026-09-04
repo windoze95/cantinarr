@@ -12,7 +12,7 @@ void main() {
       const [
         TitleLink('IMDb', 'https://www.imdb.com/title/tt0133093/'),
         TitleLink('TMDB', 'https://www.themoviedb.org/movie/603'),
-        TitleLink('Trakt', 'https://trakt.tv/search/imdb/tt0133093'),
+        TitleLink('Trakt', 'https://trakt.tv/movies/tt0133093'),
       ],
     );
   });
@@ -24,7 +24,7 @@ void main() {
       const [
         TitleLink('IMDb', 'https://www.imdb.com/title/tt0903747/'),
         TitleLink('TMDB', 'https://www.themoviedb.org/tv/1396'),
-        TitleLink('Trakt', 'https://trakt.tv/search/imdb/tt0903747'),
+        TitleLink('Trakt', 'https://trakt.tv/shows/tt0903747'),
       ],
     );
   });

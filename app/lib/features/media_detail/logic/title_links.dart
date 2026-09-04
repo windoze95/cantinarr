@@ -26,8 +26,10 @@ final _imdbId = RegExp(r'^tt\d+$');
 
 /// The Links line of a title page's Details, in a fixed order: IMDb when
 /// TMDB knows the title's IMDb id, TMDB itself always (the page is built from
-/// its record), then Trakt, which resolves an IMDb id to its own page for
-/// movies and shows alike, so no Trakt id is needed.
+/// its record), then Trakt, which resolves an IMDb id under its own
+/// `/movies/` and `/shows/` paths, so no Trakt id is needed. Trakt's older
+/// `/search/imdb/<id>` form is gone -- it answers 404 -- and its app renders
+/// client-side, so a link there has to name the media type up front.
 List<TitleLink> titleLinks({
   required MediaType type,
   required int tmdbId,
@@ -35,10 +37,14 @@ List<TitleLink> titleLinks({
 }) {
   final imdb = imdbId?.trim() ?? '';
   final known = _imdbId.hasMatch(imdb);
-  final kind = type == MediaType.tv ? 'tv' : 'movie';
+  final isShow = type == MediaType.tv;
+  // The two sites name the same thing differently: TMDB's path segment is
+  // `tv`, Trakt's is `shows`.
+  final tmdbKind = isShow ? 'tv' : 'movie';
+  final traktKind = isShow ? 'shows' : 'movies';
   return [
     if (known) TitleLink('IMDb', 'https://www.imdb.com/title/$imdb/'),
-    TitleLink('TMDB', 'https://www.themoviedb.org/$kind/$tmdbId'),
-    if (known) TitleLink('Trakt', 'https://trakt.tv/search/imdb/$imdb'),
+    TitleLink('TMDB', 'https://www.themoviedb.org/$tmdbKind/$tmdbId'),
+    if (known) TitleLink('Trakt', 'https://trakt.tv/$traktKind/$imdb'),
   ];
 }
