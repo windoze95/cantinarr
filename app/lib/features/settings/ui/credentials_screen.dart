@@ -12,6 +12,7 @@ import '../../ai_assistant/data/grok_oauth_service.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
+import '../logic/outbound_proxy_provider.dart';
 import '../settings_anchors.dart';
 import 'credential_section.dart';
 
@@ -44,6 +45,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   // The local provider's scoped endpoint pair.
   final _localBaseUrlController = TextEditingController();
   String _localReasoningEffort = '';
+  bool _localUseProxy = false;
   final _localKeyController = TextEditingController();
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
@@ -144,6 +146,11 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       if (_localReasoningEffort !=
           (_status?.ai.localOpenaiReasoningEffort ?? '')) {
         creds['local_openai_reasoning_effort'] = _localReasoningEffort;
+        aiChanged = true;
+      }
+      if (_showLocalProxyOptIn &&
+          _localUseProxy != (_status?.ai.localOpenaiUseProxy ?? false)) {
+        creds['local_openai_use_proxy'] = _localUseProxy.toString();
         aiChanged = true;
       }
     }
@@ -276,6 +283,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     _openaiReasoningEffort = status.ai.openaiReasoningEffort;
     _localBaseUrlController.text = status.ai.localOpenaiBaseUrl;
     _localReasoningEffort = status.ai.localOpenaiReasoningEffort;
+    _localUseProxy = status.ai.localOpenaiUseProxy;
   }
 
   /// Effort is openai-only among hosted providers, capability-flagged so
@@ -291,6 +299,14 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     final provider =
         _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
     return provider?.id == 'local_openai';
+  }
+
+  /// The endpoint's transport class is the admin's to declare, so the control
+  /// only appears on servers that accept the key.
+  bool get _showLocalProxyOptIn {
+    final provider =
+        _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
+    return provider?.id == 'local_openai' && provider!.supportsProxyOptIn;
   }
 
   String _friendlySaveError(Object error) {
@@ -500,6 +516,21 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                   () => _localReasoningEffort = value ?? ''),
                             ),
                           ),
+                          if (_showLocalProxyOptIn) ...[
+                            const SizedBox(height: 12),
+                            _LocalProxyOptInSection(
+                              enabled: _localUseProxy,
+                              proxyConfigured: ref
+                                      .watch(outboundProxyProvider)
+                                      ?.url
+                                      .isNotEmpty ??
+                                  false,
+                              onChanged: _isSaving
+                                  ? null
+                                  : (value) =>
+                                      setState(() => _localUseProxy = value),
+                            ),
+                          ],
                         ],
                         const SizedBox(height: 14),
                         _anchor(
@@ -822,6 +853,54 @@ class _AISelectionSection extends StatelessWidget {
       if (provider.id == selectedProvider) return provider;
     }
     return providers.isNotEmpty ? providers.first : null;
+  }
+}
+
+/// Declares whether the local endpoint is an internet host. Cantinarr never
+/// guesses that from the URL: a split-horizon name or a Tailscale address
+/// would be read wrong, and reading it wrong is silent either way.
+class _LocalProxyOptInSection extends StatelessWidget {
+  final bool enabled;
+  final bool proxyConfigured;
+  final ValueChanged<bool>? onChanged;
+
+  const _LocalProxyOptInSection({
+    required this.enabled,
+    required this.proxyConfigured,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppTheme.surfaceVariant.withValues(alpha: 0.45),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        side: const BorderSide(color: AppTheme.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SwitchListTile.adaptive(
+        key: const ValueKey('local-openai-use-proxy'),
+        value: enabled,
+        onChanged: onChanged,
+        title: const Text(
+          'Route through the outbound proxy',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          'Turn this on when the endpoint is on the internet instead of your '
+          'own network. ${proxyConfigured ? 'A server on your own network is always dialed directly.' : 'No outbound proxy is set yet, so add one under Settings > Outbound Proxy first.'}',
+          style: const TextStyle(
+            color: AppTheme.textSecondary,
+            fontSize: 12,
+            height: 1.38,
+          ),
+        ),
+      ),
+    );
   }
 }
 

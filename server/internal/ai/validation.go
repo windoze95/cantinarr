@@ -291,7 +291,7 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 	case credentials.AIProviderOpenAI:
 		runner = NewOpenAIService(apiKey, profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, h.toolServer)
 	case credentials.AIProviderLocalOpenAI:
-		runner = NewLocalOpenAIService(apiKey, profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, h.toolServer)
+		runner = NewLocalOpenAIService(apiKey, profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, profile.UseProxy, h.toolServer)
 	case credentials.AIProviderGemini:
 		runner = NewGeminiService(apiKey, profile.Config.Model, h.toolServer)
 	case credentials.AIProviderGrok, credentials.AIProviderGrokOAuth:

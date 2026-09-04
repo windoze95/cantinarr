@@ -989,6 +989,11 @@ const List<SettingsSearchEntry> _credentialsEntries = [
       'vllm',
       'lm studio',
       'openai compatible',
+      // Its endpoint is also where an internet-hosted local server opts into
+      // the outbound proxy.
+      'proxy',
+      'outbound proxy',
+      'vpn',
     ],
     gate: gateAdmin,
     anchorId: SettingsAnchors.credentialsAiModel,
