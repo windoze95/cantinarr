@@ -278,12 +278,20 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
-          _filterChip('ALL', PersonCreditFilter.all, state.filter),
-          const SizedBox(width: 8),
-          _filterChip('MOVIES', PersonCreditFilter.movies, state.filter),
-          const SizedBox(width: 8),
-          _filterChip('TV SHOWS', PersonCreditFilter.tvShows, state.filter),
-          const Spacer(),
+          // A Wrap, not chips and a Spacer in the Row: on a narrow sheet
+          // the third chip folds under rather than overflowing the edge.
+          Expanded(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                _filterChip('ALL', PersonCreditFilter.all, state.filter),
+                _filterChip('MOVIES', PersonCreditFilter.movies, state.filter),
+                _filterChip(
+                    'TV SHOWS', PersonCreditFilter.tvShows, state.filter),
+              ],
+            ),
+          ),
           PopupMenuButton<PersonCreditSort>(
             icon: const Icon(Icons.sort, color: AppTheme.textSecondary, size: 20),
             color: AppTheme.surfaceVariant,

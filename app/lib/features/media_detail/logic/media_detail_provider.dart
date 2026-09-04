@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../discover/data/tmdb_models.dart';
+import 'title_facts.dart';
 
 /// State for the media detail screen.
 class MediaDetailState {
@@ -51,6 +52,27 @@ class MediaDetailState {
       movieDetail?.trailerKey ?? tvDetail?.trailerKey;
 
   List<Season> get seasons => tvDetail?.seasons ?? [];
+
+  TitleCredits get credits =>
+      movieDetail?.credits ?? tvDetail?.credits ?? TitleCredits.empty;
+
+  /// Everyone the cast and crew sheet lists besides the cast: a show's
+  /// creators first, then the credited crew.
+  List<CrewMember> get crew => [...?tvDetail?.createdBy, ...credits.crew];
+
+  /// The studios shown as chips: the first five production companies, so a
+  /// co-production with a dozen partners stays a line, not a wall.
+  List<TaggedId> get studios =>
+      (movieDetail?.companies ?? tvDetail?.companies ?? const [])
+          .where((c) => c.name != null)
+          .take(5)
+          .toList();
+
+  List<TitleFact> get facts => switch ((movieDetail, tvDetail)) {
+        (final movie?, _) => movieFacts(movie),
+        (_, final tv?) => tvFacts(tv),
+        _ => const [],
+      };
 
   MediaDetailState copyWith({
     bool? isLoading,

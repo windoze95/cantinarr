@@ -284,6 +284,38 @@ func TestMovieDetailAppendsReleaseDatesAlongsideVideos(t *testing.T) {
 	}
 }
 
+// TestDetailBodiesAppendCredits pins the credits append on both detail
+// proxies: the title page's Cast row and Details lines read `credits` off
+// the same body as everything else, so neither type may drop its earlier
+// appends to gain it. Membership, not string equality, as above.
+func TestDetailBodiesAppendCredits(t *testing.T) {
+	cases := []struct {
+		name  string
+		route string
+		path  string
+		keeps []string
+	}{
+		{"movie", "/media/movie/603", "/3/movie/603", []string{"videos", "release_dates"}},
+		{"tv", "/media/tv/603", "/3/tv/603", []string{"videos", "external_ids"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t, true)
+			e.doOK(t, tc.route)
+			hit := e.upstream.hit(t, 0)
+			if hit.path != tc.path {
+				t.Errorf("upstream path = %s, want %s", hit.path, tc.path)
+			}
+			appends := strings.Split(hit.query.Get("append_to_response"), ",")
+			for _, want := range append(tc.keeps, "credits") {
+				if !slices.Contains(appends, want) {
+					t.Errorf("append_to_response = %q, want it to contain %s", hit.query.Get("append_to_response"), want)
+				}
+			}
+		})
+	}
+}
+
 // TestRepeatQueryIsServedFromCache pins the TTL cache: an identical query
 // within the TTL never reaches the upstream again, while a different page
 // does.

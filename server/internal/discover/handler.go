@@ -259,14 +259,14 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) MovieDetail(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	key := "movie:" + id
-	params := url.Values{"append_to_response": {"videos,release_dates"}}
+	params := url.Values{"append_to_response": {"videos,release_dates,credits"}}
 	h.cachedTMDB(w, key, ttlDetails, fmt.Sprintf("/movie/%s", id), params)
 }
 
 func (h *Handler) TVDetail(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	key := "tv:" + id
-	params := url.Values{"append_to_response": {"videos,external_ids"}}
+	params := url.Values{"append_to_response": {"videos,external_ids,credits"}}
 	h.cachedTMDB(w, key, ttlDetails, fmt.Sprintf("/tv/%s", id), params)
 }
 

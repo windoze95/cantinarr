@@ -218,6 +218,109 @@ class TaggedId {
   String toString() => 'TaggedId($id, $name)';
 }
 
+/// One credited performer on a title (`credits.cast[]`): who they are, who
+/// they played, and TMDB's billing order.
+class CastMember {
+  final int id;
+  final String name;
+  final String? character;
+  final String? profilePath;
+  final int order;
+
+  const CastMember({
+    required this.id,
+    required this.name,
+    this.character,
+    this.profilePath,
+    this.order = 0,
+  });
+
+  factory CastMember.fromJson(Map<String, dynamic> json) => CastMember(
+        id: json['id'] as int,
+        name: (json['name'] ?? 'Unknown') as String,
+        character: _blankToNull(json['character'] as String?),
+        profilePath: json['profile_path'] as String?,
+        order: json['order'] as int? ?? 0,
+      );
+}
+
+/// One credited crew member on a title (`credits.crew[]`): TMDB files each
+/// job under a department ("Directing" / "Director"), which is how the full
+/// cast and crew sheet groups them.
+class CrewMember {
+  final int id;
+  final String name;
+  final String job;
+  final String department;
+  final String? profilePath;
+
+  const CrewMember({
+    required this.id,
+    required this.name,
+    required this.job,
+    required this.department,
+    this.profilePath,
+  });
+
+  factory CrewMember.fromJson(Map<String, dynamic> json) => CrewMember(
+        id: json['id'] as int,
+        name: (json['name'] ?? 'Unknown') as String,
+        job: (json['job'] ?? '') as String,
+        department: (json['department'] ?? '') as String,
+        profilePath: json['profile_path'] as String?,
+      );
+}
+
+/// A title's `credits` append: its cast in billing order and its crew as
+/// TMDB lists them. [empty] is what a body without the append yields.
+class TitleCredits {
+  final List<CastMember> cast;
+  final List<CrewMember> crew;
+
+  const TitleCredits({this.cast = const [], this.crew = const []});
+
+  static const empty = TitleCredits();
+
+  /// Reads the nested `credits` append off a detail body. Tolerates a
+  /// missing or wrongly-shaped key, and entries without a numeric id, by
+  /// leaving them out rather than throwing: a server still serving a cached
+  /// pre-change body sends exactly that shape, and it must not blank the
+  /// rest of the page.
+  factory TitleCredits.fromJson(Map<String, dynamic> json) {
+    final data = json['credits'];
+    if (data is! Map<String, dynamic>) return empty;
+    final cast = _entries(data['cast']).map(CastMember.fromJson).toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    return TitleCredits(
+      cast: cast,
+      crew: _entries(data['crew']).map(CrewMember.fromJson).toList(),
+    );
+  }
+
+  bool get isEmpty => cast.isEmpty && crew.isEmpty;
+}
+
+/// The well-formed entries of a TMDB list: maps carrying an integer `id`.
+Iterable<Map<String, dynamic>> _entries(Object? list) => list is List
+    ? list.whereType<Map<String, dynamic>>().where((m) => m['id'] is int)
+    : const [];
+
+List<TaggedId> _tagged(Object? list) =>
+    _entries(list).map(TaggedId.fromJson).toList();
+
+/// `production_countries[].name`, skipping entries without one.
+List<String> _countryNames(Object? list) => list is List
+    ? list
+        .whereType<Map<String, dynamic>>()
+        .map((m) => m['name'])
+        .whereType<String>()
+        .where((name) => name.isNotEmpty)
+        .toList()
+    : const [];
+
+String? _blankToNull(String? value) =>
+    value == null || value.trim().isEmpty ? null : value;
+
 /// Full movie detail from TMDB.
 class MovieDetail {
   final int id;
@@ -235,6 +338,13 @@ class MovieDetail {
   final int? budget;
   final int? revenue;
   final List<TmdbReleaseDateRegion> releaseDates;
+  final TitleCredits credits;
+
+  /// `production_companies`, in TMDB's order.
+  final List<TaggedId> companies;
+
+  /// `production_countries[].name`, in TMDB's order.
+  final List<String> countries;
 
   const MovieDetail({
     required this.id,
@@ -252,6 +362,9 @@ class MovieDetail {
     this.budget,
     this.revenue,
     this.releaseDates = const [],
+    this.credits = TitleCredits.empty,
+    this.companies = const [],
+    this.countries = const [],
   });
 
   factory MovieDetail.fromJson(Map<String, dynamic> json) => MovieDetail(
@@ -273,6 +386,9 @@ class MovieDetail {
         budget: json['budget'] as int?,
         revenue: json['revenue'] as int?,
         releaseDates: _parseReleaseDates(json),
+        credits: TitleCredits.fromJson(json),
+        companies: _tagged(json['production_companies']),
+        countries: _countryNames(json['production_countries']),
       );
 
   String? get trailerKey {
@@ -302,6 +418,20 @@ class TVDetail {
   final List<Video> videos;
   final List<Season> seasons;
   final ExternalIds? externalIds;
+  final TitleCredits credits;
+
+  /// `created_by`, as crew filed under a "Creators" department so the cast
+  /// and crew sheet lists them first.
+  final List<CrewMember> createdBy;
+
+  /// `networks`, in TMDB's order.
+  final List<TaggedId> networks;
+
+  /// `production_companies`, in TMDB's order.
+  final List<TaggedId> companies;
+
+  /// `production_countries[].name`, in TMDB's order.
+  final List<String> countries;
 
   const TVDetail({
     required this.id,
@@ -319,6 +449,11 @@ class TVDetail {
     this.videos = const [],
     this.seasons = const [],
     this.externalIds,
+    this.credits = TitleCredits.empty,
+    this.createdBy = const [],
+    this.networks = const [],
+    this.companies = const [],
+    this.countries = const [],
   });
 
   factory TVDetail.fromJson(Map<String, dynamic> json) => TVDetail(
@@ -345,6 +480,19 @@ class TVDetail {
         externalIds: json['external_ids'] is Map<String, dynamic>
             ? ExternalIds.fromJson(json['external_ids'] as Map<String, dynamic>)
             : null,
+        credits: TitleCredits.fromJson(json),
+        createdBy: _entries(json['created_by'])
+            .map((m) => CrewMember(
+                  id: m['id'] as int,
+                  name: (m['name'] ?? 'Unknown') as String,
+                  job: 'Creator',
+                  department: 'Creators',
+                  profilePath: m['profile_path'] as String?,
+                ))
+            .toList(),
+        networks: _tagged(json['networks']),
+        companies: _tagged(json['production_companies']),
+        countries: _countryNames(json['production_countries']),
       );
 
   String? get trailerKey {

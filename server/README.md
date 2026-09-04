@@ -361,7 +361,7 @@ GET /api/discover/tv/on-the-air | top-rated | upcoming     # Airing This Week, T
 GET /api/discover/movies | /api/discover/tv          # filterable discover: an allowlist of TMDB params, validated here
 GET /api/search                                      # multi-search
 GET /api/search/keyword | /api/search/company        # type-ahead lookups behind the browse filters; query required
-GET /api/media/movie/{id} | /api/media/tv/{id}       # detail (+ /recommendations, /similar); movie body appends videos + per-region release_dates
+GET /api/media/movie/{id} | /api/media/tv/{id}       # detail (+ /recommendations, /similar); movie body appends videos, credits + per-region release_dates; TV body appends videos, credits + external_ids
 GET /api/media/person/{id} | /api/media/person/{id}/credits
 GET /api/genres/movie | /api/genres/tv | /api/providers/movie | /api/providers/tv | /api/providers/regions | /api/languages
 GET /api/trakt/trending | popular | lists | lists/{user}/{slug}/items
