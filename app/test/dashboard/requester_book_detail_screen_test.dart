@@ -8,9 +8,11 @@ import 'package:cantinarr/core/providers/instance_provider.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/ui/chaptarr_book_screen.dart';
+import 'package:cantinarr/features/chaptarr/ui/widgets/book_link_chips.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_author_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_series_detail_screen.dart';
+import 'package:cantinarr/features/media_detail/logic/title_links.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -461,6 +463,86 @@ void main() {
     expect(authorScreen.instanceId, 'books');
   });
 
+  testWidgets('a resolved book links out to Goodreads and Open Library',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester);
+
+    router.go('/detail/book/555?title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.widgetWithText(ActionChip, 'Open Library'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.text('Links'), findsOneWidget);
+    expect(find.widgetWithText(ActionChip, 'Goodreads'), findsOneWidget);
+    expect(find.widgetWithText(ActionChip, 'Open Library'), findsOneWidget);
+    expect(find.byTooltip('Open on Goodreads'), findsOneWidget);
+    // Hardcover pages are slug-addressed, so a chip needs a declared link and
+    // the fixture declares none.
+    expect(find.widgetWithText(ActionChip, 'Hardcover'), findsNothing);
+  });
+
+  testWidgets('a book whose record names no outside page has no Links line',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: _BooksAdapter(noLinkIds: true),
+    );
+
+    router.go('/detail/book/555?title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Dune Messiah'), findsOneWidget);
+    expect(find.text('Links', skipOffstage: false), findsNothing);
+    expect(find.byType(ActionChip, skipOffstage: false), findsNothing);
+  });
+
+  testWidgets('a page opened by id and title resolves by the exact id first',
+      (tester) async {
+    final adapter = _BooksAdapter();
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+
+    // The Books tab rows navigate with the id and title only, no record
+    // riding along, and this provider answers nothing for a full title.
+    router.go('/detail/book/29749107?title=Ahsoka');
+    await tester.pumpAndSettle();
+
+    // The id fetch answered, so the title search was never needed.
+    expect(adapter.lookupTerms, ['29749107']);
+    await tester.scrollUntilVisible(
+      find.widgetWithText(ActionChip, 'Open Library'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.text('Links'), findsOneWidget);
+    // The edition's ISBN came through: the list endpoint never carries
+    // editions, so only the exact-id fetch could have named it.
+    final chips = tester.widget<BookLinkChips>(find.byType(BookLinkChips));
+    expect(chips.links, const [
+      TitleLink('Goodreads', 'https://www.goodreads.com/book/show/29749107'),
+      TitleLink('Open Library', 'https://openlibrary.org/isbn/9781484705667'),
+    ]);
+  });
+
+  testWidgets('an id fetch answering another id is not adopted',
+      (tester) async {
+    final adapter = _BooksAdapter(mismatchedLookupId: true);
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+
+    router.go('/detail/book/555?title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+
+    // The id fetch answered the work under the provider's current id
+    // (lookup-555): the alias-to-canonical case, and not this page's record,
+    // so the title path and its strong-match rule still had to decide.
+    expect(adapter.lookupTerms, ['555', 'Dune Messiah']);
+    expect(find.text('Dune Messiah'), findsOneWidget);
+    expect(find.text('Frank Herbert'), findsOneWidget);
+    expect(find.text('1969 · 336 pages'), findsOneWidget);
+  });
+
   testWidgets('an unresolvable id shows a graceful state with a Books tab exit',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester);
@@ -655,12 +737,17 @@ class _BooksAdapter implements HttpClientAdapter {
   /// author name is stated without the library identity that makes it tappable.
   final bool noAuthorLink;
 
+  /// Suppresses the provider ids (and the edition ISBN) on the lookup
+  /// records, so a page has no outside page to link to.
+  final bool noLinkIds;
+
   /// Coverage verdicts by reported path; unlisted paths count as covered.
   final Map<String, bool> coverage;
   final coveragePaths = <String>[];
   final libraryInstanceIds = <String>[];
   final statusInstanceIds = <String>[];
   final statusForeignIds = <String>[];
+  final lookupTerms = <String>[];
   final requestBodies = <Map<String, dynamic>>[];
   final _requestedFormats = <String, String>{};
 
@@ -673,6 +760,7 @@ class _BooksAdapter implements HttpClientAdapter {
     this.bookFiles = false,
     this.noSeries = false,
     this.noAuthorLink = false,
+    this.noLinkIds = false,
     this.coverage = const {},
   });
 
@@ -789,24 +877,20 @@ class _BooksAdapter implements HttpClientAdapter {
         _ => {'status': 'unavailable'},
       };
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
-      body = [
-        {
-          'title': 'Dune Messiah',
-          'foreignBookId': mismatchedLookupId ? 'lookup-555' : '555',
-          'year': 1969,
-          'pageCount': 336,
-          'overview': '<b>The desert planet has a new emperor.</b><br/><br/>'
-              'A second chapter &amp; more.',
-          'genres': ['Science Fiction'],
-          'author': {
-            'id': 0,
-            'authorName': mismatchedLookupAuthor
-                ? 'Brian Herbert'
-                : 'Frank Herbert',
-            'foreignAuthorId': 'author-2',
-          },
-        },
-      ];
+      final term = options.queryParameters['term'].toString();
+      lookupTerms.add(term);
+      body = switch (term) {
+        // An id term is an exact fetch. For a book the library tracks that
+        // is the record itself, editions included; an alias id resolves to
+        // the same canonical record.
+        '29749107' || 'lookup-29749107' => [_ahsokaLookup()],
+        // The metadata work, under the id the provider currently keys it by
+        // (the mismatch variant models an older id it has since re-keyed).
+        // Its title search hits; Ahsoka's, a full title, answers nothing,
+        // as this provider routinely does.
+        '555' || 'Dune Messiah' => [_duneLookup()],
+        _ => <Object>[],
+      };
     } else if (options.path.endsWith('/api/v1/book/42')) {
       body = _liveBook(id: 42, mediaType: 'ebook');
     } else if (options.path.endsWith('/api/v1/book/43')) {
@@ -851,6 +935,49 @@ class _BooksAdapter implements HttpClientAdapter {
       },
     );
   }
+
+  /// The library's own Ahsoka record as `book/lookup` returns it for its id:
+  /// unlike the list endpoint's copy, it carries the editions.
+  Map<String, dynamic> _ahsokaLookup() => {
+        'title': 'Ahsoka',
+        'foreignBookId': '29749107',
+        'releaseDate': '2016-10-11T00:00:00Z',
+        'overview': 'A former Jedi searches for a new path.',
+        if (!noLinkIds) 'goodreadsBookId': 'gr:29749107',
+        'editions': [
+          {
+            'id': 1,
+            'bookId': 42,
+            'monitored': true,
+            if (!noLinkIds) 'isbn13': '9781484705667',
+          },
+        ],
+        'author': {
+          'id': 7,
+          'authorName': 'E. K. Johnston',
+          'foreignAuthorId': 'hc:auth-ekj',
+        },
+      };
+
+  Map<String, dynamic> _duneLookup() => {
+        'title': 'Dune Messiah',
+        'foreignBookId': mismatchedLookupId ? 'lookup-555' : '555',
+        'year': 1969,
+        'pageCount': 336,
+        'overview': '<b>The desert planet has a new emperor.</b><br/><br/>'
+            'A second chapter &amp; more.',
+        'genres': ['Science Fiction'],
+        if (!noLinkIds) ...{
+          'goodreadsBookId': 'gr:5907',
+          'openLibraryWorkId': 'ol:OL262758W',
+        },
+        'author': {
+          'id': 0,
+          'authorName':
+              mismatchedLookupAuthor ? 'Brian Herbert' : 'Frank Herbert',
+          'foreignAuthorId': 'author-2',
+        },
+      };
 
   @override
   void close({bool force = false}) {}

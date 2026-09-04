@@ -15,8 +15,11 @@ import '../../auth/logic/auth_provider.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
+import '../../chaptarr/logic/book_links.dart';
 import '../../chaptarr/ui/chaptarr_book_screen.dart';
+import '../../chaptarr/ui/widgets/book_link_chips.dart';
 import '../../issues/ui/report_problem_sheet.dart';
+import '../../media_detail/logic/title_links.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
@@ -27,9 +30,11 @@ import '../logic/book_ownership_matcher.dart';
 
 /// Requester-facing detail for one book, addressed by its Chaptarr/Readarr
 /// foreignBookId. Search navigation supplies [initialBook] for an immediate,
-/// metadata-rich presentation; notification/deep links resolve the same data
-/// from the title hint when possible, and the owned-books digest remains the
-/// live source of per-format ownership.
+/// metadata-rich presentation; the Books tab rows and notification/deep links
+/// carry only the id and a title, so the page resolves the same data by the
+/// exact foreign id first and by the title hint's search only when the id
+/// names nothing, and the owned-books digest remains the live source of
+/// per-format ownership.
 class RequesterBookDetailScreen extends ConsumerStatefulWidget {
   final String foreignId;
   final String? titleHint;
@@ -115,8 +120,9 @@ class _RequesterBookDetailScreenState
     _chaptarrRecords = const [];
     _filesByBook = const {};
     _canonicalForeignId = null;
-    _metadataLoading = widget.initialBook == null &&
-        (widget.titleHint?.trim().isNotEmpty ?? false);
+    // The id fetch runs whenever no record rode along, so the page waits on
+    // it rather than flashing "not found" at a book only that fetch can name.
+    _metadataLoading = widget.initialBook == null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _resolveMetadata(generation);
       _resolveChaptarrRecords(generation);
@@ -132,61 +138,81 @@ class _RequesterBookDetailScreenState
     );
   }
 
-  /// Notification links carry only a title and foreign id. Resolve their
-  /// metadata with the same read-only lookup as Books search. Prefer the exact
-  /// foreign id. An older provider-id mismatch may use metadata only when the
-  /// canonical digest row exists and exactly one lookup result strongly
-  /// matches both that row's title and author.
+  /// Resolves the book's metadata with the same read-only lookup as Books
+  /// search, by the exact foreign id first. Chaptarr answers `book/lookup`
+  /// for an id term with an exact fetch: the library's own record, editions
+  /// included, when it tracks the book, else the metadata work itself, and
+  /// nothing for an id it does not know. A result counts only when it carries
+  /// this page's id: the provider resolves an alias id to its canonical
+  /// sibling, a record the requester did not open, and the page is re-keyed
+  /// to that id separately once the server reports it. Only when the id names
+  /// nothing does the title hint's search run, since this provider routinely
+  /// answers nothing for a full title; an older provider-id mismatch may then
+  /// use metadata only when the canonical digest row exists and exactly one
+  /// lookup result strongly matches both that row's title and author.
   Future<void> _resolveMetadata(int generation) async {
     if (_metadata != null) return;
-    final term = widget.titleHint?.trim() ?? '';
     final service = _chaptarrService();
-    if (term.isEmpty || service == null) {
+    if (service == null) {
       if (mounted && generation == _loadGeneration) {
         setState(() => _metadataLoading = false);
       }
       return;
     }
     ChaptarrBook? match;
-    try {
-      final results = await service.lookupBook(term);
-      for (final book in results) {
-        if (book.foreignBookId == widget.foreignId) {
-          match = book;
-          break;
-        }
+    if (widget.foreignId.trim().isNotEmpty) {
+      try {
+        match = _exactMatch(await service.lookupBook(widget.foreignId));
+      } catch (_) {
+        // An unreadable id fetch is not an answer; the title search below
+        // still gets its turn.
       }
-      if (match == null) {
-        final digest = await ref.read(
-          ownedBooksForInstanceProvider(_instanceId).future,
-        );
-        final canonicalRows = digest
-            .where((owned) =>
-                owned.foreignBookId.trim() == widget.foreignId.trim())
-            .toList(growable: false);
-        if (canonicalRows.length == 1) {
-          final canonical = canonicalRows.single;
-          final strongIdentityMatches = results
-              .where((book) =>
-                  strongNormalizedTitleMatch(book.title, canonical.title) &&
-                  strongAuthorMatch(
-                    book.author?.authorName,
-                    canonical.author,
-                  ))
+    }
+    final term = widget.titleHint?.trim() ?? '';
+    if (match == null && term.isNotEmpty) {
+      try {
+        final results = await service.lookupBook(term);
+        match = _exactMatch(results);
+        if (match == null) {
+          final digest = await ref.read(
+            ownedBooksForInstanceProvider(_instanceId).future,
+          );
+          final canonicalRows = digest
+              .where((owned) =>
+                  owned.foreignBookId.trim() == widget.foreignId.trim())
               .toList(growable: false);
-          if (strongIdentityMatches.length == 1) {
-            match = strongIdentityMatches.single;
+          if (canonicalRows.length == 1) {
+            final canonical = canonicalRows.single;
+            final strongIdentityMatches = results
+                .where((book) =>
+                    strongNormalizedTitleMatch(book.title, canonical.title) &&
+                    strongAuthorMatch(
+                      book.author?.authorName,
+                      canonical.author,
+                    ))
+                .toList(growable: false);
+            if (strongIdentityMatches.length == 1) {
+              match = strongIdentityMatches.single;
+            }
           }
         }
+      } catch (_) {
+        // The title hint still gives the requester a useful fallback.
       }
-    } catch (_) {
-      // The title hint still gives the requester a useful fallback.
     }
     if (!mounted || generation != _loadGeneration) return;
     setState(() {
       _metadata = match;
       _metadataLoading = false;
     });
+  }
+
+  /// The one result that is this page's own record, never a substitute.
+  ChaptarrBook? _exactMatch(List<ChaptarrBook> results) {
+    for (final book in results) {
+      if (book.foreignBookId == widget.foreignId) return book;
+    }
+    return null;
   }
 
   /// Resolve exact live Chaptarr records. Lookup records and the requester
@@ -502,6 +528,13 @@ class _RequesterBookDetailScreenState
     final genres = _metadata?.genres.isNotEmpty ?? false
         ? _metadata!.genres
         : (live?.genres ?? const <String>[]);
+    // The lookup record leads, as it does for every line above; a live
+    // library record fills in only when the lookup named no outside page.
+    final metadataLinks =
+        _metadata == null ? const <TitleLink>[] : bookLinks(_metadata!);
+    final links = metadataLinks.isNotEmpty
+        ? metadataLinks
+        : (live == null ? const <TitleLink>[] : bookLinks(live));
     final ownership = owned?.ownership;
     // Only a page that could not bind to its own library record needs the
     // pointer; a bound page's format panel already tells the whole truth.
@@ -735,6 +768,14 @@ class _RequesterBookDetailScreenState
                     color: AppTheme.textPrimary,
                   ),
             ),
+          ],
+          // Outbound, and marked as such. Shown with or without an overview:
+          // the page is the reader's route to the book's own page elsewhere.
+          if (links.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            Text('Links', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Center(child: BookLinkChips(links)),
           ],
         ],
       ),

@@ -6,9 +6,12 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../../../navigation/ambient_page_route.dart';
+import '../../media_detail/logic/title_links.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
+import '../logic/book_links.dart';
 import 'chaptarr_releases_screen.dart';
+import 'widgets/book_link_chips.dart';
 import 'widgets/book_status.dart';
 import 'widgets/format_badge.dart';
 import 'widgets/format_picker.dart';
@@ -62,6 +65,17 @@ class _ChaptarrBookDetailSheetState
   String? _historyError;
 
   ChaptarrBook get _primary => _records.first;
+
+  /// The first record that names an outside page. A title's ebook and
+  /// audiobook records normally carry the same provider ids, but only one of
+  /// them may have been matched to an edition Chaptarr knows a page for.
+  List<TitleLink> get _links {
+    for (final record in _records) {
+      final links = bookLinks(record);
+      if (links.isNotEmpty) return links;
+    }
+    return const [];
+  }
 
   @override
   void initState() {
@@ -193,6 +207,7 @@ class _ChaptarrBookDetailSheetState
         .toList();
     final hasUnknownFormat =
         _records.any((record) => record.format == BookFormat.unknown);
+    final links = _links;
 
     return AppSheet(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -246,6 +261,10 @@ class _ChaptarrBookDetailSheetState
                 }),
             ],
           ),
+          if (links.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            BookLinkChips(links),
+          ],
           if (_primary.displayOverview case final overview?) ...[
             const SizedBox(height: 14),
             Text(overview,
