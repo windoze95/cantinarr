@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -175,9 +176,34 @@ func (c *Client) SendWithOptions(ctx context.Context, userIDs []int64, title, bo
 	return &out, nil
 }
 
+// StatusError is the error do returns for a non-2xx gateway reply. Its message
+// is the same text the untyped error carried; the type exists so the manager
+// can tell a refused key (401) from an outage without parsing strings.
+type StatusError struct {
+	Method string
+	Path   string
+	Status int
+	// Body is the first 512 bytes of the reply, trimmed.
+	Body string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("push gateway %s %s returned status %d: %s", e.Method, e.Path, e.Status, e.Body)
+}
+
+// IsUnauthorized reports whether err is a gateway reply of 401: the bearer key
+// the client sent is not one the gateway knows (its tenant is gone, or the
+// gateway's database was replaced). A 403 is deliberately not included; that
+// is a disabled tenant or closed enrollment, not a lost key, and re-enrolling
+// would not help.
+func IsUnauthorized(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Status == http.StatusUnauthorized
+}
+
 // do executes a request with an optional JSON body, fails on non-2xx status
-// (including a snippet of the response body), and decodes JSON into out when
-// out is non-nil.
+// with a *StatusError (carrying a snippet of the response body), and decodes
+// JSON into out when out is non-nil.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -202,8 +228,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("push gateway %s %s returned status %d: %s",
-			method, path, resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return &StatusError{Method: method, Path: path, Status: resp.StatusCode, Body: strings.TrimSpace(string(snippet))}
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {

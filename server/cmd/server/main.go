@@ -181,8 +181,10 @@ func main() {
 	var pushManager *push.Manager
 	if cfg.PushGatewayURL != "" {
 		pushManager = push.NewManager(database, cipher, cfg.PushGatewayURL, cfg.PushAPIKey, cfg.PushEnrollToken, cfg.ServerName, logger)
-		// Try once now (non-blocking) and keep retrying in the background until
-		// the gateway is reachable; both are no-ops once enrolled.
+		// Try once now (non-blocking) and keep the background retry running for
+		// the life of the process: it re-enrolls, on a backoff, after a gateway
+		// that was down at boot or a stored key the gateway later refuses, and
+		// costs one mutex read per tick while a client exists.
 		go pushManager.Ensure(ctx)
 		pushManager.StartRetry(ctx)
 		log.Printf("Push notifications enabled via %s", cfg.PushGatewayURL)

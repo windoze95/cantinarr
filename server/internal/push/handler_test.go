@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 )
@@ -232,5 +233,78 @@ func TestUpdatePreferencesInvalidBody(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+// PUSH-031: a registration the gateway refuses with 401 still succeeds for the
+// app (the local row is the source of truth) and hands the refused stored key
+// to the manager, which drops it so the next attempt re-enrolls and registers
+// the device with the new tenant.
+func TestHandlerRegisterUnauthorizedInvalidatesStoredKey(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (7, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO devices (id, user_id, device_name) VALUES ('dev-1', 7, 'iPhone')")
+	g, url := newMockGatewayServer(t)
+	cipher := testCipher(t)
+	seedStoredKey(t, database, cipher, "pgk_stale")
+	g.acceptKeys("pgk_stale")
+
+	// A backoff long enough that its window is still open when the assertions
+	// below run, and short enough for the test to see it close.
+	mgr := NewManager(database, cipher, url, "", "", "Cantinarr", nil)
+	mgr.retryInterval = 200 * time.Millisecond
+	if c := mgr.Ensure(context.Background()); c == nil || c.apiKey != "pgk_stale" {
+		t.Fatalf("Ensure = %+v, want a client carrying pgk_stale", c)
+	}
+	// The gateway loses the tenant.
+	g.acceptKeys("pgk_enrolled")
+
+	h := NewHandler(database, mgr, nil)
+	body := `{"device_id":"dev-1","apns_token":"tok-1","platform":"ios"}`
+	rr := httptest.NewRecorder()
+	h.Register(rr, withUser(httptest.NewRequest(http.MethodPost, "/api/devices/push-token", strings.NewReader(body)), 7))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM push_tokens WHERE device_id = 'dev-1' AND token = 'tok-1'").Scan(&count); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("stored token rows = %d, want 1", count)
+	}
+
+	// The refused key is gone, from memory and from the settings row, and the
+	// invalidation itself did not touch /v1/enroll.
+	if mgr.Client() != nil {
+		t.Error("manager still holds the refused client")
+	}
+	if k := storedPushKey(t, database, cipher); k != "" {
+		t.Errorf("stored push key = %q, want it deleted", k)
+	}
+	if g.enrollCount() != 0 {
+		t.Fatalf("enroll calls = %d, want 0 (re-enrollment waits for the backoff)", g.enrollCount())
+	}
+	// Inside the backoff window Ensure stays off the gateway...
+	if mgr.Ensure(context.Background()) != nil || g.enrollCount() != 0 {
+		t.Fatalf("Ensure contacted the gateway inside the backoff window (enroll calls = %d)", g.enrollCount())
+	}
+	// ...and once it closes, the next Ensure re-enrolls and registers the
+	// stored device with the new tenant before it returns.
+	waitFor(t, "re-enrollment after the backoff", func() bool {
+		c := mgr.Ensure(context.Background())
+		return c != nil && c.apiKey == "pgk_enrolled"
+	})
+	if g.enrollCount() != 1 {
+		t.Errorf("enroll calls = %d, want 1", g.enrollCount())
+	}
+	if ids := g.registeredIDsWith("pgk_enrolled"); len(ids) != 1 || ids[0] != "dev-1" {
+		t.Errorf("devices registered with the new tenant = %v, want [dev-1]", ids)
+	}
+	if k := storedPushKey(t, database, cipher); k != "pgk_enrolled" {
+		t.Errorf("stored push key = %q, want pgk_enrolled", k)
 	}
 }
