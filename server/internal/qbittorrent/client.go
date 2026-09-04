@@ -2,6 +2,7 @@ package qbittorrent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,12 +13,16 @@ import (
 	"time"
 )
 
-// Client talks to the qBittorrent WebUI API v2 using cookie (SID) auth.
-// On a 403 from any call it re-logs-in once and retries.
+// Client talks to the qBittorrent WebUI API v2. With a username and password
+// it uses cookie (SID) auth: it logs in first and, on a 403 from any call,
+// re-logs-in once and retries. With an API key (qBittorrent 5.2+, Web API
+// 2.14.1+) every request carries the key as a Bearer token instead, no
+// session exists, and a 403 is final: the key was rejected.
 type Client struct {
 	baseURL    string
 	username   string
 	password   string
+	apiKey     string
 	httpClient *http.Client
 
 	mu            sync.Mutex
@@ -25,12 +30,34 @@ type Client struct {
 	authenticated bool
 }
 
-// NewClient creates a new qBittorrent client.
+// errAPIKeyRejected is what a 403 means under an API key. No login could fix
+// it: qBittorrent refuses every auth/* call made under a Bearer key, and a
+// qBittorrent older than 5.2 ignores the header entirely and 403s the same
+// way. The key itself is never part of the message.
+var errAPIKeyRejected = errors.New("qbittorrent rejected the API key (it needs qBittorrent 5.2 or newer, with a key generated under Options > WebUI)")
+
+// NewClient creates a qBittorrent client that signs in with the WebUI
+// username and password.
 func NewClient(baseURL, username, password string) *Client {
+	c := newClient(baseURL)
+	c.username = username
+	c.password = password
+	return c
+}
+
+// NewAPIKeyClient creates a qBittorrent client that authenticates every
+// request with a WebUI API key (Options > WebUI on qBittorrent 5.2 and
+// newer). It never calls the login endpoint: a key needs no session, and
+// qBittorrent refuses auth/* calls made under one.
+func NewAPIKeyClient(baseURL, apiKey string) *Client {
+	c := newClient(baseURL)
+	c.apiKey = apiKey
+	return c
+}
+
+func newClient(baseURL string) *Client {
 	return &Client{
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		username: username,
-		password: password,
+		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
@@ -39,7 +66,12 @@ func NewClient(baseURL, username, password string) *Client {
 }
 
 // Login authenticates against the WebUI and stores the SID session cookie.
+// A client built on an API key has no login to make and refuses the call, so
+// a caller cannot steer it onto the cookie flow by mistake.
 func (c *Client) Login() error {
+	if c.apiKey != "" {
+		return errors.New("qbittorrent: login is not used with an API key")
+	}
 	form := url.Values{"username": {c.username}, "password": {c.password}}
 	req, err := http.NewRequest("POST", c.baseURL+"/api/v2/auth/login", strings.NewReader(form.Encode()))
 	if err != nil {
@@ -99,9 +131,23 @@ func (c *Client) Login() error {
 	return nil
 }
 
-// do executes an authenticated request, logging in first when no session
-// exists and re-logging-in once on a 403 response.
+// do executes an authenticated request. Under an API key that is a single
+// request, and a 403 is the key being rejected (see errAPIKeyRejected).
+// Under a password it logs in first when no session exists and re-logs-in
+// once on a 403 response.
 func (c *Client) do(method, path string, form url.Values) (*http.Response, error) {
+	if c.apiKey != "" {
+		resp, err := c.doOnce(method, path, form)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusForbidden {
+			resp.Body.Close()
+			return nil, errAPIKeyRejected
+		}
+		return resp, nil
+	}
+
 	c.mu.Lock()
 	haveSession := c.authenticated
 	c.mu.Unlock()
@@ -141,6 +187,12 @@ func (c *Client) doOnce(method, path string, form url.Values) (*http.Response, e
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	req.Header.Set("Referer", c.baseURL)
+
+	if c.apiKey != "" {
+		// The key stands in for the session; no cookie is ever held.
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		return c.httpClient.Do(req)
+	}
 
 	c.mu.Lock()
 	for _, cookie := range c.cookies {
@@ -203,8 +255,9 @@ func (c *Client) getJSON(path string, out interface{}) error {
 	return nil
 }
 
-// Version returns the qBittorrent application version; used (together with
-// Login) as the connection test.
+// Version returns the qBittorrent application version; used as the
+// connection test (after Login when signing in with a password; on its own
+// under an API key, where a 403 already names the rejected key).
 func (c *Client) Version() (string, error) {
 	resp, err := c.do("GET", "/api/v2/app/version", nil)
 	if err != nil {
