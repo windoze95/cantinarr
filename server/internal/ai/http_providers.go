@@ -45,17 +45,17 @@ type openAIService struct {
 // default, so the configured value wins over the env var. reasoningEffort is
 // the admin-pinned effort for every turn (empty = auto). The endpoint counts
 // as internet-bound and rides the admin's outbound proxy; NewLocalOpenAIService
-// is the LAN twin.
+// is the twin that defaults to direct.
 func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer) *openAIService {
 	return newOpenAIService(apiKey, model, baseURL, reasoningEffort, toolServer, newHostedProviderHTTPClient(httpProviderStreamTimeout))
 }
 
 // NewLocalOpenAIService is NewOpenAIService for the Local (OpenAI-compatible)
-// provider: the endpoint is admin-typed and usually a LAN host, so its client
-// never uses a proxy, and a missing key becomes the placeholder bearer most
-// local servers ignore (localOpenAICredential).
-func NewLocalOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer) *openAIService {
-	return newOpenAIService(localOpenAICredential(apiKey), model, baseURL, reasoningEffort, toolServer, newLocalProviderHTTPClient(httpProviderStreamTimeout))
+// provider: a missing key becomes the placeholder bearer most local servers
+// ignore (localOpenAICredential), and the endpoint is dialed directly unless
+// useProxy says the admin has declared it an internet host.
+func NewLocalOpenAIService(apiKey, model, baseURL, reasoningEffort string, useProxy bool, toolServer *mcp.ToolServer) *openAIService {
+	return newOpenAIService(localOpenAICredential(apiKey), model, baseURL, reasoningEffort, toolServer, newLocalProviderHTTPClient(httpProviderStreamTimeout, useProxy))
 }
 
 func newOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer, client *http.Client) *openAIService {

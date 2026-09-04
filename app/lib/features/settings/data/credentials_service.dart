@@ -59,6 +59,11 @@ class AiCredentialConfig {
   /// contracts as the openai pair; older servers never send them.
   final String localOpenaiBaseUrl;
   final String localOpenaiReasoningEffort;
+
+  /// Whether the local endpoint is declared an internet host, so its turns
+  /// follow the outbound proxy. Off on older servers, which is also what they
+  /// do.
+  final bool localOpenaiUseProxy;
   final List<AiProviderOption> providers;
 
   /// Whether the shared provider is actually ready (credential stored, or the
@@ -76,6 +81,7 @@ class AiCredentialConfig {
     this.openaiReasoningEffort = '',
     this.localOpenaiBaseUrl = '',
     this.localOpenaiReasoningEffort = '',
+    this.localOpenaiUseProxy = false,
     required this.providers,
     this.sharedConfigured = true,
     required this.healthCheckEnabled,
@@ -114,6 +120,7 @@ class AiCredentialConfig {
       localOpenaiBaseUrl: json['local_openai_base_url'] as String? ?? '',
       localOpenaiReasoningEffort:
           json['local_openai_reasoning_effort'] as String? ?? '',
+      localOpenaiUseProxy: json['local_openai_use_proxy'] as bool? ?? false,
       providers: providers,
       sharedConfigured: shared['configured'] as bool? ?? true,
       healthCheckEnabled: health['enabled'] as bool? ?? true,

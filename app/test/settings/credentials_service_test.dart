@@ -100,6 +100,9 @@ void main() {
       expect(status.ai.openaiReasoningEffort, isEmpty);
       expect(status.ai.localOpenaiBaseUrl, isEmpty);
       expect(status.ai.localOpenaiReasoningEffort, isEmpty);
+      // A server that predates the setting reads as off, which is also what
+      // it does with the endpoint.
+      expect(status.ai.localOpenaiUseProxy, isFalse);
       expect(status.ai.providers, isEmpty);
     });
 
@@ -131,7 +134,44 @@ void main() {
       expect(provider.usesUserOAuth, isTrue);
       expect(provider.supportsBaseUrl, isFalse);
       expect(provider.supportsReasoningEffort, isFalse);
+      expect(provider.supportsProxyOptIn, isFalse);
       expect(provider.sharedOnly, isFalse);
+    });
+
+    test('parses the local provider endpoint settings and its proxy opt-in',
+        () {
+      final status = CredentialsStatus.fromJson({
+        'credentials': const <String, bool>{},
+        'ai': {
+          'config': {
+            'provider': 'local_openai',
+            'model': 'qwen3.6:35b-a3b',
+          },
+          'local_openai_base_url': 'https://llm.example.com/v1',
+          'local_openai_reasoning_effort': 'none',
+          'local_openai_use_proxy': true,
+          'providers': [
+            {
+              'id': 'local_openai',
+              'label': 'Local (OpenAI-compatible)',
+              'auth_type': 'api_key',
+              'credential_key': 'local_openai_key',
+              'supports_base_url': true,
+              'supports_reasoning_effort': true,
+              'supports_proxy_opt_in': true,
+              'shared_only': true,
+              'models': <Map<String, dynamic>>[],
+            },
+          ],
+        },
+      });
+
+      expect(status.ai.localOpenaiBaseUrl, 'https://llm.example.com/v1');
+      expect(status.ai.localOpenaiReasoningEffort, 'none');
+      expect(status.ai.localOpenaiUseProxy, isTrue);
+      final provider = status.ai.providers.single;
+      expect(provider.supportsProxyOptIn, isTrue);
+      expect(provider.sharedOnly, isTrue);
     });
   });
 

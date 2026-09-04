@@ -408,6 +408,68 @@ void main() {
       'local_openai_reasoning_effort': 'none',
     });
   });
+
+  testWidgets('a server without the proxy opt-in flag shows no such control',
+      (tester) async {
+    // The key would come back as an unknown credential, so an older server
+    // must not be offered the switch at all.
+    final adapter = _CredentialsAdapter(
+      provider: 'local_openai',
+      model: 'qwen3.6:35b-a3b',
+      includeLocalProvider: true,
+      localBaseUrl: 'http://llm-host:11434/v1',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    expect(find.byKey(const ValueKey('local-openai-base-url')), findsOneWidget);
+    expect(find.byKey(const ValueKey('local-openai-use-proxy')), findsNothing);
+  });
+
+  testWidgets('the proxy opt-in prefills from the credentials status',
+      (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'local_openai',
+      model: 'qwen3.6:35b-a3b',
+      includeLocalProvider: true,
+      localBaseUrl: 'https://llm.example.com/v1',
+      localSupportsProxyOptIn: true,
+      localUseProxy: true,
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final toggle = find.byKey(const ValueKey('local-openai-use-proxy'));
+    await tester.scrollUntilVisible(toggle, 200,
+        scrollable: find.byType(Scrollable).first);
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+  });
+
+  testWidgets('turning the proxy opt-in on sends its key', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'local_openai',
+      model: 'qwen3.6:35b-a3b',
+      includeLocalProvider: true,
+      localBaseUrl: 'https://llm.example.com/v1',
+      localSupportsProxyOptIn: true,
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final toggle = find.byKey(const ValueKey('local-openai-use-proxy'));
+    await tester.scrollUntilVisible(toggle, 200,
+        scrollable: find.byType(Scrollable).first);
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    // Only the changed key travels: the untouched endpoint pair is not
+    // rewritten just because the screen is showing it.
+    expect(adapter.lastUpdate, {'local_openai_use_proxy': 'true'});
+  });
 }
 
 Future<void> _pumpCredentials(
@@ -437,6 +499,8 @@ class _CredentialsAdapter implements HttpClientAdapter {
     this.includeLocalProvider = false,
     this.localBaseUrl,
     this.localReasoningEffort,
+    this.localSupportsProxyOptIn = false,
+    this.localUseProxy,
   });
 
   final String provider;
@@ -446,6 +510,8 @@ class _CredentialsAdapter implements HttpClientAdapter {
   final bool includeLocalProvider;
   final String? localBaseUrl;
   final String? localReasoningEffort;
+  final bool localSupportsProxyOptIn;
+  final bool? localUseProxy;
   Map<String, dynamic>? lastUpdate;
 
   @override
@@ -479,6 +545,7 @@ class _CredentialsAdapter implements HttpClientAdapter {
           if (localBaseUrl != null) 'local_openai_base_url': localBaseUrl,
           if (localReasoningEffort != null)
             'local_openai_reasoning_effort': localReasoningEffort,
+          if (localUseProxy != null) 'local_openai_use_proxy': localUseProxy,
           'providers': [
             {
               'id': 'codex',
@@ -526,6 +593,7 @@ class _CredentialsAdapter implements HttpClientAdapter {
                 'credential_key': 'local_openai_key',
                 'supports_base_url': true,
                 'supports_reasoning_effort': true,
+                if (localSupportsProxyOptIn) 'supports_proxy_opt_in': true,
                 'shared_only': true,
                 'models': <Map<String, dynamic>>[],
               },

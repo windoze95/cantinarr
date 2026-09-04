@@ -25,9 +25,16 @@ func newHostedProviderHTTPClient(timeout time.Duration) *http.Client {
 }
 
 // newLocalProviderHTTPClient builds the client for the Local
-// (OpenAI-compatible) provider, whose endpoint is admin-typed and usually a
-// LAN host: cluster-internal, never proxied.
-func newLocalProviderHTTPClient(timeout time.Duration) *http.Client {
+// (OpenAI-compatible) provider. Its endpoint is admin-typed, so the class
+// cannot be read off the URL -- a split-horizon name or a Tailscale address
+// would be misread -- and the admin declares it instead: useProxy marks the
+// endpoint an internet host, which rides the outbound proxy like any hosted
+// provider. Off, the default and what every install assumed before the
+// setting existed, keeps the endpoint cluster-internal and never proxied.
+func newLocalProviderHTTPClient(timeout time.Duration, useProxy bool) *http.Client {
+	if useProxy {
+		return newProviderHTTPClient(timeout, httpx.ExternalTransport(), httpx.External())
+	}
 	return newProviderHTTPClient(timeout, httpx.Internal(), nil)
 }
 
