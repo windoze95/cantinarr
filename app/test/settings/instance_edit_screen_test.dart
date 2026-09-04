@@ -1237,6 +1237,57 @@ void main() {
     expect(adapter.requests.length, requestsBefore);
   });
 
+  testWidgets('ruTorrent asks for optional HTTP Basic credentials, no API key',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ruTorrent').last);
+    await tester.pumpAndSettle();
+
+    // ruTorrent's web server may or may not sit behind HTTP Basic auth, so
+    // both credential fields are offered as optional, like Transmission's.
+    expect(
+        find.widgetWithText(TextField, 'Username (optional)'), findsOneWidget);
+    expect(
+        find.widgetWithText(TextField, 'Password (optional)'), findsOneWidget);
+    expect(find.text('Only if authentication is enabled'), findsNWidgets(2));
+    expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.text('Username & password'), findsNothing);
+    expect(find.text('http://rutorrent:8080'), findsOneWidget);
+  });
+
+  testWidgets('a new ruTorrent instance saves with no credentials typed',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ruTorrent').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Torrents');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'URL'), 'http://rutorrent:8080');
+    final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    // Optional credentials are not required: the save goes through with
+    // both left empty, and no validation message stands in the way.
+    expect(find.text('Username and password are required'), findsNothing);
+    final post = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+    expect(post.body['service_type'], 'rutorrent');
+    expect(post.body['username'], '');
+    expect(post.body['password'], '');
+    expect(post.body['api_key'], '');
+  });
+
   testWidgets(
       'Lidarr hides the default toggle, assigns selected users, and installs '
       'its webhook on create', (tester) async {

@@ -92,15 +92,18 @@ void main() {
         ServiceInstance(
             id: 'transmission-a', serviceType: 'transmission', name: 'Trans'),
         ServiceInstance(id: 'nzbget-a', serviceType: 'nzbget', name: 'NZBGet'),
+        ServiceInstance(
+            id: 'rutorrent-a', serviceType: 'rutorrent', name: 'ruTorrent'),
       ],
     );
 
     // Usenet group first, then torrents; server order kept within each group,
-    // so Deluge stays between the two qBittorrent instances.
+    // so Deluge stays between the two qBittorrent instances and ruTorrent,
+    // last on the server, closes the torrent group.
     expect(
       connection.downloadInstances.map((i) => i.id).toList(),
       ['sabnzbd-a', 'nzbget-a', 'qbittorrent-a', 'deluge-a', 'qbittorrent-b',
-          'transmission-a'],
+          'transmission-a', 'rutorrent-a'],
     );
   });
 

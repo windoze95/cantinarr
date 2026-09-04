@@ -10,7 +10,7 @@ for a test. The private lab's fixture allowlist, rights/provenance records, and
 safety audit are the reference implementation of this rule.
 
 - Two admins (`Admin A`, `Admin B`), a default requester, and a requester with no Chaptarr/Lidarr/included-AI grant.
-- One instance of each supported service — Radarr, Sonarr, Chaptarr, Lidarr, SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, Tautulli, Tracearr, Jellyfin, and Emby (a throwaway container of each with two empty libraries is enough) — plus a second instance of at least one arr for the admin exploratory session.
+- One instance of each supported service — Radarr, Sonarr, Chaptarr, Lidarr, SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, ruTorrent, Tautulli, Tracearr, Jellyfin, and Emby (a throwaway container of each with two empty libraries is enough) — plus a second instance of at least one arr for the admin exploratory session.
 - A Plex owner account with two owned servers plus a shared server and player resources, and movie/show/music/photo libraries; at least four disposable registered recipient accounts, one already-shared account, one pending-but-unaccepted account, and one unregistered email. Put a uniquely named marker item in every test library, and ensure the owner can remove shares plus create/delete temporary libraries between cases.
 - Movie and TV fixtures that can be walked through unavailable, requested, downloading, partial, and available states; a TV fixture with Specials and enough real seasons for a noncontiguous selection.
 - A book fixture requestable in both ebook and audiobook formats.

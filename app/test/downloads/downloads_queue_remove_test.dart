@@ -134,6 +134,7 @@ void main() {
     'qbittorrent',
     'transmission',
     'deluge',
+    'rutorrent',
   ]) {
     testWidgets('$serviceType remove dialog offers the delete-data option',
         (tester) async {

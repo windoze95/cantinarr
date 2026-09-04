@@ -35,7 +35,8 @@ const (
 // authenticate with an API key; qBittorrent with either an API key (5.2 and
 // newer) or a username and password, and a row holds one shape or the other,
 // never both; NZBGet and Transmission with a username and password; Deluge
-// with its web UI password alone.
+// with its web UI password alone; ruTorrent with optional Basic-auth
+// credentials.
 type Instance struct {
 	ID          string `json:"id"`
 	ServiceType string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", "deluge", …

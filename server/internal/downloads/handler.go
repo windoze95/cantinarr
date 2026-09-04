@@ -1,5 +1,5 @@
 // Package downloads exposes a unified REST API over SABnzbd, qBittorrent,
-// NZBGet, Transmission, and Deluge download-client instances, normalizing
+// NZBGet, Transmission, Deluge, and ruTorrent download-client instances, normalizing
 // all backends into a common shape. Each client's mapping lives in its own
 // backend_<type>.go adapter behind the backend interface (backend.go).
 package downloads
@@ -27,8 +27,8 @@ func NewHandler(store *instance.Store, registry *instance.Registry) *Handler {
 }
 
 // QueueItem is the normalized shape of a single download across backends.
-// id is the SABnzbd nzo_id, the qBittorrent/Transmission/Deluge torrent
-// hash, or the NZBGet NZBID.
+// id is the SABnzbd nzo_id, the qBittorrent/Transmission/Deluge/ruTorrent
+// torrent hash, or the NZBGet NZBID.
 type QueueItem struct {
 	ID            string  `json:"id"`
 	Name          string  `json:"name"`

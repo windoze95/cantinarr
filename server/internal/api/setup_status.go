@@ -143,7 +143,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "download_client",
 			Title:       "Download activity",
-			Description: "See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, Transmission, or Deluge).",
+			Description: "See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, Transmission, Deluge, or ruTorrent).",
 			Configured:  f.HasDownloadClient,
 			Optional:    true,
 		},

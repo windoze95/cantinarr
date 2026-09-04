@@ -876,6 +876,8 @@ class _UserRequestSettingsScreenState
         return 'Transmission';
       case 'deluge':
         return 'Deluge';
+      case 'rutorrent':
+        return 'ruTorrent';
       case 'tautulli':
         return 'Tautulli';
       case 'tracearr':

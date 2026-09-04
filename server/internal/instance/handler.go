@@ -18,6 +18,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/plex"
+	"github.com/windoze95/cantinarr-server/internal/rutorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
 	"github.com/windoze95/cantinarr-server/internal/transmission"
 )
@@ -33,6 +34,7 @@ var allowedServiceTypes = map[string]bool{
 	"nzbget":       true,
 	"transmission": true,
 	"deluge":       true,
+	"rutorrent":    true,
 	"tautulli":     true,
 	"tracearr":     true,
 	"jellyfin":     true,
@@ -40,7 +42,7 @@ var allowedServiceTypes = map[string]bool{
 	"plex":         true,
 }
 
-const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'deluge', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex'"}`
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'deluge', 'rutorrent', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
 // Download clients and watch-history providers (Tautulli, Tracearr) are admin
@@ -804,8 +806,9 @@ func validateRequiredFields(inst *Instance) error {
 		if inst.Username == "" || inst.Password == "" {
 			return fmt.Errorf("username and password are required for %s", inst.ServiceType)
 		}
-	case "transmission":
-		// Username/password are optional: Transmission RPC may run without auth.
+	case "transmission", "rutorrent":
+		// Username/password are optional: Transmission RPC may run without
+		// auth, and ruTorrent is only protected when its web server asks.
 	case "deluge":
 		// Deluge's web UI has a password and no username.
 		if inst.Password == "" {
@@ -872,6 +875,9 @@ func validateConnection(inst *Instance) error {
 		return err
 	case "deluge":
 		_, err := deluge.NewClient(inst.URL, inst.Password).Version()
+		return err
+	case "rutorrent":
+		_, err := rutorrent.NewClient(inst.URL, inst.Username, inst.Password).Version()
 		return err
 	case "tautulli", "tracearr":
 		return validateWatchHistoryConnection(inst)
