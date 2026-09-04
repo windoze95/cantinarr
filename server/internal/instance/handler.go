@@ -16,7 +16,6 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/plex"
-	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
 	"github.com/windoze95/cantinarr-server/internal/transmission"
 )
@@ -58,11 +57,15 @@ var grantableServiceTypes = map[string]bool{
 // instanceResponse is the JSON shape returned to clients. All credentials are
 // write-only, including the token used to authenticate arr webhook callbacks.
 type instanceResponse struct {
-	ID                string              `json:"id"`
-	ServiceType       string              `json:"service_type"`
-	Name              string              `json:"name"`
-	URL               string              `json:"url"`
-	Username          string              `json:"username,omitempty"`
+	ID          string `json:"id"`
+	ServiceType string `json:"service_type"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Username    string `json:"username,omitempty"`
+	// HasAPIKey says which of qBittorrent's two credential shapes is stored
+	// (a key, or the username above with a password) without revealing the
+	// key. Only qBittorrent rows carry it.
+	HasAPIKey         bool                `json:"has_api_key,omitempty"`
 	IsDefault         bool                `json:"is_default"`
 	SortOrder         int                 `json:"sort_order"`
 	MediaDownloads    bool                `json:"media_downloads"`
@@ -99,6 +102,9 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 		SortOrder:         inst.SortOrder,
 		MediaDownloads:    inst.MediaDownloadsConfigured(h.mediaRoots),
 		MediaPathMappings: mappings,
+	}
+	if inst.ServiceType == "qbittorrent" {
+		resp.HasAPIKey = inst.APIKey != ""
 	}
 	if IsMediaServerType(inst.ServiceType) {
 		cfg := inst.MediaServerConfig.public()
@@ -235,6 +241,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
+	applyQbittorrentAuthMode(&inst, &request.Instance)
 	if err := validateRequiredFields(&inst); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
@@ -305,6 +312,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if inst.Password == "" {
 		inst.Password = existing.Password
 	}
+	applyQbittorrentAuthMode(&inst, &request.Instance)
 	plexCred, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
@@ -408,6 +416,7 @@ func (h *Handler) resolveTestInstance(w http.ResponseWriter, r *http.Request) (*
 			inst.Password = existing.Password
 		}
 		inst.MediaServerConfig = existing.MediaServerConfig.clone()
+		applyQbittorrentAuthMode(&inst, &request.Instance)
 	}
 
 	if !allowedServiceTypes[inst.ServiceType] {
@@ -781,7 +790,14 @@ func validateRequiredFields(inst *Instance) error {
 		return fmt.Errorf("url must not contain credentials, a query string, or a fragment")
 	}
 	switch inst.ServiceType {
-	case "qbittorrent", "nzbget":
+	case "qbittorrent":
+		// Either shape: an API key (qBittorrent 5.2+) or the WebUI username
+		// and password. Storage holds one or the other, never both (see
+		// applyQbittorrentAuthMode).
+		if inst.APIKey == "" && (inst.Username == "" || inst.Password == "") {
+			return fmt.Errorf("an API key, or a username and password, is required for qbittorrent")
+		}
+	case "nzbget":
 		if inst.Username == "" || inst.Password == "" {
 			return fmt.Errorf("username and password are required for %s", inst.ServiceType)
 		}
@@ -799,6 +815,27 @@ func validateRequiredFields(inst *Instance) error {
 	return nil
 }
 
+// applyQbittorrentAuthMode keeps a qBittorrent instance on exactly one of its
+// two credential shapes. Credentials are write-only and a blank field keeps
+// the stored value, which on its own could never move an instance from a
+// password to an API key or back: the stale credential would survive every
+// edit and the client would keep choosing it. So the shape the admin sent
+// wins: a key clears the stored username and password, a username or
+// password clears the stored key, and a request carrying neither (an edit
+// that only moved the URL) keeps what is stored. inst already carries the
+// stored fallbacks; submitted is the request exactly as it arrived.
+func applyQbittorrentAuthMode(inst, submitted *Instance) {
+	if inst.ServiceType != "qbittorrent" {
+		return
+	}
+	switch {
+	case submitted.APIKey != "":
+		inst.Username, inst.Password = "", ""
+	case submitted.Username != "" || submitted.Password != "":
+		inst.APIKey = ""
+	}
+}
+
 // validateConnection performs a service-type-specific connectivity check.
 func validateConnection(inst *Instance) error {
 	switch inst.ServiceType {
@@ -811,9 +848,11 @@ func validateConnection(inst *Instance) error {
 		_, err := sabnzbd.NewClient(inst.URL, inst.APIKey).Version()
 		return err
 	case "qbittorrent":
-		client := qbittorrent.NewClient(inst.URL, inst.Username, inst.Password)
-		if err := client.Login(); err != nil {
-			return err
+		client := newQbittorrentClient(inst)
+		if inst.APIKey == "" {
+			if err := client.Login(); err != nil {
+				return err
+			}
 		}
 		_, err := client.Version()
 		return err

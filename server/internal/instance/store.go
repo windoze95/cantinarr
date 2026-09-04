@@ -32,7 +32,8 @@ const (
 
 // Instance represents a configured service instance (Radarr, Sonarr, SABnzbd,
 // or qBittorrent). Radarr/Sonarr/SABnzbd authenticate with an API key;
-// qBittorrent authenticates with username/password.
+// qBittorrent with either an API key (5.2 and newer) or a username and
+// password, and a row holds one shape or the other, never both.
 type Instance struct {
 	ID          string `json:"id"`
 	ServiceType string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", or "qbittorrent"

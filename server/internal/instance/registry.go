@@ -295,6 +295,17 @@ func (r *Registry) GetSabnzbdClient(instanceID string) (*sabnzbd.Client, error) 
 	return client, nil
 }
 
+// newQbittorrentClient builds the client an instance's stored credentials
+// call for: an API key when one is stored (qBittorrent 5.2+), otherwise the
+// WebUI username and password. Storage holds exactly one of the two (see
+// applyQbittorrentAuthMode), so the choice is never ambiguous.
+func newQbittorrentClient(inst *Instance) *qbittorrent.Client {
+	if inst.APIKey != "" {
+		return qbittorrent.NewAPIKeyClient(inst.URL, inst.APIKey)
+	}
+	return qbittorrent.NewClient(inst.URL, inst.Username, inst.Password)
+}
+
 // GetQbittorrentClient returns a cached or new qBittorrent client for the given instance ID.
 func (r *Registry) GetQbittorrentClient(instanceID string) (*qbittorrent.Client, error) {
 	r.mu.RLock()
@@ -309,7 +320,7 @@ func (r *Registry) GetQbittorrentClient(instanceID string) (*qbittorrent.Client,
 		return nil, err
 	}
 
-	client := qbittorrent.NewClient(inst.URL, inst.Username, inst.Password)
+	client := newQbittorrentClient(inst)
 
 	r.mu.Lock()
 	r.qbittorrentClients[instanceID] = client

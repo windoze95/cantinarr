@@ -1043,10 +1043,12 @@ void main() {
     await tester.tap(find.text('qBittorrent'));
     await tester.pumpAndSettle();
 
-    // qBittorrent authenticates with username/password, not an API key.
+    // qBittorrent opens on its WebUI sign-in, the shape every version has,
+    // with the 5.2+ API key offered as the other shape.
     expect(find.widgetWithText(TextField, 'Username'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Password'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.text('API key'), findsOneWidget);
     expect(find.widgetWithText(SwitchListTile, 'Default Instance'),
         findsOneWidget);
 
@@ -1056,6 +1058,108 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Name and URL are required'), findsOneWidget);
     expect(find.text('Choose a service type'), findsNothing);
+  });
+
+  testWidgets(
+      'qBittorrent switched to an API key swaps the fields and saves only '
+      'the key', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('qBittorrent').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Username & password'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Username'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Username'), 'admin');
+
+    await tester.tap(find.text('API key'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'API Key'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Username'), findsNothing);
+    expect(find.widgetWithText(TextField, 'Password'), findsNothing);
+    expect(find.textContaining('5.2 or newer'), findsWidgets);
+
+    await _fillForm(tester, 'Torrents');
+    final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    // The username typed before the switch is gone from the save, so the
+    // server stores exactly one shape.
+    final post = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+    expect(post.body['service_type'], 'qbittorrent');
+    expect(post.body['api_key'], 'key');
+    expect(post.body['username'], '');
+    expect(post.body['password'], '');
+  });
+
+  testWidgets(
+      'editing a qBittorrent instance stored with an API key opens on the '
+      'key, and moving it to a password requires that password',
+      (tester) async {
+    final adapter = _FakeAdapter(instances: [
+      {
+        'id': 'qbittorrent-b',
+        'service_type': 'qbittorrent',
+        'name': 'Torrents',
+        'url': 'http://qbittorrent:8081',
+        'is_default': true,
+        'has_api_key': true,
+        'media_path_mappings': <dynamic>[],
+      },
+    ]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'qbittorrent-b',
+        initialServiceType: 'qbittorrent',
+        initialName: 'Torrents',
+        initialUrl: 'http://qbittorrent:8081',
+      ),
+    );
+
+    // The stored shape wins: the key field, blank to keep the stored key.
+    expect(find.widgetWithText(TextField, 'API Key'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Username'), findsNothing);
+    expect(find.text('Leave blank to keep existing'), findsOneWidget);
+
+    await tester.tap(find.text('Username & password'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'Username'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Password'), findsOneWidget);
+    // Nothing is stored on this shape, so blank is no longer "keep".
+    expect(find.text('Leave blank to keep existing'), findsNothing);
+    final save = find.widgetWithText(ElevatedButton, 'Save Changes');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(find.text('Username and password are required'), findsOneWidget);
+    expect(
+        adapter.requests.where((r) =>
+            r.method == 'PUT' && r.path == '/api/instances/qbittorrent-b'),
+        isEmpty);
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Username'), 'admin');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Password'), 'secret');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final update = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' && r.path == '/api/instances/qbittorrent-b');
+    expect(update.body['username'], 'admin');
+    expect(update.body['password'], 'secret');
+    expect(update.body['api_key'], '');
   });
 
   testWidgets(

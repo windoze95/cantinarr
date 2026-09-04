@@ -18,6 +18,11 @@ import '../logic/arr_path_match.dart';
 import '../logic/plex_invites_provider.dart';
 
 /// Form for creating or editing a service instance.
+/// qBittorrent's two credential shapes: the WebUI sign-in, which every
+/// version has, or an API key, which 5.2 and newer issue under
+/// Options > WebUI.
+enum _QbitAuth { password, apiKey }
+
 class InstanceEditScreen extends ConsumerStatefulWidget {
   final String? instanceId;
   final String? initialServiceType;
@@ -134,6 +139,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String _plexMachineId = '';
   bool _plexAutoApprove = false;
 
+  /// Which credential shape a qBittorrent form is on, and the shape the
+  /// stored instance is on when editing, so a switch knows it must carry
+  /// the new shape's fields instead of "leave blank to keep existing".
+  _QbitAuth _qbitAuth = _QbitAuth.password;
+  _QbitAuth _storedQbitAuth = _QbitAuth.password;
+
   static const _serviceTypes = <(String, String)>[
     ('radarr', 'Radarr'),
     ('sonarr', 'Sonarr'),
@@ -151,10 +162,19 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   ];
 
   /// Types that authenticate with username/password instead of an API key.
+  /// qBittorrent can do either, chosen by the toggle above its fields.
   bool get _usesUserPass =>
-      _serviceType == 'qbittorrent' ||
       _serviceType == 'nzbget' ||
-      _serviceType == 'transmission';
+      _serviceType == 'transmission' ||
+      (_serviceType == 'qbittorrent' && _qbitAuth == _QbitAuth.password);
+
+  /// Editing a qBittorrent instance onto its other credential shape: the
+  /// stored credential is about to be dropped, so the new one is required
+  /// and "leave blank to keep existing" no longer applies.
+  bool get _qbitSwitchingShape =>
+      widget.isEditing &&
+      _serviceType == 'qbittorrent' &&
+      _qbitAuth != _storedQbitAuth;
 
   /// Transmission auth is optional (only when the daemon requires it).
   bool get _credentialsOptional => _serviceType == 'transmission';
@@ -492,6 +512,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        _storedQbitAuth = details['has_api_key'] == true
+            ? _QbitAuth.apiKey
+            : _QbitAuth.password;
+        _qbitAuth = _storedQbitAuth;
         if (_isMediaServer) {
           final raw = details['media_server_config'];
           final config = raw is Map
@@ -902,8 +926,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       }
     }
     // When editing, blank credentials keep the existing ones. Plex's is
-    // the link, checked above.
-    if (widget.isEditing || _isPlex) return null;
+    // the link, checked above. A qBittorrent instance moved onto its other
+    // credential shape has nothing stored to keep, so that shape's fields
+    // are required as on a new instance.
+    if ((widget.isEditing && !_qbitSwitchingShape) || _isPlex) return null;
     if (_usesUserPass) {
       if (_credentialsOptional) return null;
       if (_usernameController.text.trim().isEmpty ||
@@ -1450,9 +1476,55 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     }
   }
 
+  /// qBittorrent's credential shape. Switching clears the other shape's
+  /// fields so a save carries exactly one, which is what tells the server
+  /// to drop the stored other.
+  Widget _buildQbitAuthToggle() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SegmentedButton<_QbitAuth>(
+          segments: const [
+            ButtonSegment(
+              value: _QbitAuth.password,
+              label: Text('Username & password'),
+            ),
+            ButtonSegment(
+              value: _QbitAuth.apiKey,
+              label: Text('API key'),
+            ),
+          ],
+          selected: {_qbitAuth},
+          showSelectedIcon: false,
+          onSelectionChanged: (selection) => setState(() {
+            _qbitAuth = selection.first;
+            if (_qbitAuth == _QbitAuth.apiKey) {
+              _usernameController.clear();
+              _passwordController.clear();
+            } else {
+              _apiKeyController.clear();
+            }
+          }),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _qbitAuth == _QbitAuth.apiKey
+              ? 'API keys need qBittorrent 5.2 or newer; generate one under '
+                  'Options > WebUI.'
+              : 'The WebUI sign-in; works on every qBittorrent version.',
+          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+        ),
+      ],
+    );
+  }
+
   String get _apiKeyHint {
-    if (widget.isEditing) return 'Leave blank to keep existing';
+    if (widget.isEditing && !_qbitSwitchingShape) {
+      return 'Leave blank to keep existing';
+    }
     switch (_serviceType) {
+      case 'qbittorrent':
+        return 'Your qBittorrent API key (Options > WebUI, 5.2 or newer)';
       case 'sabnzbd':
         return 'Your SABnzbd API key';
       case 'tautulli':
@@ -2421,10 +2493,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // shape (API key vs username/password), so the prompted form shows
           // nothing here until one is picked.
           //
-          // qBittorrent, NZBGet and Transmission authenticate with
-          // username/password; Plex links a plex.tv account with a PIN;
+          // NZBGet and Transmission authenticate with username/password;
+          // qBittorrent with either that or, on 5.2 and newer, an API key,
+          // chosen by the toggle; Plex links a plex.tv account with a PIN;
           // everything else uses an API key. Credentials are write-only:
           // when editing, blank keeps the existing value.
+          if (_serviceType == 'qbittorrent') ...[
+            _buildQbitAuthToggle(),
+            const SizedBox(height: 16),
+          ],
           if (_serviceTypeUnchosen)
             const SizedBox.shrink()
           else if (_isPlex)
@@ -2447,7 +2524,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               decoration: InputDecoration(
                 labelText:
                     _credentialsOptional ? 'Password (optional)' : 'Password',
-                hintText: widget.isEditing
+                hintText: widget.isEditing && !_qbitSwitchingShape
                     ? 'Leave blank to keep existing'
                     : (_credentialsOptional
                         ? 'Only if authentication is enabled'
