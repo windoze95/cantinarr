@@ -56,7 +56,7 @@ services:
       - ./config:/config
     environment:
       # Optional: enables push notifications (see Configuration)
-      - CANTINARR_PUSH_GATEWAY_URL=https://push.julian.codes
+      - CANTINARR_PUSH_GATEWAY_URL=https://push.cantinarr.com
     restart: unless-stopped
 ```
 
@@ -95,7 +95,7 @@ Optional env vars for deployment tuning (a `.env` file next to the binary is aut
 | `CANTINARR_CODEX_BIN` | auto-discovered | Optional path to `codex-app-server` or the full `codex` CLI; official container images bundle the tested 0.144.3 app-server at `/usr/local/bin/codex-app-server` |
 | `CANTINARR_CODEX_RUNTIME_DIR` | `/dev/shm/cantinarr-codex` | Absolute Linux tmpfs/ramfs directory used for server-owned, ephemeral per-session Codex state; if it already exists, it must be owned by the server user with mode `0700` |
 | `CANTINARR_MEDIA_ROOTS` | unset | Comma-separated absolute server/container paths forming the outer filesystem allowlist for completed-media downloads. Empty disables downloads. Mount libraries read-only beneath these roots, then map each arr-reported prefix to a path inside them from that instance's settings; `/` and aliases of `/` are refused |
-| `CANTINARR_PUSH_GATEWAY_URL` | unset | Push gateway origin; setting it **enables** push notifications |
+| `CANTINARR_PUSH_GATEWAY_URL` | unset | Push gateway origin; setting it **enables** push notifications. The community relay is `https://push.cantinarr.com`; its former name `https://push.julian.codes` is still accepted and rewritten to the new one at start (same gateway, same enrollment) |
 | `CANTINARR_PUSH_API_KEY` | unset | Optional pinned gateway key -- leave blank and the server auto-enrolls on first start, persisting its issued key encrypted in the DB |
 | `CANTINARR_PUSH_ENROLL_TOKEN` | unset | Shared enroll token, only for gateways with gated enrollment |
 | `CANTINARR_APPLE_APP_IDS` | unset | Comma-separated `TeamID.BundleID` values served in `/.well-known/apple-app-site-association` for native Apple passkeys |
