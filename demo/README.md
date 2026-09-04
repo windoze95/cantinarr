@@ -22,7 +22,6 @@ The server starts on **port 8484**.
 |----------|----------|-------|
 | admin    | demo     | admin |
 | user     | demo     | user  |
-| kid      | demo     | user (kids account: movies up to PG, shows up to TV-PG, unrated and Horror hidden) |
 
 There is **no registration endpoint and no invite code** — accounts come from the seeds above or from admin-generated connect links (a third seeded account, `riley`, has a pending invite to demo that flow).
 
@@ -39,7 +38,7 @@ Full parity with the current Cantinarr API surface:
 - **Auth & session** — JWT login, opaque `cnr1.` refresh tokens, connect-link redemption, per-user permissions, device management
 - **Discovery** — trending, popular, top-rated, upcoming, and now-playing rows for movies, Airing This Week / Top Rated / Coming Soon for TV, real paging, full-text search, browse by genre, year range, rating, language, streaming service (per region), keyword, and studio, movie/TV/person details with cast, crew, studios, countries, budget and revenue, release dates by region, and IMDb/TMDB/Trakt link ids, Trakt lists/anticipated/calendar
 - **Requests** — movie, TV (per-season), book (ebook/audiobook), and album requests with the full approval flow: pending → approve/deny → simulated download progress → available/partial, routed to a chosen library
-- **Kids accounts** — the `kid` account carries a content policy (rating caps, unrated and genre blocks); every title surface hides what it may not see, a hidden title's page reads "not available to your account", and its requests are refused; admins edit the policy from the user's request settings, with the real certification catalog (US and GB)
+- **Kids accounts** — one seeded requester is a kids account with a content policy (rating caps, unrated and genre blocks); every title surface hides what it may not see, a hidden title's page reads "not available to your account", and its requests are refused; admins see the Child tag on the Users screen and edit the policy from that user's request settings, with the real certification catalog (US and GB)
 - **Multiple libraries** — two Radarr and two Sonarr instances, reached through additive per-user grants, so the Library chooser, the per-library status chips, and instance-scoped quality profiles all have something to show
 - **Books browsing** — the Chaptarr library by author and by series, with per-format ownership on every title
 - **Music browsing** — the Lidarr library by artist, Recently Added, owned-aware search, requestable albums that walk pending → requested → downloading → available, and the admin Music module (library, queue with the Import Doctor, wanted, calendar, history, release search)
