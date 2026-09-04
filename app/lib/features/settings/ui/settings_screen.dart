@@ -1015,6 +1015,7 @@ IconData _serviceIcon(String serviceType) {
     case 'qbittorrent':
     case 'nzbget':
     case 'transmission':
+    case 'deluge':
       return Icons.download_outlined;
     case 'tautulli':
     case 'tracearr':
@@ -1045,6 +1046,8 @@ String _serviceLabel(String serviceType) {
       return 'NZBGet';
     case 'transmission':
       return 'Transmission';
+    case 'deluge':
+      return 'Deluge';
     case 'tautulli':
       return 'Tautulli';
     case 'tracearr':

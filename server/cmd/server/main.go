@@ -167,7 +167,7 @@ func main() {
 		}
 	}()
 
-	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission queue management)
+	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission / Deluge queue management)
 	downloadsHandler := downloads.NewHandler(instanceStore, registry)
 
 	// Watch-history handler (Tautulli and Tracearr monitoring)

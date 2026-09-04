@@ -72,8 +72,9 @@ const catchUpHistoryPageSize = 200
 // same as a batch over restoredAlertCap.
 var errImportBacklogOverflow = errors.New("import history window overflow")
 
-// downloadClientTypes are the service types polled for downloads_queue events.
-var downloadClientTypes = []string{"sabnzbd", "qbittorrent", "nzbget", "transmission"}
+// downloadClientTypes are the service types polled for downloads_queue
+// events: every client the downloads package serves.
+var downloadClientTypes = downloads.DownloadClientTypes()
 
 // Event represents a WebSocket event sent to clients.
 type Event struct {

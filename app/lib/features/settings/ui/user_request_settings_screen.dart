@@ -874,6 +874,8 @@ class _UserRequestSettingsScreenState
         return 'NZBGet';
       case 'transmission':
         return 'Transmission';
+      case 'deluge':
+        return 'Deluge';
       case 'tautulli':
         return 'Tautulli';
       case 'tracearr':

@@ -30,13 +30,15 @@ const (
 	legacyMediaDownloadModeIdentity = "identity"
 )
 
-// Instance represents a configured service instance (Radarr, Sonarr, SABnzbd,
-// or qBittorrent). Radarr/Sonarr/SABnzbd authenticate with an API key;
-// qBittorrent with either an API key (5.2 and newer) or a username and
-// password, and a row holds one shape or the other, never both.
+// Instance represents a configured service instance (an arr, a download
+// client, a watch-history provider, or a media server). Radarr/Sonarr/SABnzbd
+// authenticate with an API key; qBittorrent with either an API key (5.2 and
+// newer) or a username and password, and a row holds one shape or the other,
+// never both; NZBGet and Transmission with a username and password; Deluge
+// with its web UI password alone.
 type Instance struct {
 	ID          string `json:"id"`
-	ServiceType string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", or "qbittorrent"
+	ServiceType string `json:"service_type"` // "radarr", "sonarr", "sabnzbd", "deluge", …
 	Name        string `json:"name"`
 	URL         string `json:"url"`
 	APIKey      string `json:"api_key"`

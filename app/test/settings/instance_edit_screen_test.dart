@@ -1162,6 +1162,81 @@ void main() {
     expect(update.body['api_key'], '');
   });
 
+  testWidgets('Deluge asks for its web UI password and nothing else',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Deluge').last);
+    await tester.pumpAndSettle();
+
+    // Deluge's web UI has no username, so one credential field and no
+    // qBittorrent-style shape toggle.
+    expect(find.widgetWithText(TextField, 'Web UI password'), findsOneWidget);
+    expect(find.text("The password Deluge's web UI asks for"), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Username'), findsNothing);
+    expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.text('Username & password'), findsNothing);
+    expect(find.text('http://deluge:8112'), findsOneWidget);
+  });
+
+  testWidgets('a new Deluge instance saves its password with an empty username',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Deluge').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Torrents');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'URL'), 'http://deluge:8112');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Web UI password'), 'secret');
+    final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    // The username/password payload shape, with the username the form never
+    // asked for left empty.
+    final post = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+    expect(post.body['service_type'], 'deluge');
+    expect(post.body['username'], '');
+    expect(post.body['password'], 'secret');
+    expect(post.body['api_key'], '');
+  });
+
+  testWidgets('a Deluge instance without a password does not save',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Deluge').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Torrents');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'URL'), 'http://deluge:8112');
+    final requestsBefore = adapter.requests.length;
+    final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    // The password is the only credential, so it is the one that is required,
+    // and nothing reaches the server without it.
+    expect(find.text('Password is required'), findsOneWidget);
+    expect(adapter.requests.length, requestsBefore);
+  });
+
   testWidgets(
       'Lidarr hides the default toggle, assigns selected users, and installs '
       'its webhook on create', (tester) async {

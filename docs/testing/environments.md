@@ -32,7 +32,7 @@ exactly this on a disposable droplet), each with only its own locally
 generated API key or local username/password:
 
 - Radarr, Sonarr, Chaptarr — local API key from each service's own settings
-- SABnzbd, NZBGet, qBittorrent, Transmission — local key or local credentials
+- SABnzbd, NZBGet, qBittorrent, Transmission, Deluge — local key or local credentials
 - Tautulli — local API key (meaningful data needs a Plex server feeding it)
 - Tracearr — public API key from its Settings > General (needs a Plex, Jellyfin, or Emby server feeding it; the jf-lab compose runs the all-in-one `supervised` image against the lab Jellyfin)
 - Jellyfin — local API key minted under Dashboard > API Keys; the whole

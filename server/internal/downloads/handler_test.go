@@ -1205,3 +1205,380 @@ func TestTransmissionHistoryCompletedOnly(t *testing.T) {
 		t.Errorf("item[1] = %+v", items[1])
 	}
 }
+
+// --- Deluge fake ---
+
+type delugeRPC struct {
+	Method string            `json:"method"`
+	Params []json.RawMessage `json:"params"`
+}
+
+// delugeFake is a Deluge web UI already connected to its daemon: it issues
+// a session cookie on auth.login, refuses calls without it, and answers the
+// daemon methods with canned JSON.
+type delugeFake struct {
+	t        *testing.T
+	torrents string // JSON object for core.get_torrents_status
+	status   string // JSON object for core.get_session_status
+
+	mu    sync.Mutex
+	calls []delugeRPC
+}
+
+const delugeSessionID = "fake-deluge-session"
+
+func (f *delugeFake) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json" {
+			f.t.Errorf("deluge path = %s, want /json", r.URL.Path)
+		}
+		var call delugeRPC
+		if err := json.NewDecoder(r.Body).Decode(&call); err != nil {
+			f.t.Errorf("deluge decode request: %v", err)
+		}
+		f.mu.Lock()
+		f.calls = append(f.calls, call)
+		torrents, status := f.torrents, f.status
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if call.Method == "auth.login" {
+			http.SetCookie(w, &http.Cookie{Name: "_session_id", Value: delugeSessionID, Path: "/"})
+			_, _ = io.WriteString(w, `{"result":true,"error":null,"id":1}`)
+			return
+		}
+		if cookie, err := r.Cookie("_session_id"); err != nil || cookie.Value != delugeSessionID {
+			_, _ = io.WriteString(w, `{"result":null,"error":{"message":"Not authenticated","code":1},"id":1}`)
+			return
+		}
+		switch call.Method {
+		case "web.connected":
+			_, _ = io.WriteString(w, `{"result":true,"error":null,"id":1}`)
+		case "core.get_torrents_status":
+			if torrents == "" {
+				torrents = "{}"
+			}
+			_, _ = io.WriteString(w, `{"result":`+torrents+`,"error":null,"id":1}`)
+		case "core.get_session_status":
+			if status == "" {
+				status = "{}"
+			}
+			_, _ = io.WriteString(w, `{"result":`+status+`,"error":null,"id":1}`)
+		case "core.remove_torrent":
+			_, _ = io.WriteString(w, `{"result":true,"error":null,"id":1}`)
+		default: // core.pause_torrent, core.resume_torrent
+			_, _ = io.WriteString(w, `{"result":null,"error":null,"id":1}`)
+		}
+	}
+}
+
+func (f *delugeFake) callsOf(method string) []delugeRPC {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []delugeRPC
+	for _, c := range f.calls {
+		if c.Method == method {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// delugeHashes decodes the single list parameter of a pause/resume call.
+func delugeHashes(t *testing.T, call delugeRPC) []string {
+	t.Helper()
+	if len(call.Params) != 1 {
+		t.Fatalf("%s params = %d, want exactly one (the hash list)", call.Method, len(call.Params))
+	}
+	var hashes []string
+	if err := json.Unmarshal(call.Params[0], &hashes); err != nil {
+		t.Fatalf("%s param is not a list: %s", call.Method, call.Params[0])
+	}
+	return hashes
+}
+
+func TestSnapshotDelugeNormalization(t *testing.T) {
+	fake := &delugeFake{
+		t: t,
+		torrents: `{
+			"deadbeef01": {"name":"Fedora","state":"Downloading","progress":75.0,"total_size":1000000,"total_done":750000,"download_payload_rate":250000,"eta":12,"is_finished":false,"message":"OK","time_added":1752500000.0,"label":"linux"},
+			"deadbeef02": {"name":"Done","state":"Seeding","progress":100.0,"total_size":5000,"total_done":5000,"download_payload_rate":0,"eta":0,"is_finished":true,"message":"OK","time_added":1752500000.0,"completed_time":1752600000},
+			"deadbeef03": {"name":"Paused","state":"Paused","progress":0.0,"total_size":800,"total_done":0,"download_payload_rate":0,"eta":-1,"is_finished":false,"message":"","time_added":1752500001.0}
+		}`,
+		status: `{"payload_download_rate":314159.0,"payload_upload_rate":0}`,
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+
+	view, err := Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.SpeedBPS != 314159 {
+		t.Errorf("SpeedBPS = %d, want 314159", view.SpeedBPS)
+	}
+	// Finished torrents belong to /history, not the queue.
+	if len(view.Items) != 2 {
+		t.Fatalf("items = %d, want 2 (finished torrent must be excluded)", len(view.Items))
+	}
+	got := view.Items[0]
+	want := QueueItem{
+		ID:            "deadbeef01",
+		Name:          "Fedora",
+		SizeBytes:     1000000,
+		SizeLeftBytes: 250000,
+		Progress:      75,
+		SpeedBPS:      250000,
+		ETASeconds:    12,
+		Status:        "Downloading", // Deluge's own state name
+		Category:      "linux",       // Label plugin label
+	}
+	if got != want {
+		t.Errorf("item[0] = %+v, want %+v", got, want)
+	}
+	paused := view.Items[1]
+	if paused.Status != "Paused" || paused.ETASeconds != 0 || paused.Category != "" || paused.SizeLeftBytes != 800 {
+		t.Errorf("paused item = %+v, want status Paused, ETA 0 (negative sentinel), empty category, 800 left", paused)
+	}
+	if view.Paused {
+		t.Error("Paused = true, want false while one torrent downloads")
+	}
+	// Login happened once and every daemon call carried the session.
+	if logins := fake.callsOf("auth.login"); len(logins) != 1 {
+		t.Errorf("auth.login calls = %d, want 1", len(logins))
+	}
+	if statusCalls := fake.callsOf("core.get_torrents_status"); len(statusCalls) != 1 {
+		t.Errorf("core.get_torrents_status calls = %d, want 1", len(statusCalls))
+	}
+}
+
+func TestSnapshotDelugeAllPausedMarksQueuePaused(t *testing.T) {
+	fake := &delugeFake{
+		t: t,
+		torrents: `{
+			"deadbeef03": {"name":"Paused","state":"Paused","progress":0.0,"total_size":800,"total_done":0,"download_payload_rate":0,"eta":0,"is_finished":false,"message":"","time_added":1752500001.0}
+		}`,
+		status: `{"payload_download_rate":0,"payload_upload_rate":0}`,
+	}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+
+	view, err := Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if !view.Paused {
+		t.Error("Paused = false, want true when every queued torrent is paused")
+	}
+
+	// A Queued torrent is Deluge scheduling it, not a user pause.
+	fake.mu.Lock()
+	fake.torrents = `{
+		"deadbeef03": {"name":"Paused","state":"Paused","progress":0.0,"total_size":800,"total_done":0,"is_finished":false},
+		"deadbeef04": {"name":"Queued","state":"Queued","progress":0.0,"total_size":800,"total_done":0,"is_finished":false}
+	}`
+	fake.mu.Unlock()
+	view, err = Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.Paused {
+		t.Error("Paused = true, want false while a torrent is Queued")
+	}
+}
+
+func TestSnapshotDelugeEmptyQueue(t *testing.T) {
+	fake := &delugeFake{t: t, torrents: `{}`, status: `{"payload_download_rate":0}`}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+	rec := e.do(t, "GET", "/downloads/"+inst.ID+"/queue")
+	view := decodeView(t, rec)
+	if view.Items == nil || len(view.Items) != 0 || view.Paused {
+		t.Errorf("view = %+v, want an empty, unpaused items list (never null)", view)
+	}
+	if !strings.Contains(rec.Body.String(), `"items":[]`) {
+		t.Errorf("body = %s, want items serialized as []", rec.Body.String())
+	}
+}
+
+func TestDelugeItemActions(t *testing.T) {
+	fake := &delugeFake{t: t}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+	base := "/downloads/" + inst.ID
+
+	rec := e.do(t, "POST", base+"/queue/deadbeef01/pause")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("pause status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	pauses := fake.callsOf("core.pause_torrent")
+	if len(pauses) != 1 {
+		t.Fatalf("core.pause_torrent calls = %d, want 1", len(pauses))
+	}
+	if hashes := delugeHashes(t, pauses[0]); len(hashes) != 1 || hashes[0] != "deadbeef01" {
+		t.Errorf("core.pause_torrent hashes = %v, want [deadbeef01]", hashes)
+	}
+
+	rec = e.do(t, "POST", base+"/queue/deadbeef01/resume")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("resume status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	resumes := fake.callsOf("core.resume_torrent")
+	if len(resumes) != 1 {
+		t.Fatalf("core.resume_torrent calls = %d, want 1", len(resumes))
+	}
+	if hashes := delugeHashes(t, resumes[0]); len(hashes) != 1 || hashes[0] != "deadbeef01" {
+		t.Errorf("core.resume_torrent hashes = %v, want [deadbeef01]", hashes)
+	}
+
+	rec = e.do(t, "DELETE", base+"/queue/deadbeef01")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	removes := fake.callsOf("core.remove_torrent")
+	if len(removes) != 1 || len(removes[0].Params) != 2 ||
+		string(removes[0].Params[0]) != `"deadbeef01"` || string(removes[0].Params[1]) != `false` {
+		t.Fatalf("core.remove_torrent calls = %+v, want one call [deadbeef01, false]", removes)
+	}
+
+	rec = e.do(t, "DELETE", base+"/queue/deadbeef01?deleteData=true")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete-with-data status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	removes = fake.callsOf("core.remove_torrent")
+	if len(removes) != 2 || string(removes[1].Params[1]) != `true` {
+		t.Fatalf("core.remove_torrent calls = %+v, want a second call with remove_data true", removes)
+	}
+}
+
+// TestDelugeQueueActionsOnlyTouchUnfinishedTorrents pins the same guardrail
+// Transmission has: pause/resume-all never reaches seeding torrents, and an
+// empty visible queue sends nothing (Deluge would read an empty list as
+// "every torrent").
+func TestDelugeQueueActionsOnlyTouchUnfinishedTorrents(t *testing.T) {
+	fake := &delugeFake{t: t, torrents: `{
+		"incomplete-1": {"name":"A","state":"Downloading","progress":50.0,"total_size":10,"total_done":5,"is_finished":false},
+		"seeding-1": {"name":"B","state":"Seeding","progress":100.0,"total_size":10,"total_done":10,"is_finished":true,"completed_time":1752600000}
+	}`, status: `{"payload_download_rate":0}`}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+	base := "/downloads/" + inst.ID
+
+	rec := e.do(t, "POST", base+"/pause")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("pause-all status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	pauses := fake.callsOf("core.pause_torrent")
+	if len(pauses) != 1 {
+		t.Fatalf("core.pause_torrent calls = %d, want 1", len(pauses))
+	}
+	if hashes := delugeHashes(t, pauses[0]); len(hashes) != 1 || hashes[0] != "incomplete-1" {
+		t.Fatalf("core.pause_torrent hashes = %v, want only the unfinished torrent", hashes)
+	}
+
+	rec = e.do(t, "POST", base+"/resume")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("resume-all status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	resumes := fake.callsOf("core.resume_torrent")
+	if len(resumes) != 1 {
+		t.Fatalf("core.resume_torrent calls = %d, want 1", len(resumes))
+	}
+	if hashes := delugeHashes(t, resumes[0]); len(hashes) != 1 || hashes[0] != "incomplete-1" {
+		t.Fatalf("core.resume_torrent hashes = %v, want only the unfinished torrent", hashes)
+	}
+
+	// Everything finished: pause-all succeeds without issuing any pause.
+	fake.mu.Lock()
+	fake.torrents = `{
+		"seeding-1": {"name":"B","state":"Seeding","progress":100.0,"total_size":10,"total_done":10,"is_finished":true}
+	}`
+	fake.mu.Unlock()
+	rec = e.do(t, "POST", base+"/pause")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("pause-all (empty queue) status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := len(fake.callsOf("core.pause_torrent")); got != 1 {
+		t.Fatalf("core.pause_torrent calls = %d, want still 1 (no pause of every torrent)", got)
+	}
+}
+
+func TestDelugeHistoryFinishedOnly(t *testing.T) {
+	fake := &delugeFake{t: t, torrents: `{
+		"h1": {"name":"incomplete","state":"Downloading","progress":50.0,"total_size":10,"total_done":5,"is_finished":false,"time_added":1752700000.0},
+		"h2": {"name":"older-done","state":"Seeding","progress":100.0,"total_size":100,"total_done":100,"is_finished":true,"message":"OK","time_added":1752300000.0,"completed_time":1752400000,"label":"linux"},
+		"h3": {"name":"newer-done","state":"Error","progress":100.0,"total_size":200,"total_done":200,"is_finished":true,"message":"No data found","time_added":1752300000.0,"completed_time":1752600000},
+		"h4": {"name":"legacy-done","state":"Seeding","progress":100.0,"total_size":300,"total_done":300,"is_finished":true,"message":"OK","time_added":1752500000.0}
+	}`, status: `{"payload_download_rate":0}`}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+
+	items := decodeHistory(t, e.do(t, "GET", "/downloads/"+inst.ID+"/history"))
+	if len(items) != 3 {
+		t.Fatalf("items = %d, want 3 (incomplete excluded)", len(items))
+	}
+	got := items[0]
+	if got.Name != "newer-done" || got.Status != "Error" || got.Error != "No data found" ||
+		got.CompletedAt != time.Unix(1752600000, 0).UTC().Format(time.RFC3339) {
+		t.Errorf("item[0] = %+v", got)
+	}
+	// Deluge 1.3 reports no completed_time; the time added orders it instead.
+	if items[1].Name != "legacy-done" || items[1].CompletedAt != time.Unix(1752500000, 0).UTC().Format(time.RFC3339) {
+		t.Errorf("item[1] = %+v, want legacy-done dated by time_added", items[1])
+	}
+	if items[2].Name != "older-done" || items[2].Status != "Seeding" ||
+		items[2].Error != "" || items[2].Category != "linux" {
+		t.Errorf("item[2] = %+v", items[2])
+	}
+
+	limited := decodeHistory(t, e.do(t, "GET", "/downloads/"+inst.ID+"/history?limit=1"))
+	if len(limited) != 1 || limited[0].Name != "newer-done" {
+		t.Errorf("limited = %+v, want only newer-done", limited)
+	}
+}
+
+// TestSnapshotDelugeErrorTorrentStaysQueued pins the is_finished rule: Deluge
+// reports progress 100 for any torrent in the Error state, so an unfinished
+// failed download must still show in the queue, never slip into history.
+func TestSnapshotDelugeErrorTorrentStaysQueued(t *testing.T) {
+	fake := &delugeFake{t: t, torrents: `{
+		"failed-1": {"name":"Failed","state":"Error","progress":100.0,"total_size":1000,"total_done":10,"is_finished":false,"message":"Tracker: file not found","time_added":1752500000.0}
+	}`, status: `{"payload_download_rate":0}`}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	e := newEnv(t)
+	inst := e.mkInstance(t, "deluge", srv.URL, "", "", "deluge-pass")
+
+	view, err := Snapshot(e.registry, inst)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Items) != 1 || view.Items[0].Status != "Error" || view.Items[0].SizeLeftBytes != 990 || view.Items[0].Progress != 1 {
+		t.Fatalf("items = %+v, want the errored torrent queued with status Error, 990 bytes left, and progress 1 from its bytes", view.Items)
+	}
+	if view.Paused {
+		t.Error("Paused = true, want false: an errored torrent is not a user pause")
+	}
+	items := decodeHistory(t, e.do(t, "GET", "/downloads/"+inst.ID+"/history"))
+	if len(items) != 0 {
+		t.Errorf("history = %+v, want empty", items)
+	}
+}

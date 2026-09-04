@@ -36,7 +36,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Download clients and unified downloads
 
-Run client-specific cases once for **each** of SABnzbd, qBittorrent, NZBGet, and Transmission; do not accept one client as proof for the other adapters.
+Run client-specific cases once for **each** of SABnzbd, qBittorrent, NZBGet, Transmission, and Deluge; do not accept one client as proof for the other adapters.
 
 - [ ] `DOWN-003` · P0 · LIVE — Pause and resume one active item per client; verify exact external item state and UI convergence.
 - [ ] `DOWN-005` · P0 · LIVE — Remove a disposable item with data/files preserved; verify queue removal and data retention using that client's semantics. NZBGet offers no delete-files choice and the dialog states files stay on disk.

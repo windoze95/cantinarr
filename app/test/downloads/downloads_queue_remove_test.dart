@@ -129,7 +129,12 @@ void main() {
   List<({String method, String path, Map<String, dynamic> query})> deletes() =>
       adapter.requests.where((r) => r.method == 'DELETE').toList();
 
-  for (final serviceType in ['sabnzbd', 'qbittorrent', 'transmission']) {
+  for (final serviceType in [
+    'sabnzbd',
+    'qbittorrent',
+    'transmission',
+    'deluge',
+  ]) {
     testWidgets('$serviceType remove dialog offers the delete-data option',
         (tester) async {
       await pumpQueue(tester, serviceType);
