@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,18 @@ import (
 )
 
 const demoPort = 8484
+
+// demoListenPort is the port the process binds: DEMO_PORT when set (so several
+// local copies can run side by side while developing), else demoPort. The
+// deployed demo never sets it.
+func demoListenPort() int {
+	if v := os.Getenv("DEMO_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return demoPort
+}
 
 // demoServerURL is the advertised base URL (DEMO_SERVER_URL env; production
 // sets https://demo.cantinarr.com). Read once at startup, before the router
@@ -34,6 +47,8 @@ var demoLandingRendered string
 func main() {
 	if v := os.Getenv("DEMO_SERVER_URL"); v != "" {
 		demoServerURL = v
+	} else {
+		demoServerURL = fmt.Sprintf("http://localhost:%d", demoListenPort())
 	}
 	demoLandingRendered = strings.NewReplacer(
 		"__DEMO_SERVER_URL_QUERY__", url.QueryEscape(demoServerURL),
@@ -45,7 +60,7 @@ func main() {
 
 	r := buildRouter()
 
-	addr := fmt.Sprintf(":%d", demoPort)
+	addr := fmt.Sprintf(":%d", demoListenPort())
 	log.Printf("Cantinarr Demo Server starting on %s", addr)
 	log.Printf("  Admin login: admin / demo")
 	log.Printf("  User login:  user / demo")
