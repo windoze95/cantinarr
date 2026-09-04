@@ -103,8 +103,8 @@ void main() {
   });
 
   testWidgets(
-      'a body without credits or production facts renders neither section',
-      (tester) async {
+      'a body without credits or production facts renders no Cast, and '
+      'Details holds only the Links line', (tester) async {
     await _pumpDetail(tester, type: MediaType.movie, body: {
       'id': 603,
       'title': 'The Matrix',
@@ -114,8 +114,11 @@ void main() {
     });
 
     expect(find.text('Cast'), findsNothing);
-    expect(find.text('Details'), findsNothing);
     expect(_seeAllFor('Cast'), findsNothing);
+    expect(find.text('Details'), findsOneWidget);
+    expect(find.text('Links'), findsOneWidget);
+    expect(find.text('Studio'), findsNothing);
+    expect(find.text('Directed by'), findsNothing);
   });
 
   testWidgets('an unreleased movie leads its Details with the status',

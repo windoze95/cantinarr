@@ -346,6 +346,10 @@ class MovieDetail {
   /// `production_countries[].name`, in TMDB's order.
   final List<String> countries;
 
+  /// TMDB's own copy of the IMDb id (`imdb_id`), when it knows one. A show
+  /// carries its IMDb id under [TVDetail.externalIds] instead.
+  final String? imdbId;
+
   const MovieDetail({
     required this.id,
     required this.title,
@@ -365,6 +369,7 @@ class MovieDetail {
     this.credits = TitleCredits.empty,
     this.companies = const [],
     this.countries = const [],
+    this.imdbId,
   });
 
   factory MovieDetail.fromJson(Map<String, dynamic> json) => MovieDetail(
@@ -389,6 +394,7 @@ class MovieDetail {
         credits: TitleCredits.fromJson(json),
         companies: _tagged(json['production_companies']),
         countries: _countryNames(json['production_countries']),
+        imdbId: _blankToNull(json['imdb_id'] as String?),
       );
 
   String? get trailerKey {
