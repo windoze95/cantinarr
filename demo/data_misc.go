@@ -1,5 +1,6 @@
-// data_misc.go — genre tables, fictional watch providers, and Trakt list
-// fixtures (D3 discover). All ported from the old demo.
+// data_misc.go — genre tables and Trakt list fixtures (D3 discover), ported
+// from the old demo. The watch providers moved to data_browse.go with the
+// rest of the browse-filter vocabulary.
 package main
 
 // discMovieGenres is the complete real TMDB movie genre table (18 entries).
@@ -20,18 +21,6 @@ var discTVGenres = []DemoGenre{
 	{9648, "Mystery"}, {10763, "News"}, {10764, "Reality"},
 	{10765, "Sci-Fi & Fantasy"}, {10766, "Soap"}, {10767, "Talk"},
 	{10768, "War & Politics"}, {37, "Western"},
-}
-
-// discProvider is one fictional watch provider (all invented for the demo).
-type discProvider struct {
-	ID   int
-	Name string
-}
-
-var discProviders = []discProvider{
-	{9001, "Public Domain Streaming"},
-	{9002, "Classic Cinema Channel"},
-	{9003, "Archive Films"},
 }
 
 // discTraktList is one curated Trakt list (served FLAT per contract §9).

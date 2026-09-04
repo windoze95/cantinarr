@@ -1,7 +1,7 @@
 // data_tv.go — the fictional TV catalog (D3 discover).
 //
-// Ported from the old demo: 6 invented public-domain-themed series with
-// fictional TMDB ids 90001-90006 and TVDB ids 390001-390006 (no real PD TV
+// Ported from the old demo: 7 invented public-domain-themed series with
+// fictional TMDB ids 90001-90007 and TVDB ids 390001-390007 (no real PD TV
 // catalog exists on TMDB, so the shows are fiction by design). Extended
 // beyond the old demo with per-season arrays (unique season ids, no season
 // 0) and full episode fixtures — the Sonarr fake and the request season
@@ -12,8 +12,16 @@
 //	season id  = tmdbID*10   + seasonNumber        (e.g. 900011)
 //	episode id = tmdbID*1000 + seasonNumber*100 + episodeNumber
 //
-// Returning series have their latest season straddling the demo "now"
-// (mid-2026) so arr calendars naturally show upcoming episodes.
+// Fixed dates go stale, so the latest season of every returning series is
+// anchored at process start (discAnchorStraddle: the middle episode airs
+// today, one a week either side), and the one unaired show premieres a
+// fixed number of days out (discAnchorPremiere). Restarts re-anchor; the
+// "Airing This Week" and "Coming Soon" rows, the Sonarr calendar, and the
+// Trakt calendar all read these dates, so none of them go quiet.
+//
+// The shows are fiction, so their synthesized IMDb ids used to resolve to
+// unrelated real titles; ImdbID is deliberately blank (rendered null) and
+// every consumer treats an absent id as "no link".
 package main
 
 import (
@@ -43,6 +51,7 @@ var discTVPosters = map[int]string{
 	90004: "/sKlU5jCHKhP8v3wk7VjbLOXrFef.jpg",
 	90005: "/265Gpw7wSwwMkUQlksot8B2chRg.jpg",
 	90006: "/dY7zYWlHoctqD5iKbEpv3f07ysO.jpg",
+	90007: "/wmqEZOkfILOmGplpOyTuAiq9vs6.jpg",
 }
 
 var discTVBackdrops = map[int]string{
@@ -52,19 +61,50 @@ var discTVBackdrops = map[int]string{
 	90004: "/fNA8lGi9dgZ6o66OQpMYJQFmb3X.jpg",
 	90005: "/nwtdRZHTlDqYwuJDc7oVQueHY2l.jpg",
 	90006: "/jZGxKCxDbepPaARnSu74Df9UE5Y.jpg",
+	90007: "/6E1GcbN4ZLqp8aUiGsW7YgCZcnA.jpg",
 }
+
+// discAnchor says how a season's start date is chosen.
+type discAnchor int
+
+const (
+	discAnchorFixed    discAnchor = iota // episode 1 airs on the spec's start date
+	discAnchorStraddle                   // episode eps/2+1 airs today; weekly either side
+	discAnchorPremiere                   // episode 1 airs today + discPremiereLeadDays
+)
+
+// discPremiereLeadDays is how far out the unaired show's premiere sits:
+// inside the three-month "Coming Soon" window, past "Airing This Week".
+const discPremiereLeadDays = 45
+
+// discToday is the process-start date (UTC, midnight) every anchored
+// season is computed from.
+var discToday = time.Now().UTC().Truncate(24 * time.Hour)
 
 // discSeasonSpec drives episode generation: weekly episodes from start.
 type discSeasonSpec struct {
 	number int
-	start  string // air date of episode 1, "YYYY-MM-DD"
+	start  string // air date of episode 1, "YYYY-MM-DD" (ignored when anchored)
 	eps    int
+	anchor discAnchor
+}
+
+// discSeasonStart resolves a spec's episode-1 air date.
+func discSeasonStart(sp discSeasonSpec) time.Time {
+	switch sp.anchor {
+	case discAnchorStraddle:
+		return discToday.AddDate(0, 0, -7*(sp.eps/2))
+	case discAnchorPremiere:
+		return discToday.AddDate(0, 0, discPremiereLeadDays)
+	}
+	start, _ := time.Parse("2006-01-02", sp.start)
+	return start
 }
 
 func discBuildSeasons(tmdbID int, showName, posterPath string, runtime int, specs []discSeasonSpec) []DemoSeason {
 	seasons := make([]DemoSeason, 0, len(specs))
 	for _, sp := range specs {
-		start, _ := time.Parse("2006-01-02", sp.start)
+		start := discSeasonStart(sp)
 		eps := make([]DemoEpisode, 0, sp.eps)
 		for n := 1; n <= sp.eps; n++ {
 			air := start.AddDate(0, 0, (n-1)*7)
@@ -82,7 +122,7 @@ func discBuildSeasons(tmdbID int, showName, posterPath string, runtime int, spec
 			SeasonNumber: sp.number,
 			Name:         fmt.Sprintf("Season %d", sp.number),
 			EpisodeCount: len(eps),
-			AirDate:      sp.start,
+			AirDate:      start.Format("2006-01-02"),
 			PosterPath:   posterPath,
 			Episodes:     eps,
 		})
@@ -117,10 +157,10 @@ func init() {
 			[]DemoGenre{{9648, "Mystery"}, {18, "Drama"}},
 			"Returning Series", "Scripted", 45,
 			[]discSeasonSpec{
-				{1, "2020-01-15", 12},
-				{2, "2021-09-08", 12},
-				{3, "2023-02-01", 12},
-				{4, "2026-06-03", 12},
+				{1, "2020-01-15", 12, discAnchorFixed},
+				{2, "2021-09-08", 12, discAnchorFixed},
+				{3, "2023-02-01", 12, discAnchorFixed},
+				{4, "", 12, discAnchorStraddle},
 			},
 		},
 		{
@@ -131,12 +171,12 @@ func init() {
 			[]DemoGenre{{35, "Comedy"}, {10765, "Sci-Fi & Fantasy"}},
 			"Returning Series", "Scripted", 90,
 			[]discSeasonSpec{
-				{1, "2019-06-01", 22},
-				{2, "2020-06-06", 22},
-				{3, "2021-06-05", 22},
-				{4, "2022-06-04", 22},
-				{5, "2023-06-03", 22},
-				{6, "2026-03-07", 22},
+				{1, "2019-06-01", 22, discAnchorFixed},
+				{2, "2020-06-06", 22, discAnchorFixed},
+				{3, "2021-06-05", 22, discAnchorFixed},
+				{4, "2022-06-04", 22, discAnchorFixed},
+				{5, "2023-06-03", 22, discAnchorFixed},
+				{6, "", 22, discAnchorStraddle},
 			},
 		},
 		{
@@ -147,9 +187,9 @@ func init() {
 			[]DemoGenre{{35, "Comedy"}, {18, "Drama"}},
 			"Ended", "Scripted", 50,
 			[]discSeasonSpec{
-				{1, "2021-03-10", 12},
-				{2, "2022-03-09", 12},
-				{3, "2023-03-08", 12},
+				{1, "2021-03-10", 12, discAnchorFixed},
+				{2, "2022-03-09", 12, discAnchorFixed},
+				{3, "2023-03-08", 12, discAnchorFixed},
 			},
 		},
 		{
@@ -160,11 +200,11 @@ func init() {
 			[]DemoGenre{{35, "Comedy"}, {99, "Documentary"}},
 			"Returning Series", "Scripted", 42,
 			[]discSeasonSpec{
-				{1, "2018-09-22", 12},
-				{2, "2019-09-21", 12},
-				{3, "2021-09-25", 12},
-				{4, "2023-09-23", 12},
-				{5, "2026-07-04", 12},
+				{1, "2018-09-22", 12, discAnchorFixed},
+				{2, "2019-09-21", 12, discAnchorFixed},
+				{3, "2021-09-25", 12, discAnchorFixed},
+				{4, "2023-09-23", 12, discAnchorFixed},
+				{5, "", 12, discAnchorStraddle},
 			},
 		},
 		{
@@ -175,8 +215,8 @@ func init() {
 			[]DemoGenre{{18, "Drama"}, {10765, "Sci-Fi & Fantasy"}},
 			"Returning Series", "Scripted", 55,
 			[]discSeasonSpec{
-				{1, "2022-10-31", 8},
-				{2, "2026-07-13", 8},
+				{1, "2022-10-31", 8, discAnchorFixed},
+				{2, "", 8, discAnchorStraddle},
 			},
 		},
 		{
@@ -187,9 +227,20 @@ func init() {
 			[]DemoGenre{{99, "Documentary"}},
 			"Ended", "Documentary", 52,
 			[]discSeasonSpec{
-				{1, "2021-01-05", 8},
-				{2, "2022-01-10", 8},
-				{3, "2023-01-09", 8},
+				{1, "2021-01-05", 8, discAnchorFixed},
+				{2, "2022-01-10", 8, discAnchorFixed},
+				{3, "2023-01-09", 8, discAnchorFixed},
+			},
+		},
+		{
+			90007, 390007, "The Lantern Society",
+			"A rotating troupe retells the ghost stories of the public-domain canon, one each week, from M.R. James to Ambrose Bierce and Edith Wharton.",
+			"Every lantern hides a story.",
+			"", 7.6, 24, 21.3, // first air date = the anchored premiere, filled in below
+			[]DemoGenre{{9648, "Mystery"}, {18, "Drama"}},
+			"In Production", "Scripted", 48,
+			[]discSeasonSpec{
+				{1, "", 8, discAnchorPremiere},
 			},
 		},
 	}
@@ -197,16 +248,21 @@ func init() {
 	demoShows = make([]*DemoShow, 0, len(rows))
 	for _, row := range rows {
 		poster := discTVPosters[row.id]
+		seasons := discBuildSeasons(row.id, row.name, poster, row.runtime, row.seasons)
+		firstAir := row.date
+		if firstAir == "" && len(seasons) > 0 {
+			firstAir = seasons[0].AirDate // an anchored premiere
+		}
 		demoShows = append(demoShows, &DemoShow{
 			TmdbID:           row.id,
 			TvdbID:           row.tvdbID,
-			ImdbID:           fmt.Sprintf("tt%07d", row.id),
+			ImdbID:           "", // fiction: no IMDb record exists (see header)
 			Name:             row.name,
 			Overview:         row.overview,
 			Tagline:          row.tagline,
 			PosterPath:       poster,
 			BackdropPath:     discTVBackdrops[row.id],
-			FirstAirDate:     row.date,
+			FirstAirDate:     firstAir,
 			Genres:           row.genres,
 			VoteAverage:      row.vote,
 			VoteCount:        row.votes,
@@ -214,7 +270,7 @@ func init() {
 			Status:           row.status,
 			Type:             row.showType,
 			OriginalLanguage: "en",
-			Seasons:          discBuildSeasons(row.id, row.name, poster, row.runtime, row.seasons),
+			Seasons:          seasons,
 		})
 	}
 }
