@@ -34,6 +34,32 @@ type chapAuthorRec struct {
 
 // chapBookMeta supplements the shared DemoBook with Chaptarr-shape metadata
 // (contract rule: never extend types.go — keep extras in domain maps).
+// chapProviderIDs carries the provider ids a real Chaptarr states beside a
+// book's foreignBookId, in its prefixed form: the Goodreads work id and the
+// Open Library work id, both taken from Wikidata for these public-domain
+// titles (Goodreads work ID P8383, Open Library ID P648). The app's book pages
+// build their Links line from exactly these fields, so the classics link out
+// to their own Goodreads editions page and Open Library work page. The four
+// invented titles have no entry and therefore no Links line, which is the
+// honest rendering for a book no provider knows.
+var chapProviderIDs = map[string]struct{ GoodreadsWork, OpenLibraryWork string }{
+	"1885":   {"gr:3060926", "ol:OL66554W"},    // Pride and Prejudice
+	"153747": {"gr:2409320", "ol:OL21501229W"}, // Moby-Dick
+	"17245":  {"gr:3165724", "ol:OL85892W"},    // Dracula
+	"18490":  {"gr:4836639", "ol:OL450125W"},   // Frankenstein
+	"102868": {"gr:1997473", "ol:OL262496W"},   // A Study in Scarlet
+	"3590":   {"gr:1222101", "ol:OL18188726W"}, // The Adventures of Sherlock Holmes
+	"8921":   {"gr:3311984", "ol:OL262454W"},   // The Hound of the Baskervilles
+	"2493":   {"gr:3234863", "ol:OL52267W"},    // The Time Machine
+	"295":    {"gr:3077988", "ol:OL24034W"},    // Treasure Island
+	"13023":  {"gr:55548884", "ol:OL138052W"},  // Alice's Adventures in Wonderland
+	"32829":  {"gr:1924715", "ol:OL1099513W"},  // Journey to the Center of the Earth
+	"3352":   {"gr:1112418", "ol:OL1099280W"},  // Twenty Thousand Leagues Under the Seas
+	"54479":  {"gr:4537271", "ol:OL1100007W"},  // Around the World in Eighty Days
+	"236093": {"gr:1993810", "ol:OL18417W"},    // The Wonderful Wizard of Oz
+	"236094": {"gr:21430714", "ol:OL18396W"},   // The Marvelous Land of Oz
+}
+
 type chapBookMeta struct {
 	ForeignID   string
 	TitleSlug   string

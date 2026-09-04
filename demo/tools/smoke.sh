@@ -232,6 +232,9 @@ chk "GET" "/api/instances/sonarr-5e6f7a8b/api/v3/calendar?start=2026-01-01&end=2
 chk GET /api/instances/chaptarr-9c0d1e2f/api/v1/author user 200 'type=="array"'
 chk GET /api/instances/chaptarr-9c0d1e2f/api/v1/book user 200 'type=="array"'
 chk GET /api/instances/chaptarr-9c0d1e2f/api/v1/rootfolder admin 200 'type=="array"'
+chk "GET" "/api/instances/chaptarr-9c0d1e2f/api/v1/book/lookup?term=1885" user 200 'type=="array" and length>0 and .[0].foreignBookId=="1885" and .[0].goodreadsWorkId=="gr:3060926" and .[0].openLibraryWorkId=="ol:OL66554W" and .[0].goodreadsBookId==null and (.[0].links|type=="array")'
+chk "GET" "/api/instances/chaptarr-9c0d1e2f/api/v1/book/lookup?term=60398" user 200 'type=="array" and length>0 and .[0].foreignBookId=="60398" and .[0].goodreadsWorkId==null and .[0].openLibraryWorkId==null'
+chk GET /api/instances/chaptarr-9c0d1e2f/api/v1/book user 200 'type=="array" and ((map(select(.foreignBookId=="17245"))|length)>0) and (map(select(.foreignBookId=="17245"))[0].openLibraryWorkId=="ol:OL85892W")'
 # ── lidarr fake ──────────────────────────────────────────
 L=/api/instances/lidarr-4d5e6f7a/api/v1
 chk GET $L/system/status admin 200 '.appName=="Lidarr" and (.version|type=="string")'

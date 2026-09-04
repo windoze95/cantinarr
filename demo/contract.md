@@ -536,6 +536,14 @@ snake_case vs arr camelCase).
   seeded policy); GB values follow TMDB where TMDB has them.
 - Music: see §7 D9. Seeded request rows: kids rows 8-9, music rows 10-14,
   `reqNextID` starts at 15.
+- Book provider ids: `chapLockedBookJSON` states `goodreadsBookId`,
+  `goodreadsWorkId`, `openLibraryWorkId`, `hardcoverBookId` and `links` the way
+  Chaptarr's BookResource does (prefixed `gr:`/`ol:`). Values come from
+  `chapProviderIDs` in data_books.go (Wikidata work ids for the real classics;
+  the invented titles carry nulls, so the app shows them no Links line), and
+  `book/lookup?term=<foreignBookId>` is an exact fetch of that record, like
+  Chaptarr's local-library-first id lookup. Never invent an id: a wrong one
+  opens a stranger's book.
 
 Additional Stage A notes: the WS upgrader's `CheckOrigin` allows every origin
 (consistent with the permissive-CORS decision); trakt artwork strings are

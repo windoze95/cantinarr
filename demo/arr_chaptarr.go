@@ -241,20 +241,36 @@ func chapLockedBookJSON(bookID int, asLibrary bool) map[string]any {
 		"manualAdd": false,
 		"isEbook":   format != bookFormatAudiobook,
 		"images":    []any{},
+		// A real edition also names its own provider ids; the demo editions are
+		// invented compilations, so they state none.
+		"goodreadsEditionId":   nil,
+		"openLibraryEditionId": nil,
+		"isbn13":               nil,
+	}
+	// Provider ids beside foreignBookId, exactly as Chaptarr's BookResource
+	// states them (prefixed gr:/ol:/hc:). Only the real classics carry any.
+	var goodreadsWork, openLibraryWork any
+	if ids, ok := chapProviderIDs[b.ForeignID]; ok {
+		goodreadsWork, openLibraryWork = ids.GoodreadsWork, ids.OpenLibraryWork
 	}
 	return map[string]any{
-		"id":            id,
-		"title":         b.Title,
-		"authorId":      meta.AuthorID,
-		"foreignBookId": b.ForeignID,
-		"titleSlug":     meta.TitleSlug,
-		"overview":      b.Overview,
-		"releaseDate":   meta.ReleaseDate + "T00:00:00Z",
-		"monitored":     monitored,
-		"mediaType":     format,
-		"seriesTitle":   meta.SeriesTitle,
-		"anyEditionOk":  true,
-		"pageCount":     meta.PageCount,
+		"id":                id,
+		"title":             b.Title,
+		"authorId":          meta.AuthorID,
+		"foreignBookId":     b.ForeignID,
+		"goodreadsBookId":   nil,
+		"goodreadsWorkId":   goodreadsWork,
+		"openLibraryWorkId": openLibraryWork,
+		"hardcoverBookId":   nil,
+		"links":             []any{},
+		"titleSlug":         meta.TitleSlug,
+		"overview":          b.Overview,
+		"releaseDate":       meta.ReleaseDate + "T00:00:00Z",
+		"monitored":         monitored,
+		"mediaType":         format,
+		"seriesTitle":       meta.SeriesTitle,
+		"anyEditionOk":      true,
+		"pageCount":         meta.PageCount,
 		"author": map[string]any{
 			"id":              meta.AuthorID,
 			"authorName":      b.AuthorName,
@@ -449,7 +465,11 @@ func chapHandleBookLookup(w http.ResponseWriter, r *http.Request) {
 	}
 	chapMu.Lock()
 	for _, b := range chapBooks {
-		if !strings.Contains(strings.ToLower(b.Title), term) &&
+		// A term that is a foreignBookId is an exact fetch of that record, the
+		// way Chaptarr answers term=<id> (local library first); everything else
+		// is a title or author search.
+		if strings.ToLower(b.ForeignID) != term &&
+			!strings.Contains(strings.ToLower(b.Title), term) &&
 			!strings.Contains(strings.ToLower(b.AuthorName), term) {
 			continue
 		}
