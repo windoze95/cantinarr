@@ -27,4 +27,9 @@ services:
       # Comma-separated absolute container paths forming the outer media
       # allowlist. Empty keeps completed-media downloads disabled.
       - CANTINARR_MEDIA_ROOTS=${CANTINARR_MEDIA_ROOTS:-}
+      # Run as a specific user instead of root (Synology, Unraid, and other
+      # linuxserver-style stacks): the image makes ./config belong to that
+      # user on start. Leave both unset to keep running as root.
+      # - PUID=1000
+      # - PGID=1000
     restart: unless-stopped

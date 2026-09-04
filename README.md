@@ -98,7 +98,10 @@ services:
     restart: unless-stopped
 ```
 
-Update it later with `docker compose pull && docker compose up -d`.
+Update it later with `docker compose pull && docker compose up -d`. The container
+runs as root unless you set `PUID`/`PGID` in its environment (see Configuration
+below), which also makes `./config` belong to that user on start -- the convention
+Synology, Unraid, and other linuxserver-style stacks expect.
 
 Open `http://your-server:8585` -- the setup wizard walks you through creating an admin account. Discovery and search work immediately on the built-in TMDB key. Then connect your services (Radarr, Sonarr, etc.) from **Settings > Providers & Credentials** and **Settings > Add Instance** in the admin UI. Configure an included AI provider there (fresh installs preselect OpenAI OAuth with the fast GPT-5.6 Luna model -- connecting a ChatGPT account is all it takes) and grant it per user, or let each person bring a provider under **Settings > AI Access**.
 
@@ -256,6 +259,8 @@ Optional server env vars for deployment tuning:
 | `CANTINARR_ANDROID_CERT_SHA256_FINGERPRINTS` | unset | Android signing cert fingerprints for `/.well-known/assetlinks.json` |
 | `CANTINARR_WEBAUTHN_EXTRA_ORIGINS` | unset | Additional WebAuthn origins to trust |
 | `CANTINARR_DISABLE_UPDATE_CHECK` | unset | Set to `1` to disable the periodic GitHub release check behind the admin update-status endpoint |
+| `PUID` | unset (runs as root) | Container image only. Run the server as this user id: on every start the image takes ownership of `/config` for it, so the database and encryption key it writes are owned by that user on the host (the linuxserver-style convention Synology and Unraid stacks expect). Ignored when the container is already started as a non-root user (compose `user:`, TrueNAS) |
+| `PGID` | same as `PUID` | Group id to pair with `PUID`; ignored without it |
 
 Source image builds also accept the Docker build argument
 `CANTINARR_E2E_WEB_SEMANTICS` (default `false`). It exists only for the
