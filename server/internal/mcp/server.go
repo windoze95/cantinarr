@@ -12,6 +12,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -116,7 +117,15 @@ type ToolServer struct {
 	// browseCatalog caches the genre, language, and streaming-service tables
 	// browse_titles resolves plain names against.
 	browseCatalog *browseCatalog
+
+	// contentPolicy is the kids-account service. Every discover tool filters
+	// its titles through the caller's policy, resolved once per call. nil
+	// until wired (main.go wires it); a server without it filters nothing.
+	contentPolicy *contentpolicy.Service
 }
+
+// SetContentPolicy wires the kids-account service.
+func (s *ToolServer) SetContentPolicy(svc *contentpolicy.Service) { s.contentPolicy = svc }
 
 // AdminNotifier pushes an admin-scoped event. *push.Notifier satisfies it;
 // declared here so the mcp package stays decoupled from push.
@@ -387,23 +396,31 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return &ToolResult{Text: "This action is not permitted for your role."}, nil
 	}
 
+	// A kids account's limits apply to every title a tool hands back. The
+	// policy is read once here; a read that fails is a failed call, never
+	// an unfiltered one.
+	policy, err := s.callerPolicy(callCtx)
+	if err != nil {
+		return nil, fmt.Errorf("content limits: %w", err)
+	}
+
 	switch name {
 	case "search_movies":
-		return s.searchMovies(input)
+		return s.searchMovies(ctx, input, policy)
 	case "search_movie_collections":
-		return s.searchMovieCollections(input)
+		return s.searchMovieCollections(ctx, input, policy)
 	case "search_tv_shows":
-		return s.searchTVShows(input)
+		return s.searchTVShows(ctx, input, policy)
 	case "get_trending":
-		return s.getTrending(input)
+		return s.getTrending(ctx, input, policy)
 	case "browse_titles":
-		return s.browseTitles(input)
+		return s.browseTitles(ctx, input, policy)
 	case "get_movie_details":
-		return s.getMovieDetails(input)
+		return s.getMovieDetails(ctx, input, policy)
 	case "get_tv_details":
-		return s.getTVDetails(input)
+		return s.getTVDetails(ctx, input, policy)
 	case "get_recommendations":
-		return s.getRecommendations(input)
+		return s.getRecommendations(ctx, input, policy)
 	case "check_request_status":
 		return s.checkRequestStatus(input, callCtx.UserID)
 	case "get_request_options":
@@ -417,7 +434,7 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 	case "search_music":
 		return s.searchMusic(input, callCtx.UserID)
 	case "display_media":
-		return s.displayMedia(input, callCtx.UserID)
+		return s.displayMedia(ctx, input, callCtx.UserID, policy)
 	case "get_queue":
 		return s.getQueue(input, callCtx.InstanceID)
 	case "get_calendar":

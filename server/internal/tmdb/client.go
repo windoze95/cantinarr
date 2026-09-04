@@ -62,6 +62,9 @@ type MovieDetails struct {
 	PosterPath  string  `json:"poster_path,omitempty"`
 	Overview    string  `json:"overview,omitempty"`
 	VoteAverage float64 `json:"vote_average,omitempty"`
+	// Adult and Genres feed a kids account's content policy.
+	Adult  bool    `json:"adult,omitempty"`
+	Genres []Genre `json:"genres,omitempty"`
 }
 
 type TVDetails struct {
@@ -71,6 +74,22 @@ type TVDetails struct {
 	PosterPath  string  `json:"poster_path,omitempty"`
 	Overview    string  `json:"overview,omitempty"`
 	VoteAverage float64 `json:"vote_average,omitempty"`
+	Adult       bool    `json:"adult,omitempty"`
+	Genres      []Genre `json:"genres,omitempty"`
+}
+
+// GenreIDs lists the detail's genre ids.
+func (m *MovieDetails) GenreIDs() []int { return genreIDs(m.Genres) }
+
+// GenreIDs lists the detail's genre ids.
+func (t *TVDetails) GenreIDs() []int { return genreIDs(t.Genres) }
+
+func genreIDs(genres []Genre) []int {
+	ids := make([]int, 0, len(genres))
+	for _, g := range genres {
+		ids = append(ids, g.ID)
+	}
+	return ids
 }
 
 // DoGetRaw fetches a TMDB API path and returns the raw JSON bytes.
@@ -185,6 +204,10 @@ type SearchResult struct {
 	FirstAirDate string  `json:"first_air_date,omitempty"`
 	VoteAverage  float64 `json:"vote_average"`
 	MediaType    string  `json:"media_type,omitempty"`
+	// Adult and GenreIDs let a kids account's content policy hide a title
+	// without a rating lookup.
+	Adult    bool  `json:"adult,omitempty"`
+	GenreIDs []int `json:"genre_ids,omitempty"`
 }
 
 type searchResponse struct {

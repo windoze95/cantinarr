@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
@@ -458,7 +460,7 @@ func formatSearchResults(results []tmdb.SearchResult, limit int) string {
 	return sb.String()
 }
 
-func (s *ToolServer) searchMovies(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) searchMovies(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -473,15 +475,19 @@ func (s *ToolServer) searchMovies(input json.RawMessage) (*ToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	results, hidden, err := s.filterResults(ctx, policy, results, contentpolicy.MediaMovie)
+	if err != nil {
+		return nil, err
+	}
 	return &ToolResult{
-		Text:           formatSearchResults(results, 10),
+		Text:           formatSearchResults(results, 10) + hiddenNote(hidden),
 		StructuredData: toMediaResultItems(results, 10),
 	}, nil
 }
 
 const maxMovieCollectionResults = 3
 
-func (s *ToolServer) searchMovieCollections(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) searchMovieCollections(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -517,11 +523,34 @@ func (s *ToolServer) searchMovieCollections(input json.RawMessage) (*ToolResult,
 		return &ToolResult{Text: fmt.Sprintf("Movie collections were found, but details could not be loaded: %s", strings.Join(failures, "; "))}, nil
 	}
 
+	// A kids account sees each collection cut to the parts it may see; a
+	// collection with nothing left is dropped whole.
+	hidden := 0
+	if policy != nil {
+		kept := make([]tmdb.MovieCollection, 0, len(collections))
+		for _, collection := range collections {
+			parts, partsHidden, err := s.filterResults(ctx, policy, collection.Parts, contentpolicy.MediaMovie)
+			if err != nil {
+				return nil, err
+			}
+			hidden += partsHidden
+			if len(parts) == 0 {
+				continue
+			}
+			collection.Parts = parts
+			kept = append(kept, collection)
+		}
+		collections = kept
+		if len(collections) == 0 {
+			return &ToolResult{Text: "No movie collections are available for this account." + hiddenNote(hidden)}, nil
+		}
+	}
+
 	text := formatMovieCollectionResults(collections, maxDisplayMediaItems)
 	if len(failures) > 0 {
 		text += fmt.Sprintf("\nSome collection details could not be loaded: %s\n", strings.Join(failures, "; "))
 	}
-	return &ToolResult{Text: text}, nil
+	return &ToolResult{Text: text + hiddenNote(hidden)}, nil
 }
 
 func formatMovieCollectionResults(collections []tmdb.MovieCollection, maxParts int) string {
@@ -555,7 +584,7 @@ func formatMovieCollectionResults(collections []tmdb.MovieCollection, maxParts i
 	return sb.String()
 }
 
-func (s *ToolServer) searchTVShows(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) searchTVShows(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -570,13 +599,17 @@ func (s *ToolServer) searchTVShows(input json.RawMessage) (*ToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	results, hidden, err := s.filterResults(ctx, policy, results, contentpolicy.MediaTV)
+	if err != nil {
+		return nil, err
+	}
 	return &ToolResult{
-		Text:           formatSearchResults(results, 10),
+		Text:           formatSearchResults(results, 10) + hiddenNote(hidden),
 		StructuredData: toMediaResultItems(results, 10),
 	}, nil
 }
 
-func (s *ToolServer) getTrending(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getTrending(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -592,13 +625,19 @@ func (s *ToolServer) getTrending(input json.RawMessage) (*ToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Trending entries name their own media type; the parameter covers a
+	// single-type ask whose entries do not.
+	results, hidden, err := s.filterResults(ctx, policy, results, strings.ToLower(strings.TrimSpace(params.MediaType)))
+	if err != nil {
+		return nil, err
+	}
 	return &ToolResult{
-		Text:           formatSearchResults(results, 10),
+		Text:           formatSearchResults(results, 10) + hiddenNote(hidden),
 		StructuredData: toMediaResultItems(results, 10),
 	}, nil
 }
 
-func (s *ToolServer) getMovieDetails(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getMovieDetails(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -613,11 +652,18 @@ func (s *ToolServer) getMovieDetails(input json.RawMessage) (*ToolResult, error)
 	if err != nil {
 		return nil, err
 	}
+	allowed, err := s.allowsTitle(ctx, policy, contentpolicy.Candidate{MediaType: contentpolicy.MediaMovie, TMDBID: movie.ID, Adult: movie.Adult, GenreIDs: movie.GenreIDs()})
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return &ToolResult{Text: titleNotAvailableText}, nil
+	}
 	data, _ := json.Marshal(movie)
 	return &ToolResult{Text: string(data)}, nil
 }
 
-func (s *ToolServer) getTVDetails(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getTVDetails(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -632,11 +678,18 @@ func (s *ToolServer) getTVDetails(input json.RawMessage) (*ToolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	allowed, err := s.allowsTitle(ctx, policy, contentpolicy.Candidate{MediaType: contentpolicy.MediaTV, TMDBID: tv.ID, Adult: tv.Adult, GenreIDs: tv.GenreIDs()})
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return &ToolResult{Text: titleNotAvailableText}, nil
+	}
 	data, _ := json.Marshal(tv)
 	return &ToolResult{Text: string(data)}, nil
 }
 
-func (s *ToolServer) getRecommendations(input json.RawMessage) (*ToolResult, error) {
+func (s *ToolServer) getRecommendations(ctx context.Context, input json.RawMessage, policy *contentpolicy.Policy) (*ToolResult, error) {
 	tmdbClient := s.creds.TMDB()
 	if tmdbClient == nil {
 		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
@@ -652,8 +705,12 @@ func (s *ToolServer) getRecommendations(input json.RawMessage) (*ToolResult, err
 	if err != nil {
 		return nil, err
 	}
+	results, hidden, err := s.filterResults(ctx, policy, results, strings.ToLower(strings.TrimSpace(params.MediaType)))
+	if err != nil {
+		return nil, err
+	}
 	return &ToolResult{
-		Text:           formatSearchResults(results, 10),
+		Text:           formatSearchResults(results, 10) + hiddenNote(hidden),
 		StructuredData: toMediaResultItems(results, 10),
 	}, nil
 }
@@ -925,7 +982,7 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 
 const maxDisplayMediaItems = 10
 
-func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
+func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, userID int64, policy *contentpolicy.Policy) (*ToolResult, error) {
 	// Book items verify against the user's Chaptarr lookup, so a missing TMDB
 	// credential only fails the movie/TV items rather than the whole call.
 	var tmdbClient *tmdb.Client
@@ -1102,6 +1159,14 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 				failures = append(failures, fmt.Sprintf("movie %d: %s", tmdbID, reason))
 				continue
 			}
+			allowed, err := s.allowsTitle(ctx, policy, contentpolicy.Candidate{MediaType: contentpolicy.MediaMovie, TMDBID: movie.ID, Adult: movie.Adult, GenreIDs: movie.GenreIDs()})
+			if err != nil {
+				return nil, err
+			}
+			if !allowed {
+				failures = append(failures, fmt.Sprintf("movie %d: not available for this account", tmdbID))
+				continue
+			}
 			items = append(items, MediaResultItem{
 				ID:          movie.ID,
 				Title:       movie.Title,
@@ -1136,6 +1201,14 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 			}
 			if reason := displayMediaMismatch(p.Title, p.Year, tv.Name, year); reason != "" {
 				failures = append(failures, fmt.Sprintf("tv %d: %s", tmdbID, reason))
+				continue
+			}
+			allowed, err := s.allowsTitle(ctx, policy, contentpolicy.Candidate{MediaType: contentpolicy.MediaTV, TMDBID: tv.ID, Adult: tv.Adult, GenreIDs: tv.GenreIDs()})
+			if err != nil {
+				return nil, err
+			}
+			if !allowed {
+				failures = append(failures, fmt.Sprintf("tv %d: not available for this account", tmdbID))
 				continue
 			}
 			items = append(items, MediaResultItem{
