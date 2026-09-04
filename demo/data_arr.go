@@ -60,6 +60,12 @@ type arrRadarrMovie struct {
 	InCinemas    string // RFC3339 or ""
 	Digital      string // RFC3339 or ""
 	Physical     string // RFC3339 or ""
+	// The editable document fields the app's Edit Movie screen round-trips
+	// through PUT /movie/{id} (radarr_api_service.dart updateMovieFields).
+	QualityProfileID    int    // one of arrQualityProfilesJSON's ids
+	MinimumAvailability string // tba | announced | inCinemas | released
+	Path                string // arr-side folder ("" = derived from the title)
+	Tags                []int  // ids from GET /tag; never nil in rendered JSON
 }
 
 // arrEpisodeFile is the arr-side state of one downloaded episode. The file
@@ -188,13 +194,28 @@ func arrLangs() []map[string]any {
 	return []map[string]any{{"id": 1, "name": "English"}}
 }
 
+// arrDefaultQualityProfileID is the profile every seeded library record is
+// on. It must name a row of arrQualityProfilesJSON, or the editors show an
+// unknown profile; the request-settings fixtures (reqRadarrProfiles /
+// reqSonarrProfiles in data_requests.go) carry the same two rows so a
+// request made with profile 1 lands on a profile the arr actually has.
+const arrDefaultQualityProfileID = 1
+
 // arrQualityProfilesJSON serves GET /qualityprofile for both fakes
 // (id AND name are hard-required by the app).
 func arrQualityProfilesJSON() []map[string]any {
 	return []map[string]any{
-		{"id": 4, "name": "HD-720p"},
-		{"id": 6, "name": "HD-1080p"},
-		{"id": 7, "name": "Ultra-HD"},
+		{"id": 1, "name": "HD-1080p"},
+		{"id": 2, "name": "Ultra-HD 2160p"},
+	}
+}
+
+// arrRadarrTagsJSON serves Radarr's GET /tag: a bare array of {id, label}
+// (radarr_api_service.dart getTags), the ids the movie documents' tags carry.
+func arrRadarrTagsJSON() []map[string]any {
+	return []map[string]any{
+		{"id": 1, "label": "classics"},
+		{"id": 2, "label": "restored"},
 	}
 }
 
@@ -345,10 +366,11 @@ func arrSeedRadarr(now time.Time) {
 		digital   time.Time
 		physical  time.Time
 		available bool
+		tags      []int
 	}
 	seeds := []seed{
-		{tmdb: 19, hasFile: true, quality: "Bluray-1080p"},                                  // Metropolis
-		{tmdb: 961, hasFile: true, quality: "Bluray-1080p"},                                 // The General
+		{tmdb: 19, hasFile: true, quality: "Bluray-1080p", tags: []int{1}},                  // Metropolis
+		{tmdb: 961, hasFile: true, quality: "Bluray-1080p", tags: []int{1, 2}},              // The General
 		{tmdb: 653, hasFile: true, quality: "Bluray-720p", cutoff: true},                    // Nosferatu
 		{tmdb: 10331, hasFile: true, quality: "WEBDL-1080p"},                                // Night of the Living Dead
 		{tmdb: 3085, hasFile: true, quality: "WEBDL-1080p"},                                 // His Girl Friday
@@ -366,14 +388,18 @@ func arrSeedRadarr(now time.Time) {
 			continue
 		}
 		m := &arrRadarrMovie{
-			ID:          arrRNextMovieID,
-			TmdbID:      s.tmdb,
-			Monitored:   true,
-			HasFile:     s.hasFile,
-			IsAvailable: s.hasFile || s.available,
-			Added:       now.AddDate(0, 0, -60+i*3),
-			Digital:     arrISO(s.digital),
-			Physical:    arrISO(s.physical),
+			ID:                  arrRNextMovieID,
+			TmdbID:              s.tmdb,
+			Monitored:           true,
+			HasFile:             s.hasFile,
+			IsAvailable:         s.hasFile || s.available,
+			Added:               now.AddDate(0, 0, -60+i*3),
+			Digital:             arrISO(s.digital),
+			Physical:            arrISO(s.physical),
+			QualityProfileID:    arrDefaultQualityProfileID,
+			MinimumAvailability: "released",
+			Path:                arrMoviePath(mv),
+			Tags:                append([]int{}, s.tags...),
 		}
 		arrRNextMovieID++
 		if rel, ok := arrDate(mv.ReleaseDate); ok {
@@ -481,7 +507,7 @@ func arrSeedSonarr(now time.Time) {
 			Monitored:        true,
 			SeasonFolder:     true,
 			Path:             "/tv/" + show.Name,
-			QualityProfileID: 6,
+			QualityProfileID: arrDefaultQualityProfileID,
 			SeriesType:       "standard",
 			Tags:             []int{},
 			SeasonMonitored:  map[int]bool{},
@@ -618,6 +644,26 @@ func arrSeedSonarr(now time.Time) {
 			}
 		}
 	}
+}
+
+// arrNewRadarrMovie allocates a fresh monitored, available, fileless library
+// record for a catalog film on the default profile — what "add to Radarr"
+// produces. Call under arrMu; the caller appends it to the library.
+func arrNewRadarrMovie(mv *DemoMovie) *arrRadarrMovie {
+	m := &arrRadarrMovie{
+		ID: arrRNextMovieID, TmdbID: mv.TmdbID,
+		Monitored: true, IsAvailable: true,
+		Added:               time.Now().UTC(),
+		QualityProfileID:    arrDefaultQualityProfileID,
+		MinimumAvailability: "released",
+		Path:                arrMoviePath(mv),
+		Tags:                []int{},
+	}
+	if rel, ok := arrDate(mv.ReleaseDate); ok {
+		m.InCinemas = arrISO(rel)
+	}
+	arrRNextMovieID++
+	return m
 }
 
 // arrNewHistory assigns the next history id (call under arrMu).
@@ -819,15 +865,7 @@ func arrStartMovieDownload(tmdbID int) bool {
 	defer arrMu.Unlock()
 	m := arrRMovieByTmdb[tmdbID]
 	if m == nil {
-		m = &arrRadarrMovie{
-			ID: arrRNextMovieID, TmdbID: tmdbID,
-			Monitored: true, IsAvailable: true,
-			Added: time.Now().UTC(),
-		}
-		if rel, ok := arrDate(mv.ReleaseDate); ok {
-			m.InCinemas = arrISO(rel)
-		}
-		arrRNextMovieID++
+		m = arrNewRadarrMovie(mv)
 		arrRMovies = append(arrRMovies, m)
 		arrRMovieByTmdb[tmdbID] = m
 	}
@@ -871,7 +909,7 @@ func arrStartSeriesDownload(tmdbID int) bool {
 			ID: len(arrSSeries) + 1, TmdbID: tmdbID,
 			Monitored: true, SeasonFolder: true,
 			Path:             "/tv/" + show.Name,
-			QualityProfileID: 6, SeriesType: "standard",
+			QualityProfileID: arrDefaultQualityProfileID, SeriesType: "standard",
 			Tags:            []int{},
 			SeasonMonitored: map[int]bool{}, EpMonitored: map[int]bool{},
 			Files: map[int]*arrEpisodeFile{},
@@ -953,11 +991,7 @@ func arrCompleteMovie(tmdbID int) bool {
 	defer arrMu.Unlock()
 	m := arrRMovieByTmdb[tmdbID]
 	if m == nil {
-		m = &arrRadarrMovie{
-			ID: arrRNextMovieID, TmdbID: tmdbID, Monitored: true,
-			Added: time.Now().UTC(),
-		}
-		arrRNextMovieID++
+		m = arrNewRadarrMovie(mv)
 		arrRMovies = append(arrRMovies, m)
 		arrRMovieByTmdb[tmdbID] = m
 	}

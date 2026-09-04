@@ -4,6 +4,12 @@
 // handleSonarrProxy runs. Statistics counters and sizeOnDisk MUST be JSON
 // integers, and episode rows need id/seriesId/seasonNumber/episodeNumber as
 // hard-required ints — see contract.md §1 and app-arr.md §5.
+//
+// Kids accounts: like the Radarr fake, every GET handler takes the gated
+// user (nil for admins and unrestricted users) and applies the real proxy
+// gate's rule through policyAllowsShowRecord — series rows and the queue,
+// history, wanted, and calendar rows judged by their series are dropped, a
+// blocked series answers the arr's own 404, and its episodes answer [].
 package main
 
 import (
@@ -25,29 +31,36 @@ func handleSonarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInstanc
 	}
 	path := strings.Trim(strings.TrimPrefix(rest, "api/v3/"), "/")
 
+	// The content gate (see arr_radarr.go): nil for admins, who are never
+	// kids accounts, and consulted per record for everyone else.
+	var gate *DemoUser
+	if !isAdmin {
+		gate = userFrom(r)
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		switch {
 		case path == "series":
-			arrSServeSeries(w, inst)
+			arrSServeSeries(w, inst, gate)
 		case strings.HasPrefix(path, "series/"):
-			arrSServeSeriesByID(w, strings.TrimPrefix(path, "series/"))
+			arrSServeSeriesByID(w, gate, strings.TrimPrefix(path, "series/"))
 		case path == "episode":
-			arrSServeEpisodes(w, r)
+			arrSServeEpisodes(w, r, gate)
 		case path == "queue":
-			arrSServeQueue(w, r)
+			arrSServeQueue(w, r, gate)
 		case path == "queue/details":
-			arrSServeQueueDetails(w, r)
+			arrSServeQueueDetails(w, r, gate)
 		case path == "history":
-			arrSServeHistory(w, r)
+			arrSServeHistory(w, r, gate)
 		case path == "history/series":
-			arrSServeSeriesHistory(w, r)
+			arrSServeSeriesHistory(w, r, gate)
 		case path == "wanted/missing":
-			arrSServeWanted(w, r, false)
+			arrSServeWanted(w, r, gate, false)
 		case path == "wanted/cutoff":
-			arrSServeWanted(w, r, true)
+			arrSServeWanted(w, r, gate, true)
 		case path == "calendar":
-			arrSServeCalendar(w, r)
+			arrSServeCalendar(w, r, gate)
 		case path == "release":
 			arrSServeReleases(w, r)
 		case path == "manualimport":
@@ -99,6 +112,27 @@ func handleSonarrProxy(w http.ResponseWriter, r *http.Request, inst *DemoInstanc
 	default:
 		writeErr(w, http.StatusNotFound, "not found")
 	}
+}
+
+// ─── Content gate ───────────────────────────────────────
+
+// arrSVisible reports whether a series record may be shown to gate (nil =
+// no gate). Mirrors arrRVisible: the title is resolved through the catalog
+// and judged by the policy; a record the catalog cannot resolve is hidden
+// from a kids account (fail closed) and shown to everyone else; a missing
+// record (a row whose series is gone) cannot be judged and is dropped.
+func arrSVisible(gate *DemoUser, st *arrSonarrSeries) bool {
+	if gate == nil {
+		return true
+	}
+	if st == nil {
+		return false
+	}
+	show, ok := findShow(st.TmdbID)
+	if !ok {
+		return !cpIsChild(gate.ID)
+	}
+	return policyAllowsShowRecord(gate, show)
 }
 
 // ─── Lookup helpers (call under arrMu) ──────────────────
@@ -175,10 +209,6 @@ func arrSSeriesJSON(st *arrSonarrSeries) map[string]any {
 	for _, g := range show.Genres {
 		genres = append(genres, g.Name)
 	}
-	status := "continuing"
-	if show.Status == "Ended" {
-		status = "ended"
-	}
 
 	seasons := make([]map[string]any, 0, len(show.Seasons))
 	totalFiles, totalAired, totalEps := 0, 0, 0
@@ -237,14 +267,26 @@ func arrSSeriesJSON(st *arrSonarrSeries) map[string]any {
 		pct = float64(totalFiles) / float64(totalAired) * 100
 	}
 
-	return map[string]any{
-		"id":                st.ID,
-		"title":             show.Name,
-		"sortTitle":         strings.ToLower(show.Name),
-		"status":            status,
-		"ended":             status == "ended",
-		"overview":          show.Overview,
-		"network":           "Public Domain TV",
+	// Sonarr's status vocabulary: a series nothing of which has aired yet is
+	// "upcoming" (the premiere is still ahead), otherwise ended/continuing.
+	status := "continuing"
+	switch {
+	case totalAired == 0:
+		status = "upcoming"
+	case show.Status == "Ended":
+		status = "ended"
+	}
+
+	doc := map[string]any{
+		"id":        st.ID,
+		"title":     show.Name,
+		"sortTitle": strings.ToLower(show.Name),
+		"status":    status,
+		"ended":     status == "ended",
+		"overview":  show.Overview,
+		// The same network the TMDB detail and the Trakt show object name,
+		// so the three surfaces agree.
+		"network":           discShowNetworkName(show.TmdbID),
 		"airTime":           "21:00",
 		"images":            arrImages(show.PosterPath, show.BackdropPath),
 		"seasons":           seasons,
@@ -258,7 +300,6 @@ func arrSSeriesJSON(st *arrSonarrSeries) map[string]any {
 		"runtime":           runtime,
 		"tvdbId":            show.TvdbID,
 		"tmdbId":            show.TmdbID,
-		"imdbId":            show.ImdbID,
 		"firstAired":        arrSAirUTC(show.FirstAirDate),
 		"seriesType":        st.SeriesType,
 		"cleanTitle":        arrSlug(show.Name),
@@ -279,6 +320,13 @@ func arrSSeriesJSON(st *arrSonarrSeries) map[string]any {
 			"percentOfEpisodes": pct,
 		},
 	}
+	// The fictional shows carry no IMDb id (a synthesized one would resolve
+	// to an unrelated real title), and Sonarr omits the key rather than
+	// serving a blank; every consumer treats an absent id as "no link".
+	if show.ImdbID != "" {
+		doc["imdbId"] = show.ImdbID
+	}
+	return doc
 }
 
 // arrSEpisodeJSON builds one episode row (all four required ints present).
@@ -363,11 +411,11 @@ func arrSHistoryJSON(rec *arrHistoryRec) map[string]any {
 
 // ─── GET handlers ───────────────────────────────────────
 
-func arrSServeSeries(w http.ResponseWriter, inst *DemoInstance) {
+func arrSServeSeries(w http.ResponseWriter, inst *DemoInstance, gate *DemoUser) {
 	arrMu.Lock()
 	docs := make([]map[string]any, 0, len(arrSSeries))
 	for _, st := range arrSSeries {
-		if !arrInSiblingLibrary(inst, st.TmdbID) {
+		if !arrInSiblingLibrary(inst, st.TmdbID) || !arrSVisible(gate, st) {
 			continue
 		}
 		docs = append(docs, arrSSeriesJSON(st))
@@ -376,7 +424,7 @@ func arrSServeSeries(w http.ResponseWriter, inst *DemoInstance) {
 	writeJSON(w, http.StatusOK, docs)
 }
 
-func arrSServeSeriesByID(w http.ResponseWriter, idStr string) {
+func arrSServeSeriesByID(w http.ResponseWriter, gate *DemoUser, idStr string) {
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
@@ -385,7 +433,8 @@ func arrSServeSeriesByID(w http.ResponseWriter, idStr string) {
 	arrMu.Lock()
 	st := arrSSeriesByIDLocked(id)
 	var doc map[string]any
-	if st != nil {
+	// A blocked series answers exactly what an absent one does.
+	if st != nil && arrSVisible(gate, st) {
 		doc = arrSSeriesJSON(st)
 	}
 	arrMu.Unlock()
@@ -397,8 +446,9 @@ func arrSServeSeriesByID(w http.ResponseWriter, idStr string) {
 }
 
 // arrSServeEpisodes serves GET /episode?seriesId=[&seasonNumber=]
-// [&includeEpisodeFile=true] as a BARE array.
-func arrSServeEpisodes(w http.ResponseWriter, r *http.Request) {
+// [&includeEpisodeFile=true] as a BARE array. Every row's parent is the one
+// series, so a blocked series answers [] (every row drops).
+func arrSServeEpisodes(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	seriesID := queryInt(r, "seriesId", 0)
 	if seriesID == 0 {
 		writeErr(w, http.StatusBadRequest, "seriesId is required")
@@ -408,7 +458,7 @@ func arrSServeEpisodes(w http.ResponseWriter, r *http.Request) {
 	includeFile := r.URL.Query().Get("includeEpisodeFile") == "true"
 	arrMu.Lock()
 	docs := []map[string]any{}
-	if st := arrSSeriesByIDLocked(seriesID); st != nil {
+	if st := arrSSeriesByIDLocked(seriesID); st != nil && arrSVisible(gate, st) {
 		if show, ok := findShow(st.TmdbID); ok {
 			for _, season := range show.Seasons {
 				if seasonFilter >= 0 && season.SeasonNumber != seasonFilter {
@@ -424,11 +474,16 @@ func arrSServeEpisodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, docs)
 }
 
-func arrSServeQueue(w http.ResponseWriter, r *http.Request) {
+func arrSServeQueue(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	page, size := arrPageParams(r)
 	arrMu.Lock()
 	records := make([]map[string]any, 0, len(arrSQueue))
 	for _, q := range arrSQueue {
+		// A queue row is judged by its embedded series (the real gate forces
+		// includeSeries=true for exactly this).
+		if gate != nil && !arrSVisible(gate, arrSSeriesByIDLocked(q.SeriesID)) {
+			continue
+		}
 		records = append(records, arrSQueueItemJSON(q))
 	}
 	arrMu.Unlock()
@@ -436,12 +491,15 @@ func arrSServeQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 // arrSServeQueueDetails serves the unpaged per-series queue (BARE array).
-func arrSServeQueueDetails(w http.ResponseWriter, r *http.Request) {
+func arrSServeQueueDetails(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	seriesID := queryInt(r, "seriesId", 0)
 	arrMu.Lock()
 	records := make([]map[string]any, 0, len(arrSQueue))
 	for _, q := range arrSQueue {
 		if seriesID != 0 && q.SeriesID != seriesID {
+			continue
+		}
+		if gate != nil && !arrSVisible(gate, arrSSeriesByIDLocked(q.SeriesID)) {
 			continue
 		}
 		records = append(records, arrSQueueItemJSON(q))
@@ -452,7 +510,7 @@ func arrSServeQueueDetails(w http.ResponseWriter, r *http.Request) {
 
 // arrSServeHistory serves the paged history; the integer eventType query
 // filter works (3 = downloadFolderImported) while bodies carry string names.
-func arrSServeHistory(w http.ResponseWriter, r *http.Request) {
+func arrSServeHistory(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	page, size := arrPageParams(r)
 	eventFilter := ""
 	switch r.URL.Query().Get("eventType") {
@@ -468,6 +526,11 @@ func arrSServeHistory(w http.ResponseWriter, r *http.Request) {
 		if eventFilter != "" && rec.EventType != eventFilter {
 			continue
 		}
+		// History rows carry seriesId but no embedded series; judging by the
+		// record is what the real gate gets by forcing includeSeries=true.
+		if gate != nil && !arrSVisible(gate, arrSSeriesByIDLocked(rec.SeriesID)) {
+			continue
+		}
 		records = append(records, arrSHistoryJSON(rec))
 	}
 	arrMu.Unlock()
@@ -476,12 +539,15 @@ func arrSServeHistory(w http.ResponseWriter, r *http.Request) {
 
 // arrSServeSeriesHistory serves GET /history/series?seriesId=
 // [&seasonNumber=] as a BARE array.
-func arrSServeSeriesHistory(w http.ResponseWriter, r *http.Request) {
+func arrSServeSeriesHistory(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	seriesID := queryInt(r, "seriesId", 0)
 	seasonFilter := queryInt(r, "seasonNumber", -1)
 	arrMu.Lock()
 	sorted := arrHistorySorted(arrSHistory)
 	records := []map[string]any{}
+	if gate != nil && !arrSVisible(gate, arrSSeriesByIDLocked(seriesID)) {
+		sorted = nil // a blocked series has no visible history
+	}
 	for _, rec := range sorted {
 		if rec.SeriesID != seriesID {
 			continue
@@ -499,7 +565,7 @@ func arrSServeSeriesHistory(w http.ResponseWriter, r *http.Request) {
 
 // arrSServeWanted serves wanted/missing and wanted/cutoff: paged episode
 // records with the EMBEDDED full series document.
-func arrSServeWanted(w http.ResponseWriter, r *http.Request, cutoff bool) {
+func arrSServeWanted(w http.ResponseWriter, r *http.Request, gate *DemoUser, cutoff bool) {
 	page, size := arrPageParams(r)
 	now := time.Now().UTC()
 	type row struct {
@@ -509,7 +575,8 @@ func arrSServeWanted(w http.ResponseWriter, r *http.Request, cutoff bool) {
 	arrMu.Lock()
 	rows := []row{}
 	for _, st := range arrSSeries {
-		if !st.Monitored {
+		// Judged by the embedded series, like the real gate.
+		if !st.Monitored || !arrSVisible(gate, st) {
 			continue
 		}
 		show, ok := findShow(st.TmdbID)
@@ -548,13 +615,13 @@ func arrSServeWanted(w http.ResponseWriter, r *http.Request, cutoff bool) {
 
 // arrSServeCalendar returns a BARE array of episodes airing inside
 // [start, end], each with the embedded series document.
-func arrSServeCalendar(w http.ResponseWriter, r *http.Request) {
+func arrSServeCalendar(w http.ResponseWriter, r *http.Request, gate *DemoUser) {
 	start, end := arrParseWindow(r.URL.Query().Get("start"), r.URL.Query().Get("end"))
 	arrMu.Lock()
 	docs := []map[string]any{}
 	for _, st := range arrSSeries {
 		show, ok := findShow(st.TmdbID)
-		if !ok {
+		if !ok || !arrSVisible(gate, st) {
 			continue
 		}
 		var seriesDoc map[string]any
