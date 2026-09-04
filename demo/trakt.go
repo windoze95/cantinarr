@@ -8,7 +8,12 @@
 // The lists endpoint serves FLAT list objects (contract §9 — what the app
 // parses, not the real relay's nested shape). Inner-object keys always
 // agree with the requested type (movie/movies, show/shows) and with the
-// per-item "type" field on list items.
+// per-item "type" field on list items. Every item carries ids.tmdb: the app
+// drops an item without one before it ever renders.
+//
+// Kids accounts: the six title-carrying handlers filter the catalog through
+// the caller's content policy before the loop (a calendar row is judged by
+// its show); the lists endpoint is opaque metadata and stays as seeded.
 package main
 
 import (
@@ -97,10 +102,28 @@ func traktMovieObj(m *DemoMovie, withImages bool) map[string]any {
 	return obj
 }
 
+// traktShowStatus maps the TMDB status vocabulary onto Trakt's.
+func traktShowStatus(status string) string {
+	switch status {
+	case "Ended":
+		return "ended"
+	case "In Production":
+		return "in production"
+	case "Planned":
+		return "planned"
+	case "Canceled":
+		return "canceled"
+	default:
+		return "returning series"
+	}
+}
+
 func traktShowObj(s *DemoShow, withImages bool) map[string]any {
-	status := "returning series"
-	if s.Status == "Ended" {
-		status = "ended"
+	// The shows are fiction: no IMDb record exists, so the link is absent
+	// rather than pointing at an unrelated real title.
+	var imdb any
+	if s.ImdbID != "" {
+		imdb = s.ImdbID
 	}
 	obj := map[string]any{
 		"title":          s.Name,
@@ -110,14 +133,14 @@ func traktShowObj(s *DemoShow, withImages bool) map[string]any {
 		"language":       s.OriginalLanguage,
 		"rating":         s.VoteAverage,
 		"votes":          s.VoteCount,
-		"status":         status,
-		"network":        "Cantina",
+		"status":         traktShowStatus(s.Status),
+		"network":        discShowNetworkName(s.TmdbID),
 		"aired_episodes": s.EpisodeCount(),
 		"genres":         traktGenreNames(s.Genres),
 		"ids": map[string]any{
 			"trakt": s.TraktID(),
 			"slug":  traktSlug(s.Name, 0),
-			"imdb":  s.ImdbID,
+			"imdb":  imdb,
 			"tmdb":  s.TmdbID,
 			"tvdb":  s.TvdbID,
 		},
@@ -137,13 +160,15 @@ func traktWantsShows(r *http.Request) bool {
 // ─── Handlers ───────────────────────────────────────────────────────────
 
 func traktHandleTrending(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
 	if queryInt(r, "page", 1) > 1 {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
 	if traktWantsShows(r) {
-		items := make([]map[string]any, 0, len(demoShows))
-		for i, s := range demoShows {
+		shows := cpKeepShows(u, demoShows)
+		items := make([]map[string]any, 0, len(shows))
+		for i, s := range shows {
 			items = append(items, map[string]any{
 				"watchers": 800 - i*40,
 				"show":     traktShowObj(s, false),
@@ -152,8 +177,9 @@ func traktHandleTrending(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, items)
 		return
 	}
-	items := make([]map[string]any, 0, len(demoMovies))
-	for i, m := range demoMovies {
+	movies := cpKeepMovies(u, demoMovies)
+	items := make([]map[string]any, 0, len(movies))
+	for i, m := range movies {
 		items = append(items, map[string]any{
 			"watchers": 1000 - i*50,
 			"movie":    traktMovieObj(m, false),
@@ -163,20 +189,23 @@ func traktHandleTrending(w http.ResponseWriter, r *http.Request) {
 }
 
 func traktHandlePopular(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
 	if queryInt(r, "page", 1) > 1 {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
 	if traktWantsShows(r) {
-		items := make([]map[string]any, 0, len(demoShows))
-		for _, s := range demoShows {
+		shows := cpKeepShows(u, demoShows)
+		items := make([]map[string]any, 0, len(shows))
+		for _, s := range shows {
 			items = append(items, traktShowObj(s, false))
 		}
 		writeJSON(w, http.StatusOK, items)
 		return
 	}
-	items := make([]map[string]any, 0, len(demoMovies))
-	for _, m := range demoMovies {
+	movies := cpKeepMovies(u, demoMovies)
+	items := make([]map[string]any, 0, len(movies))
+	for _, m := range movies {
 		items = append(items, traktMovieObj(m, false))
 	}
 	writeJSON(w, http.StatusOK, items)
@@ -222,19 +251,24 @@ func traktHandleLists(w http.ResponseWriter, r *http.Request) {
 }
 
 func traktHandleListItems(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
 	slug := chi.URLParam(r, "slug")
 	ids, ok := discTraktListItems[slug]
 	if !ok {
 		ids = discTraktListItems["best-of-film-noir"]
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	items := make([]map[string]any, 0, len(ids))
-	rank := 0
+	resolved := make([]*DemoMovie, 0, len(ids))
 	for _, tmdbID := range ids {
-		m, found := findMovie(tmdbID)
-		if !found {
-			continue
+		if m, found := findMovie(tmdbID); found {
+			resolved = append(resolved, m)
 		}
+	}
+	// Rank renumbers over what the caller may see.
+	movies := cpKeepMovies(u, resolved)
+	now := time.Now().UTC().Format(time.RFC3339)
+	items := make([]map[string]any, 0, len(movies))
+	rank := 0
+	for _, m := range movies {
 		rank++
 		items = append(items, map[string]any{
 			"rank":      rank,
@@ -249,13 +283,15 @@ func traktHandleListItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func traktHandleCalendar(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
 	days := queryInt(r, "days", 14)
 	if days < 1 {
 		days = 14
 	}
 	now := time.Now().UTC()
-	items := make([]map[string]any, 0, len(demoShows))
-	for i, s := range demoShows {
+	shows := cpKeepShows(u, demoShows)
+	items := make([]map[string]any, 0, len(shows))
+	for i, s := range shows {
 		if i >= days {
 			break
 		}
@@ -279,48 +315,77 @@ func traktHandleCalendar(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
-func traktHandleAnticipated(w http.ResponseWriter, r *http.Request) {
-	if queryInt(r, "page", 1) > 1 {
-		writeJSON(w, http.StatusOK, []any{})
-		return
+// traktAnticipatedPageSize is how many items one "Most Anticipated" page
+// carries. The app pages this feed open-ended until an empty page, so the
+// grid under the row grows once (18 films = two pages) and then stops.
+const traktAnticipatedPageSize = 10
+
+// traktPageWindow is the [lo, hi) slice of a list for a 1-based page.
+func traktPageWindow(page, size, total int) (lo, hi int) {
+	if page < 1 {
+		page = 1
 	}
+	lo = min((page-1)*size, total)
+	hi = min(lo+size, total)
+	return lo, hi
+}
+
+func traktHandleAnticipated(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
+	page := queryInt(r, "page", 1)
 	if traktWantsShows(r) {
-		items := make([]map[string]any, 0, len(demoShows))
-		for i, s := range demoShows {
+		// The unaired show leads (highest list count), then the rest.
+		ordered := make([]*DemoShow, 0, len(demoShows))
+		for _, s := range demoShows {
+			if s.Status == "In Production" || s.Status == "Planned" {
+				ordered = append(ordered, s)
+			}
+		}
+		for _, s := range demoShows {
+			if s.Status != "In Production" && s.Status != "Planned" {
+				ordered = append(ordered, s)
+			}
+		}
+		shows := cpKeepShows(u, ordered)
+		lo, hi := traktPageWindow(page, traktAnticipatedPageSize, len(shows))
+		items := make([]map[string]any, 0, hi-lo)
+		for i := lo; i < hi; i++ {
 			items = append(items, map[string]any{
 				"list_count": 400 - i*25,
-				"show":       traktShowObj(s, true),
+				"show":       traktShowObj(shows[i], true),
 			})
 		}
 		writeJSON(w, http.StatusOK, items)
 		return
 	}
-	items := make([]map[string]any, 0, 10)
-	for i, m := range demoMovies {
-		if i >= 10 {
-			break
-		}
+	movies := cpKeepMovies(u, demoMovies)
+	lo, hi := traktPageWindow(page, traktAnticipatedPageSize, len(movies))
+	items := make([]map[string]any, 0, hi-lo)
+	for i := lo; i < hi; i++ {
 		items = append(items, map[string]any{
-			"list_count": 500 - i*30,
-			"movie":      traktMovieObj(m, true),
+			"list_count": 500 - i*25,
+			"movie":      traktMovieObj(movies[i], true),
 		})
 	}
 	writeJSON(w, http.StatusOK, items)
 }
 
 func traktHandleRecommendations(w http.ResponseWriter, r *http.Request) {
+	u := userFrom(r)
 	// No page param on this endpoint (srv-discover §6.7).
 	if traktWantsShows(r) {
-		items := make([]map[string]any, 0, len(demoShows))
-		for _, s := range demoShows {
+		shows := cpKeepShows(u, demoShows)
+		items := make([]map[string]any, 0, len(shows))
+		for _, s := range shows {
 			items = append(items, traktShowObj(s, false))
 		}
 		writeJSON(w, http.StatusOK, items)
 		return
 	}
 	n := min(8, len(demoMovies))
-	items := make([]map[string]any, 0, n)
-	for _, m := range demoMovies[:n] {
+	movies := cpKeepMovies(u, demoMovies[:n])
+	items := make([]map[string]any, 0, len(movies))
+	for _, m := range movies {
 		items = append(items, traktMovieObj(m, false))
 	}
 	writeJSON(w, http.StatusOK, items)
