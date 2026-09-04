@@ -43,6 +43,7 @@ import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/ui/sonarr_series_detail_screen.dart';
 import '../logic/arr_deep_link.dart';
 import '../logic/media_detail_provider.dart';
+import '../logic/title_links.dart';
 import '../logic/release_schedule.dart';
 import '../logic/release_window.dart';
 import '../logic/title_facts.dart';
@@ -626,9 +627,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
                           // Details: the few lines worth reading before
                           // deciding, never a spec sheet. Only known lines
-                          // render, and no section at all when none is.
+                          // render; the Links line closes it with the
+                          // title's own pages elsewhere (TMDB's is always
+                          // known, so the section is there once loaded).
                           if (state.facts.isNotEmpty ||
-                              state.studios.isNotEmpty) ...[
+                              state.studios.isNotEmpty ||
+                              state.links.isNotEmpty) ...[
                             const SizedBox(height: 24),
                             Padding(
                               padding:
@@ -642,6 +646,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                   filters:
                                       BrowseFilters(companies: [studio]),
                                 ),
+                                links: state.links,
+                                onLink: _openTitleLink,
                               ),
                             ),
                           ],
@@ -1031,6 +1037,23 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     if (opened || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text("Couldn't open ${_watchLabel(link)}."),
+    ));
+  }
+
+  /// Opens the title's own page on an outside site (IMDb, TMDB, Trakt) in
+  /// the browser, or the site's app when it claims the address, and says so
+  /// when nothing could open it.
+  Future<void> _openTitleLink(TitleLink link) async {
+    var opened = false;
+    try {
+      opened = await launchUrl(Uri.parse(link.url),
+          mode: LaunchMode.externalApplication);
+    } catch (_) {
+      opened = false;
+    }
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text("Couldn't open ${link.label}."),
     ));
   }
 
@@ -1650,11 +1673,15 @@ class _DetailsSection extends StatelessWidget {
   final List<TitleFact> facts;
   final List<TaggedId> studios;
   final ValueChanged<TaggedId> onStudio;
+  final List<TitleLink> links;
+  final ValueChanged<TitleLink> onLink;
 
   const _DetailsSection({
     required this.facts,
     required this.studios,
     required this.onStudio,
+    required this.links,
+    required this.onLink,
   });
 
   @override
@@ -1693,6 +1720,30 @@ class _DetailsSection extends StatelessWidget {
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     visualDensity: VisualDensity.compact,
                     onPressed: () => onStudio(studio),
+                  ),
+              ],
+            ),
+          ),
+        // Outbound, unlike the studio chips, and marked as such.
+        if (links.isNotEmpty)
+          _row(
+            'Links',
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final link in links)
+                  ActionChip(
+                    avatar: const Icon(Icons.open_in_new,
+                        size: 14, color: AppTheme.textSecondary),
+                    label: Text(link.label,
+                        style: const TextStyle(fontSize: 12)),
+                    tooltip: 'Open on ${link.label}',
+                    backgroundColor: AppTheme.surfaceVariant,
+                    side: const BorderSide(color: AppTheme.border),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => onLink(link),
                   ),
               ],
             ),

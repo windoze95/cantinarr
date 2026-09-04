@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../discover/data/tmdb_models.dart';
 import 'title_facts.dart';
+import 'title_links.dart';
 
 /// State for the media detail screen.
 class MediaDetailState {
@@ -77,6 +78,21 @@ class MediaDetailState {
   List<TitleFact> get facts => switch ((movieDetail, tvDetail)) {
         (final movie?, _) => movieFacts(movie),
         (_, final tv?) => tvFacts(tv),
+        _ => const [],
+      };
+
+  /// The IMDb id TMDB knows for this title: a movie carries it on its own
+  /// record, a show under its external ids.
+  String? get imdbId => movieDetail?.imdbId ?? tvDetail?.externalIds?.imdbId;
+
+  /// Where to read about this title off-app; empty until a detail has loaded.
+  List<TitleLink> get links => switch ((movieDetail, tvDetail)) {
+        (final movie?, _) => titleLinks(
+            type: MediaType.movie, tmdbId: movie.id, imdbId: movie.imdbId),
+        (_, final tv?) => titleLinks(
+            type: MediaType.tv,
+            tmdbId: tv.id,
+            imdbId: tv.externalIds?.imdbId),
         _ => const [],
       };
 

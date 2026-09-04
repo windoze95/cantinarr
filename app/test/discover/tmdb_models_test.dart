@@ -110,6 +110,25 @@ void main() {
     });
   });
 
+  group('MovieDetail imdbId', () {
+    test('reads imdb_id and treats blank or absent as unknown', () {
+      expect(
+        MovieDetail.fromJson(
+            {'id': 603, 'title': 'The Matrix', 'imdb_id': 'tt0133093'}).imdbId,
+        'tt0133093',
+      );
+      expect(
+        MovieDetail.fromJson({'id': 603, 'title': 'The Matrix', 'imdb_id': ''})
+            .imdbId,
+        isNull,
+      );
+      expect(
+        MovieDetail.fromJson({'id': 603, 'title': 'The Matrix'}).imdbId,
+        isNull,
+      );
+    });
+  });
+
   group('title credits and production', () {
     test('MovieDetail parses credits in billing order, companies, and countries',
         () {
