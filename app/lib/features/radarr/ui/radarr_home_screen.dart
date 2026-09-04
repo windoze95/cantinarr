@@ -9,6 +9,7 @@ import '../../../navigation/ambient_page_route.dart';
 import '../data/radarr_api_service.dart';
 import '../data/radarr_models.dart';
 import '../logic/radarr_movies_provider.dart';
+import 'movie_actions.dart';
 import 'radarr_movie_detail_screen.dart';
 import 'radarr_movie_list.dart';
 import 'radarr_releases_screen.dart';
@@ -93,6 +94,23 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
     );
     // The detail screen can edit or remove the movie; refresh on return.
     _notifier?.loadMovies();
+  }
+
+  /// Long-press menu: search / edit / refresh / remove / monitor.
+  void _showMovieActions(RadarrMovie movie) {
+    final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
+    if (instanceId == null) return;
+    showMovieActions(
+      context,
+      service: RadarrApiService(
+        backendDio: ref.read(backendClientProvider),
+        instanceId: instanceId,
+      ),
+      instanceId: instanceId,
+      movie: movie,
+      onChanged: () => _notifier?.loadMovies(),
+      onRemoved: () => _notifier?.loadMovies(),
+    );
   }
 
   @override
@@ -186,6 +204,7 @@ class _RadarrHomeScreenState extends ConsumerState<RadarrHomeScreen> {
                         onSearch: _triggerAutomaticSearch,
                         onInteractiveSearch: _openInteractiveSearch,
                         onOpen: _openMovie,
+                        onLongPress: _showMovieActions,
                       ),
                     ),
             ),
